@@ -24,6 +24,27 @@ fn timeline_lane_rows_group_segments_by_lane() {
 }
 
 #[test]
+fn timeline_lane_rows_order_segments_by_start_time() {
+    let mut project = load_sample_project().expect("sample project should load");
+    project
+        .segments
+        .sort_by(|left, right| right.start_seconds.total_cmp(&left.start_seconds));
+
+    let rows = timeline_lane_rows(&project);
+    let speaker_one = rows
+        .iter()
+        .find(|row| row.lane.id == "track-speaker-1")
+        .expect("speaker one lane should exist");
+    let segment_ids: Vec<&str> = speaker_one
+        .segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+
+    assert_eq!(segment_ids, vec!["annotation-1", "annotation-3"]);
+}
+
+#[test]
 fn transport_status_includes_project_name_and_segment_count() {
     let project = load_sample_project().expect("sample project should load");
 

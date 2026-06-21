@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use studio_babel::{BabelTaskPackage, import_package};
+use studio_babel::{import_package, BabelTaskPackage};
 use studio_core::{AudioLane, Project, Segment};
 
 const SAMPLE_TASK_JSON: &str = include_str!("../assets/sample-task.json");
@@ -20,13 +20,15 @@ pub fn timeline_lane_rows(project: &Project) -> Vec<TimelineLaneRow<'_>> {
     project
         .lanes
         .iter()
-        .map(|lane| TimelineLaneRow {
-            lane,
-            segments: project
+        .map(|lane| {
+            let mut segments: Vec<_> = project
                 .segments
                 .iter()
                 .filter(|segment| segment.lane_id == lane.id)
-                .collect(),
+                .collect();
+            segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+
+            TimelineLaneRow { lane, segments }
         })
         .collect()
 }

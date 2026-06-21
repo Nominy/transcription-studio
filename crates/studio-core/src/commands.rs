@@ -23,6 +23,12 @@ pub enum EditorCommand {
         segment_id: String,
         text: String,
     },
+    UpdateSegment {
+        segment_id: String,
+        start_seconds: f64,
+        end_seconds: f64,
+        text: String,
+    },
     MoveSegmentBoundary {
         segment_id: String,
         start_seconds: f64,
@@ -121,6 +127,12 @@ fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), St
             segment.text = text;
             Ok(())
         }
+        EditorCommand::UpdateSegment {
+            segment_id,
+            start_seconds,
+            end_seconds,
+            text,
+        } => update_segment(project, &segment_id, start_seconds, end_seconds, text),
         EditorCommand::MoveSegmentBoundary {
             segment_id,
             start_seconds,
@@ -147,6 +159,7 @@ fn create_segment(project: &mut Project, segment: Segment) -> Result<(), StudioC
         return Err(StudioCoreError::DuplicateSegmentId);
     }
     validate_time_range(segment.start_seconds, segment.end_seconds)?;
+    validate_track(project, &segment.speaker_id, &segment.lane_id)?;
     project.segments.push(segment);
     Ok(())
 }
@@ -158,6 +171,23 @@ fn delete_segment(project: &mut Project, segment_id: &str) -> Result<(), StudioC
         .position(|segment| segment.id == segment_id)
         .ok_or(StudioCoreError::SegmentNotFound)?;
     project.segments.remove(index);
+    Ok(())
+}
+
+fn update_segment(
+    project: &mut Project,
+    segment_id: &str,
+    start_seconds: f64,
+    end_seconds: f64,
+    text: String,
+) -> Result<(), StudioCoreError> {
+    validate_time_range(start_seconds, end_seconds)?;
+    let segment = project
+        .segment_mut(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    segment.start_seconds = start_seconds;
+    segment.end_seconds = end_seconds;
+    segment.text = text;
     Ok(())
 }
 
@@ -292,4 +322,29 @@ fn validate_time_range(start_seconds: f64, end_seconds: f64) -> Result<(), Studi
     } else {
         Err(StudioCoreError::InvalidTimeRange)
     }
+}
+
+fn validate_track(
+    project: &Project,
+    speaker_id: &str,
+    lane_id: &str,
+) -> Result<(), StudioCoreError> {
+    if !project
+        .speakers
+        .iter()
+        .any(|speaker| speaker.id == speaker_id)
+    {
+        return Err(StudioCoreError::SpeakerNotFound);
+    }
+
+    let lane = project
+        .lanes
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .ok_or(StudioCoreError::LaneNotFound)?;
+    if lane.speaker_id != speaker_id {
+        return Err(StudioCoreError::LaneSpeakerMismatch);
+    }
+
+    Ok(())
 }
