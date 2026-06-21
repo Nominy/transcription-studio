@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
-use iced::widget::{Column, Row, button, column, container, row, scrollable, text, text_input};
+use iced::widget::{
+    Column, Row, button, column, container, pick_list, row, scrollable, text, text_input,
+};
 use iced::{Element, Fill, Length, Theme};
 use studio_app::{StudioWorkflow, load_sample_project, timeline_lane_rows, transport_status};
 use studio_core::{Project, Segment};
@@ -28,27 +30,31 @@ enum Message {
     Redo,
     SegmentStartChanged(String, String),
     SegmentEndChanged(String, String),
+    SegmentSplitChanged(String, String),
     SegmentTextChanged(String, String),
+    SegmentTrackChanged(String, String),
     ApplySegment(String),
     SplitSegment(String),
     MergeSegment(String),
     DeleteSegment(String),
     CreateSegmentAfter(String),
-    ToggleSpeaker(String),
 }
 
 #[derive(Debug, Clone)]
 struct SegmentDraft {
     start_seconds: String,
     end_seconds: String,
+    split_seconds: String,
     text: String,
 }
 
 impl SegmentDraft {
     fn from_segment(segment: &Segment) -> Self {
+        let split_seconds = (segment.start_seconds + segment.end_seconds) / 2.0;
         Self {
-            start_seconds: format!("{:.3}", segment.start_seconds),
-            end_seconds: format!("{:.3}", segment.end_seconds),
+            start_seconds: format_seconds_for_edit(segment.start_seconds),
+            end_seconds: format_seconds_for_edit(segment.end_seconds),
+            split_seconds: format_seconds_for_edit(split_seconds),
             text: segment.text.clone(),
         }
     }
@@ -101,6 +107,47 @@ impl StudioState {
         }
     }
 
+    fn sync_segment_drafts_preserving_existing(&mut self) {
+        let Some(project) = self.project() else {
+            self.segment_drafts.clear();
+            return;
+        };
+        let current_segments: Vec<_> = project
+            .segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.id.clone(),
+                    SegmentDraft::from_segment(segment),
+                )
+            })
+            .collect();
+        for (segment_id, draft) in &current_segments {
+            if !self.segment_drafts.contains_key(segment_id) {
+                self.segment_drafts
+                    .insert(segment_id.clone(), draft.clone());
+            }
+        }
+        self.segment_drafts.retain(|segment_id, _| {
+            current_segments
+                .iter()
+                .any(|(current_id, _)| current_id == segment_id)
+        });
+    }
+
+    fn refresh_segment_draft(&mut self, segment_id: &str) {
+        let Some(segment) = self
+            .project()
+            .and_then(|project| project.segment(segment_id))
+            .cloned()
+        else {
+            self.segment_drafts.remove(segment_id);
+            return;
+        };
+        self.segment_drafts
+            .insert(segment_id.to_string(), SegmentDraft::from_segment(&segment));
+    }
+
     fn replace_workflow(&mut self, workflow: StudioWorkflow, status: String) {
         self.workflow = Ok(workflow);
         self.status = status;
@@ -111,19 +158,22 @@ impl StudioState {
         &mut self,
         action_name: &str,
         action: impl FnOnce(&mut StudioWorkflow) -> Result<String, String>,
-    ) {
+    ) -> bool {
         match &mut self.workflow {
             Ok(workflow) => match action(workflow) {
                 Ok(status) => {
                     self.status = status;
-                    self.reset_segment_drafts();
+                    self.sync_segment_drafts_preserving_existing();
+                    true
                 }
                 Err(error) => {
                     self.status = format!("{action_name} failed: {error}");
+                    false
                 }
             },
             Err(error) => {
                 self.status = format!("{action_name} unavailable: {error}");
+                false
             }
         }
     }
@@ -179,17 +229,21 @@ impl StudioState {
     }
 
     fn undo(&mut self) {
-        self.with_workflow_mut("Undo", |workflow| {
+        if self.with_workflow_mut("Undo", |workflow| {
             workflow.undo().map_err(|error| error.to_string())?;
             Ok("Undid last edit.".to_string())
-        });
+        }) {
+            self.reset_segment_drafts();
+        }
     }
 
     fn redo(&mut self) {
-        self.with_workflow_mut("Redo", |workflow| {
+        if self.with_workflow_mut("Redo", |workflow| {
             workflow.redo().map_err(|error| error.to_string())?;
             Ok("Redid last edit.".to_string())
-        });
+        }) {
+            self.reset_segment_drafts();
+        }
     }
 
     fn apply_segment(&mut self, segment_id: &str) {
@@ -236,19 +290,15 @@ impl StudioState {
 
         let text = draft.text;
         let segment_id = segment_id.to_string();
-        self.with_workflow_mut("Apply", |workflow| {
-            if timing_changed {
-                workflow
-                    .move_segment_boundary(&segment_id, start_seconds, end_seconds)
-                    .map_err(|error| error.to_string())?;
-            }
-            if text_changed {
-                workflow
-                    .apply_text_edit(&segment_id, text)
-                    .map_err(|error| error.to_string())?;
-            }
+        let applied = self.with_workflow_mut("Apply", |workflow| {
+            workflow
+                .apply_segment_edit(&segment_id, start_seconds, end_seconds, text)
+                .map_err(|error| error.to_string())?;
             Ok(format!("Applied edits to `{segment_id}`."))
         });
+        if applied {
+            self.refresh_segment_draft(&segment_id);
+        }
     }
 
     fn split_segment(&mut self, segment_id: &str) {
@@ -260,36 +310,57 @@ impl StudioState {
             self.status = format!("Segment `{segment_id}` was not found.");
             return;
         };
-        let split_at = (segment.start_seconds + segment.end_seconds) / 2.0;
+        let Some(draft) = self.segment_drafts.get(segment_id) else {
+            self.status = format!("Segment `{segment_id}` has no editable draft.");
+            return;
+        };
+        let split_at = match parse_seconds("Split", &draft.split_seconds) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if split_at <= segment.start_seconds || split_at >= segment.end_seconds {
+            self.status = "Split must be inside the segment.".to_string();
+            return;
+        }
         let segment_id = segment_id.to_string();
-        self.with_workflow_mut("Split", |workflow| {
+        let split_segment_id = segment_id.clone();
+        if self.with_workflow_mut("Split", |workflow| {
             let new_segment_id = workflow
                 .split_segment(&segment_id, split_at)
                 .map_err(|error| error.to_string())?;
             Ok(format!(
                 "Split `{segment_id}` at {split_at:.3}s into `{new_segment_id}`."
             ))
-        });
+        }) {
+            self.refresh_segment_draft(&split_segment_id);
+        }
     }
 
     fn merge_segment(&mut self, segment_id: &str) {
         let segment_id = segment_id.to_string();
-        self.with_workflow_mut("Merge", |workflow| {
+        if self.with_workflow_mut("Merge", |workflow| {
             workflow
                 .merge_with_next(&segment_id)
                 .map_err(|error| error.to_string())?;
             Ok(format!("Merged `{segment_id}` with the next segment."))
-        });
+        }) {
+            self.refresh_segment_draft(&segment_id);
+        }
     }
 
     fn delete_segment(&mut self, segment_id: &str) {
         let segment_id = segment_id.to_string();
-        self.with_workflow_mut("Delete", |workflow| {
+        if self.with_workflow_mut("Delete", |workflow| {
             workflow
                 .delete_segment(&segment_id)
                 .map_err(|error| error.to_string())?;
             Ok(format!("Deleted `{segment_id}`."))
-        });
+        }) {
+            self.segment_drafts.remove(&segment_id);
+        }
     }
 
     fn create_segment_after(&mut self, segment_id: &str) {
@@ -302,22 +373,17 @@ impl StudioState {
         });
     }
 
-    fn toggle_speaker(&mut self, segment_id: &str) {
-        let Some((speaker_id, speaker_label)) = self.project().and_then(|project| {
-            let segment = project.segment(segment_id)?;
-            next_speaker(project, &segment.speaker_id)
-        }) else {
-            self.status = format!("No alternate speaker is available for `{segment_id}`.");
-            return;
-        };
-
+    fn change_segment_track(&mut self, segment_id: &str, lane_id: &str) {
         let segment_id = segment_id.to_string();
-        self.with_workflow_mut("Speaker toggle", |workflow| {
+        let lane_id = lane_id.to_string();
+        if self.with_workflow_mut("Track change", |workflow| {
             workflow
-                .change_segment_speaker(&segment_id, &speaker_id)
+                .change_segment_track(&segment_id, &lane_id)
                 .map_err(|error| error.to_string())?;
-            Ok(format!("Set `{segment_id}` to {speaker_label}."))
-        });
+            Ok(format!("Moved `{segment_id}` to `{lane_id}`."))
+        }) {
+            self.refresh_segment_draft(&segment_id);
+        }
     }
 }
 
@@ -348,17 +414,24 @@ fn update(state: &mut StudioState, message: Message) {
                 draft.end_seconds = value;
             }
         }
+        Message::SegmentSplitChanged(segment_id, value) => {
+            if let Some(draft) = state.segment_drafts.get_mut(&segment_id) {
+                draft.split_seconds = value;
+            }
+        }
         Message::SegmentTextChanged(segment_id, value) => {
             if let Some(draft) = state.segment_drafts.get_mut(&segment_id) {
                 draft.text = value;
             }
+        }
+        Message::SegmentTrackChanged(segment_id, lane_id) => {
+            state.change_segment_track(&segment_id, &lane_id)
         }
         Message::ApplySegment(segment_id) => state.apply_segment(&segment_id),
         Message::SplitSegment(segment_id) => state.split_segment(&segment_id),
         Message::MergeSegment(segment_id) => state.merge_segment(&segment_id),
         Message::DeleteSegment(segment_id) => state.delete_segment(&segment_id),
         Message::CreateSegmentAfter(segment_id) => state.create_segment_after(&segment_id),
-        Message::ToggleSpeaker(segment_id) => state.toggle_speaker(&segment_id),
     }
 }
 
@@ -473,10 +546,12 @@ fn view_project<'a>(
     let mut transcript_rows = Column::new().spacing(6);
     transcript_rows = transcript_rows.push(row![
         text("Speaker").width(Length::Fixed(112.0)),
+        text("Track").width(Length::Fixed(156.0)),
         text("Start").width(Length::Fixed(84.0)),
         text("End").width(Length::Fixed(84.0)),
+        text("Split").width(Length::Fixed(84.0)),
         text("Text").width(Fill),
-        text("Actions").width(Length::Fixed(440.0)),
+        text("Actions").width(Length::Fixed(360.0)),
     ]);
 
     for segment in &project.segments {
@@ -505,6 +580,13 @@ fn view_segment_row<'a>(
 ) -> Element<'a, Message> {
     let segment_id = segment.id.clone();
     let speaker = speaker_label(project, &segment.speaker_id);
+    let track_options: Vec<String> = project.lanes.iter().map(|lane| lane.id.clone()).collect();
+    let selected_track = Some(segment.lane_id.clone());
+    let track_segment_id = segment_id.clone();
+    let track_picker = pick_list(track_options, selected_track, move |lane_id| {
+        Message::SegmentTrackChanged(track_segment_id.clone(), lane_id)
+    })
+    .width(Length::Fixed(156.0));
 
     let start_id = segment_id.clone();
     let start_input = text_input("0.000", &draft.start_seconds)
@@ -523,11 +605,19 @@ fn view_segment_row<'a>(
 
     let segment_id = segment.id.clone();
     let text_id = segment_id.clone();
-    let text_input = text_input("Transcript text", &draft.text)
+    let transcript_text_input = text_input("Transcript text", &draft.text)
         .on_input(move |value| Message::SegmentTextChanged(text_id.clone(), value))
         .on_submit(Message::ApplySegment(segment_id.clone()))
         .padding(6)
         .width(Fill);
+
+    let segment_id = segment.id.clone();
+    let split_id = segment_id.clone();
+    let split_input = text_input("0.000", &draft.split_seconds)
+        .on_input(move |value| Message::SegmentSplitChanged(split_id.clone(), value))
+        .on_submit(Message::SplitSegment(segment_id.clone()))
+        .padding(6)
+        .width(Length::Fixed(84.0));
 
     let actions = row![
         action_button("Apply", Message::ApplySegment(segment.id.clone())),
@@ -535,16 +625,17 @@ fn view_segment_row<'a>(
         action_button("Merge", Message::MergeSegment(segment.id.clone())),
         action_button("Delete", Message::DeleteSegment(segment.id.clone())),
         action_button("After", Message::CreateSegmentAfter(segment.id.clone())),
-        action_button("Speaker", Message::ToggleSpeaker(segment.id.clone())),
     ]
     .spacing(4)
-    .width(Length::Fixed(440.0));
+    .width(Length::Fixed(360.0));
 
     row![
         text(speaker).width(Length::Fixed(112.0)),
+        track_picker,
         start_input,
         end_input,
-        text_input,
+        split_input,
+        transcript_text_input,
         actions,
     ]
     .spacing(6)
@@ -570,18 +661,8 @@ fn parse_seconds(label: &str, value: &str) -> Result<f64, String> {
     }
 }
 
-fn next_speaker(project: &Project, current_speaker_id: &str) -> Option<(String, String)> {
-    if project.speakers.len() < 2 {
-        return None;
-    }
-
-    let index = project
-        .speakers
-        .iter()
-        .position(|speaker| speaker.id == current_speaker_id)
-        .unwrap_or(0);
-    let speaker = &project.speakers[(index + 1) % project.speakers.len()];
-    Some((speaker.id.clone(), speaker.label.clone()))
+fn format_seconds_for_edit(value: f64) -> String {
+    value.to_string()
 }
 
 fn speaker_label(project: &Project, speaker_id: &str) -> String {
@@ -615,10 +696,123 @@ fn write_text_file(path: &str, contents: &str) -> Result<(), String> {
 mod tests {
     use std::path::Path;
 
-    use super::DEFAULT_IMPORT_PATH;
+    use studio_app::StudioWorkflow;
+
+    use super::{DEFAULT_IMPORT_PATH, StudioState};
 
     #[test]
     fn default_import_path_points_to_existing_fixture() {
         assert!(Path::new(DEFAULT_IMPORT_PATH).exists());
+    }
+
+    #[test]
+    fn applying_text_only_preserves_precise_timing() {
+        let mut state = StudioState::default();
+        let project = state.workflow.as_mut().unwrap().project();
+        assert!(project.segment("annotation-1").is_some());
+        let mut project = project.clone();
+        let segment = project.segment_mut("annotation-1").unwrap();
+        segment.start_seconds = 1.23456;
+        segment.end_seconds = 3.45678;
+        state.replace_workflow(
+            StudioWorkflow::from_project(project),
+            "loaded precise timing fixture".to_string(),
+        );
+
+        state
+            .segment_drafts
+            .get_mut("annotation-1")
+            .unwrap()
+            .text = "Only text changed.".to_string();
+        state.apply_segment("annotation-1");
+
+        let segment = state
+            .workflow
+            .as_ref()
+            .unwrap()
+            .project()
+            .segment("annotation-1")
+            .unwrap();
+        assert_eq!(segment.start_seconds, 1.23456);
+        assert_eq!(segment.end_seconds, 3.45678);
+        assert_eq!(segment.text, "Only text changed.");
+    }
+
+    #[test]
+    fn applying_text_and_timing_undoes_as_one_step() {
+        let mut state = StudioState::default();
+        let draft = state.segment_drafts.get_mut("annotation-1").unwrap();
+        draft.start_seconds = "1.500".to_string();
+        draft.end_seconds = "3.750".to_string();
+        draft.text = "Updated together.".to_string();
+
+        state.apply_segment("annotation-1");
+        state.undo();
+
+        let segment = state
+            .workflow
+            .as_ref()
+            .unwrap()
+            .project()
+            .segment("annotation-1")
+            .unwrap();
+        assert_eq!(segment.start_seconds, 1.2);
+        assert_eq!(segment.end_seconds, 3.4);
+        assert_eq!(segment.text, "Здравствуйте.");
+    }
+
+    #[test]
+    fn unrelated_actions_preserve_unapplied_drafts() {
+        let mut state = StudioState::default();
+        state
+            .segment_drafts
+            .get_mut("annotation-1")
+            .unwrap()
+            .text = "draft still being typed".to_string();
+
+        state.split_segment("annotation-2");
+
+        assert_eq!(
+            state.segment_drafts.get("annotation-1").unwrap().text,
+            "draft still being typed"
+        );
+    }
+
+    #[test]
+    fn split_uses_typed_split_time() {
+        let mut state = StudioState::default();
+        state
+            .segment_drafts
+            .get_mut("annotation-1")
+            .unwrap()
+            .split_seconds = "2.000".to_string();
+
+        state.split_segment("annotation-1");
+
+        let segment = state
+            .workflow
+            .as_ref()
+            .unwrap()
+            .project()
+            .segment("annotation-1")
+            .unwrap();
+        assert_eq!(segment.end_seconds, 2.0);
+    }
+
+    #[test]
+    fn track_change_updates_segment_lane_and_speaker() {
+        let mut state = StudioState::default();
+
+        state.change_segment_track("annotation-1", "track-speaker-2");
+
+        let segment = state
+            .workflow
+            .as_ref()
+            .unwrap()
+            .project()
+            .segment("annotation-1")
+            .unwrap();
+        assert_eq!(segment.lane_id, "track-speaker-2");
+        assert_eq!(segment.speaker_id, "speaker-2");
     }
 }
