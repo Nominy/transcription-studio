@@ -196,6 +196,35 @@ fn workflow_merges_nearest_later_segment_on_same_lane_when_segments_are_unsorted
 }
 
 #[test]
+fn workflow_export_preserves_imported_annotation_id_after_merging_created_left_segment() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+    let created_id = workflow
+        .create_segment_after("annotation-1")
+        .expect("create should apply");
+    workflow
+        .merge_with_next(&created_id)
+        .expect("merge should apply");
+
+    let exported = workflow.export_babel_json().expect("export should apply");
+    let package: BabelTaskPackage =
+        serde_json::from_str(&exported).expect("export should remain Babel JSON");
+
+    assert!(
+        package
+            .annotations
+            .iter()
+            .any(|annotation| annotation.annotation_id == "annotation-3")
+    );
+    assert!(
+        !package
+            .annotations
+            .iter()
+            .any(|annotation| annotation.annotation_id == created_id)
+    );
+}
+
+#[test]
 fn workflow_create_segment_after_uses_shorter_positive_gap_before_next_same_lane_segment() {
     let mut workflow = workflow_with_segments(vec![
         segment("anchor", 1.0, 2.0, "left"),

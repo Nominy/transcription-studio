@@ -226,7 +226,7 @@ fn merge_segments(
     left_segment.start_seconds = left.start_seconds;
     left_segment.end_seconds = right.end_seconds;
     left_segment.text = merged_text;
-    left_segment.source_annotation_id = left.source_annotation_id;
+    left_segment.source_annotation_id = left.source_annotation_id.or(right.source_annotation_id);
 
     project.segments.remove(right_index);
     Ok(())

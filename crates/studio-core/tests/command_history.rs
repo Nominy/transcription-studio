@@ -447,6 +447,33 @@ fn merge_segments_combines_adjacent_segments_on_same_lane() {
 }
 
 #[test]
+fn merge_segments_preserves_right_source_annotation_when_left_has_none() {
+    let mut project = sample_project();
+    project.segments[0].source_annotation_id = None;
+    project.segments[1].speaker_id = "speaker-1".to_string();
+    project.segments[1].lane_id = "track-1".to_string();
+    project.segments[1].start_seconds = 3.0;
+    project.segments[1].end_seconds = 4.4;
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::MergeSegments {
+                left_segment_id: "segment-1".to_string(),
+                right_segment_id: "segment-2".to_string(),
+            },
+        )
+        .expect("merge should apply");
+
+    let merged = project.segment("segment-1").unwrap();
+    assert_eq!(
+        merged.source_annotation_id,
+        Some("annotation-2".to_string())
+    );
+}
+
+#[test]
 fn merge_segments_rejects_missing_segment() {
     let mut project = sample_project();
     let mut history = CommandHistory::default();
