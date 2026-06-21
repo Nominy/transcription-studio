@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use studio_babel::{BabelTaskPackage, import_package};
 use studio_core::{AudioLane, Project, Segment};
 
-const SAMPLE_TASK_JSON: &str = include_str!("../../studio-babel/tests/fixtures/sample-task.json");
+const SAMPLE_TASK_JSON: &str = include_str!("../assets/sample-task.json");
 
 #[derive(Clone, Debug)]
 pub struct TimelineLaneRow<'a> {
@@ -29,4 +29,8 @@ pub fn timeline_lane_rows(project: &Project) -> Vec<TimelineLaneRow<'_>> {
                 .collect(),
         })
         .collect()
+}
+
+pub fn transport_status(project: &Project) -> String {
+    format!("{} | {} segments", project.name, project.segments.len())
 }

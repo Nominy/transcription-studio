@@ -124,6 +124,9 @@ fn split_segment(
     let original_end = project.segments[index].end_seconds;
     let original_start = project.segments[index].start_seconds;
 
+    validate_time_range(original_start, at_seconds)?;
+    validate_time_range(at_seconds, original_end)?;
+
     if at_seconds <= original_start || at_seconds >= original_end {
         return Err(StudioCoreError::SplitOutsideSegment);
     }
@@ -144,7 +147,7 @@ fn split_segment(
 }
 
 fn validate_time_range(start_seconds: f64, end_seconds: f64) -> Result<(), StudioCoreError> {
-    if start_seconds < end_seconds {
+    if start_seconds.is_finite() && end_seconds.is_finite() && start_seconds < end_seconds {
         Ok(())
     } else {
         Err(StudioCoreError::InvalidTimeRange)

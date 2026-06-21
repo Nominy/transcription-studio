@@ -93,6 +93,25 @@ fn move_segment_boundary_rejects_non_positive_duration() {
 }
 
 #[test]
+fn move_segment_boundary_rejects_non_finite_times() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::MoveSegmentBoundary {
+            segment_id: "segment-1".to_string(),
+            start_seconds: 1.0,
+            end_seconds: f64::NAN,
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::InvalidTimeRange));
+    assert_eq!(project.segment("segment-1").unwrap().start_seconds, 1.0);
+    assert_eq!(project.segment("segment-1").unwrap().end_seconds, 3.0);
+}
+
+#[test]
 fn split_segment_creates_adjacent_right_segment_and_keeps_text_on_left() {
     let mut project = sample_project();
     let mut history = CommandHistory::default();
@@ -118,6 +137,25 @@ fn split_segment_creates_adjacent_right_segment_and_keeps_text_on_left() {
     assert_eq!(right.text, "");
     assert_eq!(right.speaker_id, "speaker-1");
     assert_eq!(right.lane_id, "track-1");
+}
+
+#[test]
+fn split_segment_rejects_non_finite_split_point() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::SplitSegment {
+            segment_id: "segment-1".to_string(),
+            at_seconds: f64::NAN,
+            new_segment_id: "segment-1b".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::InvalidTimeRange));
+    assert!(!project.has_segment("segment-1b"));
+    assert_eq!(project.segment("segment-1").unwrap().end_seconds, 3.0);
 }
 
 #[test]

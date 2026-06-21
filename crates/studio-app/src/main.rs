@@ -1,6 +1,6 @@
 use iced::widget::{Column, Row, column, container, row, scrollable, text};
 use iced::{Element, Fill, Length, Theme};
-use studio_app::{load_sample_project, timeline_lane_rows};
+use studio_app::{load_sample_project, timeline_lane_rows, transport_status};
 use studio_core::Project;
 
 pub fn main() -> iced::Result {
@@ -43,12 +43,7 @@ fn view(state: &StudioState) -> Element<'_, Message> {
 }
 
 fn view_project(project: &Project) -> Element<'_, Message> {
-    let header = row![
-        text("Transcription Studio").size(26),
-        text(format!("Project: {}", project.name)),
-        text(format!("Segments: {}", project.segments.len())),
-    ]
-    .spacing(24);
+    let header = row![text("Transcription Studio").size(26)].spacing(24);
 
     let transport = container(
         row![
@@ -56,6 +51,7 @@ fn view_project(project: &Project) -> Element<'_, Message> {
             text("00:00.000"),
             text("Speed 1.00x"),
             text("Zoom 100%"),
+            text(transport_status(project)),
         ]
         .spacing(18),
     )

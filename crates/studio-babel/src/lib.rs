@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use studio_core::{AudioLane, Project, Segment, Speaker};
@@ -38,10 +38,30 @@ pub struct BabelAnnotation {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum BabelImportError {
+    #[error("duplicate speaker key `{0}`")]
+    DuplicateSpeaker(String),
+    #[error("duplicate audio track id `{0}`")]
+    DuplicateTrack(String),
+    #[error("duplicate annotation id `{0}`")]
+    DuplicateAnnotation(String),
     #[error("annotation references unknown speaker `{0}`")]
     UnknownSpeaker(String),
     #[error("annotation references unknown audio track `{0}`")]
     UnknownTrack(String),
+    #[error("audio track `{track_id}` references unknown speaker `{speaker_key}`")]
+    UnknownTrackSpeaker {
+        track_id: String,
+        speaker_key: String,
+    },
+    #[error(
+        "annotation `{annotation_id}` speaker `{speaker_key}` does not match track `{track_id}` speaker `{track_speaker_key}`"
+    )]
+    AnnotationTrackSpeakerMismatch {
+        annotation_id: String,
+        speaker_key: String,
+        track_id: String,
+        track_speaker_key: String,
+    },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -51,22 +71,44 @@ pub enum BabelExportError {
 }
 
 pub fn import_package(package: BabelTaskPackage) -> Result<Project, BabelImportError> {
+    validate_unique_ids(&package)?;
+
+    let speaker_labels_by_key: BTreeMap<_, _> = package
+        .speakers
+        .iter()
+        .map(|speaker| (speaker.speaker_key.clone(), speaker.label.clone()))
+        .collect();
+    let track_speakers_by_id: BTreeMap<_, _> = package
+        .audio_tracks
+        .iter()
+        .map(|track| (track.track_id.clone(), track.speaker_key.clone()))
+        .collect();
+
+    for track in &package.audio_tracks {
+        if !speaker_labels_by_key.contains_key(&track.speaker_key) {
+            return Err(BabelImportError::UnknownTrackSpeaker {
+                track_id: track.track_id.clone(),
+                speaker_key: track.speaker_key.clone(),
+            });
+        }
+    }
+
     for annotation in &package.annotations {
-        if !package
-            .speakers
-            .iter()
-            .any(|speaker| speaker.speaker_key == annotation.speaker_key)
-        {
+        if !speaker_labels_by_key.contains_key(&annotation.speaker_key) {
             return Err(BabelImportError::UnknownSpeaker(
                 annotation.speaker_key.clone(),
             ));
         }
-        if !package
-            .audio_tracks
-            .iter()
-            .any(|track| track.track_id == annotation.track_id)
-        {
-            return Err(BabelImportError::UnknownTrack(annotation.track_id.clone()));
+        let track_speaker_key = track_speakers_by_id
+            .get(&annotation.track_id)
+            .ok_or_else(|| BabelImportError::UnknownTrack(annotation.track_id.clone()))?;
+        if track_speaker_key != &annotation.speaker_key {
+            return Err(BabelImportError::AnnotationTrackSpeakerMismatch {
+                annotation_id: annotation.annotation_id.clone(),
+                speaker_key: annotation.speaker_key.clone(),
+                track_id: annotation.track_id.clone(),
+                track_speaker_key: track_speaker_key.clone(),
+            });
         }
     }
 
@@ -89,8 +131,11 @@ pub fn import_package(package: BabelTaskPackage) -> Result<Project, BabelImportE
             .into_iter()
             .map(|track| AudioLane {
                 id: track.track_id,
+                label: speaker_labels_by_key
+                    .get(&track.speaker_key)
+                    .cloned()
+                    .unwrap_or_else(|| track.path.clone()),
                 speaker_id: track.speaker_key,
-                label: format!("{} audio", track.path),
                 source_path: track.path,
             })
             .collect(),
@@ -109,6 +154,35 @@ pub fn import_package(package: BabelTaskPackage) -> Result<Project, BabelImportE
             .collect(),
         metadata,
     })
+}
+
+fn validate_unique_ids(package: &BabelTaskPackage) -> Result<(), BabelImportError> {
+    let mut speaker_keys = BTreeSet::new();
+    for speaker in &package.speakers {
+        if !speaker_keys.insert(speaker.speaker_key.as_str()) {
+            return Err(BabelImportError::DuplicateSpeaker(
+                speaker.speaker_key.clone(),
+            ));
+        }
+    }
+
+    let mut track_ids = BTreeSet::new();
+    for track in &package.audio_tracks {
+        if !track_ids.insert(track.track_id.as_str()) {
+            return Err(BabelImportError::DuplicateTrack(track.track_id.clone()));
+        }
+    }
+
+    let mut annotation_ids = BTreeSet::new();
+    for annotation in &package.annotations {
+        if !annotation_ids.insert(annotation.annotation_id.as_str()) {
+            return Err(BabelImportError::DuplicateAnnotation(
+                annotation.annotation_id.clone(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn export_package(project: &Project) -> Result<BabelTaskPackage, BabelExportError> {
