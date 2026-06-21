@@ -1,0 +1,14 @@
+[package]
+name = "studio-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+iced.workspace = true
+serde_json.workspace = true
+studio-babel = { path = "../studio-babel" }
+studio-core = { path = "../studio-core" }
+

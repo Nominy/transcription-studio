@@ -1,0 +1,22 @@
+[workspace]
+members = [
+  "crates/studio-core",
+  "crates/studio-project",
+  "crates/studio-babel",
+  "crates/studio-app"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Nominy/transcription-studio"
+
+[workspace.dependencies]
+anyhow = "1.0"
+iced = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.14"
+thiserror = "2.0"
+
