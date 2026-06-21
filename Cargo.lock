@@ -3083,6 +3083,8 @@ dependencies = [
  "serde_json",
  "studio-babel",
  "studio-core",
+ "studio-project",
+ "tempfile",
 ]
 
 [[package]]
