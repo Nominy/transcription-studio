@@ -1,0 +1,52 @@
+{
+  "task_id": "babel-task-ru-demo",
+  "project_preset": "ru-gold-2sp-v1",
+  "speakers": [
+    {
+      "speaker_key": "speaker-1",
+      "label": "Speaker 1"
+    },
+    {
+      "speaker_key": "speaker-2",
+      "label": "Speaker 2"
+    }
+  ],
+  "audio_tracks": [
+    {
+      "track_id": "track-speaker-1",
+      "speaker_key": "speaker-1",
+      "path": "audio/speaker-1.wav"
+    },
+    {
+      "track_id": "track-speaker-2",
+      "speaker_key": "speaker-2",
+      "path": "audio/speaker-2.wav"
+    }
+  ],
+  "annotations": [
+    {
+      "annotation_id": "annotation-1",
+      "speaker_key": "speaker-1",
+      "track_id": "track-speaker-1",
+      "start_seconds": 1.2,
+      "end_seconds": 3.4,
+      "text": "Здравствуйте."
+    },
+    {
+      "annotation_id": "annotation-2",
+      "speaker_key": "speaker-2",
+      "track_id": "track-speaker-2",
+      "start_seconds": 3.5,
+      "end_seconds": 5.1,
+      "text": "Да, слушаю."
+    },
+    {
+      "annotation_id": "annotation-3",
+      "speaker_key": "speaker-1",
+      "track_id": "track-speaker-1",
+      "start_seconds": 5.4,
+      "end_seconds": 7.2,
+      "text": "Уточните номер."
+    }
+  ]
+}
