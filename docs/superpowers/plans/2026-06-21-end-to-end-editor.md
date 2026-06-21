@@ -50,7 +50,7 @@
 **Files:**
 - Modify only if verification exposes bugs.
 
-- [ ] Run `cargo fmt --all -- --check`.
-- [ ] Run `cargo test --workspace`.
-- [ ] Run `cargo check --workspace`.
-- [ ] Fix and commit any issues.
+- [x] Run `cargo fmt --all -- --check`.
+- [x] Run `cargo test --workspace`.
+- [x] Run `cargo check --workspace`.
+- [x] Fix and commit any issues.
