@@ -1,10 +1,11 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
+use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::widget::{
     Column, Row, Space, button, column, container, horizontal_rule, pick_list, row, scrollable,
     slider, text, text_input, vertical_rule,
 };
-use iced::{Color, Element, Fill, Length, Theme, border};
+use iced::{Color, Element, Fill, Length, Subscription, Task, Theme, border, clipboard, keyboard};
 use studio_app::{
     EditorSession, LintSeverity, ReviewState, StudioWorkflow, TimelineLaneView, TrackFilter,
     TranscriptRowView, WaveformBlock, format_mm_ss, load_sample_project,
@@ -17,11 +18,12 @@ const DEFAULT_EXPORT_PATH: &str = ".studio-dev/export/babel-task.json";
 
 pub fn main() -> iced::Result {
     iced::application("Transcription Studio", update, view)
+        .subscription(subscription)
         .theme(|_| Theme::Light)
         .run()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Message {
     ImportPathChanged(String),
     LocalProjectPathChanged(String),
@@ -212,6 +214,101 @@ impl StudioState {
         self.with_editor_mut(EditorSession::mark_saved);
     }
 
+    fn reconcile_editor_with_project(&mut self) {
+        if let Some(project) = self.project().cloned() {
+            self.with_editor_mut(|editor| editor.reconcile_project(&project));
+        }
+    }
+
+    fn segment_draft_differs(&self, segment: &Segment) -> Result<bool, String> {
+        let Some(draft) = self.segment_drafts.get(&segment.id) else {
+            return Ok(false);
+        };
+        let start_seconds = parse_seconds("Start", &draft.start_seconds)?;
+        let end_seconds = parse_seconds("End", &draft.end_seconds)?;
+        if start_seconds >= end_seconds {
+            return Err("Start must be before end.".to_string());
+        }
+
+        Ok(segment.start_seconds != start_seconds
+            || segment.end_seconds != end_seconds
+            || segment.text != draft.text)
+    }
+
+    fn pending_draft_segment_ids(&self) -> Result<Vec<String>, String> {
+        let Some(project) = self.project() else {
+            return Ok(Vec::new());
+        };
+
+        project
+            .segments
+            .iter()
+            .filter_map(|segment| match self.segment_draft_differs(segment) {
+                Ok(true) => Some(Ok(segment.id.clone())),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect()
+    }
+
+    fn draft_lint_status(
+        &self,
+        row_view: &TranscriptRowView,
+        draft: &SegmentDraft,
+    ) -> (LintSeverity, String) {
+        let Some(segment) = self
+            .project()
+            .and_then(|project| project.segment(&row_view.segment_id))
+        else {
+            return (LintSeverity::Error, "segment is missing".to_string());
+        };
+
+        let start_seconds = match parse_seconds("Start", &draft.start_seconds) {
+            Ok(value) => value,
+            Err(error) => return (LintSeverity::Error, error),
+        };
+        let end_seconds = match parse_seconds("End", &draft.end_seconds) {
+            Ok(value) => value,
+            Err(error) => return (LintSeverity::Error, error),
+        };
+        if start_seconds >= end_seconds {
+            return (LintSeverity::Error, "Start must be before end".to_string());
+        }
+        if draft.text.trim().is_empty() {
+            return (LintSeverity::Error, "text is empty".to_string());
+        }
+        if segment.start_seconds != start_seconds
+            || segment.end_seconds != end_seconds
+            || segment.text != draft.text
+        {
+            return (LintSeverity::Warning, "Draft pending".to_string());
+        }
+
+        (
+            row_view.lint.severity.clone(),
+            row_view.lint.message.clone(),
+        )
+    }
+
+    fn apply_pending_drafts(&mut self, action_name: &str) -> bool {
+        let pending_ids = match self.pending_draft_segment_ids() {
+            Ok(pending_ids) => pending_ids,
+            Err(error) => {
+                self.status = format!("{action_name} blocked: {error}");
+                return false;
+            }
+        };
+
+        for segment_id in pending_ids {
+            if !self.apply_segment_draft(&segment_id, false) {
+                self.status = format!("{action_name} blocked: {}", self.status);
+                return false;
+            }
+        }
+
+        true
+    }
+
     fn import_babel_json(&mut self) {
         match fs::read_to_string(&self.import_path)
             .map_err(|error| format!("failed to read `{}`: {error}", self.import_path))
@@ -242,6 +339,10 @@ impl StudioState {
     }
 
     fn save_local_project(&mut self) {
+        if !self.apply_pending_drafts("Save") {
+            return;
+        }
+
         let path = self.local_project_path.clone();
         if self.with_workflow_mut("Save", |workflow| {
             workflow
@@ -254,17 +355,27 @@ impl StudioState {
     }
 
     fn export_babel_json(&mut self) {
+        if !self.apply_pending_drafts("Export") {
+            return;
+        }
+
         let path = self.export_path.clone();
-        self.with_workflow_mut("Export", |workflow| {
+        if self.with_workflow_mut("Export", |workflow| {
             let json = workflow
                 .export_babel_json()
                 .map_err(|error| error.to_string())?;
             write_text_file(&path, &json)?;
             Ok(format!("Exported Babel JSON `{path}`."))
-        });
+        }) {
+            self.mark_saved();
+        }
     }
 
     fn submit_review(&mut self) {
+        if !self.apply_pending_drafts("Submit") {
+            return;
+        }
+
         let Some(project) = self.project().cloned() else {
             self.status = "Submit unavailable: no project loaded.".to_string();
             return;
@@ -306,9 +417,13 @@ impl StudioState {
     }
 
     fn apply_segment(&mut self, segment_id: &str) {
+        self.apply_segment_draft(segment_id, true);
+    }
+
+    fn apply_segment_draft(&mut self, segment_id: &str, report_no_change: bool) -> bool {
         let Some(draft) = self.segment_drafts.get(segment_id).cloned() else {
             self.status = format!("Segment `{segment_id}` has no editable draft.");
-            return;
+            return false;
         };
 
         let Some(segment) = self
@@ -317,34 +432,36 @@ impl StudioState {
             .cloned()
         else {
             self.status = format!("Segment `{segment_id}` was not found.");
-            return;
+            return false;
         };
 
         let start_seconds = match parse_seconds("Start", &draft.start_seconds) {
             Ok(value) => value,
             Err(error) => {
                 self.status = error;
-                return;
+                return false;
             }
         };
         let end_seconds = match parse_seconds("End", &draft.end_seconds) {
             Ok(value) => value,
             Err(error) => {
                 self.status = error;
-                return;
+                return false;
             }
         };
         if start_seconds >= end_seconds {
             self.status = "Start must be before end.".to_string();
-            return;
+            return false;
         }
 
         let timing_changed =
             segment.start_seconds != start_seconds || segment.end_seconds != end_seconds;
         let text_changed = segment.text != draft.text;
         if !timing_changed && !text_changed {
-            self.status = format!("No changes to apply for `{segment_id}`.");
-            return;
+            if report_no_change {
+                self.status = format!("No changes to apply for `{segment_id}`.");
+            }
+            return true;
         }
 
         let text = draft.text;
@@ -359,6 +476,7 @@ impl StudioState {
             self.refresh_segment_draft(&segment_id);
             self.mark_dirty();
         }
+        applied
     }
 
     fn split_segment(&mut self, segment_id: &str) {
@@ -397,6 +515,7 @@ impl StudioState {
         }) {
             self.refresh_segment_draft(&split_segment_id);
             self.mark_dirty();
+            self.reconcile_editor_with_project();
         }
     }
 
@@ -412,6 +531,7 @@ impl StudioState {
         }) {
             self.refresh_segment_draft(&segment_id);
             self.mark_dirty();
+            self.reconcile_editor_with_project();
         }
     }
 
@@ -425,6 +545,7 @@ impl StudioState {
         }) {
             self.segment_drafts.remove(&segment_id);
             self.mark_dirty();
+            self.reconcile_editor_with_project();
         }
     }
 
@@ -437,6 +558,7 @@ impl StudioState {
             Ok(format!("Created `{new_segment_id}` after `{segment_id}`."))
         }) {
             self.mark_dirty();
+            self.reconcile_editor_with_project();
         }
     }
 
@@ -485,7 +607,7 @@ impl StudioState {
     }
 }
 
-fn update(state: &mut StudioState, message: Message) {
+fn update(state: &mut StudioState, message: Message) -> Task<Message> {
     match message {
         Message::ImportPathChanged(path) => state.import_path = path,
         Message::LocalProjectPathChanged(path) => state.local_project_path = path,
@@ -497,12 +619,14 @@ fn update(state: &mut StudioState, message: Message) {
         Message::SubmitReview => state.submit_review(),
         Message::CopySupportId => {
             if let Some(editor) = &state.editor {
-                state.status = format!("Support ID copied: {}", editor.support_id);
+                let support_id = editor.support_id.clone();
+                state.status = format!("Support ID copied: {support_id}");
+                return clipboard::write(support_id);
             }
         }
         Message::ShowHotkeys => {
             state.status =
-                "Hotkeys: Space play/pause, Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, Enter apply."
+                "Hotkeys: Space play/pause, Ctrl+S save, Ctrl+E export, Ctrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo, Arrow keys move rows."
                     .to_string();
         }
         Message::TogglePlayback => state.with_editor_mut(EditorSession::toggle_playback),
@@ -513,9 +637,17 @@ fn update(state: &mut StudioState, message: Message) {
                 state.with_editor_mut(|editor| editor.set_speed(speed));
             }
         }
-        Message::ZoomChanged(value) => state.with_editor_mut(|editor| editor.set_zoom(value)),
+        Message::ZoomChanged(value) => {
+            if let Some(project) = state.project().cloned() {
+                state.with_editor_mut(|editor| editor.set_zoom(&project, value));
+            }
+        }
         Message::ToggleDiffView => state.with_editor_mut(EditorSession::toggle_diff_view),
-        Message::ToggleLoop => state.with_editor_mut(EditorSession::toggle_loop),
+        Message::ToggleLoop => {
+            if let Some(project) = state.project().cloned() {
+                state.with_editor_mut(|editor| editor.toggle_loop(&project));
+            }
+        }
         Message::ToggleLaneMute(lane_id) => {
             state.with_editor_mut(|editor| editor.toggle_lane_mute(&lane_id));
         }
@@ -537,11 +669,13 @@ fn update(state: &mut StudioState, message: Message) {
         Message::SegmentStartChanged(segment_id, value) => {
             if let Some(draft) = state.segment_drafts.get_mut(&segment_id) {
                 draft.start_seconds = value;
+                state.mark_dirty();
             }
         }
         Message::SegmentEndChanged(segment_id, value) => {
             if let Some(draft) = state.segment_drafts.get_mut(&segment_id) {
                 draft.end_seconds = value;
+                state.mark_dirty();
             }
         }
         Message::SegmentSplitChanged(segment_id, value) => {
@@ -552,6 +686,7 @@ fn update(state: &mut StudioState, message: Message) {
         Message::SegmentTextChanged(segment_id, value) => {
             if let Some(draft) = state.segment_drafts.get_mut(&segment_id) {
                 draft.text = value;
+                state.mark_dirty();
             }
         }
         Message::SegmentTrackChanged(segment_id, lane_id) => {
@@ -562,6 +697,38 @@ fn update(state: &mut StudioState, message: Message) {
         Message::MergeSegment(segment_id) => state.merge_segment(&segment_id),
         Message::DeleteSegment(segment_id) => state.delete_segment(&segment_id),
         Message::CreateSegmentAfter(segment_id) => state.create_segment_after(&segment_id),
+    }
+
+    Task::none()
+}
+
+fn subscription(_state: &StudioState) -> Subscription<Message> {
+    keyboard::on_key_press(hotkey_message)
+}
+
+fn hotkey_message(key: Key, modifiers: Modifiers) -> Option<Message> {
+    let key = key.as_ref();
+
+    if modifiers.command() {
+        return match key {
+            Key::Character("s") | Key::Character("S") => Some(Message::SaveLocalProject),
+            Key::Character("e") | Key::Character("E") => Some(Message::ExportBabelJson),
+            Key::Character("y") | Key::Character("Y") => Some(Message::Redo),
+            Key::Character("z") | Key::Character("Z") if modifiers.shift() => Some(Message::Redo),
+            Key::Character("z") | Key::Character("Z") => Some(Message::Undo),
+            _ => None,
+        };
+    }
+
+    if modifiers.control() || modifiers.alt() || modifiers.logo() {
+        return None;
+    }
+
+    match key {
+        Key::Named(Named::Space) => Some(Message::TogglePlayback),
+        Key::Named(Named::ArrowLeft) => Some(Message::PreviousSegment),
+        Key::Named(Named::ArrowRight) => Some(Message::NextSegment),
+        _ => None,
     }
 }
 
@@ -711,11 +878,7 @@ fn view_status_bar<'a>(
     } else {
         "Diff View: Off"
     };
-    let loop_label = if editor.loop_enabled {
-        "Loop: On"
-    } else {
-        "Loop: Off"
-    };
+    let loop_label = editor.loop_label();
 
     container(
         row![
@@ -774,7 +937,7 @@ fn view_timeline<'a>(project: &'a Project, editor: &'a EditorSession) -> Element
 
     lanes = lanes.push(
         row![
-            container(text("Loop")).width(Length::Fixed(162.0)),
+            container(text(editor.loop_label())).width(Length::Fixed(162.0)),
             view_time_ruler(editor),
         ]
         .spacing(8),
@@ -859,10 +1022,11 @@ fn view_lane_waveform<'a>(
         ))));
     }
 
-    let playhead_percent = (((editor.playhead_seconds - editor.viewport.start_seconds)
-        / editor.viewport.end_seconds.max(0.001))
-        * 100.0)
-        .clamp(0.0, 100.0) as f32;
+    let viewport_duration =
+        (editor.viewport.end_seconds - editor.viewport.start_seconds).max(0.001);
+    let playhead_percent =
+        (((editor.playhead_seconds - editor.viewport.start_seconds) / viewport_duration) * 100.0)
+            .clamp(0.0, 100.0) as f32;
 
     container(
         column![
@@ -945,7 +1109,7 @@ fn view_transcript_workspace<'a>(
     table = table.push(view_table_header());
     for row_view in rows {
         if let Some(draft) = state.segment_drafts.get(&row_view.segment_id) {
-            table = table.push(view_transcript_row(project, editor, row_view, draft));
+            table = table.push(view_transcript_row(state, project, editor, row_view, draft));
         }
     }
 
@@ -974,6 +1138,7 @@ fn view_table_header<'a>() -> Element<'a, Message> {
 }
 
 fn view_transcript_row<'a>(
+    state: &'a StudioState,
     project: &'a Project,
     editor: &'a EditorSession,
     row_view: TranscriptRowView,
@@ -1025,6 +1190,10 @@ fn view_transcript_row<'a>(
         editor.open_actions_segment_id.as_deref() == Some(row_view.segment_id.as_str());
     let action_button = button(text(if actions_open { "Close" } else { "..." }))
         .on_press(Message::ToggleActions(row_view.segment_id.clone()));
+    let (lint_severity, mut lint_message) = state.draft_lint_status(&row_view, draft);
+    if let Some(diff_marker) = row_view.diff_marker.as_deref() {
+        lint_message = format!("{lint_message} | {diff_marker}");
+    }
     let mut row_content = Column::new().spacing(4);
     row_content = row_content.push(
         row![
@@ -1037,10 +1206,7 @@ fn view_transcript_row<'a>(
             end_input,
             split_input,
             transcript_text_input,
-            view_lint(
-                row_view.lint.severity.clone(),
-                row_view.lint.message.clone()
-            ),
+            view_lint(lint_severity, lint_message),
             action_button.width(Length::Fixed(80.0)),
         ]
         .spacing(8),
@@ -1250,9 +1416,11 @@ fn dot_style(color: Color) -> container::Style {
 mod tests {
     use std::path::Path;
 
+    use iced::keyboard::{Key, Modifiers, key::Named};
     use studio_app::StudioWorkflow;
+    use studio_babel::BabelTaskPackage;
 
-    use super::{DEFAULT_IMPORT_PATH, ReviewState, StudioState};
+    use super::{DEFAULT_IMPORT_PATH, Message, ReviewState, StudioState, hotkey_message, update};
 
     #[test]
     fn default_import_path_points_to_existing_fixture() {
@@ -1387,5 +1555,125 @@ mod tests {
             ReviewState::Draft
         );
         assert!(state.status.contains("blocked"));
+    }
+
+    #[test]
+    fn typing_text_marks_dirty_and_save_flushes_pending_draft() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let mut state = StudioState {
+            local_project_path: temp.path().display().to_string(),
+            ..StudioState::default()
+        };
+
+        let _ = update(
+            &mut state,
+            Message::SegmentTextChanged("annotation-1".to_string(), "typed draft".to_string()),
+        );
+
+        assert!(state.editor.as_ref().unwrap().is_dirty);
+        state.save_local_project();
+
+        let loaded = StudioWorkflow::load_local_project(temp.path()).unwrap();
+        assert_eq!(
+            loaded.project().segment("annotation-1").unwrap().text,
+            "typed draft"
+        );
+        assert!(!state.editor.as_ref().unwrap().is_dirty);
+    }
+
+    #[test]
+    fn export_flushes_pending_draft_and_marks_saved_after_write() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let export_path = temp.path().join("babel-task.json");
+        let mut state = StudioState {
+            export_path: export_path.display().to_string(),
+            ..StudioState::default()
+        };
+
+        let _ = update(
+            &mut state,
+            Message::SegmentTextChanged("annotation-2".to_string(), "exported draft".to_string()),
+        );
+        state.export_babel_json();
+
+        let exported = std::fs::read_to_string(export_path).unwrap();
+        let package: BabelTaskPackage = serde_json::from_str(&exported).unwrap();
+        let annotation = package
+            .annotations
+            .iter()
+            .find(|annotation| annotation.annotation_id == "annotation-2")
+            .unwrap();
+        assert_eq!(annotation.text, "exported draft");
+        assert!(!state.editor.as_ref().unwrap().is_dirty);
+    }
+
+    #[test]
+    fn submit_flushes_pending_hidden_draft_and_blocks_lint_even_when_filtered() {
+        let mut state = StudioState::default();
+        state.editor.as_mut().unwrap().track_filter =
+            studio_app::TrackFilter::Lane("track-speaker-2".to_string());
+
+        let _ = update(
+            &mut state,
+            Message::SegmentTextChanged("annotation-1".to_string(), String::new()),
+        );
+        state.submit_review();
+
+        assert_eq!(
+            state.editor.as_ref().unwrap().review_state,
+            ReviewState::Draft
+        );
+        assert!(state.status.contains("blocked"));
+        assert_eq!(
+            state
+                .workflow
+                .as_ref()
+                .unwrap()
+                .project()
+                .segment("annotation-1")
+                .unwrap()
+                .text,
+            ""
+        );
+    }
+
+    #[test]
+    fn deleting_selected_segment_clears_removed_action_state() {
+        let mut state = StudioState::default();
+        state.select_segment("annotation-1");
+        state.editor.as_mut().unwrap().open_actions_segment_id = Some("annotation-1".to_string());
+
+        state.delete_segment("annotation-1");
+
+        let editor = state.editor.as_ref().unwrap();
+        assert_ne!(editor.selected_segment_id.as_deref(), Some("annotation-1"));
+        assert!(editor.open_actions_segment_id.is_none());
+    }
+
+    #[test]
+    fn hotkey_mapping_covers_transport_navigation_and_workflow_actions() {
+        assert_eq!(
+            hotkey_message(Key::Named(Named::Space), Modifiers::empty()),
+            Some(Message::TogglePlayback)
+        );
+        assert_eq!(
+            hotkey_message(Key::Named(Named::ArrowRight), Modifiers::empty()),
+            Some(Message::NextSegment)
+        );
+        assert_eq!(
+            hotkey_message(Key::Character("s".into()), Modifiers::COMMAND),
+            Some(Message::SaveLocalProject)
+        );
+        assert_eq!(
+            hotkey_message(Key::Character("e".into()), Modifiers::COMMAND),
+            Some(Message::ExportBabelJson)
+        );
+        assert_eq!(
+            hotkey_message(
+                Key::Character("z".into()),
+                Modifiers::COMMAND | Modifiers::SHIFT,
+            ),
+            Some(Message::Redo)
+        );
     }
 }

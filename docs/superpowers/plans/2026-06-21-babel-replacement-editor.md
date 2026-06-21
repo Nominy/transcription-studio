@@ -55,6 +55,7 @@
 - [x] Run `cargo fmt --all -- --check`.
 - [x] Run `cargo test --workspace`.
 - [x] Run `cargo check --workspace`.
-- [ ] Dispatch read-only spec and code-quality subagent reviews.
-- [ ] Fix reviewed issues with failing tests first.
-- [ ] Commit final fixes.
+- [x] Dispatch read-only spec and code-quality subagent reviews.
+- [x] Fix reviewed issues with failing tests first: real zoom viewport, clipboard copy task, hotkey subscription, loop/diff rendering, stable Babel IDs, hidden-lane submit blocking, pending draft flush, stale selection cleanup, export saved state, and unknown Babel field preservation.
+- [x] Run final fmt/test/check/clippy verification.
+- [x] Commit final fixes.

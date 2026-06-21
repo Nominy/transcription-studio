@@ -24,6 +24,45 @@ fn project_with_segments(segments: Vec<Segment>) -> Project {
     }
 }
 
+fn two_lane_project(mut segments: Vec<Segment>) -> Project {
+    for segment in &mut segments {
+        if segment.lane_id == "track-2" {
+            segment.speaker_id = "speaker-2".to_string();
+        }
+    }
+
+    Project {
+        id: "project".to_string(),
+        name: "Project".to_string(),
+        speakers: vec![
+            Speaker {
+                id: "speaker-1".to_string(),
+                label: "Speaker 1".to_string(),
+            },
+            Speaker {
+                id: "speaker-2".to_string(),
+                label: "Speaker 2".to_string(),
+            },
+        ],
+        lanes: vec![
+            AudioLane {
+                id: "track-1".to_string(),
+                speaker_id: "speaker-1".to_string(),
+                label: "Speaker 1".to_string(),
+                source_path: "audio/speaker-1.wav".to_string(),
+            },
+            AudioLane {
+                id: "track-2".to_string(),
+                speaker_id: "speaker-2".to_string(),
+                label: "Speaker 2".to_string(),
+                source_path: "audio/speaker-2.wav".to_string(),
+            },
+        ],
+        segments,
+        metadata: Default::default(),
+    }
+}
+
 fn segment(id: &str, start_seconds: f64, end_seconds: f64, text: &str) -> Segment {
     Segment {
         id: id.to_string(),
@@ -142,4 +181,88 @@ fn submit_review_is_blocked_by_lint_errors_and_marks_clean_project_submitted() {
         .expect_err("lint errors should block submit");
     assert!(error.contains("1 blocking"));
     assert_eq!(bad_session.review_state, ReviewState::Draft);
+}
+
+#[test]
+fn submit_review_checks_hidden_lanes_even_when_filter_is_clean() {
+    let mut hidden_bad = segment("annotation-2", 2.0, 3.0, "");
+    hidden_bad.lane_id = "track-2".to_string();
+    let project = two_lane_project(vec![
+        segment("annotation-1", 0.0, 1.0, "visible clean"),
+        hidden_bad,
+    ]);
+    let mut session = EditorSession::for_project(&project);
+    session.track_filter = TrackFilter::Lane("track-1".to_string());
+
+    assert_eq!(session.transcript_rows(&project).len(), 1);
+    assert_eq!(session.blocking_lint_count(&project), 1);
+    assert!(session.submit_review(&project).is_err());
+}
+
+#[test]
+fn zoom_reframes_the_visible_timeline_around_the_playhead() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+    session.select_segment(&project, "annotation-2");
+
+    let before = session.timeline_lanes(&project)[1].blocks[0].left_percent;
+    session.set_zoom(&project, 2.0);
+    let after = session.timeline_lanes(&project)[1].blocks[0].left_percent;
+
+    assert_eq!(session.zoom, 2.0);
+    assert!(session.viewport.start_seconds > 1.0);
+    assert!(session.viewport.end_seconds < 7.2);
+    assert_ne!(before, after);
+}
+
+#[test]
+fn loop_range_tracks_the_selected_segment_when_enabled() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+    session.select_segment(&project, "annotation-2");
+
+    session.toggle_loop(&project);
+
+    assert!(session.loop_enabled);
+    assert_eq!(session.loop_range.start_seconds, 3.5);
+    assert_eq!(session.loop_range.end_seconds, 5.1);
+    assert!(session.loop_label().contains("00:03.50"));
+}
+
+#[test]
+fn diff_view_adds_visible_row_markers() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+
+    assert!(session.transcript_rows(&project)[0].diff_marker.is_none());
+    session.toggle_diff_view();
+
+    let rows = session.transcript_rows(&project);
+    assert_eq!(rows[0].diff_marker.as_deref(), Some("Babel source"));
+}
+
+#[test]
+fn display_ids_are_stable_babel_annotation_ids_not_visible_row_positions() {
+    let project = project_with_segments(vec![
+        segment("annotation-20", 0.0, 1.0, "twenty"),
+        segment("annotation-2", 2.0, 3.0, "two"),
+        Segment {
+            id: "annotation-20__studio_1".to_string(),
+            source_annotation_id: None,
+            speaker_id: "speaker-1".to_string(),
+            lane_id: "track-1".to_string(),
+            start_seconds: 4.0,
+            end_seconds: 5.0,
+            text: "derived".to_string(),
+        },
+    ]);
+
+    let rows = EditorSession::for_project(&project).transcript_rows(&project);
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.display_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["20", "02", "20.1"]
+    );
 }

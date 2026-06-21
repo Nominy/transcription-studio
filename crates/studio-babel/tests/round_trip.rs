@@ -1,3 +1,4 @@
+use serde_json::json;
 use studio_babel::{
     BabelAnnotation, BabelAudioTrack, BabelImportError, BabelSpeaker, BabelTaskPackage,
     export_package, import_package,
@@ -48,12 +49,58 @@ fn export_preserves_babel_round_trip_fields() {
 }
 
 #[test]
+fn export_preserves_unknown_babel_fields_from_imported_package() {
+    let source = json!({
+        "task_id": "task-extra",
+        "project_preset": "ru-gold-2sp-v1",
+        "review_batch": { "queue": "gold", "priority": 2 },
+        "speakers": [
+            {
+                "speaker_key": "speaker-1",
+                "label": "Speaker 1",
+                "display_color": "violet"
+            }
+        ],
+        "audio_tracks": [
+            {
+                "track_id": "track-1",
+                "speaker_key": "speaker-1",
+                "path": "audio/speaker-1.wav",
+                "waveform_bucket": "wf-1"
+            }
+        ],
+        "annotations": [
+            {
+                "annotation_id": "annotation-1",
+                "speaker_key": "speaker-1",
+                "track_id": "track-1",
+                "start_seconds": 1.0,
+                "end_seconds": 2.0,
+                "text": "hello",
+                "rule_state": { "lint": "ok" }
+            }
+        ]
+    });
+    let package: BabelTaskPackage = serde_json::from_value(source).unwrap();
+    let project = import_package(package).expect("package should import");
+
+    let exported = export_package(&project).expect("project should export");
+    let value = serde_json::to_value(exported).unwrap();
+
+    assert_eq!(value["review_batch"]["queue"], "gold");
+    assert_eq!(value["speakers"][0]["display_color"], "violet");
+    assert_eq!(value["audio_tracks"][0]["waveform_bucket"], "wf-1");
+    assert_eq!(value["annotations"][0]["rule_state"]["lint"], "ok");
+}
+
+#[test]
 fn import_rejects_audio_track_with_unknown_speaker() {
     let mut package = load_fixture();
     package.audio_tracks.push(BabelAudioTrack {
         track_id: "orphan-track".to_string(),
         speaker_key: "missing-speaker".to_string(),
         path: "audio/orphan.wav".to_string(),
+        extra: Default::default(),
     });
 
     let result = import_package(package);
@@ -77,6 +124,7 @@ fn import_rejects_annotation_using_track_from_another_speaker() {
         start_seconds: 8.0,
         end_seconds: 9.0,
         text: "Wrong lane.".to_string(),
+        extra: Default::default(),
     });
 
     let result = import_package(package);
@@ -98,6 +146,7 @@ fn import_rejects_duplicate_speaker_track_and_annotation_ids() {
     duplicate_speaker.speakers.push(BabelSpeaker {
         speaker_key: "speaker-1".to_string(),
         label: "Duplicate speaker".to_string(),
+        extra: Default::default(),
     });
     assert_eq!(
         import_package(duplicate_speaker),
@@ -109,6 +158,7 @@ fn import_rejects_duplicate_speaker_track_and_annotation_ids() {
         track_id: "track-speaker-1".to_string(),
         speaker_key: "speaker-1".to_string(),
         path: "audio/duplicate.wav".to_string(),
+        extra: Default::default(),
     });
     assert_eq!(
         import_package(duplicate_track),
@@ -125,6 +175,7 @@ fn import_rejects_duplicate_speaker_track_and_annotation_ids() {
         start_seconds: 8.0,
         end_seconds: 9.0,
         text: "Duplicate annotation.".to_string(),
+        extra: Default::default(),
     });
     assert_eq!(
         import_package(duplicate_annotation),

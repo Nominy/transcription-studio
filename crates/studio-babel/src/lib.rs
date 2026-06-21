@@ -1,8 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use thiserror::Error;
+
+const META_PROJECT_PRESET: &str = "project_preset";
+const META_EXTRA_PACKAGE: &str = "babel.extra.package";
+const META_EXTRA_SPEAKER_PREFIX: &str = "babel.extra.speaker.";
+const META_EXTRA_TRACK_PREFIX: &str = "babel.extra.track.";
+const META_EXTRA_ANNOTATION_PREFIX: &str = "babel.extra.annotation.";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BabelTaskPackage {
@@ -11,12 +18,16 @@ pub struct BabelTaskPackage {
     pub speakers: Vec<BabelSpeaker>,
     pub audio_tracks: Vec<BabelAudioTrack>,
     pub annotations: Vec<BabelAnnotation>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BabelSpeaker {
     pub speaker_key: String,
     pub label: String,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +35,8 @@ pub struct BabelAudioTrack {
     pub track_id: String,
     pub speaker_key: String,
     pub path: String,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,6 +47,8 @@ pub struct BabelAnnotation {
     pub start_seconds: f64,
     pub end_seconds: f64,
     pub text: String,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -113,7 +128,32 @@ pub fn import_package(package: BabelTaskPackage) -> Result<Project, BabelImportE
     }
 
     let mut metadata = BTreeMap::new();
-    metadata.insert("project_preset".to_string(), package.project_preset);
+    metadata.insert(
+        META_PROJECT_PRESET.to_string(),
+        package.project_preset.clone(),
+    );
+    store_extra(&mut metadata, META_EXTRA_PACKAGE, &package.extra);
+    for speaker in &package.speakers {
+        store_extra(
+            &mut metadata,
+            &metadata_key(META_EXTRA_SPEAKER_PREFIX, &speaker.speaker_key),
+            &speaker.extra,
+        );
+    }
+    for track in &package.audio_tracks {
+        store_extra(
+            &mut metadata,
+            &metadata_key(META_EXTRA_TRACK_PREFIX, &track.track_id),
+            &track.extra,
+        );
+    }
+    for annotation in &package.annotations {
+        store_extra(
+            &mut metadata,
+            &metadata_key(META_EXTRA_ANNOTATION_PREFIX, &annotation.annotation_id),
+            &annotation.extra,
+        );
+    }
 
     Ok(Project {
         name: format!("Babel task {}", package.task_id),
@@ -188,19 +228,24 @@ fn validate_unique_ids(package: &BabelTaskPackage) -> Result<(), BabelImportErro
 pub fn export_package(project: &Project) -> Result<BabelTaskPackage, BabelExportError> {
     let project_preset = project
         .metadata
-        .get("project_preset")
+        .get(META_PROJECT_PRESET)
         .cloned()
         .ok_or(BabelExportError::MissingProjectPreset)?;
 
     Ok(BabelTaskPackage {
         task_id: project.id.clone(),
         project_preset,
+        extra: load_extra(&project.metadata, META_EXTRA_PACKAGE),
         speakers: project
             .speakers
             .iter()
             .map(|speaker| BabelSpeaker {
                 speaker_key: speaker.id.clone(),
                 label: speaker.label.clone(),
+                extra: load_extra(
+                    &project.metadata,
+                    &metadata_key(META_EXTRA_SPEAKER_PREFIX, &speaker.id),
+                ),
             })
             .collect(),
         audio_tracks: project
@@ -210,22 +255,57 @@ pub fn export_package(project: &Project) -> Result<BabelTaskPackage, BabelExport
                 track_id: lane.id.clone(),
                 speaker_key: lane.speaker_id.clone(),
                 path: lane.source_path.clone(),
+                extra: load_extra(
+                    &project.metadata,
+                    &metadata_key(META_EXTRA_TRACK_PREFIX, &lane.id),
+                ),
             })
             .collect(),
         annotations: project
             .segments
             .iter()
-            .map(|segment| BabelAnnotation {
-                annotation_id: segment
+            .map(|segment| {
+                let annotation_id = segment
                     .source_annotation_id
                     .clone()
-                    .unwrap_or_else(|| segment.id.clone()),
-                speaker_key: segment.speaker_id.clone(),
-                track_id: segment.lane_id.clone(),
-                start_seconds: segment.start_seconds,
-                end_seconds: segment.end_seconds,
-                text: segment.text.clone(),
+                    .unwrap_or_else(|| segment.id.clone());
+                BabelAnnotation {
+                    extra: load_extra(
+                        &project.metadata,
+                        &metadata_key(META_EXTRA_ANNOTATION_PREFIX, &annotation_id),
+                    ),
+                    annotation_id,
+                    speaker_key: segment.speaker_id.clone(),
+                    track_id: segment.lane_id.clone(),
+                    start_seconds: segment.start_seconds,
+                    end_seconds: segment.end_seconds,
+                    text: segment.text.clone(),
+                }
             })
             .collect(),
     })
+}
+
+fn metadata_key(prefix: &str, id: &str) -> String {
+    format!("{prefix}{id}")
+}
+
+fn store_extra(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    extra: &BTreeMap<String, Value>,
+) {
+    if extra.is_empty() {
+        return;
+    }
+
+    let encoded = serde_json::to_string(extra).expect("Babel extra metadata should encode");
+    metadata.insert(key.to_string(), encoded);
+}
+
+fn load_extra(metadata: &BTreeMap<String, String>, key: &str) -> BTreeMap<String, Value> {
+    metadata
+        .get(key)
+        .and_then(|encoded| serde_json::from_str(encoded).ok())
+        .unwrap_or_default()
 }
