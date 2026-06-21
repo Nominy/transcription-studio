@@ -14,7 +14,9 @@ pub struct Project {
 
 impl Project {
     pub fn segment(&self, segment_id: &str) -> Option<&Segment> {
-        self.segments.iter().find(|segment| segment.id == segment_id)
+        self.segments
+            .iter()
+            .find(|segment| segment.id == segment_id)
     }
 
     pub fn segment_mut(&mut self, segment_id: &str) -> Option<&mut Segment> {
@@ -52,4 +54,3 @@ pub struct Segment {
     pub end_seconds: f64,
     pub text: String,
 }
-

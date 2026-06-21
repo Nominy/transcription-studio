@@ -150,4 +150,3 @@ fn validate_time_range(start_seconds: f64, end_seconds: f64) -> Result<(), Studi
         Err(StudioCoreError::InvalidTimeRange)
     }
 }
-

@@ -137,7 +137,9 @@ fn undo_restores_previous_project_state() {
         .expect("text edit should apply");
 
     assert_ne!(project, original);
-    history.undo(&mut project).expect("undo should restore state");
+    history
+        .undo(&mut project)
+        .expect("undo should restore state");
     assert_eq!(project, original);
 }
 
@@ -156,10 +158,13 @@ fn redo_reapplies_undone_change() {
         )
         .expect("text edit should apply");
 
-    history.undo(&mut project).expect("undo should restore state");
+    history
+        .undo(&mut project)
+        .expect("undo should restore state");
     assert_eq!(project.segment("segment-1").unwrap().text, "original one");
 
-    history.redo(&mut project).expect("redo should restore change");
+    history
+        .redo(&mut project)
+        .expect("redo should restore change");
     assert_eq!(project.segment("segment-1").unwrap().text, "redo text");
 }
-

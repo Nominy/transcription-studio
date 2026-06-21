@@ -1,4 +1,4 @@
-use iced::widget::{column, container, row, scrollable, text, Column, Row};
+use iced::widget::{Column, Row, column, container, row, scrollable, text};
 use iced::{Element, Fill, Length, Theme};
 use studio_app::{load_sample_project, timeline_lane_rows};
 use studio_core::Project;
@@ -50,13 +50,15 @@ fn view_project(project: &Project) -> Element<'_, Message> {
     ]
     .spacing(24);
 
-    let transport = container(row![
-        text("Play/Pause"),
-        text("00:00.000"),
-        text("Speed 1.00x"),
-        text("Zoom 100%"),
-    ]
-    .spacing(18))
+    let transport = container(
+        row![
+            text("Play/Pause"),
+            text("00:00.000"),
+            text("Speed 1.00x"),
+            text("Zoom 100%"),
+        ]
+        .spacing(18),
+    )
     .padding(12)
     .width(Fill);
 

@@ -1,4 +1,4 @@
-use studio_babel::{export_package, import_package, BabelTaskPackage};
+use studio_babel::{BabelTaskPackage, export_package, import_package};
 
 fn load_fixture() -> BabelTaskPackage {
     let source = include_str!("fixtures/sample-task.json");
@@ -43,4 +43,3 @@ fn export_preserves_babel_round_trip_fields() {
     assert_eq!(exported.audio_tracks, package.audio_tracks);
     assert_eq!(exported.annotations, package.annotations);
 }
-

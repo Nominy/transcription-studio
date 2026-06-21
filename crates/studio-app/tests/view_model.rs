@@ -20,4 +20,3 @@ fn timeline_lane_rows_group_segments_by_lane() {
     assert_eq!(rows[1].lane.id, "track-speaker-2");
     assert_eq!(rows[1].segments.len(), 1);
 }
-

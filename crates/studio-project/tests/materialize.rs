@@ -83,7 +83,10 @@ fn load_project_restores_saved_segments() {
 
     assert_eq!(loaded, project);
     assert_eq!(loaded.segments.len(), 2);
-    assert_eq!(loaded.segment("annotation-1").unwrap().text, "Здравствуйте.");
+    assert_eq!(
+        loaded.segment("annotation-1").unwrap().text,
+        "Здравствуйте."
+    );
 }
 
 #[test]
@@ -92,4 +95,3 @@ fn load_project_rejects_missing_manifest_files() {
 
     assert!(load_project(temp.path()).is_err());
 }
-
