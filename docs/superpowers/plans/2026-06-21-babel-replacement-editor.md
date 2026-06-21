@@ -17,11 +17,11 @@
 - Modify: `crates/studio-app/src/lib.rs`
 - Test: `crates/studio-app/tests/editor_model.rs`
 
-- [ ] Add tests for default editor state, viewport bounds, track filter options, timeline lane projections, deterministic waveform blocks, linter rows, dirty/saved/review state, and submit blocking on lint errors.
-- [ ] Implement `EditorSession`, `TrackFilter`, `TransportState`, `ReviewState`, `LintSeverity`, `TimelineLaneView`, `WaveformBlock`, and `TranscriptRowView`.
-- [ ] Export the model types from `studio-app`.
-- [ ] Run `cargo test -p studio-app --test editor_model`.
-- [ ] Commit `feat: add babel editor session model`.
+- [x] Add tests for default editor state, viewport bounds, track filter options, timeline lane projections, deterministic waveform blocks, linter rows, dirty/saved/review state, and submit blocking on lint errors.
+- [x] Implement `EditorSession`, `TrackFilter`, `ReviewState`, `LintSeverity`, `TimelineLaneView`, `WaveformBlock`, and `TranscriptRowView`.
+- [x] Export the model types from `studio-app`.
+- [x] Run `cargo test -p studio-app --test editor_model`.
+- [x] Commit `feat: add babel editor session model`.
 
 ## Task 2: Workflow Commands For Replacement UX
 
@@ -29,32 +29,32 @@
 - Modify: `crates/studio-app/src/workflow.rs`
 - Test: `crates/studio-app/tests/workflow.rs`
 
-- [ ] Add tests for selecting next/previous segment by timeline order through workflow helpers if needed by UI.
-- [ ] Add a helper for project duration/time bounds if not covered by `editor_model`.
-- [ ] Keep all mutations routed through existing core commands.
-- [ ] Run `cargo test -p studio-app --test workflow`.
-- [ ] Commit `feat: add editor workflow helpers`.
+- [x] Add tested editor/session navigation and time bounds in `editor_model`.
+- [x] Keep workflow helpers unchanged where existing command coverage already supports the shell.
+- [x] Keep all mutations routed through existing core commands.
+- [x] Run `cargo test -p studio-app`.
+- [x] Commit `feat: rebuild native shell as babel editor`.
 
 ## Task 3: Babel-Like Native Shell
 
 **Files:**
 - Modify: `crates/studio-app/src/main.rs`
 
-- [ ] Replace the form-style layout with a Babel-like editor: top toolbar, overview waveform, diff switch, loop row, multi-track waveform lanes, transport/table toolbar, transcript grid.
-- [ ] Add messages for zoom, speed, play/pause, previous/next segment, loop toggle, diff toggle, lane mute, track filter, row select, row action menu, save, export, submit review, and hotkey/support actions.
-- [ ] Wire all row mutations through `StudioWorkflow` and mark the editor session dirty.
-- [ ] Show linter status and block submit on lint errors.
-- [ ] Run `cargo test -p studio-app`.
-- [ ] Commit `feat: rebuild native shell as babel editor`.
+- [x] Replace the form-style layout with a Babel-like editor: top toolbar, overview waveform, diff switch, loop row, multi-track waveform lanes, transport/table toolbar, transcript grid.
+- [x] Add messages for zoom, speed, play/pause, previous/next segment, loop toggle, diff toggle, lane mute, track filter, row select, row action menu, save, export, submit review, and hotkey/support actions.
+- [x] Wire all row mutations through `StudioWorkflow` and mark the editor session dirty.
+- [x] Show linter status and block submit on lint errors.
+- [x] Run `cargo test -p studio-app`.
+- [x] Commit `feat: rebuild native shell as babel editor`.
 
 ## Task 4: Verification And Review
 
 **Files:**
 - Modify only if verification or review exposes bugs.
 
-- [ ] Run `cargo fmt --all -- --check`.
-- [ ] Run `cargo test --workspace`.
-- [ ] Run `cargo check --workspace`.
+- [x] Run `cargo fmt --all -- --check`.
+- [x] Run `cargo test --workspace`.
+- [x] Run `cargo check --workspace`.
 - [ ] Dispatch read-only spec and code-quality subagent reviews.
 - [ ] Fix reviewed issues with failing tests first.
 - [ ] Commit final fixes.
