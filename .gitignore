@@ -1,4 +1,5 @@
 /target/
+/.studio-dev/
 /.idea/
 /.vscode/
 *.log
@@ -6,4 +7,3 @@
 *.bak
 .DS_Store
 Thumbs.db
-
