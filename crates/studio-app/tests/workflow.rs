@@ -69,6 +69,25 @@ fn workflow_applies_timing_split_merge_delete_create_and_speaker_edits() {
 }
 
 #[test]
+fn workflow_merges_next_segment_on_same_lane() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+
+    workflow
+        .merge_with_next("annotation-1")
+        .expect("merge should skip interleaved speakers");
+
+    let project = workflow.project();
+    assert!(project.segment("annotation-3").is_none());
+    let merged = project
+        .segment("annotation-1")
+        .expect("left segment should remain");
+    assert_eq!(merged.end_seconds, 7.2);
+    assert_eq!(merged.text, "Здравствуйте. Уточните номер.");
+    assert!(project.segment("annotation-2").is_some());
+}
+
+#[test]
 fn workflow_saves_and_reloads_local_project() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut workflow =

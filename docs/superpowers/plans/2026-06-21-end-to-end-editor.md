@@ -39,11 +39,11 @@
 **Files:**
 - Modify: `crates/studio-app/src/main.rs`
 
-- [ ] Replace display-only rows with editable text/start/end inputs and action buttons.
-- [ ] Route input changes through `StudioWorkflow` methods.
-- [ ] Add buttons for split, merge-next, delete, create-after, speaker toggle, save local, and export.
-- [ ] Run `cargo check -p studio-app`.
-- [ ] Commit `feat: make native shell editable`.
+- [x] Replace display-only rows with editable text/start/end inputs and action buttons.
+- [x] Route input changes through `StudioWorkflow` methods.
+- [x] Add buttons for split, merge-next, delete, create-after, speaker toggle, save local, and export.
+- [x] Run `cargo check -p studio-app`.
+- [x] Commit `feat: make native shell editable`.
 
 ## Task 4: End-to-End Verification
 

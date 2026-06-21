@@ -5,7 +5,7 @@ use iced::{Element, Fill, Length, Theme};
 use studio_app::{StudioWorkflow, load_sample_project, timeline_lane_rows, transport_status};
 use studio_core::{Project, Segment};
 
-const DEFAULT_IMPORT_PATH: &str = ".studio-dev/import/sample-task.json";
+const DEFAULT_IMPORT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/sample-task.json");
 const DEFAULT_LOCAL_PROJECT_PATH: &str = ".studio-dev/session";
 const DEFAULT_EXPORT_PATH: &str = ".studio-dev/export/babel-task.json";
 
@@ -609,4 +609,16 @@ fn write_text_file(path: &str, contents: &str) -> Result<(), String> {
 
     fs::write(path, contents)
         .map_err(|error| format!("failed to write `{}`: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::DEFAULT_IMPORT_PATH;
+
+    #[test]
+    fn default_import_path_points_to_existing_fixture() {
+        assert!(Path::new(DEFAULT_IMPORT_PATH).exists());
+    }
 }

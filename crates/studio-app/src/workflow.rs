@@ -82,12 +82,21 @@ impl StudioWorkflow {
             .iter()
             .position(|segment| segment.id == left_segment_id)
             .with_context(|| format!("segment `{left_segment_id}` was not found"))?;
+        let left = &self.project.segments[left_index];
         let right_segment_id = self
             .project
             .segments
-            .get(left_index + 1)
+            .iter()
+            .skip(left_index + 1)
+            .find(|segment| {
+                segment.speaker_id == left.speaker_id
+                    && segment.lane_id == left.lane_id
+                    && left.end_seconds <= segment.start_seconds
+            })
             .map(|segment| segment.id.clone())
-            .with_context(|| format!("segment `{left_segment_id}` has no next segment"))?;
+            .with_context(|| {
+                format!("segment `{left_segment_id}` has no next segment on its lane")
+            })?;
 
         self.apply(EditorCommand::MergeSegments {
             left_segment_id: left_segment_id.to_string(),
