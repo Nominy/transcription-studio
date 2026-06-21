@@ -159,6 +159,307 @@ fn split_segment_rejects_non_finite_split_point() {
 }
 
 #[test]
+fn create_segment_appends_valid_segment() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let segment = Segment {
+        id: "segment-3".to_string(),
+        source_annotation_id: Some("annotation-3".to_string()),
+        speaker_id: "speaker-1".to_string(),
+        lane_id: "track-1".to_string(),
+        start_seconds: 4.5,
+        end_seconds: 5.0,
+        text: "new segment".to_string(),
+    };
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::CreateSegment {
+                segment: segment.clone(),
+            },
+        )
+        .expect("create should apply");
+
+    assert_eq!(project.segments.last(), Some(&segment));
+}
+
+#[test]
+fn create_segment_rejects_duplicate_id() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::CreateSegment {
+            segment: Segment {
+                id: "segment-1".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "track-1".to_string(),
+                start_seconds: 4.5,
+                end_seconds: 5.0,
+                text: "duplicate".to_string(),
+            },
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::DuplicateSegmentId));
+    assert_eq!(project.segments.len(), 2);
+    assert_eq!(project.segment("segment-1").unwrap().text, "original one");
+}
+
+#[test]
+fn create_segment_rejects_invalid_time_range() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::CreateSegment {
+            segment: Segment {
+                id: "segment-3".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "track-1".to_string(),
+                start_seconds: 5.0,
+                end_seconds: 4.5,
+                text: "invalid".to_string(),
+            },
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::InvalidTimeRange));
+    assert!(!project.has_segment("segment-3"));
+}
+
+#[test]
+fn delete_segment_removes_existing_segment() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::DeleteSegment {
+                segment_id: "segment-1".to_string(),
+            },
+        )
+        .expect("delete should apply");
+
+    assert!(!project.has_segment("segment-1"));
+    assert!(project.has_segment("segment-2"));
+}
+
+#[test]
+fn delete_segment_rejects_missing_segment() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::DeleteSegment {
+            segment_id: "missing".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SegmentNotFound));
+    assert_eq!(project.segments.len(), 2);
+}
+
+#[test]
+fn merge_segments_combines_adjacent_segments_on_same_lane() {
+    let mut project = sample_project();
+    project.segments[1].speaker_id = "speaker-1".to_string();
+    project.segments[1].lane_id = "track-1".to_string();
+    project.segments[1].start_seconds = 3.0;
+    project.segments[1].end_seconds = 4.4;
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::MergeSegments {
+                left_segment_id: "segment-1".to_string(),
+                right_segment_id: "segment-2".to_string(),
+            },
+        )
+        .expect("merge should apply");
+
+    assert_eq!(project.segments.len(), 1);
+    let merged = project.segment("segment-1").unwrap();
+    assert_eq!(merged.start_seconds, 1.0);
+    assert_eq!(merged.end_seconds, 4.4);
+    assert_eq!(merged.text, "original one original two");
+    assert_eq!(
+        merged.source_annotation_id,
+        Some("annotation-1".to_string())
+    );
+    assert_eq!(merged.speaker_id, "speaker-1");
+    assert_eq!(merged.lane_id, "track-1");
+    assert!(!project.has_segment("segment-2"));
+}
+
+#[test]
+fn merge_segments_rejects_missing_segment() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::MergeSegments {
+            left_segment_id: "segment-1".to_string(),
+            right_segment_id: "missing".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SegmentNotFound));
+    assert_eq!(project.segments.len(), 2);
+}
+
+#[test]
+fn merge_segments_rejects_different_speaker_or_lane() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::MergeSegments {
+            left_segment_id: "segment-1".to_string(),
+            right_segment_id: "segment-2".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SegmentTrackMismatch));
+    assert_eq!(project.segments.len(), 2);
+}
+
+#[test]
+fn merge_segments_rejects_right_segment_before_left_ends() {
+    let mut project = sample_project();
+    project.segments[1].speaker_id = "speaker-1".to_string();
+    project.segments[1].lane_id = "track-1".to_string();
+    project.segments[1].start_seconds = 2.9;
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::MergeSegments {
+            left_segment_id: "segment-1".to_string(),
+            right_segment_id: "segment-2".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SegmentOrderInvalid));
+    assert_eq!(project.segments.len(), 2);
+}
+
+#[test]
+fn change_segment_speaker_updates_speaker_and_lane() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::ChangeSegmentSpeaker {
+                segment_id: "segment-1".to_string(),
+                speaker_id: "speaker-2".to_string(),
+                lane_id: "track-2".to_string(),
+            },
+        )
+        .expect("speaker change should apply");
+
+    let segment = project.segment("segment-1").unwrap();
+    assert_eq!(segment.speaker_id, "speaker-2");
+    assert_eq!(segment.lane_id, "track-2");
+}
+
+#[test]
+fn change_segment_speaker_rejects_missing_segment() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::ChangeSegmentSpeaker {
+            segment_id: "missing".to_string(),
+            speaker_id: "speaker-2".to_string(),
+            lane_id: "track-2".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SegmentNotFound));
+}
+
+#[test]
+fn change_segment_speaker_rejects_unknown_speaker() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::ChangeSegmentSpeaker {
+            segment_id: "segment-1".to_string(),
+            speaker_id: "speaker-missing".to_string(),
+            lane_id: "track-2".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::SpeakerNotFound));
+    assert_eq!(
+        project.segment("segment-1").unwrap().speaker_id,
+        "speaker-1"
+    );
+    assert_eq!(project.segment("segment-1").unwrap().lane_id, "track-1");
+}
+
+#[test]
+fn change_segment_speaker_rejects_unknown_lane() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::ChangeSegmentSpeaker {
+            segment_id: "segment-1".to_string(),
+            speaker_id: "speaker-2".to_string(),
+            lane_id: "track-missing".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::LaneNotFound));
+    assert_eq!(
+        project.segment("segment-1").unwrap().speaker_id,
+        "speaker-1"
+    );
+    assert_eq!(project.segment("segment-1").unwrap().lane_id, "track-1");
+}
+
+#[test]
+fn change_segment_speaker_rejects_lane_for_another_speaker() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::ChangeSegmentSpeaker {
+            segment_id: "segment-1".to_string(),
+            speaker_id: "speaker-2".to_string(),
+            lane_id: "track-1".to_string(),
+        },
+    );
+
+    assert_eq!(result, Err(StudioCoreError::LaneSpeakerMismatch));
+    assert_eq!(
+        project.segment("segment-1").unwrap().speaker_id,
+        "speaker-1"
+    );
+    assert_eq!(project.segment("segment-1").unwrap().lane_id, "track-1");
+}
+
+#[test]
 fn undo_restores_previous_project_state() {
     let mut project = sample_project();
     let original = project.clone();

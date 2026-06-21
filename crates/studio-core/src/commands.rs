@@ -4,6 +4,21 @@ use crate::{Project, Segment};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorCommand {
+    CreateSegment {
+        segment: Segment,
+    },
+    DeleteSegment {
+        segment_id: String,
+    },
+    MergeSegments {
+        left_segment_id: String,
+        right_segment_id: String,
+    },
+    ChangeSegmentSpeaker {
+        segment_id: String,
+        speaker_id: String,
+        lane_id: String,
+    },
     ApplyTextEdit {
         segment_id: String,
         text: String,
@@ -30,6 +45,16 @@ pub enum StudioCoreError {
     DuplicateSegmentId,
     #[error("split point must be inside the segment")]
     SplitOutsideSegment,
+    #[error("segments must belong to the same speaker and lane")]
+    SegmentTrackMismatch,
+    #[error("left segment must end before the right segment starts")]
+    SegmentOrderInvalid,
+    #[error("speaker was not found")]
+    SpeakerNotFound,
+    #[error("lane was not found")]
+    LaneNotFound,
+    #[error("lane does not belong to the speaker")]
+    LaneSpeakerMismatch,
     #[error("there is no command to undo")]
     NothingToUndo,
     #[error("there is no command to redo")]
@@ -78,6 +103,17 @@ impl CommandHistory {
 
 fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), StudioCoreError> {
     match command {
+        EditorCommand::CreateSegment { segment } => create_segment(project, segment),
+        EditorCommand::DeleteSegment { segment_id } => delete_segment(project, &segment_id),
+        EditorCommand::MergeSegments {
+            left_segment_id,
+            right_segment_id,
+        } => merge_segments(project, &left_segment_id, &right_segment_id),
+        EditorCommand::ChangeSegmentSpeaker {
+            segment_id,
+            speaker_id,
+            lane_id,
+        } => change_segment_speaker(project, &segment_id, speaker_id, lane_id),
         EditorCommand::ApplyTextEdit { segment_id, text } => {
             let segment = project
                 .segment_mut(&segment_id)
@@ -104,6 +140,101 @@ fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), St
             new_segment_id,
         } => split_segment(project, &segment_id, at_seconds, new_segment_id),
     }
+}
+
+fn create_segment(project: &mut Project, segment: Segment) -> Result<(), StudioCoreError> {
+    if project.has_segment(&segment.id) {
+        return Err(StudioCoreError::DuplicateSegmentId);
+    }
+    validate_time_range(segment.start_seconds, segment.end_seconds)?;
+    project.segments.push(segment);
+    Ok(())
+}
+
+fn delete_segment(project: &mut Project, segment_id: &str) -> Result<(), StudioCoreError> {
+    let index = project
+        .segments
+        .iter()
+        .position(|segment| segment.id == segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    project.segments.remove(index);
+    Ok(())
+}
+
+fn merge_segments(
+    project: &mut Project,
+    left_segment_id: &str,
+    right_segment_id: &str,
+) -> Result<(), StudioCoreError> {
+    let left_index = project
+        .segments
+        .iter()
+        .position(|segment| segment.id == left_segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    let right_index = project
+        .segments
+        .iter()
+        .position(|segment| segment.id == right_segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+
+    if left_index == right_index {
+        return Err(StudioCoreError::SegmentOrderInvalid);
+    }
+
+    let left = project.segments[left_index].clone();
+    let right = project.segments[right_index].clone();
+
+    if left.speaker_id != right.speaker_id || left.lane_id != right.lane_id {
+        return Err(StudioCoreError::SegmentTrackMismatch);
+    }
+    if left.end_seconds > right.start_seconds {
+        return Err(StudioCoreError::SegmentOrderInvalid);
+    }
+
+    let merged_text = merge_text(&left.text, &right.text);
+    let left_segment = &mut project.segments[left_index];
+    left_segment.start_seconds = left.start_seconds;
+    left_segment.end_seconds = right.end_seconds;
+    left_segment.text = merged_text;
+    left_segment.source_annotation_id = left.source_annotation_id;
+
+    project.segments.remove(right_index);
+    Ok(())
+}
+
+fn change_segment_speaker(
+    project: &mut Project,
+    segment_id: &str,
+    speaker_id: String,
+    lane_id: String,
+) -> Result<(), StudioCoreError> {
+    project
+        .segment(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+
+    if !project
+        .speakers
+        .iter()
+        .any(|speaker| speaker.id == speaker_id)
+    {
+        return Err(StudioCoreError::SpeakerNotFound);
+    }
+
+    let lane = project
+        .lanes
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .ok_or(StudioCoreError::LaneNotFound)?;
+    if lane.speaker_id != speaker_id {
+        return Err(StudioCoreError::LaneSpeakerMismatch);
+    }
+
+    let segment = project
+        .segment_mut(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    segment.speaker_id = speaker_id;
+    segment.lane_id = lane_id;
+    Ok(())
 }
 
 fn split_segment(
@@ -144,6 +275,15 @@ fn split_segment(
     project.segments[index].end_seconds = at_seconds;
     project.segments.insert(index + 1, right);
     Ok(())
+}
+
+fn merge_text(left: &str, right: &str) -> String {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => right.to_string(),
+        (false, true) => left.to_string(),
+        (false, false) => format!("{left} {right}"),
+    }
 }
 
 fn validate_time_range(start_seconds: f64, end_seconds: f64) -> Result<(), StudioCoreError> {
