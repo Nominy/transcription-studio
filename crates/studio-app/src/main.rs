@@ -115,12 +115,7 @@ impl StudioState {
         let current_segments: Vec<_> = project
             .segments
             .iter()
-            .map(|segment| {
-                (
-                    segment.id.clone(),
-                    SegmentDraft::from_segment(segment),
-                )
-            })
+            .map(|segment| (segment.id.clone(), SegmentDraft::from_segment(segment)))
             .collect();
         for (segment_id, draft) in &current_segments {
             if !self.segment_drafts.contains_key(segment_id) {
@@ -719,11 +714,8 @@ mod tests {
             "loaded precise timing fixture".to_string(),
         );
 
-        state
-            .segment_drafts
-            .get_mut("annotation-1")
-            .unwrap()
-            .text = "Only text changed.".to_string();
+        state.segment_drafts.get_mut("annotation-1").unwrap().text =
+            "Only text changed.".to_string();
         state.apply_segment("annotation-1");
 
         let segment = state
@@ -764,11 +756,8 @@ mod tests {
     #[test]
     fn unrelated_actions_preserve_unapplied_drafts() {
         let mut state = StudioState::default();
-        state
-            .segment_drafts
-            .get_mut("annotation-1")
-            .unwrap()
-            .text = "draft still being typed".to_string();
+        state.segment_drafts.get_mut("annotation-1").unwrap().text =
+            "draft still being typed".to_string();
 
         state.split_segment("annotation-2");
 

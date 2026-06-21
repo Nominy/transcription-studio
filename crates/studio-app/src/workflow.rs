@@ -1,7 +1,7 @@
 use std::{cell::RefCell, cmp::Ordering, path::Path};
 
-use anyhow::{bail, Context, Result};
-use studio_babel::{export_package, import_package, BabelTaskPackage};
+use anyhow::{Context, Result, bail};
+use studio_babel::{BabelTaskPackage, export_package, import_package};
 use studio_core::{CommandHistory, EditorCommand, Project, Segment};
 use studio_project::{load_project, save_project};
 

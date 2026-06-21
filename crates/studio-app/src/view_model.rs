@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use studio_babel::{import_package, BabelTaskPackage};
+use studio_babel::{BabelTaskPackage, import_package};
 use studio_core::{AudioLane, Project, Segment};
 
 const SAMPLE_TASK_JSON: &str = include_str!("../assets/sample-task.json");
