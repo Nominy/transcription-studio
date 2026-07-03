@@ -7,7 +7,7 @@ The private GitHub repository is expected to build and package the alpha channel
 `CI` runs on pushes, pull requests, and manual dispatch:
 
 - Gitleaks scans the full git history with redacted output.
-- Windows builds run `cargo fmt --all --check`, `cargo check --workspace --locked`, and `cargo test --workspace --locked`.
+- Windows builds run `cargo fmt --all --check` and `cargo test --workspace --locked` with `RUST_TEST_THREADS=4`. The test step compiles the same workspace graph, so CI skips a separate `cargo check` pass, and the capped libtest worker count avoids over-scheduling the heavy app smoke tests.
 
 ## Windows Alpha Package
 

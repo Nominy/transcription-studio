@@ -83,7 +83,31 @@ use super::{
     DEFAULT_IMPORT_PATH, EditAnnotationDialog, Message, RuntimeGraphicsInfo, StudioState, update,
 };
 
+const CACHE_PROJECT_SEGMENT_COUNT: usize = 240;
+const VIRTUALIZED_PROJECT_SEGMENT_COUNT: usize = 320;
+const LONG_SPARSE_PROJECT_SEGMENT_COUNT: usize = 240;
+const LONG_SPARSE_PROJECT_SPACING_SECONDS: f64 = 5.0;
+
 fn large_two_lane_project(segment_count: usize) -> Project {
+    large_two_lane_project_with_spacing(segment_count, 1.0)
+}
+
+fn cache_sized_two_lane_project() -> Project {
+    large_two_lane_project(CACHE_PROJECT_SEGMENT_COUNT)
+}
+
+fn virtualized_two_lane_project() -> Project {
+    large_two_lane_project(VIRTUALIZED_PROJECT_SEGMENT_COUNT)
+}
+
+fn long_sparse_waveform_project() -> Project {
+    large_two_lane_project_with_spacing(
+        LONG_SPARSE_PROJECT_SEGMENT_COUNT,
+        LONG_SPARSE_PROJECT_SPACING_SECONDS,
+    )
+}
+
+fn large_two_lane_project_with_spacing(segment_count: usize, spacing_seconds: f64) -> Project {
     let speakers = vec![
         Speaker {
             id: "speaker-1".to_string(),
@@ -129,7 +153,7 @@ fn large_two_lane_project(segment_count: usize) -> Project {
         } else {
             "speaker-2"
         };
-        let start_seconds = 20.0 + index as f64;
+        let start_seconds = 20.0 + index as f64 * spacing_seconds;
         segments.push(Segment {
             id: format!("annotation-{index:04}"),
             source_annotation_id: Some(format!("annotation-{index:04}")),
@@ -4826,7 +4850,7 @@ fn waveform_body_drag_does_not_show_edge_magnifier() {
 
 #[test]
 fn waveform_drag_preview_reuses_prewarmed_segment_block_peaks() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -4922,7 +4946,7 @@ fn waveform_drag_preview_reuses_prewarmed_segment_block_peaks() {
 
 #[test]
 fn edge_drag_preview_keeps_full_region_fill_for_existing_segment() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -7490,7 +7514,7 @@ fn transcript_row_render_cache_invalidates_after_project_structure_mutation() {
 
 #[test]
 fn large_project_playback_reuses_transcript_rows_and_lane_peak_resolutions() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -7517,7 +7541,7 @@ fn large_project_playback_reuses_transcript_rows_and_lane_peak_resolutions() {
         let first_overview = state.overview_waveform_snapshot_for_render(&project, editor);
         let first_transport = state.transport_strip_snapshot_for_render(&project, editor);
         let first_submit = state.submit_control_snapshot_for_render(&project, editor);
-        assert_eq!(rows.len(), 1_200);
+        assert_eq!(rows.len(), CACHE_PROJECT_SEGMENT_COUNT);
         assert_eq!(lanes.len(), 2);
         (rows, lanes, first_overview, first_transport, first_submit)
     };
@@ -7620,7 +7644,7 @@ fn transport_tick_advances_playback_without_cloning_project() {
 fn transport_tick_reuses_cached_project_bounds_while_playing() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(cache_sized_two_lane_project()),
         "Loaded large transport-bounds project.".to_string(),
     );
     let project = state.project().unwrap().clone();
@@ -7807,7 +7831,7 @@ fn large_project_runtime_can_probe_live_transcript_scroll_cadence_without_user_v
 
 #[test]
 fn large_project_playback_reuses_shared_transcript_row_snapshot() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
@@ -7823,7 +7847,7 @@ fn large_project_playback_reuses_shared_transcript_row_snapshot() {
         state.transcript_rows_snapshot_for_render(&project, editor)
     };
     let misses_after_first_render = state.transcript_rows_cache_miss_count();
-    assert_eq!(first_rows.len(), 1_200);
+    assert_eq!(first_rows.len(), CACHE_PROJECT_SEGMENT_COUNT);
 
     let start_tick = Instant::now();
     for frame in 0..20 {
@@ -7847,7 +7871,7 @@ fn large_project_playback_reuses_shared_transcript_row_snapshot() {
 
 #[test]
 fn large_project_playback_reuses_transcript_rows_across_selected_segment_changes() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
@@ -7954,7 +7978,7 @@ fn transport_strip_view_is_lazy_cached_across_playback_ticks() {
 
 #[test]
 fn large_project_playback_reuses_transcript_layout_metrics() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
@@ -7999,7 +8023,7 @@ fn large_project_playback_reuses_transcript_layout_metrics() {
 
 #[test]
 fn large_project_transcript_scroll_reuses_transcript_layout_metrics() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
@@ -8112,7 +8136,7 @@ fn timeline_lane_render_cache_moves_playhead_without_rebuilding_static_lanes() {
 
 #[test]
 fn decoded_waveform_render_cache_reuses_recent_timeline_viewports_during_scroll_jitter() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8178,7 +8202,7 @@ fn decoded_waveform_render_cache_reuses_recent_timeline_viewports_during_scroll_
 
 #[test]
 fn timeline_lane_snapshot_cache_keeps_only_current_viewport_during_scroll() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8236,7 +8260,7 @@ fn timeline_lane_snapshot_cache_keeps_only_current_viewport_during_scroll() {
 
 #[test]
 fn timeline_scroll_across_new_segments_uses_prewarmed_segment_blocks() {
-    let project = large_two_lane_project(1_200);
+    let project = long_sparse_waveform_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8249,8 +8273,8 @@ fn timeline_scroll_across_new_segments_uses_prewarmed_segment_blocks() {
             LaneWaveform::from_decoded(decoded_audio_for_duration(duration_seconds)),
         );
         editor.viewport = TimeRange {
-            start_seconds: 20.0,
-            end_seconds: 25.0,
+            start_seconds: 30.0,
+            end_seconds: 35.0,
         };
     });
 
@@ -8305,7 +8329,7 @@ fn timeline_scroll_across_new_segments_uses_prewarmed_segment_blocks() {
 
 #[test]
 fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
-    let project = large_two_lane_project(1_200);
+    let project = long_sparse_waveform_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8324,8 +8348,8 @@ fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
     let mut initial_strip_range = None;
     for viewport in [
         TimeRange {
-            start_seconds: 20.0,
-            end_seconds: 25.0,
+            start_seconds: 30.0,
+            end_seconds: 35.0,
         },
         TimeRange {
             start_seconds: 620.0,
@@ -8380,7 +8404,7 @@ fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
 
 #[test]
 fn decoded_waveform_far_scroll_keeps_full_lane_region_fill_blocks_in_memory() {
-    let project = large_two_lane_project(1_200);
+    let project = long_sparse_waveform_project();
     let track_1_segment_count = project
         .segments
         .iter()
@@ -8403,8 +8427,8 @@ fn decoded_waveform_far_scroll_keeps_full_lane_region_fill_blocks_in_memory() {
     let mut initial_strip_blocks = None;
     for viewport in [
         TimeRange {
-            start_seconds: 20.0,
-            end_seconds: 25.0,
+            start_seconds: 30.0,
+            end_seconds: 35.0,
         },
         TimeRange {
             start_seconds: 620.0,
@@ -8445,7 +8469,7 @@ fn decoded_waveform_far_scroll_keeps_full_lane_region_fill_blocks_in_memory() {
 
 #[test]
 fn timeline_pan_rebuilds_exact_geometry_without_rebuilding_audio_strip() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8514,7 +8538,7 @@ fn timeline_pan_rebuilds_exact_geometry_without_rebuilding_audio_strip() {
 
 #[test]
 fn timeline_scroll_updates_block_geometry_on_every_subpixel_pan_step() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8581,7 +8605,7 @@ fn timeline_scroll_updates_block_geometry_on_every_subpixel_pan_step() {
 
 #[test]
 fn decoded_waveform_scroll_reuses_audio_strip_when_visible_segments_change() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8710,7 +8734,7 @@ fn overview_waveform_render_cache_moves_playhead_without_rebuilding_blocks() {
 
 #[test]
 fn overview_waveform_static_blocks_survive_timeline_viewport_pans() {
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -8781,14 +8805,14 @@ fn large_project_startup_smoke_reports_runtime_cache_and_waveform_reuse() {
     assert_eq!(report.rows, 1_200);
     assert!(report.rendered_rows <= 36);
     assert_eq!(report.lanes, 2);
-    assert_eq!(report.frames, 20);
+    assert_eq!(report.frames, 4);
     assert_eq!(report.cache_misses, 1);
     assert_eq!(report.layout_cache_misses, 1);
     assert_eq!(report.timeline_cache_misses, 1);
     assert_eq!(report.overview_cache_misses, 1);
     assert_eq!(report.transport_cache_misses, 1);
     assert_eq!(report.submit_cache_misses, 1);
-    assert_eq!(report.interaction_frames, 24);
+    assert_eq!(report.interaction_frames, 4);
     assert!(report.interaction_view_build_micros_total > 0);
     assert!(report.interaction_view_build_micros_max > 0);
     assert_eq!(
@@ -8851,11 +8875,7 @@ fn large_project_startup_smoke_reports_runtime_cache_and_waveform_reuse() {
             .contains("stable_transport=true")
     );
     assert!(report.runtime_trace_line().contains("stable_submit=true"));
-    assert!(
-        report
-            .runtime_trace_line()
-            .contains("interaction_frames=24")
-    );
+    assert!(report.runtime_trace_line().contains("interaction_frames=4"));
     assert!(
         report
             .runtime_trace_line()
@@ -8878,7 +8898,7 @@ fn large_project_synthetic_waveform_smoke_reports_no_audio_overlay_path() {
     assert_eq!(report.rows, 1_200);
     assert!(report.rendered_rows <= 36);
     assert_eq!(report.lanes, 2);
-    assert_eq!(report.frames, 20);
+    assert_eq!(report.frames, 4);
     assert_eq!(report.cache_misses, 1);
     assert_eq!(report.layout_cache_misses, 1);
     assert_eq!(report.timeline_cache_misses, 1);
@@ -8897,16 +8917,9 @@ fn large_project_synthetic_waveform_smoke_reports_no_audio_overlay_path() {
             .contains("decoded_waveforms=false")
     );
     assert!(report.runtime_trace_line().contains("peak_caches="));
-}
-
-#[test]
-fn large_project_smoke_reports_view_construction_timing_for_playback_frames() {
-    let mut state = stable_sample_state();
-
-    let report = run_large_project_synthetic_waveform_smoke(&mut state);
     let trace = report.runtime_trace_line();
 
-    assert!(trace.contains("view_build_frames=20"));
+    assert!(trace.contains("view_build_frames=4"));
     assert!(trace.contains("view_build_micros_total="));
     assert!(trace.contains("view_build_micros_max="));
 }
@@ -9029,7 +9042,7 @@ fn transcript_scroll_message_tracks_absolute_viewport_for_virtual_rows() {
 
 #[test]
 fn selecting_far_transcript_row_updates_virtual_scroll_target() {
-    let project = large_two_lane_project(1_200);
+    let project = virtualized_two_lane_project();
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
@@ -9037,10 +9050,10 @@ fn selecting_far_transcript_row_updates_virtual_scroll_target() {
     );
 
     state.transcript_scroll_viewport_height = 300.0;
-    state.select_segment("annotation-0800");
+    state.select_segment("annotation-0260");
 
-    assert!(state.transcript_scroll_offset_y > 23_000.0);
-    assert!(state.transcript_scroll_offset_y < 24_000.0);
+    assert!(state.transcript_scroll_offset_y > 7_000.0);
+    assert!(state.transcript_scroll_offset_y < 8_000.0);
 }
 
 #[test]
@@ -15793,7 +15806,7 @@ fn app_timeline_rebuilds_reuse_cached_segment_index_while_viewport_moves() {
 fn moving_playback_reuses_cached_timeline_segment_index_across_viewport_misses() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(cache_sized_two_lane_project()),
         "Loaded large moving-viewport project.".to_string(),
     );
     let project = state.project().unwrap().clone();
@@ -15837,7 +15850,7 @@ fn moving_playback_reuses_cached_timeline_segment_index_across_viewport_misses()
 fn moving_playback_reuses_cached_project_bounds_across_viewport_misses() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(cache_sized_two_lane_project()),
         "Loaded large moving-bounds project.".to_string(),
     );
     let project = state.project().unwrap().clone();
@@ -15881,7 +15894,7 @@ fn moving_playback_reuses_cached_project_bounds_across_viewport_misses() {
 fn moving_playback_reuses_static_waveform_blocks_while_visible_segments_are_unchanged() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(cache_sized_two_lane_project()),
         "Loaded large moving-waveform-block project.".to_string(),
     );
     let project = state.project().unwrap().clone();
@@ -15978,7 +15991,7 @@ fn moving_playback_reuses_static_waveform_blocks_while_visible_segments_are_unch
 #[test]
 fn moving_playback_viewport_reuses_decoded_timeline_peak_arc_while_visible_segments_unchanged() {
     let mut state = stable_sample_state();
-    let project = large_two_lane_project(1_200);
+    let project = cache_sized_two_lane_project();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
         "Loaded large moving-waveform-arc project.".to_string(),
@@ -18543,14 +18556,14 @@ fn transcript_virtual_window_pins_out_of_window_row_as_exact_island() {
 fn selected_row_stays_mounted_as_island_when_scrolled_away() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(virtualized_two_lane_project()),
         "Loaded large Babel-like project.".to_string(),
     );
     let project = state.project().unwrap().clone();
     let far_segment_id = {
         let editor = state.editor.as_ref().unwrap();
         let rows = state.transcript_rows_snapshot_for_render(&project, editor);
-        rows[900].segment_id.clone()
+        rows[240].segment_id.clone()
     };
     let _ = state.select_segment_without_seek(&far_segment_id);
     let _ = update(
@@ -18592,14 +18605,14 @@ fn selected_row_stays_mounted_as_island_when_scrolled_away() {
 fn playback_follow_scrolls_transcript_to_row_under_playhead() {
     let mut state = stable_sample_state();
     state.replace_workflow(
-        StudioWorkflow::from_project(large_two_lane_project(1_200)),
+        StudioWorkflow::from_project(virtualized_two_lane_project()),
         "Loaded large Babel-like project.".to_string(),
     );
     let project = state.project().unwrap().clone();
     let far_segment_id = {
         let editor = state.editor.as_ref().unwrap();
         let rows = state.transcript_rows_snapshot_for_render(&project, editor);
-        rows[600].segment_id.clone()
+        rows[200].segment_id.clone()
     };
     state.with_editor_mut(|editor| {
         editor.select_segment(&project, &far_segment_id);

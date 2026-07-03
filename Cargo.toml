@@ -28,3 +28,6 @@ time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 url = "2.5"
 velopack = "1.2.0"
+
+[profile.test]
+debug = 0
