@@ -43,6 +43,7 @@ fn sample_project() -> Project {
                 start_seconds: 1.2,
                 end_seconds: 3.4,
                 text: "Здравствуйте.".to_string(),
+                metadata: Default::default(),
             },
             Segment {
                 id: "annotation-2".to_string(),
@@ -52,6 +53,7 @@ fn sample_project() -> Project {
                 start_seconds: 3.5,
                 end_seconds: 5.1,
                 text: "Да, слушаю.".to_string(),
+                metadata: Default::default(),
             },
         ],
         metadata,

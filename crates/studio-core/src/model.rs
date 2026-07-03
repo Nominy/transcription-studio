@@ -53,4 +53,6 @@ pub struct Segment {
     pub start_seconds: f64,
     pub end_seconds: f64,
     pub text: String,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, serde_json::Value>,
 }

@@ -2,7 +2,9 @@ use studio_app::StudioWorkflow;
 use studio_babel::BabelTaskPackage;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 
-const SAMPLE_TASK_JSON: &str = include_str!("../assets/sample-task.json");
+const SAMPLE_TASK_JSON: &str = include_str!("fixtures/stable-workflow-task.json");
+const REVIEW_ACTION_JSON: &str =
+    include_str!("../../studio-babel/tests/fixtures/review-action-final.json");
 
 fn workflow_with_segments(segments: Vec<Segment>) -> StudioWorkflow {
     StudioWorkflow::from_project(Project {
@@ -32,6 +34,7 @@ fn segment(id: &str, start_seconds: f64, end_seconds: f64, text: &str) -> Segmen
         start_seconds,
         end_seconds,
         text: text.to_string(),
+        metadata: Default::default(),
     }
 }
 
@@ -56,6 +59,171 @@ fn workflow_imports_babel_json_and_exports_after_text_edit() {
         .find(|annotation| annotation.annotation_id == "annotation-1")
         .expect("edited annotation should exist");
     assert_eq!(edited.text, "Исправленный текст.");
+}
+
+#[test]
+fn workflow_imports_recovered_babel_review_action_json() {
+    let workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+
+    let project = workflow.project();
+    assert_eq!(project.id, "62077784-367e-4709-85d7-1b2e403944df");
+    assert_eq!(project.lanes.len(), 2);
+    assert_eq!(project.segments.len(), 24);
+    assert!(
+        project
+            .segment("eaa5afc3-3d59-4267-b073-d390d0b48060")
+            .is_some()
+    );
+}
+
+#[test]
+fn workflow_exports_recovered_review_action_json_in_original_envelope_shape() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+    workflow
+        .apply_text_edit(
+            "eaa5afc3-3d59-4267-b073-d390d0b48060",
+            "Edited through workflow.",
+        )
+        .expect("text edit should apply");
+
+    let exported = workflow
+        .export_babel_json()
+        .expect("review action should export");
+    let value: serde_json::Value =
+        serde_json::from_str(&exported).expect("export should be valid JSON");
+
+    assert!(value.is_array());
+    assert_eq!(
+        value.pointer("/0/result/data/json/actionId"),
+        Some(&serde_json::json!("9edb22ab-0993-41f3-926e-90779da4c624"))
+    );
+    let annotations = value
+        .pointer("/0/result/data/json/annotations")
+        .and_then(serde_json::Value::as_array)
+        .expect("annotations should remain under result.data.json");
+    let edited = annotations
+        .iter()
+        .find(|annotation| {
+            annotation.get("id") == Some(&serde_json::json!("eaa5afc3-3d59-4267-b073-d390d0b48060"))
+        })
+        .expect("edited annotation should export");
+    assert_eq!(edited["content"], "Edited through workflow.");
+}
+
+#[test]
+fn workflow_text_edit_exports_fresh_babel_updated_at() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+    let original_updated_at = workflow
+        .project()
+        .segment("eaa5afc3-3d59-4267-b073-d390d0b48060")
+        .and_then(|segment| segment.metadata.get("updatedAt"))
+        .and_then(serde_json::Value::as_str)
+        .expect("fixture should carry imported updatedAt")
+        .to_string();
+
+    workflow
+        .apply_text_edit(
+            "eaa5afc3-3d59-4267-b073-d390d0b48060",
+            "Edited through workflow.",
+        )
+        .expect("text edit should apply");
+
+    let exported = workflow
+        .export_babel_json()
+        .expect("review action should export");
+    let value: serde_json::Value =
+        serde_json::from_str(&exported).expect("export should be valid JSON");
+    let edited = value
+        .pointer("/0/result/data/json/annotations")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|annotations| {
+            annotations.iter().find(|annotation| {
+                annotation.get("id")
+                    == Some(&serde_json::json!("eaa5afc3-3d59-4267-b073-d390d0b48060"))
+            })
+        })
+        .expect("edited annotation should export");
+    let updated_at = edited
+        .get("updatedAt")
+        .and_then(serde_json::Value::as_str)
+        .expect("updatedAt should export");
+
+    assert_ne!(
+        updated_at, original_updated_at,
+        "Babel text edits stamp updatedAt instead of preserving the imported value"
+    );
+    assert_eq!(updated_at.len(), "2026-06-21T12:34:56.000Z".len());
+    assert!(updated_at.ends_with('Z'));
+    assert_eq!(&updated_at[10..11], "T");
+    assert_eq!(&updated_at[19..20], ".");
+}
+
+#[test]
+fn workflow_marks_recovered_review_action_export_as_pass() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+
+    workflow.mark_review_passed();
+
+    let exported = workflow
+        .export_babel_json()
+        .expect("review action should export");
+    let value: serde_json::Value =
+        serde_json::from_str(&exported).expect("export should be valid JSON");
+    assert_eq!(
+        value.pointer("/0/result/data/json/actionDecision"),
+        Some(&serde_json::json!("pass"))
+    );
+}
+
+#[test]
+fn workflow_annotation_metadata_edit_exports_babel_timestamp_and_resolution() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+
+    workflow
+        .update_annotation_metadata(
+            "eaa5afc3-3d59-4267-b073-d390d0b48060",
+            "background-noise / chair scrape",
+            Some(4),
+            serde_json::json!({
+                "primaryLabel": "background-noise",
+                "secondaryLabel": "chair scrape"
+            }),
+        )
+        .expect("annotation metadata edit should apply");
+
+    let exported = workflow
+        .export_babel_json()
+        .expect("review action should export");
+    let value: serde_json::Value =
+        serde_json::from_str(&exported).expect("export should be valid JSON");
+    let edited = value
+        .pointer("/0/result/data/json/annotations")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|annotations| {
+            annotations.iter().find(|annotation| {
+                annotation.get("id")
+                    == Some(&serde_json::json!("eaa5afc3-3d59-4267-b073-d390d0b48060"))
+            })
+        })
+        .expect("edited annotation should export");
+    let updated_at = edited
+        .get("updatedAt")
+        .and_then(serde_json::Value::as_str)
+        .expect("updatedAt should export");
+
+    assert_eq!(
+        edited.pointer("/metadata/lowConfidenceResolved"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(updated_at.len(), "2026-06-21T12:34:56.000Z".len());
+    assert!(updated_at.ends_with('Z'));
+    assert_eq!(&updated_at[10..11], "T");
+    assert_eq!(&updated_at[19..20], ".");
 }
 
 #[test]
@@ -98,6 +266,61 @@ fn workflow_coalesces_immediate_timing_then_text_edit_for_one_undo_step() {
     assert_eq!(restored.start_seconds, 1.2);
     assert_eq!(restored.end_seconds, 3.4);
     assert_eq!(restored.text, "Здравствуйте.");
+}
+
+#[test]
+fn workflow_coalesces_repeated_boundary_moves_for_one_undo_step() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+
+    workflow
+        .move_segment_boundary("annotation-1", 1.4, 3.6)
+        .expect("first drag timing edit should apply");
+    workflow
+        .move_segment_boundary("annotation-1", 1.6, 3.8)
+        .expect("second drag timing edit should coalesce");
+    workflow
+        .move_segment_boundary("annotation-1", 1.8, 4.0)
+        .expect("third drag timing edit should coalesce");
+
+    let edited = workflow.project().segment("annotation-1").unwrap();
+    assert_eq!(edited.start_seconds, 1.8);
+    assert_eq!(edited.end_seconds, 4.0);
+
+    workflow
+        .undo()
+        .expect("one undo should restore the entire drag gesture");
+
+    let restored = workflow.project().segment("annotation-1").unwrap();
+    assert_eq!(restored.start_seconds, 1.2);
+    assert_eq!(restored.end_seconds, 3.4);
+    assert_eq!(restored.text, "Здравствуйте.");
+}
+
+#[test]
+fn workflow_reports_undo_redo_availability_for_babel_action_row() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+
+    assert!(!workflow.can_undo());
+    assert!(!workflow.can_redo());
+
+    workflow
+        .apply_text_edit("annotation-1", "edited")
+        .expect("text edit should apply");
+
+    assert!(workflow.can_undo());
+    assert!(!workflow.can_redo());
+
+    workflow.undo().expect("undo should apply");
+
+    assert!(!workflow.can_undo());
+    assert!(workflow.can_redo());
+
+    workflow.redo().expect("redo should apply");
+
+    assert!(workflow.can_undo());
+    assert!(!workflow.can_redo());
 }
 
 #[test]
@@ -157,6 +380,23 @@ fn workflow_applies_timing_split_merge_delete_create_and_speaker_edits() {
 }
 
 #[test]
+fn workflow_split_segment_clones_recovered_babel_content_on_both_halves() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+
+    let split_id = workflow
+        .split_segment("annotation-1", 2.0)
+        .expect("split should apply");
+
+    let left = workflow.project().segment("annotation-1").unwrap();
+    let right = workflow.project().segment(&split_id).unwrap();
+    assert_eq!(left.text, "Здравствуйте.");
+    assert_eq!(right.text, "Здравствуйте.");
+    assert!((left.end_seconds - 1.95).abs() < f64::EPSILON * 8.0);
+    assert!((right.start_seconds - 2.05).abs() < f64::EPSILON * 8.0);
+}
+
+#[test]
 fn workflow_merges_next_segment_on_same_lane() {
     let mut workflow =
         StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
@@ -170,6 +410,26 @@ fn workflow_merges_next_segment_on_same_lane() {
     let merged = project
         .segment("annotation-1")
         .expect("left segment should remain");
+    assert_eq!(merged.end_seconds, 7.2);
+    assert_eq!(merged.text, "Здравствуйте. Уточните номер.");
+    assert!(project.segment("annotation-2").is_some());
+}
+
+#[test]
+fn workflow_merges_previous_segment_on_same_lane() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(SAMPLE_TASK_JSON).expect("sample task should import");
+
+    workflow
+        .merge_with_previous("annotation-3")
+        .expect("merge should skip interleaved speakers");
+
+    let project = workflow.project();
+    assert!(project.segment("annotation-1").is_none());
+    let merged = project
+        .segment("annotation-3")
+        .expect("active segment should remain like recovered Babel merge-above");
+    assert_eq!(merged.start_seconds, 1.2);
     assert_eq!(merged.end_seconds, 7.2);
     assert_eq!(merged.text, "Здравствуйте. Уточните номер.");
     assert!(project.segment("annotation-2").is_some());
@@ -225,32 +485,113 @@ fn workflow_export_preserves_imported_annotation_id_after_merging_created_left_s
 }
 
 #[test]
-fn workflow_create_segment_after_uses_shorter_positive_gap_before_next_same_lane_segment() {
+fn workflow_create_segment_after_uses_full_recovered_babel_gap_before_next_same_lane_segment() {
     let mut workflow = workflow_with_segments(vec![
         segment("anchor", 1.0, 2.0, "left"),
-        segment("next", 2.4, 3.0, "next"),
+        segment("next", 4.0, 5.0, "next"),
     ]);
 
     let created_id = workflow
         .create_segment_after("anchor")
-        .expect("create should fit in the available gap");
+        .expect("create should fill the available gap");
 
     let created = workflow.project().segment(&created_id).unwrap();
     assert_eq!(created.start_seconds, 2.0);
-    assert_eq!(created.end_seconds, 2.4);
+    assert_eq!(created.end_seconds, 4.0);
 }
 
 #[test]
-fn workflow_create_segment_after_rejects_when_next_same_lane_segment_leaves_no_gap() {
+fn workflow_create_segment_before_uses_full_recovered_babel_gap_after_previous_same_lane_segment() {
+    let mut workflow = workflow_with_segments(vec![
+        segment("previous", 1.0, 2.0, "previous"),
+        segment("anchor", 4.0, 5.0, "anchor"),
+    ]);
+
+    let created_id = workflow
+        .create_segment_before("anchor")
+        .expect("create should fill the available gap");
+
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 2.0);
+    assert_eq!(created.end_seconds, 4.0);
+}
+
+#[test]
+fn workflow_create_segment_before_uses_recovered_babel_minimum_span_when_previous_touches_anchor() {
+    let mut workflow = workflow_with_segments(vec![
+        segment("previous", 1.0, 2.0, "previous"),
+        segment("anchor", 2.0, 3.0, "anchor"),
+    ]);
+
+    let created_id = workflow
+        .create_segment_before("anchor")
+        .expect("create should match Babel's minimum overlapping span");
+
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 2.0);
+    assert_eq!(created.end_seconds, 2.01);
+}
+
+#[test]
+fn workflow_create_segment_after_uses_recovered_babel_minimum_span_when_next_touches_anchor() {
     let mut workflow = workflow_with_segments(vec![
         segment("anchor", 1.0, 2.0, "left"),
         segment("next", 2.0, 3.0, "next"),
     ]);
 
-    let result = workflow.create_segment_after("anchor");
+    let created_id = workflow
+        .create_segment_after("anchor")
+        .expect("create should match Babel's minimum overlapping span");
 
-    assert!(result.is_err());
-    assert_eq!(workflow.project().segments.len(), 2);
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 2.0);
+    assert_eq!(created.end_seconds, 2.01);
+}
+
+#[test]
+fn workflow_create_segment_before_uses_recovered_babel_zero_boundary_fallback() {
+    let mut workflow = workflow_with_segments(vec![
+        segment("previous", 0.0, 0.0, "previous"),
+        segment("anchor", 1.0, 2.0, "anchor"),
+    ]);
+
+    let created_id = workflow
+        .create_segment_before("anchor")
+        .expect("create should use Babel's falsy zero boundary fallback");
+
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert!((created.start_seconds - 0.2).abs() < f64::EPSILON * 8.0);
+    assert_eq!(created.end_seconds, 1.0);
+}
+
+#[test]
+fn workflow_create_segment_at_time_uses_babel_blank_region_duration() {
+    let mut workflow = workflow_with_segments(vec![segment("anchor", 1.0, 2.0, "anchor")]);
+
+    let created_id = workflow
+        .create_segment_at_time_in_lane("track-1", 12.25)
+        .expect("create at time should apply");
+
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert_eq!(created.lane_id, "track-1");
+    assert_eq!(created.speaker_id, "speaker-1");
+    assert_eq!(created.start_seconds, 12.25);
+    assert_eq!(created.end_seconds, 13.05);
+    assert!(created.text.is_empty());
+}
+
+#[test]
+fn workflow_create_blank_segment_starts_at_zero_like_babel_dialog_default() {
+    let mut workflow = workflow_with_segments(vec![segment("anchor", 1.0, 2.0, "anchor")]);
+
+    let created_id = workflow
+        .create_blank_segment_in_lane("track-1")
+        .expect("blank create should apply");
+
+    let created = workflow.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 0.0);
+    assert_eq!(created.end_seconds, 0.8);
+    assert!(created.text.is_empty());
 }
 
 #[test]

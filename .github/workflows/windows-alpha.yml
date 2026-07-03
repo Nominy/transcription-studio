@@ -1,0 +1,158 @@
+name: Windows Alpha Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Velopack channel
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - alpha
+      version:
+        description: Optional package version override. Blank uses crates/studio-app/Cargo.toml.
+        required: false
+        type: string
+      feed_url:
+        description: Existing Velopack feed URL used to prime delta packages.
+        required: true
+        default: https://reviewgen.ovh/transcription-studio/alpha/win-x64
+        type: string
+      publish_to_vps:
+        description: Publish artifacts to the VPS feed after packaging.
+        required: true
+        default: false
+        type: boolean
+      remote_path:
+        description: Remote web-root path for the Velopack feed.
+        required: true
+        default: /var/www/transcription-studio/alpha/win-x64
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velopack-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package Windows alpha
+    runs-on: windows-latest
+
+    env:
+      CHANNEL: ${{ inputs.channel }}
+      VERSION: ${{ inputs.version }}
+      FEED_URL: ${{ inputs.feed_url }}
+      REMOTE_PATH: ${{ inputs.remote_path }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-stable-release
+
+      - name: Install Velopack CLI
+        run: dotnet tool update -g vpk
+
+      - name: Prime existing Velopack packages for deltas
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Join-Path $PWD "target\velopack\Releases"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $baseUrl = $env:FEED_URL.TrimEnd("/")
+          $feedName = "releases.$env:CHANNEL.json"
+          $feedUri = "$baseUrl/$feedName"
+
+          try {
+            $feed = Invoke-RestMethod -Uri $feedUri
+          } catch {
+            Write-Warning "Could not read existing Velopack feed at $feedUri; packaging will create full artifacts only."
+            return
+          }
+
+          foreach ($asset in $feed.Assets) {
+            if ([string]::IsNullOrWhiteSpace($asset.FileName)) {
+              continue
+            }
+            $assetUri = "$baseUrl/$($asset.FileName)"
+            $assetPath = Join-Path $releaseDir $asset.FileName
+            Write-Host "Downloading existing package $assetUri"
+            Invoke-WebRequest -Uri $assetUri -OutFile $assetPath
+          }
+
+          foreach ($name in @("RELEASES-$env:CHANNEL", "assets.$env:CHANNEL.json", $feedName)) {
+            try {
+              Invoke-WebRequest -Uri "$baseUrl/$name" -OutFile (Join-Path $releaseDir $name)
+            } catch {
+              Write-Warning "Optional existing feed file not available: $name"
+            }
+          }
+
+      - name: Build Velopack artifacts
+        shell: pwsh
+        run: |
+          $args = @("-Channel", $env:CHANNEL)
+          if (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
+            $args += @("-Version", $env:VERSION)
+          }
+          & .\tools\package-alpha-windows.ps1 @args
+
+      - name: Upload Velopack artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcription-studio-${{ inputs.channel }}-windows
+          path: target/velopack/Releases/*
+          if-no-files-found: error
+
+      - name: Publish artifacts to VPS
+        if: ${{ inputs.publish_to_vps }}
+        shell: pwsh
+        env:
+          ALPHA_SSH_HOST: ${{ secrets.ALPHA_SSH_HOST }}
+          ALPHA_SSH_USER: ${{ secrets.ALPHA_SSH_USER }}
+          ALPHA_SSH_PRIVATE_KEY: ${{ secrets.ALPHA_SSH_PRIVATE_KEY }}
+          ALPHA_SSH_PORT: ${{ secrets.ALPHA_SSH_PORT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @("ALPHA_SSH_HOST", "ALPHA_SSH_USER", "ALPHA_SSH_PRIVATE_KEY")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "$name secret is required when publish_to_vps is true."
+            }
+          }
+
+          $port = if ([string]::IsNullOrWhiteSpace($env:ALPHA_SSH_PORT)) { "22" } else { $env:ALPHA_SSH_PORT }
+          $keyPath = Join-Path $env:RUNNER_TEMP "transcription_studio_alpha_deploy_key"
+          $keyText = $env:ALPHA_SSH_PRIVATE_KEY -replace "`r`n", "`n"
+          [System.IO.File]::WriteAllText($keyPath, $keyText)
+          icacls $keyPath /inheritance:r | Out-Null
+          icacls $keyPath /grant:r "$($env:USERNAME):R" | Out-Null
+
+          $target = "$($env:ALPHA_SSH_USER)@$($env:ALPHA_SSH_HOST)"
+          $sshArgs = @("-i", $keyPath, "-p", $port, "-o", "StrictHostKeyChecking=accept-new")
+          $scpArgs = @("-i", $keyPath, "-P", $port, "-o", "StrictHostKeyChecking=accept-new")
+          $files = Get-ChildItem -LiteralPath "target\velopack\Releases" -File | ForEach-Object { $_.FullName }
+          if ($files.Count -eq 0) {
+            throw "No Velopack release artifacts were found."
+          }
+
+          & ssh @sshArgs $target "mkdir -p '$env:REMOTE_PATH'"
+          if ($LASTEXITCODE -ne 0) { throw "remote mkdir failed with exit code $LASTEXITCODE" }
+          & scp @scpArgs @files "${target}:$env:REMOTE_PATH/"
+          if ($LASTEXITCODE -ne 0) { throw "artifact upload failed with exit code $LASTEXITCODE" }
+          & ssh @sshArgs $target "find '$env:REMOTE_PATH' -maxdepth 1 -type f -printf '%f %s bytes\n' | sort"
+          if ($LASTEXITCODE -ne 0) { throw "remote artifact listing failed with exit code $LASTEXITCODE" }

@@ -1,0 +1,405 @@
+[
+  {
+    "result": {
+      "data": {
+        "json": {
+          "annotations": [
+            {
+              "id": "9c0ee61b-8786-46fc-b074-a59f77ff2f94",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Верно.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 132.526,
+              "endTimeInSeconds": 133.1,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:48:40.608Z"
+            },
+            {
+              "id": "6a31b261-2c11-4783-83de-f1656c19a7e2",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, конечно.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 188.65375,
+              "endTimeInSeconds": 189.48175,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:48:40.632Z"
+            },
+            {
+              "id": "55a85c97-e2bd-43c0-8ff8-2ab01f3dfbdf",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 160.87,
+              "endTimeInSeconds": 161.20175,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:59:40.626Z"
+            },
+            {
+              "id": "77e544d6-e5b0-478c-8197-3e025bd425ae",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, хорошо.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 180.089875,
+              "endTimeInSeconds": 180.81625,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:00:40.552Z"
+            },
+            {
+              "id": "0c11f0e5-1016-4321-8584-761b7067a82f",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, поняла.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 202.143125,
+              "endTimeInSeconds": 203.13275,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:01:40.482Z"
+            },
+            {
+              "id": "1f08713b-e074-4c52-a5a8-9d4aef3d4d36",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Ясно.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 327.31875,
+              "endTimeInSeconds": 327.832375,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:48:40.722Z"
+            },
+            {
+              "id": "053de1e2-2a58-49b4-b80e-6f14dc23cefb",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Точно.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 346.853125,
+              "endTimeInSeconds": 347.33774999999997,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:48:40.737Z"
+            },
+            {
+              "id": "152b01d3-e22f-420b-b3e9-7919950fa9ee",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Понимаю, да.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 303.66812500000003,
+              "endTimeInSeconds": 304.515625,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:06:40.588Z"
+            },
+            {
+              "id": "b4a633d6-ee2b-40dd-9f27-97baf735011e",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Ну, вот как.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 384.842625,
+              "endTimeInSeconds": 385.528375,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:09:40.535Z"
+            },
+            {
+              "id": "2ab6abaa-5670-40cf-bfa6-1bee1a79d71d",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Понятно.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 426.939875,
+              "endTimeInSeconds": 427.540125,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T02:48:40.752Z"
+            },
+            {
+              "id": "39a1a9f6-82b7-4d89-8d77-ec57a14b5034",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Вот так.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 451.81625,
+              "endTimeInSeconds": 452.54087499999997,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T03:11:40.496Z"
+            },
+            {
+              "id": "05733cd4-95f2-4b11-95dc-e80eb827f622",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Поняла, да, хорошо.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 217.08925,
+              "endTimeInSeconds": 218.42,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:02:22.566Z"
+            },
+            {
+              "id": "49ade1f3-7de8-4508-a9a3-7e8684b700a2",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, поняла.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 268.010125,
+              "endTimeInSeconds": 268.83,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:04:40.590Z"
+            },
+            {
+              "id": "af3acad1-433a-45d5-8f25-c42a548f0df5",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, но ничего.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 273.39887500000003,
+              "endTimeInSeconds": 274.919375,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:05:40.542Z"
+            },
+            {
+              "id": "4ccdb049-d1bf-4047-a87b-40a25eb9487a",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 283.355125,
+              "endTimeInSeconds": 283.670375,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:05:40.552Z"
+            },
+            {
+              "id": "c451a88d-edc2-431f-943c-9d69d525098b",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 55.079875,
+              "endTimeInSeconds": 55.410375,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T02:22:28.151Z",
+              "updatedAt": "2026-06-19T02:48:40.527Z"
+            },
+            {
+              "id": "eaa5afc3-3d59-4267-b073-d390d0b48060",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Ты знаешь, э, есть у меня такое беспокойство, а, по поводу вообще моего финансового положения. Немножко расскажу тебе. Мы переехали в новую страну чуть больше года назад. А, были какие-то сбережения. Но, как это часто бывает в эмиграции, очень много было растрат поначалу, а долго не могли нормальную работу найти, ни я, ни супруг, и как бы деньги вообще все утекли, а, наши сбережения, достаточно быстро, да. И, конечно, мы уже выбрались из вот этого стрессового состояния, когда ты прям не знаешь, чем платить в следующем месяце за квартиру. Но, ты знаешь, к сожалению, всё равно пока не получается никак, а, сформировать какую-то подушку безопасности, начать откладывать даже там на просто крупную покупку, да. А, и я понимаю, что ну как-то всегда была беспечна с деньгами, но я понимаю, что вот именно сейчас я просто себе этого не могу позволить, потому я в другой стране. Да, вот мы- мы, наша ячейка семейная, да, я и супруг, нам не на кого сейчас полагаться, да. А, у нас здесь даже, как вот в родной стране, нет возможности, там, не знаю, ф-- на кредитку жить, да, потому что у нас нет, да, там, м, просто такой возможности, нет там местного банка, к-- там, карты. И, м, н-- э, ты знаешь, я поняла, что это уже вызывает у меня такую тревогу. Ну и пора, видимо. Пришло время действительно как-то ответственно отнестись к своим финансам. И-- но, к сожалению, я не очень знаю, с чего начать. А, как-то, конечно, советов море везде: и откладывай 10 %, {СКАЗ: десять процентов} 20, {СКАЗ: двадцать} 50 %. {СКАЗ: пятьдесят} В общем, цифры разнятся, ничего непонятно. И я думаю, может быть, т-- обсудить с тобой, может, ты что-то посоветуешь мне, с чего вообще начать?",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 0.929,
+              "endTimeInSeconds": 99.286625,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T02:57:40.573Z"
+            },
+            {
+              "id": "52ebb25e-1b55-4dfc-8968-4f7dc6333a52",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, конечно, я с удовольствием с тобой тему обсужу и, надеюсь, что мы с тобой найдём какие-то способы начать откладывать деньги и накопить п-- эту подушку безопасности. А, вообще, очень здорово, что ты об этом думаешь, потому что не все об этом заботятся. Вот, но я вижу, что ты любишь свою семью, думаешь о будущем, и это очень здорово. И твои беспокойства абсолютно понятны и обоснованы. А, тем более, вы пережили такой стресс, переехали в другую страну и первое время здесь были совсем без поддержки. Да, это невероятно тяжело. Да, и знаешь, я тебе сразу задам такой вопрос. Вот скажи, а, ты хочешь откладывать свои именно деньги или деньги всей семьи? Ну, то есть твои и мужа, а, суммарно. Э, ну, то есть ты хочешь работать именно со своим доходом или семейным?",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 99.42775,
+              "endTimeInSeconds": 152.187125,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T02:58:40.517Z"
+            },
+            {
+              "id": "a1a38418-cef1-421d-8629-213ce66ceadb",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "А, ты знаешь, я, наверно, думаю щас про свой доход, потому что я тут считаю, хоть мы, в общем-то, а, да, мы там скидываемся на необходимые траты, а, мы, а, как бы вообще без проблем друг другу даём там деньги, когда они нужны и-- но мы не ведём вот так, знаешь, семейный бюджет. Вот это вот: все получили зарплату, скинули в 1 {СКАЗ: одну} копейку, и кто-то его распределяет. Нет, у нас такого нет. Мы вот обязательные платежи как бы скидываем. У нас есть общий кошелёк, да, в нашем банке, куда мы там вот-- а- а всё остальное, она под свою ответственность. Я считаю, что даже так лучше, потому что под свою ответственность, да, ты не размазываешь там, что прав, виноват. И я в этом смысле решила, да, что мне надо с собой разобраться. Поскольку я более беспечна отношусь к деньгам, [смешок] я, наверно, должна как-то сама, да, как бы, вот. Вот мои доходы, и мо- мо-- я должна откладывать. Вот как-то так. Супруг [неразборчиво] как бы делает то, что ему хочется. Я уверена, что он тоже как бы-- я знаю, что он тоже об этом думает, но у него немножко чуть другая ситуация по финансам. Вот, э, сейчас по стабильности, я имею в виду, дохода, ему чуть-чуть сложнее. Поэтому даже мне бы ста-- быть вот этим ведущим, я думаю, что в нашей семье.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 153.35579475086197,
+              "endTimeInSeconds": 221.72787499999998,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T03:02:22.563Z"
+            },
+            {
+              "id": "8437d43e-6b73-4892-ae1e-9360671875e3",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Спасибо.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 234.55,
+              "endTimeInSeconds": 235.06,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:11:28.731Z",
+              "updatedAt": "2026-06-19T03:03:40.574Z"
+            },
+            {
+              "id": "f8fc433e-fa6a-428a-9364-b5f24eaa6a31",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, здорово, что ты к этому при- пришла. Это вообще такое взрослое решение начать откладывать. Да, и знаешь, никогда не поздно начать это делать. А, так что очень здорово, что ты об этом задумываешься. И хочу тебя спросить: да, вот, а, тот доход, который у тебя есть ще-- сейчас, а, скажи, какую часть этого дохода ты могла бы начать откладывать и не трогать? То есть понимаешь ли ты вообще, а, какой процент твоих трат, а, ну, уходит на семейные нужды там и каждый месяц, и сколько ты готова вложить во что-то.",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 221.899125,
+              "endTimeInSeconds": 256.013,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T03:04:40.579Z"
+            },
+            {
+              "id": "f46ed57f-5958-4356-b2ed-e145ecd554c3",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Ты знаешь, я так даже ещё не анализировала. На самом деле у меня всего несколько месяцев, как прошло вот это вот стрессовое состояние, да, от того, что мы там не знали з-- как платить за квартиру. И я ещё ни разу вот ни- ни-- не садилась так, чтобы посчитать, куда уходят деньги, знаешь, в прямом смысле. Кроме обязательных трат, которые у меня есть - это вот там жильё, оплата там, аренда жилья, всякие коммуналка, интернет. Ну, вот всё, что я это всё считаю в одну, да, то, что каждый день одна и то-- ну, каждый месяц почти одна и та же сумма. Кроме вот этих трат и моей платы за учёбу, я там ежемесячно плачу, да, за своё образование, а у меня вот всё остальное, ну, знаешь, как придётся, как Бог пошлёт. Вот, как, э, какие будут траты, сколько будет свободно времени. Но я, конечно, грешу какими-то импульсивными небольшими покупками, да, там, что-то заказать чуть-чуть, что-то себя порадовать. А, ну, и я уверена, что это всё-таки набегает. Но, честно сказать, ещё ни разу не считала. Может быть, подскажешь, как лучше это начать делать?",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 257.4821427530787,
+              "endTimeInSeconds": 313.97362499999997,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T00:10:27.835Z",
+              "updatedAt": "2026-06-19T03:06:40.582Z"
+            },
+            {
+              "id": "32b5322a-3360-44d4-b7a0-da474c16f7d2",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Давай.",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "startTimeInSeconds": 110.63343999318623,
+              "endTimeInSeconds": 111.11431186203187,
+              "intensity": null,
+              "metadata": null,
+              "createdAt": "2026-06-19T03:11:54.792Z",
+              "updatedAt": "2026-06-19T03:11:54.792Z"
+            },
+            {
+              "id": "ba8ba524-62c1-406a-84ef-7643689ed439",
+              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "type": "transcription",
+              "content": "Да, конечно. А, ну, во-первых, а, идеально, если ты будешь, а, пользоваться 1 {СКАЗ: одним} счётом, да, или какой-то 1 {СКАЗ: одной} картой, потому что, а, так гораздо легче отслеживать, э, приходящие деньги и те, которые ты тратишь. Да, и так, просто взглянув даже, а, в приложение, да, ты будешь видеть, э, сколько денег пришло, сколько ты потратила и на какие сферы. Потому что часто в приложениях, да, банк тебе сразу даже показывает, там что там энную сумму ты потратила на продукты, другую сумму там на покупки. И иногда человек видит, что он потратил там сумму на покупки, эту, например, там на каком-нибудь \"Амазон\". Да, и все эти покупки были импульсивными. И тогда уже потом очень, э, легко работать с тем, чтобы эти импульсивные покупки отсекать. Вот. Но надеюсь, что у тебя всё-таки есть какие-то остатки, да, которые можно начать откладывать. А, да, и вот надо понять, э, где их лучше хранить. Вот. И знаешь, в 1 {СКАЗ: первую} очередь, конечно, было бы хорошо обратиться к каким-то самым надёжным банкам в твоей стране, да, и может быть, даже связаться с ними напрямую, потому что не всегда там на сайтах есть какие-то выгодные предл- предложения и так далее. То есть номер 1 {СКАЗ: один} - а, да, это, конечно, а, положить деньги там под процент, но в зависимости от того, какие у тебя цели. То есть до этого нужно прописать именно финансовые цели, которые у тебя есть. Возможно, это деньги будут на покупку недвижимости, да, а, возможно, там на какую-то учёбу. Или это действительно будет просто подушка безопасности, да, м, ну, скажем так, неприкосновенная. Вот, но сразу отмечу, что если ты к-- там кладёшь их в банк, ам, и это по-- твоя подушка безопасности, то со временем деньги могут обесцениваться, вот. И как ты смотришь на такой вариант, а, чтобы вложить деньги, например, а, в золото? Да, потому что золото, оно всегда, а, растёт, а, в своей стоимости. Вот, как правило, то есть как долгосрочный вклад - это такая, м, неплохая идея. А, возможно, ещё вкладывать и в ценные бумаги, да, но тоже это очень рискованно, на самом деле, вот. И 3 {СКАЗ: третий} вариант - это недвижимость, на самом деле, чтобы твои деньги, да, не, м, теряли свои стоимости, свои ценности. Вот какой вариант, ты думаешь, тебе был бы самым близким?",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "startTimeInSeconds": 313.292625,
+              "endTimeInSeconds": 464.805125,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-06-19T02:24:12.287Z",
+              "updatedAt": "2026-06-19T03:11:54.802Z"
+            }
+          ],
+          "lintErrors": [],
+          "processedRecordingUriMap": {
+            "9c5b9a65-a226-4bcf-85b0-60682896267b": "s3://davidai-audio-recordings/transcription-chunks/prod/06d59594-7036-4e2b-98e3-8f369f041f26/62077784-367e-4709-85d7-1b2e403944df/ba31a7bd-1c89-4f77-a9df-06a1150793bd.wav",
+            "5ba48657-3264-4fc0-9ec2-d15ac659e125": "s3://davidai-audio-recordings/transcription-chunks/prod/06d59594-7036-4e2b-98e3-8f369f041f26/62077784-367e-4709-85d7-1b2e403944df/65e89852-4e36-411b-9e1a-6ad1ee3c12ad.wav"
+          },
+          "transcriptionChunkProcessedRecordings": [
+            {
+              "id": "39f470f1-c346-42e1-8c10-54d2c166ba1e",
+              "transcriptionChunkId": "62077784-367e-4709-85d7-1b2e403944df",
+              "chunkedProcessedRecordingId": "5ba48657-3264-4fc0-9ec2-d15ac659e125",
+              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "speaker": 1,
+              "startTimeInSeconds": 0,
+              "endTimeInSeconds": 465.325,
+              "createdAt": "2026-06-18T23:55:34.443Z",
+              "updatedAt": "2026-06-18T23:55:34.443Z"
+            },
+            {
+              "id": "412b42f0-18ab-470a-9eb8-44acbfe94a32",
+              "transcriptionChunkId": "62077784-367e-4709-85d7-1b2e403944df",
+              "chunkedProcessedRecordingId": "9c5b9a65-a226-4bcf-85b0-60682896267b",
+              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "speaker": 2,
+              "startTimeInSeconds": 0,
+              "endTimeInSeconds": 465.325,
+              "createdAt": "2026-06-18T23:55:34.518Z",
+              "updatedAt": "2026-06-18T23:55:34.518Z"
+            }
+          ],
+          "actionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+          "actionLevel": 1,
+          "isWorkerResumingClaim": false,
+          "actionWorkerId": "113f6620-6ffd-4e46-bf4f-8e6e64105431",
+          "actionDecision": "in-progress",
+          "success": true
+        }
+      }
+    }
+  }
+]

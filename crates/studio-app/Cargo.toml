@@ -1,17 +1,25 @@
 [package]
 name = "studio-app"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+httpdate.workspace = true
 iced.workspace = true
+reqwest.workspace = true
+rodio.workspace = true
 serde_json.workspace = true
 studio-babel = { path = "../studio-babel" }
 studio-core = { path = "../studio-core" }
 studio-project = { path = "../studio-project" }
+studio-waveform = { path = "../studio-waveform" }
+time.workspace = true
+tokio.workspace = true
+url.workspace = true
+velopack.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,0 +1,139 @@
+{
+  "identity": {
+    "title": "Babel Editor Rebuild",
+    "urlPath": "/",
+    "firstMeaningfulTexts": [
+      "Copy Support ID",
+      "Hotkeys",
+      "All Tracks",
+      "Saved",
+      "Submit Review"
+    ]
+  },
+  "optionalControlsAbsentByDefault": [
+    "Skip Chunk",
+    "Flag Recording",
+    "Script Context",
+    "Original Script"
+  ],
+  "transport": {
+    "trackFilter": "All Tracks",
+    "browserPlayLabel": "Play all tracks",
+    "browserPauseLabel": "Pause all tracks",
+    "nativePlayLabel": "Play",
+    "nativePauseLabel": "Pause",
+    "speedLabel": "1x",
+    "jumpBackLabel": "Jump back 5 seconds",
+    "jumpForwardLabel": "Jump forward 5 seconds",
+    "saveCleanLabel": "Saved",
+    "saveDirtyLabel": "Save progress",
+    "submitLabel": "Submit Review"
+  },
+  "support": {
+    "copyLabel": "Copy Support ID",
+    "copiedLabel": "Copied!"
+  },
+  "hotkeys": {
+    "buttonLabel": "Hotkeys",
+    "dialogTitle": "Keyboard Shortcuts",
+    "expectedTexts": [
+      "Global Controls",
+      "Play/Pause",
+      "Space",
+      "Seek To Previous Segment",
+      "Seek To Next Segment",
+      "Loop Controls",
+      "Set loop region (on loop bar)",
+      "Segment Controls (Click on segment)"
+    ]
+  },
+  "submitConfirmation": {
+    "title": "Confirm Submission",
+    "body": "Are you sure you want to submit?",
+    "buttons": [
+      "Cancel",
+      "Submit",
+      "Close"
+    ]
+  },
+  "timeline": {
+    "laneOrder": [
+      "Speaker 1",
+      "Speaker 2"
+    ],
+    "laneColors": [
+      "blue",
+      "purple"
+    ],
+    "defaultVisibleRegion": {
+      "laneLabel": "Speaker 2",
+      "backgroundColor": "rgba(176, 131, 255, 0.25)",
+      "borderColor": "rgb(176, 131, 255)"
+    }
+  },
+  "transcript": {
+    "initialRowCount": 24,
+    "headers": [
+      "ID",
+      "Speaker",
+      "Start (mm:ss)",
+      "End (mm:ss)",
+      "Text",
+      "Linter",
+      "Actions"
+    ],
+    "firstRows": [
+      {
+        "displayId": "1",
+        "speaker": "Speaker 2",
+        "start": "00:00.93",
+        "end": "01:39.29",
+        "textPrefix": "Ты знаешь"
+      },
+      {
+        "displayId": "2",
+        "speaker": "Speaker 1",
+        "start": "00:55.08",
+        "end": "00:55.41",
+        "text": "Да."
+      }
+    ],
+    "rowMenuItems": [
+      "Add Segment Above",
+      "Add Segment Below",
+      "Merge With Above",
+      "Merge With Below",
+      "Delete"
+    ],
+    "rowMenuForbiddenItems": [
+      "Edit Segment",
+      "Change Speaker",
+      "Skip Chunk"
+    ],
+    "inlineEditDirtySuffix": " [playwright-inline]"
+  },
+  "createRegion": {
+    "laneLabel": "Speaker 1",
+    "dialogTitle": "Add Region",
+    "textPlaceholder": "Enter text for this region...",
+    "buttons": [
+      "Cancel",
+      "Save"
+    ],
+    "createdSegmentCountDeltaOnDrag": 1,
+    "cancelDismissesOnly": true,
+    "savedText": "playwright-created region text",
+    "forbiddenFields": [
+      "Speaker",
+      "Start",
+      "End",
+      "Primary",
+      "Secondary",
+      "Intensity"
+    ]
+  },
+  "existingRegion": {
+    "singleClickDoesNotOpenAddRegionPopup": true,
+    "doubleClickDoesNotOpenTextPopup": true
+  }
+}

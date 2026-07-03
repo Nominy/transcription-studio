@@ -1,6 +1,18 @@
+use serde_json::json;
 use thiserror::Error;
 
 use crate::{Project, Segment};
+
+const BABEL_SPLIT_GAP_SECONDS: f64 = 0.1;
+const BABEL_SPLIT_HALF_GAP_SECONDS: f64 = BABEL_SPLIT_GAP_SECONDS / 2.0;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SegmentUpdate {
+    pub segment_id: String,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub text: String,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorCommand {
@@ -14,10 +26,27 @@ pub enum EditorCommand {
         left_segment_id: String,
         right_segment_id: String,
     },
+    MergeSegmentsKeepingRight {
+        left_segment_id: String,
+        right_segment_id: String,
+    },
     ChangeSegmentSpeaker {
         segment_id: String,
         speaker_id: String,
         lane_id: String,
+    },
+    SetSegmentAnnotationType {
+        segment_id: String,
+        annotation_type: String,
+    },
+    UpdateAnnotationMetadata {
+        segment_id: String,
+        text: String,
+        intensity: Option<u8>,
+        content: serde_json::Value,
+    },
+    ResolveLowConfidence {
+        segment_id: String,
     },
     ApplyTextEdit {
         segment_id: String,
@@ -29,6 +58,9 @@ pub enum EditorCommand {
         end_seconds: f64,
         text: String,
     },
+    UpdateSegments {
+        updates: Vec<SegmentUpdate>,
+    },
     MoveSegmentBoundary {
         segment_id: String,
         start_seconds: f64,
@@ -38,6 +70,19 @@ pub enum EditorCommand {
         segment_id: String,
         at_seconds: f64,
         new_segment_id: String,
+    },
+    SplitSegmentWithText {
+        segment_id: String,
+        at_seconds: f64,
+        new_segment_id: String,
+        left_text: String,
+        right_text: String,
+    },
+    CutLaneRange {
+        lane_id: String,
+        start_seconds: f64,
+        end_seconds: f64,
+        smart_split: bool,
     },
 }
 
@@ -74,13 +119,30 @@ pub struct CommandHistory {
 }
 
 impl CommandHistory {
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
     pub fn apply(
         &mut self,
         project: &mut Project,
         command: EditorCommand,
     ) -> Result<(), StudioCoreError> {
+        self.apply_with_timestamp(project, command, None)
+    }
+
+    pub fn apply_with_timestamp(
+        &mut self,
+        project: &mut Project,
+        command: EditorCommand,
+        updated_at: Option<String>,
+    ) -> Result<(), StudioCoreError> {
         let previous = project.clone();
-        apply_command(project, command)?;
+        apply_command(project, command, updated_at.as_deref())?;
         self.undo_stack.push(previous);
         self.redo_stack.clear();
         Ok(())
@@ -107,24 +169,62 @@ impl CommandHistory {
     }
 }
 
-fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), StudioCoreError> {
+fn apply_command(
+    project: &mut Project,
+    command: EditorCommand,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
     match command {
-        EditorCommand::CreateSegment { segment } => create_segment(project, segment),
+        EditorCommand::CreateSegment { segment } => create_segment(project, segment, updated_at),
         EditorCommand::DeleteSegment { segment_id } => delete_segment(project, &segment_id),
         EditorCommand::MergeSegments {
             left_segment_id,
             right_segment_id,
-        } => merge_segments(project, &left_segment_id, &right_segment_id),
+        } => merge_segments(
+            project,
+            &left_segment_id,
+            &right_segment_id,
+            MergeKeep::Left,
+            updated_at,
+        ),
+        EditorCommand::MergeSegmentsKeepingRight {
+            left_segment_id,
+            right_segment_id,
+        } => merge_segments(
+            project,
+            &left_segment_id,
+            &right_segment_id,
+            MergeKeep::Right,
+            updated_at,
+        ),
         EditorCommand::ChangeSegmentSpeaker {
             segment_id,
             speaker_id,
             lane_id,
-        } => change_segment_speaker(project, &segment_id, speaker_id, lane_id),
+        } => change_segment_speaker(project, &segment_id, speaker_id, lane_id, updated_at),
+        EditorCommand::SetSegmentAnnotationType {
+            segment_id,
+            annotation_type,
+        } => set_segment_annotation_type(project, &segment_id, annotation_type, updated_at),
+        EditorCommand::UpdateAnnotationMetadata {
+            segment_id,
+            text,
+            intensity,
+            content,
+        } => update_annotation_metadata(project, &segment_id, text, intensity, content, updated_at),
+        EditorCommand::ResolveLowConfidence { segment_id } => {
+            let segment = project
+                .segment_mut(&segment_id)
+                .ok_or(StudioCoreError::SegmentNotFound)?;
+            mark_low_confidence_resolved(segment, updated_at);
+            Ok(())
+        }
         EditorCommand::ApplyTextEdit { segment_id, text } => {
             let segment = project
                 .segment_mut(&segment_id)
                 .ok_or(StudioCoreError::SegmentNotFound)?;
             segment.text = text;
+            mark_low_confidence_resolved(segment, updated_at);
             Ok(())
         }
         EditorCommand::UpdateSegment {
@@ -132,7 +232,15 @@ fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), St
             start_seconds,
             end_seconds,
             text,
-        } => update_segment(project, &segment_id, start_seconds, end_seconds, text),
+        } => update_segment(
+            project,
+            &segment_id,
+            start_seconds,
+            end_seconds,
+            text,
+            updated_at,
+        ),
+        EditorCommand::UpdateSegments { updates } => update_segments(project, updates, updated_at),
         EditorCommand::MoveSegmentBoundary {
             segment_id,
             start_seconds,
@@ -144,22 +252,58 @@ fn apply_command(project: &mut Project, command: EditorCommand) -> Result<(), St
                 .ok_or(StudioCoreError::SegmentNotFound)?;
             segment.start_seconds = start_seconds;
             segment.end_seconds = end_seconds;
+            mark_low_confidence_resolved(segment, updated_at);
             Ok(())
         }
         EditorCommand::SplitSegment {
             segment_id,
             at_seconds,
             new_segment_id,
-        } => split_segment(project, &segment_id, at_seconds, new_segment_id),
+        } => split_segment(project, &segment_id, at_seconds, new_segment_id, updated_at),
+        EditorCommand::SplitSegmentWithText {
+            segment_id,
+            at_seconds,
+            new_segment_id,
+            left_text,
+            right_text,
+        } => split_segment_with_text(
+            project,
+            &segment_id,
+            at_seconds,
+            new_segment_id,
+            left_text,
+            right_text,
+            updated_at,
+        ),
+        EditorCommand::CutLaneRange {
+            lane_id,
+            start_seconds,
+            end_seconds,
+            smart_split,
+        } => cut_lane_range(
+            project,
+            &lane_id,
+            start_seconds,
+            end_seconds,
+            smart_split,
+            updated_at,
+        ),
     }
 }
 
-fn create_segment(project: &mut Project, segment: Segment) -> Result<(), StudioCoreError> {
+fn create_segment(
+    project: &mut Project,
+    mut segment: Segment,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
     if project.has_segment(&segment.id) {
         return Err(StudioCoreError::DuplicateSegmentId);
     }
     validate_time_range(segment.start_seconds, segment.end_seconds)?;
     validate_track(project, &segment.speaker_id, &segment.lane_id)?;
+    if let Some(updated_at) = updated_at {
+        stamp_created_if_absent_and_updated(&mut segment, updated_at);
+    }
     project.segments.push(segment);
     Ok(())
 }
@@ -180,6 +324,7 @@ fn update_segment(
     start_seconds: f64,
     end_seconds: f64,
     text: String,
+    updated_at: Option<&str>,
 ) -> Result<(), StudioCoreError> {
     validate_time_range(start_seconds, end_seconds)?;
     let segment = project
@@ -188,13 +333,47 @@ fn update_segment(
     segment.start_seconds = start_seconds;
     segment.end_seconds = end_seconds;
     segment.text = text;
+    mark_low_confidence_resolved(segment, updated_at);
     Ok(())
+}
+
+fn update_segments(
+    project: &mut Project,
+    updates: Vec<SegmentUpdate>,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    for update in &updates {
+        validate_time_range(update.start_seconds, update.end_seconds)?;
+        project
+            .segment(&update.segment_id)
+            .ok_or(StudioCoreError::SegmentNotFound)?;
+    }
+
+    for update in updates {
+        let segment = project
+            .segment_mut(&update.segment_id)
+            .ok_or(StudioCoreError::SegmentNotFound)?;
+        segment.start_seconds = update.start_seconds;
+        segment.end_seconds = update.end_seconds;
+        segment.text = update.text;
+        mark_low_confidence_resolved(segment, updated_at);
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeKeep {
+    Left,
+    Right,
 }
 
 fn merge_segments(
     project: &mut Project,
     left_segment_id: &str,
     right_segment_id: &str,
+    keep: MergeKeep,
+    updated_at: Option<&str>,
 ) -> Result<(), StudioCoreError> {
     let left_index = project
         .segments
@@ -222,13 +401,64 @@ fn merge_segments(
     }
 
     let merged_text = merge_text(&left.text, &right.text);
-    let left_segment = &mut project.segments[left_index];
-    left_segment.start_seconds = left.start_seconds;
-    left_segment.end_seconds = right.end_seconds;
-    left_segment.text = merged_text;
-    left_segment.source_annotation_id = left.source_annotation_id.or(right.source_annotation_id);
+    match keep {
+        MergeKeep::Left => {
+            let left_segment = &mut project.segments[left_index];
+            left_segment.start_seconds = left.start_seconds;
+            left_segment.end_seconds = right.end_seconds;
+            left_segment.text = merged_text;
+            left_segment.source_annotation_id =
+                left.source_annotation_id.or(right.source_annotation_id);
+            mark_low_confidence_resolved(left_segment, updated_at);
+            project.segments.remove(right_index);
+        }
+        MergeKeep::Right => {
+            let right_segment = &mut project.segments[right_index];
+            right_segment.start_seconds = left.start_seconds;
+            right_segment.end_seconds = right.end_seconds;
+            right_segment.text = merged_text;
+            right_segment.source_annotation_id =
+                right.source_annotation_id.or(left.source_annotation_id);
+            mark_low_confidence_resolved(right_segment, updated_at);
+            project.segments.remove(left_index);
+        }
+    }
+    Ok(())
+}
 
-    project.segments.remove(right_index);
+fn set_segment_annotation_type(
+    project: &mut Project,
+    segment_id: &str,
+    annotation_type: String,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    let segment = project
+        .segment_mut(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    segment
+        .metadata
+        .insert("type".to_string(), serde_json::json!(annotation_type));
+    mark_low_confidence_resolved(segment, updated_at);
+    Ok(())
+}
+
+fn update_annotation_metadata(
+    project: &mut Project,
+    segment_id: &str,
+    text: String,
+    intensity: Option<u8>,
+    content: serde_json::Value,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    let segment = project
+        .segment_mut(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    segment.text = text;
+    segment
+        .metadata
+        .insert("intensity".to_string(), serde_json::json!(intensity));
+    segment.metadata.insert("content".to_string(), content);
+    mark_low_confidence_resolved(segment, updated_at);
     Ok(())
 }
 
@@ -237,6 +467,7 @@ fn change_segment_speaker(
     segment_id: &str,
     speaker_id: String,
     lane_id: String,
+    updated_at: Option<&str>,
 ) -> Result<(), StudioCoreError> {
     project
         .segment(segment_id)
@@ -264,6 +495,7 @@ fn change_segment_speaker(
         .ok_or(StudioCoreError::SegmentNotFound)?;
     segment.speaker_id = speaker_id;
     segment.lane_id = lane_id;
+    mark_low_confidence_resolved(segment, updated_at);
     Ok(())
 }
 
@@ -272,6 +504,7 @@ fn split_segment(
     segment_id: &str,
     at_seconds: f64,
     new_segment_id: String,
+    updated_at: Option<&str>,
 ) -> Result<(), StudioCoreError> {
     if project.has_segment(&new_segment_id) {
         return Err(StudioCoreError::DuplicateSegmentId);
@@ -282,29 +515,247 @@ fn split_segment(
         .iter()
         .position(|segment| segment.id == segment_id)
         .ok_or(StudioCoreError::SegmentNotFound)?;
-    let original_end = project.segments[index].end_seconds;
     let original_start = project.segments[index].start_seconds;
+    let original_end = project.segments[index].end_seconds;
+    let left_end_seconds = at_seconds - BABEL_SPLIT_HALF_GAP_SECONDS;
+    let right_start_seconds = at_seconds + BABEL_SPLIT_HALF_GAP_SECONDS;
 
-    validate_time_range(original_start, at_seconds)?;
-    validate_time_range(at_seconds, original_end)?;
+    validate_time_range(original_start, left_end_seconds)?;
+    validate_time_range(right_start_seconds, original_end)?;
 
-    if at_seconds <= original_start || at_seconds >= original_end {
+    if at_seconds <= original_start || at_seconds >= original_end - BABEL_SPLIT_GAP_SECONDS {
         return Err(StudioCoreError::SplitOutsideSegment);
     }
 
-    let right = Segment {
+    let mut right = Segment {
         id: new_segment_id,
         source_annotation_id: None,
         speaker_id: project.segments[index].speaker_id.clone(),
         lane_id: project.segments[index].lane_id.clone(),
-        start_seconds: at_seconds,
+        start_seconds: right_start_seconds,
         end_seconds: original_end,
-        text: String::new(),
+        text: project.segments[index].text.clone(),
+        metadata: project.segments[index].metadata.clone(),
     };
 
-    project.segments[index].end_seconds = at_seconds;
+    project.segments[index].end_seconds = left_end_seconds;
+    mark_low_confidence_resolved(&mut project.segments[index], updated_at);
+    mark_low_confidence_resolved(&mut right, updated_at);
+    if let Some(updated_at) = updated_at {
+        stamp_created_and_updated(&mut project.segments[index], updated_at);
+        stamp_created_and_updated(&mut right, updated_at);
+    }
     project.segments.insert(index + 1, right);
     Ok(())
+}
+
+fn split_segment_with_text(
+    project: &mut Project,
+    segment_id: &str,
+    at_seconds: f64,
+    new_segment_id: String,
+    left_text: String,
+    right_text: String,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    split_segment(
+        project,
+        segment_id,
+        at_seconds,
+        new_segment_id.clone(),
+        updated_at,
+    )?;
+    let left = project
+        .segment_mut(segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    left.text = left_text;
+    let right = project
+        .segment_mut(&new_segment_id)
+        .ok_or(StudioCoreError::SegmentNotFound)?;
+    right.text = right_text;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CutSegmentSnapshot {
+    id: String,
+    start_seconds: f64,
+    end_seconds: f64,
+    text: String,
+}
+
+fn cut_lane_range(
+    project: &mut Project,
+    lane_id: &str,
+    start_seconds: f64,
+    end_seconds: f64,
+    smart_split: bool,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    validate_time_range(start_seconds, end_seconds)?;
+    if !project.lanes.iter().any(|lane| lane.id == lane_id) {
+        return Err(StudioCoreError::LaneNotFound);
+    }
+
+    let overlapping = project
+        .segments
+        .iter()
+        .filter(|segment| segment.lane_id == lane_id)
+        .filter(|segment| {
+            segment.end_seconds > start_seconds && segment.start_seconds < end_seconds
+        })
+        .map(|segment| CutSegmentSnapshot {
+            id: segment.id.clone(),
+            start_seconds: segment.start_seconds,
+            end_seconds: segment.end_seconds,
+            text: segment.text.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    for segment in overlapping {
+        let covers_left =
+            segment.start_seconds < start_seconds && segment.end_seconds > start_seconds;
+        let covers_right = segment.start_seconds < end_seconds && segment.end_seconds > end_seconds;
+        let fully_inside =
+            segment.start_seconds >= start_seconds && segment.end_seconds <= end_seconds;
+
+        if covers_left && covers_right {
+            let new_segment_id = next_derived_segment_id(project, &segment.id);
+            let (left_text, right_text) = if smart_split {
+                let pivot_seconds = (start_seconds + end_seconds) / 2.0;
+                let duration = segment.end_seconds - segment.start_seconds;
+                let ratio = if duration.is_finite() && duration > 0.0 {
+                    (pivot_seconds - segment.start_seconds) / duration
+                } else {
+                    0.0
+                };
+                split_text_by_babel_word_ratio(&segment.text, ratio)
+            } else {
+                (segment.text.clone(), segment.text.clone())
+            };
+
+            split_segment_with_text(
+                project,
+                &segment.id,
+                start_seconds,
+                new_segment_id.clone(),
+                left_text,
+                right_text,
+                updated_at,
+            )?;
+            let left = project
+                .segment(&segment.id)
+                .ok_or(StudioCoreError::SegmentNotFound)?
+                .clone();
+            update_segment(
+                project,
+                &segment.id,
+                left.start_seconds,
+                start_seconds,
+                left.text,
+                updated_at,
+            )?;
+            let right = project
+                .segment(&new_segment_id)
+                .ok_or(StudioCoreError::SegmentNotFound)?
+                .clone();
+            update_segment(
+                project,
+                &new_segment_id,
+                end_seconds,
+                right.end_seconds,
+                right.text,
+                updated_at,
+            )?;
+        } else if fully_inside {
+            delete_segment(project, &segment.id)?;
+        } else if covers_left {
+            update_segment(
+                project,
+                &segment.id,
+                segment.start_seconds,
+                start_seconds,
+                segment.text,
+                updated_at,
+            )?;
+        } else if covers_right {
+            update_segment(
+                project,
+                &segment.id,
+                end_seconds,
+                segment.end_seconds,
+                segment.text,
+                updated_at,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn next_derived_segment_id(project: &Project, base_segment_id: &str) -> String {
+    for index in 1.. {
+        let candidate = format!("{base_segment_id}__studio_{index}");
+        if !project.has_segment(&candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!("failed to allocate derived segment id")
+}
+
+fn split_text_by_babel_word_ratio(text: &str, ratio: f64) -> (String, String) {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    if words.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let clamped_ratio = if ratio.is_finite() {
+        ratio.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let mut split_count = (words.len() as f64 * clamped_ratio).round() as usize;
+    if clamped_ratio > 0.0 && clamped_ratio < 1.0 && words.len() > 1 {
+        split_count = split_count.clamp(1, words.len() - 1);
+    } else {
+        split_count = split_count.min(words.len());
+    }
+
+    (
+        words[..split_count].join(" "),
+        words[split_count..].join(" "),
+    )
+}
+
+fn mark_low_confidence_resolved(segment: &mut Segment, updated_at: Option<&str>) {
+    segment
+        .metadata
+        .insert("lowConfidenceResolved".to_string(), json!(true));
+    if let Some(updated_at) = updated_at {
+        stamp_updated(segment, updated_at);
+    }
+}
+
+fn stamp_updated(segment: &mut Segment, updated_at: &str) {
+    segment
+        .metadata
+        .insert("updatedAt".to_string(), json!(updated_at));
+}
+
+fn stamp_created_if_absent_and_updated(segment: &mut Segment, updated_at: &str) {
+    segment
+        .metadata
+        .entry("createdAt".to_string())
+        .or_insert_with(|| json!(updated_at));
+    stamp_updated(segment, updated_at);
+}
+
+fn stamp_created_and_updated(segment: &mut Segment, updated_at: &str) {
+    segment
+        .metadata
+        .insert("createdAt".to_string(), json!(updated_at));
+    stamp_updated(segment, updated_at);
 }
 
 fn merge_text(left: &str, right: &str) -> String {

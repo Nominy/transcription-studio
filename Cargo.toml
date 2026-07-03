@@ -3,6 +3,7 @@ members = [
   "crates/studio-core",
   "crates/studio-project",
   "crates/studio-babel",
+  "crates/studio-waveform",
   "crates/studio-app"
 ]
 resolver = "2"
@@ -14,9 +15,16 @@ repository = "https://github.com/Nominy/transcription-studio"
 
 [workspace.dependencies]
 anyhow = "1.0"
-iced = "0.13"
+iced = { version = "0.13", features = ["tokio", "lazy", "svg", "canvas", "system", "advanced"] }
+httpdate = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
+rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.14"
 thiserror = "2.0"
-
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+url = "2.5"
+velopack = "1.2.0"
