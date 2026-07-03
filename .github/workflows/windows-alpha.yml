@@ -60,11 +60,6 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Cache Rust build outputs
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: windows-stable-release
-
       - name: Install Velopack CLI
         run: dotnet tool update -g vpk
 

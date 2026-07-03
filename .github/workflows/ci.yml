@@ -55,11 +55,6 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Cache Rust build outputs
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: windows-stable
-
       - name: Check formatting
         run: cargo fmt --all --check
 
