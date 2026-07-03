@@ -50,13 +50,13 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
@@ -113,7 +113,7 @@ jobs:
           & .\tools\package-alpha-windows.ps1 @args
 
       - name: Upload Velopack artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: transcription-studio-${{ inputs.channel }}-windows
           path: target/velopack/Releases/*
