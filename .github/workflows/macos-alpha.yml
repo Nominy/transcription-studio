@@ -1,0 +1,193 @@
+name: macOS Alpha Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Velopack channel
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - alpha
+      version:
+        description: Optional package version override. Blank uses crates/studio-app/Cargo.toml.
+        required: false
+        type: string
+      target:
+        description: macOS build target
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - latest-arm64
+          - latest-amd64
+          - sonoma-amd64
+      publish_to_vps:
+        description: Publish artifacts to the VPS feed after packaging.
+        required: true
+        default: false
+        type: boolean
+      remote_base_path:
+        description: Remote web-root base path for macOS Velopack feeds.
+        required: true
+        default: /var/www/transcription-studio/alpha
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velopack-macos-${{ inputs.channel }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  select-targets:
+    name: Select macOS targets
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+
+    steps:
+      - name: Build target matrix
+        id: targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_arm64='{"target":"latest-arm64","runner":"macos-26","runtime":"osx-arm64","feed_suffix":"mac-arm64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-arm64"}'
+          latest_amd64='{"target":"latest-amd64","runner":"macos-26-intel","runtime":"osx-x64","feed_suffix":"mac-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-x64"}'
+          sonoma_amd64='{"target":"sonoma-amd64","runner":"macos-14-large","runtime":"osx-x64","feed_suffix":"mac-sonoma-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64"}'
+
+          case "${{ inputs.target }}" in
+            all)
+              matrix="{\"include\":[$latest_arm64,$latest_amd64,$sonoma_amd64]}"
+              ;;
+            latest-arm64)
+              matrix="{\"include\":[$latest_arm64]}"
+              ;;
+            latest-amd64)
+              matrix="{\"include\":[$latest_amd64]}"
+              ;;
+            sonoma-amd64)
+              matrix="{\"include\":[$sonoma_amd64]}"
+              ;;
+            *)
+              echo "Unknown target: ${{ inputs.target }}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package macOS alpha (${{ matrix.target }})
+    needs: select-targets
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
+
+    env:
+      CHANNEL: ${{ inputs.channel }}
+      VERSION: ${{ inputs.version }}
+      RUNTIME: ${{ matrix.runtime }}
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      STUDIO_DEFAULT_UPDATE_FEED_URL: ${{ matrix.feed_url }}
+      REMOTE_PATH: ${{ inputs.remote_base_path }}/${{ matrix.feed_suffix }}
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
+      APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+      APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
+      APPLE_NOTARY_PROFILE: ${{ secrets.APPLE_NOTARY_PROFILE }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install Velopack CLI
+        run: dotnet tool update -g vpk
+
+      - name: Import Developer ID signing assets
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/transcription-studio-signing.keychain-db"
+          cert_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_password="${APPLE_KEYCHAIN_PASSWORD:-temporary-keychain-password}"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert_path" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+
+          if [[ -n "${APPLE_NOTARY_PROFILE:-}" && -n "${APPLE_NOTARY_APPLE_ID:-}" && -n "${APPLE_NOTARY_TEAM_ID:-}" && -n "${APPLE_NOTARY_PASSWORD:-}" ]]; then
+            xcrun notarytool store-credentials "$APPLE_NOTARY_PROFILE" \
+              --apple-id "$APPLE_NOTARY_APPLE_ID" \
+              --team-id "$APPLE_NOTARY_TEAM_ID" \
+              --password "$APPLE_NOTARY_PASSWORD" \
+              --keychain "$keychain"
+          fi
+
+          echo "APPLE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build Velopack artifacts
+        shell: bash
+        run: |
+          chmod +x ./tools/package-alpha-macos.sh
+          ./tools/package-alpha-macos.sh
+
+      - name: Upload Velopack artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: transcription-studio-${{ inputs.channel }}-${{ matrix.target }}
+          path: target/velopack/Releases/*
+          if-no-files-found: error
+
+      - name: Publish artifacts to VPS
+        if: ${{ inputs.publish_to_vps }}
+        shell: bash
+        env:
+          ALPHA_SSH_HOST: ${{ secrets.ALPHA_SSH_HOST }}
+          ALPHA_SSH_USER: ${{ secrets.ALPHA_SSH_USER }}
+          ALPHA_SSH_PRIVATE_KEY: ${{ secrets.ALPHA_SSH_PRIVATE_KEY }}
+          ALPHA_SSH_PORT: ${{ secrets.ALPHA_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          : "${ALPHA_SSH_HOST:?ALPHA_SSH_HOST secret is required when publish_to_vps is true.}"
+          : "${ALPHA_SSH_USER:?ALPHA_SSH_USER secret is required when publish_to_vps is true.}"
+          : "${ALPHA_SSH_PRIVATE_KEY:?ALPHA_SSH_PRIVATE_KEY secret is required when publish_to_vps is true.}"
+
+          port="${ALPHA_SSH_PORT:-22}"
+          key_path="$RUNNER_TEMP/transcription_studio_alpha_deploy_key"
+          printf '%s\n' "$ALPHA_SSH_PRIVATE_KEY" > "$key_path"
+          chmod 600 "$key_path"
+
+          target="${ALPHA_SSH_USER}@${ALPHA_SSH_HOST}"
+          ssh_args=(-i "$key_path" -p "$port" -o StrictHostKeyChecking=accept-new)
+          scp_args=(-i "$key_path" -P "$port" -o StrictHostKeyChecking=accept-new)
+
+          ssh "${ssh_args[@]}" "$target" "mkdir -p '$REMOTE_PATH'"
+          scp "${scp_args[@]}" target/velopack/Releases/* "${target}:$REMOTE_PATH/"
+          ssh "${ssh_args[@]}" "$target" "find '$REMOTE_PATH' -maxdepth 1 -type f -printf '%f %s bytes\n' | sort"

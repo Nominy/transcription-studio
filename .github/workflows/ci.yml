@@ -39,8 +39,15 @@ jobs:
         run: gitleaks detect --source . --redact --verbose
 
   rust:
-    name: Rust workspace (Windows)
-    runs-on: windows-latest
+    name: Rust workspace (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
 
     env:
       CARGO_TERM_COLOR: always

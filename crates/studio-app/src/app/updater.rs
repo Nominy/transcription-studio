@@ -1,7 +1,15 @@
 use velopack::{UpdateCheck, UpdateManager, sources};
 
-pub(super) const DEFAULT_UPDATE_FEED_URL: &str =
-    "https://reviewgen.ovh/transcription-studio/alpha/win-x64";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-studio/alpha/mac-arm64";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-studio/alpha/mac-x64";
+#[cfg(not(target_os = "macos"))]
+const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-studio/alpha/win-x64";
+pub(super) const DEFAULT_UPDATE_FEED_URL: &str = default_update_feed_url_from(
+    option_env!("STUDIO_DEFAULT_UPDATE_FEED_URL"),
+    PLATFORM_UPDATE_FEED_URL,
+);
 const UPDATE_FEED_URL_ENV: &str = "STUDIO_UPDATE_FEED_URL";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +192,33 @@ fn configured_update_feed_url() -> String {
         .unwrap_or_else(|| DEFAULT_UPDATE_FEED_URL.to_string())
 }
 
+#[cfg(test)]
+fn default_update_feed_url_for_os(
+    os: &str,
+    arch: &str,
+    build_override: Option<&'static str>,
+) -> &'static str {
+    let platform_url = match os {
+        "macos" => match arch {
+            "aarch64" | "arm64" => "https://reviewgen.ovh/transcription-studio/alpha/mac-arm64",
+            "x86_64" => "https://reviewgen.ovh/transcription-studio/alpha/mac-x64",
+            _ => "https://reviewgen.ovh/transcription-studio/alpha/mac-arm64",
+        },
+        _ => "https://reviewgen.ovh/transcription-studio/alpha/win-x64",
+    };
+    default_update_feed_url_from(build_override, platform_url)
+}
+
+const fn default_update_feed_url_from(
+    build_override: Option<&'static str>,
+    platform_url: &'static str,
+) -> &'static str {
+    match build_override {
+        Some(url) => url,
+        None => platform_url,
+    }
+}
+
 fn check_for_updates_blocking(feed_url: &str) -> Result<UpdateCheckSummary, String> {
     let update_manager = update_manager(feed_url)?;
     match update_manager
@@ -221,4 +256,33 @@ fn update_manager(feed_url: &str) -> Result<UpdateManager, String> {
     UpdateManager::new(source, None, None).map_err(|error| {
         format!("Velopack updater is available only from an installed build: {error}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_update_feed_url_for_os;
+
+    #[test]
+    fn default_update_feed_url_matches_packaged_runtime_family() {
+        assert_eq!(
+            default_update_feed_url_for_os("windows", "x86_64", None),
+            "https://reviewgen.ovh/transcription-studio/alpha/win-x64"
+        );
+        assert_eq!(
+            default_update_feed_url_for_os("macos", "aarch64", None),
+            "https://reviewgen.ovh/transcription-studio/alpha/mac-arm64"
+        );
+        assert_eq!(
+            default_update_feed_url_for_os("macos", "x86_64", None),
+            "https://reviewgen.ovh/transcription-studio/alpha/mac-x64"
+        );
+        assert_eq!(
+            default_update_feed_url_for_os(
+                "macos",
+                "x86_64",
+                Some("https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64")
+            ),
+            "https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64"
+        );
+    }
 }

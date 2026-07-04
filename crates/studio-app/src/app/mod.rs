@@ -26,6 +26,7 @@ mod native_auth_flow;
 mod native_capabilities;
 mod navigation;
 mod panel_persistence;
+mod platform_paths;
 mod renderer_capture;
 mod review_backend_client;
 mod segment_actions;

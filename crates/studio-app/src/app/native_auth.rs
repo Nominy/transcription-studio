@@ -8,6 +8,8 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use super::platform_paths::application_support_dir_named;
+
 const CLERK_INSTANCE_SUFFIX: &str = "v1aVht_F";
 const CLERK_API_VERSION: &str = "2025-11-10";
 const CLERK_JS_VERSION: &str = "5.127.0";
@@ -161,12 +163,7 @@ pub(super) fn default_native_auth_store_path() -> PathBuf {
     {
         return PathBuf::from(path.trim());
     }
-    let base = env::var("APPDATA").map(PathBuf::from).unwrap_or_else(|_| {
-        env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".config"))
-            .unwrap_or_else(|_| PathBuf::from("."))
-    });
-    base.join("TranscriptionStudio").join("babel-auth.json")
+    application_support_dir_named("TranscriptionStudio").join("babel-auth.json")
 }
 
 pub(super) fn native_clerk_url() -> String {

@@ -5,6 +5,8 @@ use std::{fs, io::Error};
 
 use studio_app::{TtsPanelEffect, read_stored_collapsed_state};
 
+use super::platform_paths::application_support_dir;
+
 #[derive(Debug, Clone)]
 pub(super) struct PanelCollapseStorage {
     path: PathBuf,
@@ -41,11 +43,7 @@ impl PanelCollapseStorage {
     }
 
     fn default_path() -> PathBuf {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(".studio-dev"))
-            .join("Transcription Studio")
-            .join("ui-local-storage.json")
+        application_support_dir().join("ui-local-storage.json")
     }
 
     pub(super) fn is_collapsed(&self, key: &str) -> bool {
