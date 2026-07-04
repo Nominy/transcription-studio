@@ -17421,10 +17421,18 @@ fn windows_alpha_release_scripts_use_velopack_and_ethernetservers() {
     let package_script = include_str!("../../../../tools/package-alpha-windows.ps1");
     let publish_script = include_str!("../../../../tools/publish-alpha-windows.ps1");
     let release_doc = include_str!("../../../../docs/release/windows-alpha.md");
+    let workflow = include_str!("../../../../.github/workflows/windows-alpha.yml");
 
     assert!(package_script.contains("vpk pack"));
     assert!(package_script.contains("--channel"));
     assert!(package_script.contains("TranscriptionStudio.exe"));
+    assert!(workflow.contains("$packageArgs = @{"));
+    assert!(workflow.contains("Channel = $env:CHANNEL"));
+    assert!(workflow.contains(".\\tools\\package-alpha-windows.ps1 @packageArgs"));
+    assert!(!workflow.contains("$args = @("));
+    assert!(!workflow.contains("$packageArgs = @("));
+    assert!(publish_script.contains("$packageArgs = @{"));
+    assert!(publish_script.contains("OutputDir = $releaseDir"));
     assert!(publish_script.contains("ssh ethernetservers"));
     assert!(publish_script.contains("scp"));
     assert!(publish_script.contains("/var/www/transcription-studio/alpha/win-x64"));

@@ -35,15 +35,15 @@ if (-not $releaseDir.StartsWith($repoRootFull, [System.StringComparison]::Ordina
 }
 
 if (-not $SkipPackage) {
-    $packageArgs = @(
-        "-Channel", $Channel,
-        "-OutputDir", $releaseDir
-    )
+    $packageArgs = @{
+        Channel = $Channel
+        OutputDir = $releaseDir
+    }
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
-        $packageArgs += @("-Version", $Version)
+        $packageArgs.Version = $Version
     }
     if ($InstallVpk) {
-        $packageArgs += "-InstallVpk"
+        $packageArgs.InstallVpk = $true
     }
     & (Join-Path $PSScriptRoot "package-alpha-windows.ps1") @packageArgs
 }

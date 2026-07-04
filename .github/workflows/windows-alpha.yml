@@ -101,11 +101,13 @@ jobs:
       - name: Build Velopack artifacts
         shell: pwsh
         run: |
-          $args = @("-Channel", $env:CHANNEL)
-          if (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
-            $args += @("-Version", $env:VERSION)
+          $packageArgs = @{
+            Channel = $env:CHANNEL
           }
-          & .\tools\package-alpha-windows.ps1 @args
+          if (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
+            $packageArgs.Version = $env:VERSION
+          }
+          & .\tools\package-alpha-windows.ps1 @packageArgs
 
       - name: Upload Velopack artifacts
         uses: actions/upload-artifact@v5
