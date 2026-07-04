@@ -17321,6 +17321,10 @@ fn updater_defaults_to_alpha_feed_and_current_version() {
 
     assert_eq!(state.updater.feed_url, DEFAULT_UPDATE_FEED_URL);
     assert_eq!(state.updater.current_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        state.updater.build_commit,
+        option_env!("STUDIO_GIT_COMMIT").unwrap_or("unknown")
+    );
     assert!(matches!(state.updater.phase, UpdatePhase::Idle));
     assert_eq!(
         state.updater.status_label(),
@@ -17382,6 +17386,7 @@ fn dashboard_exposes_small_update_section() {
     for label in [
         "Updates",
         "Current version",
+        "Build commit",
         "Update feed",
         "Check for updates",
         "Install update",

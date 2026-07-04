@@ -49,6 +49,7 @@ impl UpdateCheckSummary {
 pub(super) struct UpdatePanelState {
     pub(super) feed_url: String,
     pub(super) current_version: String,
+    pub(super) build_commit: String,
     pub(super) phase: UpdatePhase,
     pub(super) available_version: Option<String>,
     last_error: Option<String>,
@@ -59,6 +60,9 @@ impl Default for UpdatePanelState {
         Self {
             feed_url: configured_update_feed_url(),
             current_version: env!("CARGO_PKG_VERSION").to_string(),
+            build_commit: option_env!("STUDIO_GIT_COMMIT")
+                .unwrap_or("unknown")
+                .to_string(),
             phase: UpdatePhase::Idle,
             available_version: None,
             last_error: None,

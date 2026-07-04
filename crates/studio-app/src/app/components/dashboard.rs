@@ -197,6 +197,11 @@ fn view_update_section(state: &StudioState) -> Element<'_, Message> {
             ]
             .spacing(8),
             row![
+                text("Build commit").width(Length::Fixed(104.0)),
+                text(state.updater.build_commit.clone()).size(12),
+            ]
+            .spacing(8),
+            row![
                 text("Update feed").width(Length::Fixed(104.0)),
                 text(state.updater.feed_url.clone()).size(12),
             ]
