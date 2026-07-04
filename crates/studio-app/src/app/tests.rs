@@ -17417,6 +17417,18 @@ fn main_runs_velopack_hooks_before_auth_cli_routes() {
 }
 
 #[test]
+fn windows_release_main_uses_gui_subsystem_to_avoid_console_window() {
+    let main_source = include_str!("../main.rs");
+
+    assert!(
+        main_source.contains(
+            "#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = \"windows\")]"
+        ),
+        "Windows release builds should use the GUI subsystem so Explorer/Velopack launches do not open a console window"
+    );
+}
+
+#[test]
 fn windows_alpha_release_scripts_use_velopack_and_ethernetservers() {
     let package_script = include_str!("../../../../tools/package-alpha-windows.ps1");
     let publish_script = include_str!("../../../../tools/publish-alpha-windows.ps1");
