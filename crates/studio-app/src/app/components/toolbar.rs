@@ -29,7 +29,7 @@ use super::super::styles::{
 use super::drag_capture::view_horizontal_drag_capture;
 use super::timed_widget::view_timed;
 use super::wavesurfer_canvas::{
-    continuous_waveform_color, view_overview_blocks_canvas, view_overview_playhead_canvas,
+    overview_waveform_color, view_overview_blocks_canvas, view_overview_playhead_canvas,
     view_overview_window_quad, view_wavesurfer_line_waveform,
 };
 
@@ -40,7 +40,7 @@ const TOP_TOOLBAR_HEIGHT: f32 = 64.0;
 const TOP_TOOLBAR_RULE_HEIGHT: f32 = 34.0;
 const TOP_TOOLBAR_CONTROL_HEIGHT: f32 = 32.0;
 const TOP_TOOLBAR_SPEED_WIDTH: f32 = 78.0;
-const OVERVIEW_WAVEFORM_LAYER_CAPACITY: usize = 3;
+const OVERVIEW_WAVEFORM_LAYER_CAPACITY: usize = 4;
 const ZOOM_ICON_SIZE: f32 = 20.0;
 const TOOLBAR_ACTION_ICON_SIZE: f32 = 16.0;
 const BACK_TO_DASHBOARD_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>"#;
@@ -70,6 +70,7 @@ struct OverviewWaveformPeaksDependency {
     color_token: String,
     height: f32,
     vertical_scale: f32,
+    span_fraction: f32,
 }
 
 impl std::hash::Hash for OverviewWaveformPeaksDependency {
@@ -79,6 +80,7 @@ impl std::hash::Hash for OverviewWaveformPeaksDependency {
         self.color_token.hash(state);
         self.height.to_bits().hash(state);
         self.vertical_scale.to_bits().hash(state);
+        self.span_fraction.to_bits().hash(state);
     }
 }
 
@@ -283,9 +285,15 @@ fn view_overview_waveform<'a>(
         let width = size.width.max(1.0);
         let mut layers: Vec<Element<'static, Message>> =
             Vec::with_capacity(OVERVIEW_WAVEFORM_LAYER_CAPACITY);
-        layers.push(view_overview_peaks(
-            Arc::clone(&overview.lane_waveform_models),
+        if !overview.lane_waveform_models.is_empty() {
+            layers.push(view_overview_peaks(
+                Arc::clone(&overview.lane_waveform_models),
+                bounds.duration_seconds(),
+            ));
+        }
+        layers.push(view_overview_blocks_canvas(
             Arc::clone(&overview.blocks),
+            overview.block_lane_rows,
         ));
         layers.push(view_overview_window_quad(
             overview.viewport_left_percent,
@@ -323,39 +331,54 @@ fn overview_playhead_percent(playhead_seconds: f64, bounds: TimeRange) -> f32 {
 
 fn view_overview_peaks(
     lane_waveform_models: Arc<[OverviewLaneWaveformView]>,
-    blocks: Arc<[studio_app::OverviewWaveformBlock]>,
+    bounds_duration_seconds: f64,
 ) -> Element<'static, Message> {
-    if !lane_waveform_models.is_empty() {
-        let lane_height = (26.0 / lane_waveform_models.len().max(1) as f32).max(8.0);
-        let mut lane_stack = Column::new()
-            .spacing(0)
-            .width(Fill)
-            .height(Length::Fixed(26.0));
-        for lane in lane_waveform_models.iter() {
-            let peaks = lane
-                .waveform_model
-                .channels
-                .first()
-                .map(|channel| Arc::clone(&channel.peaks))
-                .unwrap_or_else(|| Arc::<[f64]>::from(Vec::new()));
-            lane_stack = lane_stack.push(
-                container(view_lazy_overview_waveform_peaks(
-                    OverviewWaveformPeaksDependency {
-                        peaks,
-                        color_token: lane.color_token.clone(),
-                        height: lane_height,
-                        vertical_scale: 1.0,
-                    },
-                ))
-                .height(Length::Fixed(lane_height))
-                .width(Fill),
-            );
-        }
-
-        return container(lane_stack).padding(2).width(Fill).into();
+    let lane_height = (26.0 / lane_waveform_models.len().max(1) as f32).max(8.0);
+    let mut lane_stack = Column::new()
+        .spacing(0)
+        .width(Fill)
+        .height(Length::Fixed(26.0));
+    for lane in lane_waveform_models.iter() {
+        let peaks = lane
+            .waveform_model
+            .channels
+            .first()
+            .map(|channel| Arc::clone(&channel.peaks))
+            .unwrap_or_else(|| Arc::<[f64]>::from(Vec::new()));
+        lane_stack = lane_stack.push(
+            container(view_lazy_overview_waveform_peaks(
+                OverviewWaveformPeaksDependency {
+                    peaks,
+                    color_token: lane.color_token.clone(),
+                    height: lane_height,
+                    vertical_scale: 1.0,
+                    span_fraction: overview_lane_span_fraction(
+                        lane.waveform_model.visible_end_seconds
+                            - lane.waveform_model.visible_start_seconds,
+                        bounds_duration_seconds,
+                    ),
+                },
+            ))
+            .height(Length::Fixed(lane_height))
+            .width(Fill),
+        );
     }
 
-    view_overview_blocks_canvas(blocks)
+    container(lane_stack).padding(2).width(Fill).into()
+}
+
+/// The overview x-axis spans the project bounds (segments), while each lane's
+/// audio can be shorter or longer. Scaling the drawn peaks keeps loud moments
+/// aligned with the playhead and the segment blocks.
+fn overview_lane_span_fraction(audio_duration_seconds: f64, bounds_duration_seconds: f64) -> f32 {
+    if !audio_duration_seconds.is_finite()
+        || !bounds_duration_seconds.is_finite()
+        || audio_duration_seconds <= 0.0
+        || bounds_duration_seconds <= 0.0
+    {
+        return 1.0;
+    }
+    (audio_duration_seconds / bounds_duration_seconds) as f32
 }
 
 fn view_lazy_overview_waveform_peaks(
@@ -364,9 +387,10 @@ fn view_lazy_overview_waveform_peaks(
     lazy(dependency, |dependency| {
         view_wavesurfer_line_waveform(
             Arc::clone(&dependency.peaks),
-            continuous_waveform_color(&dependency.color_token),
+            overview_waveform_color(&dependency.color_token),
             dependency.height,
             dependency.vertical_scale,
+            dependency.span_fraction,
         )
     })
     .into()

@@ -75,6 +75,75 @@ impl StudioState {
         self.scroll_transcript_to_segment_centered(&project, &selected_segment_id)
     }
 
+    pub(super) fn visible_transcription_rows_sorted(&self) -> Vec<(String, f64)> {
+        let Some(project) = self.project() else {
+            return Vec::new();
+        };
+        let Some(editor) = self.editor.as_ref() else {
+            return Vec::new();
+        };
+        let mut rows = project
+            .segments
+            .iter()
+            .filter(|segment| match &editor.track_filter {
+                TrackFilter::All => true,
+                TrackFilter::Lane { id, .. } => id == &segment.lane_id,
+            })
+            .filter(|segment| !editor.collapsed_lane_ids.contains(&segment.lane_id))
+            .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
+            .map(|segment| (segment.id.clone(), segment.start_seconds))
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.1.total_cmp(&right.1));
+        rows
+    }
+
+    pub(super) fn move_ghost_cursor_row(&mut self, direction: i32) -> Option<f32> {
+        let pending = self.helper_focus_restore_pending.clone()?;
+        if self.helper_focused_segment_id.is_some() {
+            return None;
+        }
+        let project = self.project().cloned()?;
+        let visible_rows = self.visible_transcription_rows_sorted();
+        if visible_rows.is_empty() {
+            return None;
+        }
+
+        let current_index = visible_rows
+            .iter()
+            .position(|(segment_id, _)| *segment_id == pending.segment_id);
+        let next_index = match current_index {
+            Some(index) => {
+                let step = if direction < 0 { -1 } else { 1 };
+                let next_index =
+                    (index as i32 + step).clamp(0, visible_rows.len() as i32 - 1) as usize;
+                if next_index == index {
+                    self.status = "Ghost cursor reached transcript edge.".to_string();
+                    return None;
+                }
+                next_index
+            }
+            None => {
+                // The pending row is hidden (e.g. its lane was collapsed): jump to the
+                // nearest visible row in the requested direction instead.
+                let anchor_start = project.segment(&pending.segment_id)?.start_seconds;
+                if direction < 0 {
+                    visible_rows
+                        .iter()
+                        .rposition(|(_, start_seconds)| *start_seconds < anchor_start)?
+                } else {
+                    visible_rows
+                        .iter()
+                        .position(|(_, start_seconds)| *start_seconds > anchor_start)?
+                }
+            }
+        };
+
+        let segment_id = visible_rows[next_index].0.clone();
+        self.with_editor_mut(|editor| editor.select_segment_without_seek(&project, &segment_id));
+        self.sync_pending_helper_focus_restore_to_segment(&segment_id);
+        self.scroll_transcript_to_segment_centered(&project, &segment_id)
+    }
+
     pub(super) fn select_adjacent_focused_segment(&mut self, direction: i32) -> Option<f32> {
         let Some(project) = self.project().cloned() else {
             self.status = "Helper focus navigation unavailable: no project loaded.".to_string();
@@ -85,19 +154,8 @@ impl StudioState {
             return None;
         };
 
-        let mut visible_segments = project
-            .segments
-            .iter()
-            .filter(|segment| match &editor.track_filter {
-                TrackFilter::All => true,
-                TrackFilter::Lane { id, .. } => id == &segment.lane_id,
-            })
-            .filter(|segment| !editor.collapsed_lane_ids.contains(&segment.lane_id))
-            .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
-            .collect::<Vec<_>>();
-        visible_segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
-
-        if visible_segments.is_empty() {
+        let visible_rows = self.visible_transcription_rows_sorted();
+        if visible_rows.is_empty() {
             self.status = "Helper focus navigation unavailable: no visible segments.".to_string();
             return None;
         }
@@ -106,20 +164,20 @@ impl StudioState {
             .selected_segment_id
             .as_deref()
             .and_then(|segment_id| {
-                visible_segments
+                visible_rows
                     .iter()
-                    .position(|segment| segment.id == segment_id)
+                    .position(|(row_segment_id, _)| row_segment_id == segment_id)
             });
         let base_index = current_index.unwrap_or(0);
         let step = if direction < 0 { -1 } else { 1 };
         let next_index =
-            (base_index as i32 + step).clamp(0, visible_segments.len() as i32 - 1) as usize;
+            (base_index as i32 + step).clamp(0, visible_rows.len() as i32 - 1) as usize;
         if current_index.is_some() && next_index == base_index {
             self.status = "Helper focus navigation reached transcript edge.".to_string();
             return None;
         }
 
-        let segment_id = visible_segments[next_index].id.clone();
+        let segment_id = visible_rows[next_index].0.clone();
         let playhead_seconds = editor.playhead_seconds;
         self.with_editor_mut(|editor| editor.select_segment_without_seek(&project, &segment_id));
 

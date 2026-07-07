@@ -106,7 +106,10 @@ pub(super) fn view_transcript_row<'a>(
             .spacing(3)
             .width(Fill)
     } else {
-        let raw_tag_suggestions = tag_suggestions::tag_suggestions_for_draft(draft);
+        let raw_tag_suggestions = tag_suggestions::tag_suggestions_for_draft_with_config(
+            draft,
+            state.project_lint_tag_config(),
+        );
         let has_text_selection = draft.text_content.selection().is_some();
         let tag_suggestions = raw_tag_suggestions
             .into_iter()
@@ -933,13 +936,7 @@ fn babel_transcript_key_binding_with_selection(
         && !event.modifiers.alt()
         && !event.modifiers.logo()
     {
-        return Some(iced::widget::text_editor::Binding::Custom(
-            if event.modifiers.shift() {
-                Message::FocusPrevious
-            } else {
-                Message::FocusNext
-            },
-        ));
+        return Some(iced::widget::text_editor::Binding::Sequence(vec![]));
     }
 
     iced::widget::text_editor::Binding::from_key_press(event)
@@ -1289,14 +1286,14 @@ mod tests {
     }
 
     #[test]
-    fn babel_transcript_editor_tabs_through_focus_like_browser_forms() {
+    fn babel_transcript_editor_swallows_tab_reserved_for_ghost_cursor_rows() {
         assert_eq!(
             super::babel_transcript_key_binding(
                 "annotation-1",
                 false,
                 key_press(Key::Named(Named::Tab), Modifiers::empty()),
             ),
-            Some(Binding::Custom(Message::FocusNext))
+            Some(Binding::Sequence(vec![]))
         );
         assert_eq!(
             super::babel_transcript_key_binding(
@@ -1304,7 +1301,7 @@ mod tests {
                 false,
                 key_press(Key::Named(Named::Tab), Modifiers::SHIFT),
             ),
-            Some(Binding::Custom(Message::FocusPrevious))
+            Some(Binding::Sequence(vec![]))
         );
         assert_eq!(
             super::babel_transcript_key_binding(

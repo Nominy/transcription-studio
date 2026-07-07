@@ -139,7 +139,7 @@ struct StaticHotkeySection {
 const GLOBAL_CONTROLS: &[CapabilityHotkey] = &[
     CapabilityHotkey {
         keys: &["Space"],
-        description: "Play/Pause",
+        description: "Play/Pause (restores ghost cursor like Escape)",
     },
     CapabilityHotkey {
         keys: &["\u{2190}"],
@@ -390,10 +390,16 @@ const CAPABILITY_DESCRIPTORS: &[CapabilityDescriptor] = &[
         "Focus Toggle",
         "Pause, blur, resume, and restore transcript focus.",
         &["helper.focus-toggle"],
-        &[CapabilityHotkey {
-            keys: &["Escape"],
-            description: "Pause and blur / resume and restore cursor",
-        }],
+        &[
+            CapabilityHotkey {
+                keys: &["Escape", "Or", "Space"],
+                description: "Pause and blur / resume and restore cursor",
+            },
+            CapabilityHotkey {
+                keys: &["Tab", "/", "Shift", "Tab"],
+                description: "Move ghost cursor to next/previous row",
+            },
+        ],
     ),
     helper_descriptor(
         "helper.quick-region-autocomplete",

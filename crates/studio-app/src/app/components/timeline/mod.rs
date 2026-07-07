@@ -3,6 +3,8 @@ mod loop_strip;
 mod ruler;
 mod waveform;
 
+pub(crate) use lane::lane_vertical_zoom_input_id;
+
 use iced::mouse;
 use iced::widget::{Column, container, mouse_area};
 use iced::{Element, Fill};
@@ -60,6 +62,11 @@ pub(super) fn view_timeline<'a>(
                 end_seconds: dialog.end_seconds,
                 text: dialog.text.as_str(),
             });
+        let vertical_zoom_input = state
+            .lane_vertical_zoom_input
+            .as_ref()
+            .filter(|input| input.lane_id == lane_view.lane_id)
+            .map(|input| input.value.as_str());
         lanes = lanes.push(view_timed(
             "timeline-lane",
             lane::view_timeline_lane(
@@ -70,6 +77,7 @@ pub(super) fn view_timeline<'a>(
                 timeline_autoscroll_anchor_fraction,
                 magnifier,
                 attached_create_region_popup,
+                vertical_zoom_input,
             ),
         ));
     }

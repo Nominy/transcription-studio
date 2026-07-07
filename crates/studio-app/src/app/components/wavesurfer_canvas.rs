@@ -16,17 +16,20 @@ use super::playhead_line::view_playhead_line;
 
 static WAVEFORM_CANVAS_CACHE_GROUP: LazyLock<canvas::Group> = LazyLock::new(canvas::Group::unique);
 const WAVEFORM_REGION_BORDER_WIDTH: f32 = 2.0;
+const OVERVIEW_BLOCKS_VERTICAL_PADDING: f32 = 2.0;
 
 pub(super) fn view_wavesurfer_line_waveform<'a>(
     peaks: Arc<[f64]>,
     color: Color,
     height: f32,
     vertical_scale: f32,
+    span_fraction: f32,
 ) -> Element<'a, Message> {
     canvas(WaveformCanvas {
         peaks: WaveformPeaks::F64(peaks),
         color,
         vertical_scale,
+        span_fraction,
     })
     .height(Length::Fixed(height))
     .width(Fill)
@@ -118,8 +121,9 @@ pub(super) fn view_waveform_selected_region_border_canvas<'a>(
 
 pub(super) fn view_overview_blocks_canvas<'a>(
     blocks: Arc<[OverviewWaveformBlock]>,
+    lane_rows: usize,
 ) -> Element<'a, Message> {
-    canvas(OverviewBlocksCanvas { blocks })
+    canvas(OverviewBlocksCanvas { blocks, lane_rows })
         .height(Length::Fixed(30.0))
         .width(Fill)
         .into()
@@ -167,6 +171,17 @@ pub(super) fn continuous_waveform_color(color_token: &str) -> Color {
     }
 }
 
+pub(super) fn overview_waveform_color(color_token: &str) -> Color {
+    color_for_token(color_token)
+}
+
+fn overview_block_color(color_token: &str) -> Color {
+    Color {
+        a: 0.25,
+        ..color_for_token(color_token)
+    }
+}
+
 pub(super) fn synthetic_waveform_color(color_token: &str) -> Color {
     Color {
         a: 0.64,
@@ -196,6 +211,9 @@ struct WaveformCanvas {
     peaks: WaveformPeaks,
     color: Color,
     vertical_scale: f32,
+    /// Fraction of the widget width the peaks span, so audio shorter or
+    /// longer than the shared time axis stays aligned with it.
+    span_fraction: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -234,6 +252,7 @@ struct SelectedRegionBorderCanvas {
 #[derive(Clone, Debug)]
 struct OverviewBlocksCanvas {
     blocks: Arc<[OverviewWaveformBlock]>,
+    lane_rows: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -303,7 +322,7 @@ impl canvas::Program<Message> for WaveformCanvas {
                 append_wavesurfer_line_points(
                     builder,
                     &self.peaks,
-                    bounds.width,
+                    bounds.width * self.span_fraction.max(0.0),
                     bounds.height,
                     self.vertical_scale,
                 );
@@ -322,7 +341,8 @@ impl WaveformCanvas {
         key = hash_u32(key, self.color.g.to_bits());
         key = hash_u32(key, self.color.b.to_bits());
         key = hash_u32(key, self.color.a.to_bits());
-        hash_u32(key, self.vertical_scale.to_bits())
+        key = hash_u32(key, self.vertical_scale.to_bits());
+        hash_u32(key, self.span_fraction.to_bits())
     }
 }
 
@@ -555,15 +575,23 @@ impl canvas::Program<Message> for OverviewBlocksCanvas {
     ) -> Vec<canvas::Geometry> {
         state.clear_if_key_changed(self.cache_key());
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            // Segment blocks tint each lane's own row (matching the stacked
+            // per-lane waveforms above) like the timeline region fills, so the
+            // waveforms stay legible underneath.
+            let lane_rows = self.lane_rows.max(1);
+            let content_top = OVERVIEW_BLOCKS_VERTICAL_PADDING;
+            let content_height = (bounds.height - OVERVIEW_BLOCKS_VERTICAL_PADDING * 2.0).max(1.0);
+            let row_height = content_height / lane_rows as f32;
             for (block, block_width) in self
                 .blocks
                 .iter()
                 .zip(overview_block_widths(&self.blocks, bounds.width))
             {
+                let row = block.lane_row.min(lane_rows - 1) as f32;
                 frame.fill_rectangle(
-                    Point::new(block_width.left_px, 2.0),
-                    Size::new(block_width.width_px, 24.0),
-                    continuous_waveform_color(&block.color_token),
+                    Point::new(block_width.left_px, content_top + row * row_height),
+                    Size::new(block_width.width_px, row_height),
+                    overview_block_color(&block.color_token),
                 );
             }
         });
@@ -576,8 +604,11 @@ impl OverviewBlocksCanvas {
     fn cache_key(&self) -> u64 {
         let ptr = Arc::as_ptr(&self.blocks) as *const OverviewWaveformBlock as usize as u64;
         hash_u64(
-            hash_u64(0x8422_2325_cbf2_9ce4, ptr),
-            self.blocks.len() as u64,
+            hash_u64(
+                hash_u64(0x8422_2325_cbf2_9ce4, ptr),
+                self.blocks.len() as u64,
+            ),
+            self.lane_rows as u64,
         )
     }
 }
@@ -958,10 +989,7 @@ struct TimeWindowWaveformBlockWidths<'a> {
 struct OverviewBlockWidths<'a> {
     blocks: &'a [OverviewWaveformBlock],
     width: f32,
-    total_portion: f32,
     index: usize,
-    cursor_percent: f32,
-    cursor_px: f32,
 }
 
 fn synthetic_waveform_block_widths(
@@ -992,10 +1020,7 @@ fn overview_block_widths(blocks: &[OverviewWaveformBlock], width: f32) -> Overvi
     OverviewBlockWidths {
         blocks,
         width,
-        total_portion: overview_block_total_portion(blocks).max(1) as f32,
         index: 0,
-        cursor_percent: 0.0,
-        cursor_px: 0.0,
     }
 }
 
@@ -1041,21 +1066,17 @@ impl Iterator for OverviewBlockWidths<'_> {
         let block = self.blocks.get(self.index)?;
         self.index += 1;
 
-        let gap = (block.left_percent - self.cursor_percent).max(0.0);
-        if gap > 0.0 {
-            self.cursor_px += self.width * f32::from(portion(gap)) / self.total_portion;
-        }
+        // Blocks come from multiple lanes and may overlap in time, so each one
+        // is positioned absolutely from its own percentages rather than by
+        // walking a shared gap cursor across the whole strip.
+        let left_px = self.width * block.left_percent.clamp(0.0, 100.0) / 100.0;
+        let width_px = (self.width * block.width_percent.clamp(0.0, 100.0) / 100.0)
+            .min((self.width - left_px).max(0.0));
 
-        let block_width_px =
-            self.width * f32::from(portion(block.width_percent)) / self.total_portion;
-        let width = SyntheticWaveformBlockWidth {
-            left_px: self.cursor_px,
-            width_px: block_width_px,
-        };
-        self.cursor_px += block_width_px;
-        self.cursor_percent = (block.left_percent + block.width_percent).min(100.0);
-
-        Some(width)
+        Some(SyntheticWaveformBlockWidth {
+            left_px,
+            width_px: width_px.max(1.0),
+        })
     }
 }
 
@@ -1117,23 +1138,6 @@ fn time_window_block_percentages(
     ))
 }
 
-fn overview_block_total_portion(blocks: &[OverviewWaveformBlock]) -> u32 {
-    let mut total = 0_u32;
-    let mut cursor = 0.0_f32;
-    for block in blocks {
-        let gap = (block.left_percent - cursor).max(0.0);
-        if gap > 0.0 {
-            total += u32::from(portion(gap));
-        }
-        total += u32::from(portion(block.width_percent));
-        cursor = (block.left_percent + block.width_percent).min(100.0);
-    }
-    if cursor < 100.0 {
-        total += u32::from(portion(100.0 - cursor));
-    }
-    total
-}
-
 fn append_wavesurfer_line_points_with(
     builder: &mut canvas::path::Builder,
     x_origin: f32,
@@ -1177,11 +1181,44 @@ fn append_wavesurfer_line_points_with(
 mod tests {
     use std::sync::Arc;
 
-    use studio_app::{WaveformBlock, WaveformPeakSource};
+    use studio_app::{OverviewWaveformBlock, WaveformBlock, WaveformPeakSource};
 
     use super::{
-        RegionFillTimeWindow, synthetic_waveform_block_widths, time_window_waveform_block_widths,
+        RegionFillTimeWindow, overview_block_widths, synthetic_waveform_block_widths,
+        time_window_waveform_block_widths,
     };
+
+    fn overview_block(
+        color_token: &str,
+        lane_row: usize,
+        left_percent: f32,
+        width_percent: f32,
+    ) -> OverviewWaveformBlock {
+        OverviewWaveformBlock {
+            color_token: color_token.to_string(),
+            lane_row,
+            left_percent,
+            width_percent,
+        }
+    }
+
+    #[test]
+    fn overview_block_widths_position_multi_lane_blocks_absolutely() {
+        let blocks = [
+            overview_block("blue", 0, 50.0, 10.0),
+            // The second lane restarts at the left edge; a cumulative gap
+            // cursor would misplace it, absolute positioning must not.
+            overview_block("purple", 1, 10.0, 20.0),
+        ];
+
+        let widths = overview_block_widths(&blocks, 200.0).collect::<Vec<_>>();
+
+        assert_eq!(widths.len(), 2);
+        assert_eq!(widths[0].left_px, 100.0);
+        assert_eq!(widths[0].width_px, 20.0);
+        assert_eq!(widths[1].left_px, 20.0);
+        assert_eq!(widths[1].width_px, 40.0);
+    }
 
     fn block(id: &str, start_seconds: f64, end_seconds: f64) -> WaveformBlock {
         block_with_geometry(id, start_seconds, end_seconds, 0.0, 10.0)

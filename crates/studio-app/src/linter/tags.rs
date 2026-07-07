@@ -14,47 +14,20 @@ const BRACKET_SPACING_REASON: &str = "Spaces are not allowed within bracket tags
 pub(super) const TAG_ONLY_PUNCTUATION_REASON: &str =
     "A segment that contains only a tag must not include any punctuation.";
 pub(super) const UNBRACKETED_TAG_REASON: &str = "Annotation tag outside brackets. Use [неразборчиво], {ИСКАЖ: word} for mispronunciations, or {СКАЗ: word} for pronunciations.";
-pub const RUSSIAN_SQUARE_BRACKET_TAGS: &[&str] = &[
-    "вдох",
-    "вздох",
-    "вибрация-губами",
-    "втягивание-воздуха-сквозь-зубы",
-    "выдох",
-    "выдувание-воздуха",
-    "глотание",
-    "дыхание",
-    "зевок",
-    "икота",
-    "кашель",
-    "кряхтенье",
-    "напевание",
-    "насмешка",
-    "неразборчиво",
-    "плач",
-    "причмокивание",
-    "прочищение-горла",
-    "радостный-возглас",
-    "резкий-вздох",
-    "свист",
-    "смех",
-    "смешок",
-    "стон",
-    "фырканье",
-    "хихиканье",
-    "цоканье-языком",
-    "чихание",
-    "шиканье",
-    "шмыганье-носом",
-    "щелчок-языком",
-];
-pub const RUSSIAN_STYLE_TAGS: &[&str] = &["протяжная-речь", "речь-нараспев", "смех-в-речи"];
+pub const RUSSIAN_SQUARE_BRACKET_TAGS: &[&str] =
+    crate::project_lint_tag_config::RUSSIAN_TRANSCRIPTION_BRACKET_TAGS;
+pub const RUSSIAN_STYLE_TAGS: &[&str] =
+    crate::project_lint_tag_config::RUSSIAN_TRANSCRIPTION_STYLE_TAGS;
 
-pub(super) fn validate_square_brackets(text: &str) -> Option<&'static str> {
+pub(super) fn validate_square_brackets_with_tags(
+    text: &str,
+    valid_tags: &[&str],
+) -> Option<&'static str> {
     validate_brackets(
         text,
         '[',
         ']',
-        Some(is_valid_square_bracket_tag),
+        Some(|tag: &str| valid_tags.contains(&tag)),
         EMPTY_BRACKET_REASON,
         UNCLOSED_BRACKET_REASON,
         Some(INVALID_BRACKET_TAG_REASON),
@@ -73,7 +46,10 @@ pub(super) fn validate_curly_brackets(text: &str) -> Option<&'static str> {
     )
 }
 
-pub(super) fn validate_style_tags(text: &str) -> Option<&'static str> {
+pub(super) fn validate_style_tags_with_tags(
+    text: &str,
+    valid_tags: &[&str],
+) -> Option<&'static str> {
     let mut stack = Vec::new();
     let mut search_start = 0;
 
@@ -98,14 +74,14 @@ pub(super) fn validate_style_tags(text: &str) -> Option<&'static str> {
             if tag.is_empty() {
                 return Some(EMPTY_STYLE_TAG_REASON);
             }
-            if !is_valid_style_tag(tag) {
+            if !valid_tags.contains(&tag) {
                 return Some(INVALID_STYLE_TAG_REASON);
             }
             if stack.pop() != Some(tag) {
                 return Some(MISMATCHED_STYLE_TAG_REASON);
             }
         } else {
-            if !is_valid_style_tag(trimmed) {
+            if !valid_tags.contains(&trimmed) {
                 return Some(INVALID_STYLE_TAG_REASON);
             }
             stack.push(trimmed);
@@ -153,14 +129,6 @@ fn validate_brackets(
     }
 
     (!stack.is_empty()).then_some(unclosed_reason)
-}
-
-fn is_valid_square_bracket_tag(tag: &str) -> bool {
-    RUSSIAN_SQUARE_BRACKET_TAGS.contains(&tag)
-}
-
-fn is_valid_style_tag(tag: &str) -> bool {
-    RUSSIAN_STYLE_TAGS.contains(&tag)
 }
 
 pub(super) fn has_tag_only_punctuation(text: &str) -> bool {
@@ -213,7 +181,10 @@ fn is_punctuation(character: char) -> bool {
         )
 }
 
-pub(super) fn malformed_curly_annotation_tag(text: &str) -> Option<String> {
+pub(super) fn malformed_curly_annotation_tag_with_tags(
+    text: &str,
+    curly_tags: &[&str],
+) -> Option<String> {
     let mut search_start = 0;
     while let Some(open_offset) = text[search_start..].find('{') {
         let open = search_start + open_offset;
@@ -224,8 +195,8 @@ pub(super) fn malformed_curly_annotation_tag(text: &str) -> Option<String> {
         let close = content_start + close_offset;
         let content = &text[content_start..close];
         if content.contains(':')
-            && !is_valid_curly_annotation_tag(content)
-            && looks_like_annotation_tag(content)
+            && !is_valid_curly_annotation_tag(content, curly_tags)
+            && looks_like_annotation_tag(content, curly_tags)
         {
             return Some(text[open..=close].to_string());
         }
@@ -235,19 +206,25 @@ pub(super) fn malformed_curly_annotation_tag(text: &str) -> Option<String> {
     None
 }
 
-fn looks_like_annotation_tag(content: &str) -> bool {
-    content.contains("СКАЗ")
-        || content.contains("ИСКАЖ")
-        || content.contains("PRO")
-        || content.contains("MIS")
+fn looks_like_annotation_tag(content: &str, curly_tags: &[&str]) -> bool {
+    curly_tags
+        .iter()
+        .map(|tag| curly_tag_name(tag))
+        .any(|tag| !tag.is_empty() && content.contains(tag))
 }
 
-fn is_valid_curly_annotation_tag(content: &str) -> bool {
-    ["ИСКАЖ", "СКАЗ"].iter().any(|tag| {
+fn is_valid_curly_annotation_tag(content: &str, curly_tags: &[&str]) -> bool {
+    curly_tags.iter().any(|tag| {
+        let tag = curly_tag_name(tag);
         content
-            .strip_prefix(&format!("{tag}: "))
+            .strip_prefix(tag)
+            .and_then(|payload| payload.strip_prefix(": "))
             .is_some_and(is_valid_curly_annotation_payload)
     })
+}
+
+fn curly_tag_name(tag: &str) -> &str {
+    tag.trim().strip_suffix(':').unwrap_or(tag.trim())
 }
 
 fn is_valid_curly_annotation_payload(payload: &str) -> bool {
@@ -257,10 +234,12 @@ fn is_valid_curly_annotation_payload(payload: &str) -> bool {
         && !payload.contains('}')
 }
 
-pub(super) fn has_unbracketed_annotation_tag(text: &str) -> bool {
-    ["СКАЗ:", "ИСКАЖ:"].iter().any(|tag| {
+pub(super) fn has_unbracketed_annotation_tag_with_tags(text: &str, curly_tags: &[&str]) -> bool {
+    curly_tags.iter().any(|tag| {
+        let tag = curly_tag_name(tag);
+        let needle = format!("{tag}:");
         let mut search_start = 0;
-        while let Some(offset) = text[search_start..].find(tag) {
+        while let Some(offset) = text[search_start..].find(&needle) {
             let tag_start = search_start + offset;
             let previous = text[..tag_start]
                 .chars()
@@ -269,7 +248,7 @@ pub(super) fn has_unbracketed_annotation_tag(text: &str) -> bool {
             if previous != Some('{') {
                 return true;
             }
-            search_start = tag_start + tag.len();
+            search_start = tag_start + needle.len();
         }
 
         false

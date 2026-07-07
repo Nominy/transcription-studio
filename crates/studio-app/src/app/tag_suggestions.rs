@@ -1,6 +1,6 @@
 use iced::widget::text_editor::{self, Motion};
 
-use studio_app::{RUSSIAN_SQUARE_BRACKET_TAGS, RUSSIAN_STYLE_TAGS};
+use studio_app::BabelProjectLintTagConfig;
 
 use super::SegmentDraft;
 
@@ -39,14 +39,21 @@ struct TagTrigger<'a> {
     end: usize,
 }
 
-const BABEL_CURLY_TAGS: &[&str] = &["MIS: ", "PRO: "];
-
+#[cfg(test)]
 pub(super) fn tag_suggestions_for_draft(draft: &SegmentDraft) -> Vec<TagSuggestion> {
+    tag_suggestions_for_draft_with_config(draft, BabelProjectLintTagConfig::default())
+}
+
+pub(super) fn tag_suggestions_for_draft_with_config(
+    draft: &SegmentDraft,
+    config: BabelProjectLintTagConfig,
+) -> Vec<TagSuggestion> {
     if let Some(selection) = draft.text_content.selection() {
         if selection.trim().is_empty() {
             return Vec::new();
         }
-        return RUSSIAN_STYLE_TAGS
+        return config
+            .style_tags
             .iter()
             .copied()
             .map(selection_wrap_suggestion_for_style_tag)
@@ -57,10 +64,19 @@ pub(super) fn tag_suggestions_for_draft(draft: &SegmentDraft) -> Vec<TagSuggesti
     let cursor = cursor_byte_offset(&text, draft.text_content.cursor_position())
         .filter(|cursor| text.is_char_boundary(*cursor))
         .unwrap_or(text.len());
-    tag_suggestions_for_text(&text, cursor)
+    tag_suggestions_for_text_with_config(&text, cursor, config)
 }
 
+#[cfg(test)]
 pub(super) fn tag_suggestions_for_text(text: &str, cursor: usize) -> Vec<TagSuggestion> {
+    tag_suggestions_for_text_with_config(text, cursor, BabelProjectLintTagConfig::default())
+}
+
+pub(super) fn tag_suggestions_for_text_with_config(
+    text: &str,
+    cursor: usize,
+    config: BabelProjectLintTagConfig,
+) -> Vec<TagSuggestion> {
     if cursor > text.len() || !text.is_char_boundary(cursor) {
         return Vec::new();
     }
@@ -71,9 +87,9 @@ pub(super) fn tag_suggestions_for_text(text: &str, cursor: usize) -> Vec<TagSugg
 
     let partial = trigger.partial.to_lowercase();
     let tags = match trigger.kind {
-        TagSuggestionKind::Bracket => RUSSIAN_SQUARE_BRACKET_TAGS,
-        TagSuggestionKind::StyleOpen | TagSuggestionKind::StyleClose => RUSSIAN_STYLE_TAGS,
-        TagSuggestionKind::Curly => BABEL_CURLY_TAGS,
+        TagSuggestionKind::Bracket => config.bracket_tags,
+        TagSuggestionKind::StyleOpen | TagSuggestionKind::StyleClose => config.style_tags,
+        TagSuggestionKind::Curly => config.curly_tags,
     };
 
     tags.iter()
@@ -304,7 +320,17 @@ impl TagTrigger<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TagSuggestionKind, tag_suggestions_for_text};
+    use std::collections::BTreeMap;
+
+    use studio_app::{
+        BabelProjectLintTagConfig, META_BABEL_PROJECT_ID, resolve_babel_project_lint_tag_config,
+    };
+    use studio_core::Project;
+
+    use super::{
+        TagSuggestion, TagSuggestionKind, tag_suggestions_for_text,
+        tag_suggestions_for_text_with_config,
+    };
 
     #[test]
     fn ignores_invalid_non_suffix_tag_partial() {
@@ -318,5 +344,58 @@ mod tests {
         assert!(suggestions.iter().any(|suggestion| {
             suggestion.kind == TagSuggestionKind::Bracket && suggestion.label == "неразборчиво"
         }));
+    }
+
+    #[test]
+    fn suggestions_use_project_config_for_russian_gold_only_tags() {
+        let config = config_for_project_id("0bf29f0c-371a-506a-8b77-5fffd14e5762");
+
+        let bracket_suggestions =
+            tag_suggestions_for_text_with_config("[муз", "[муз".len(), config);
+        let style_suggestions = tag_suggestions_for_text_with_config("<под", "<под".len(), config);
+
+        assert_eq!(suggestion_labels(&bracket_suggestions), vec!["музыка"]);
+        assert_eq!(bracket_suggestions[0].kind, TagSuggestionKind::Bracket);
+        assert_eq!(suggestion_labels(&style_suggestions), vec!["<подражание>"]);
+        assert_eq!(style_suggestions[0].kind, TagSuggestionKind::StyleOpen);
+    }
+
+    #[test]
+    fn russian_silver_suggestions_only_offer_unintelligible_bracket_tag() {
+        let config = config_for_project_id("73f8e130-9fb4-5c17-b142-5a2e75d89b6d");
+
+        let bracket_suggestions = tag_suggestions_for_text_with_config("[", "[".len(), config);
+        let style_suggestions = tag_suggestions_for_text_with_config("<", "<".len(), config);
+        let curly_suggestions = tag_suggestions_for_text_with_config("{", "{".len(), config);
+
+        assert_eq!(
+            suggestion_labels(&bracket_suggestions),
+            vec!["неразборчиво"]
+        );
+        assert_eq!(bracket_suggestions[0].kind, TagSuggestionKind::Bracket);
+        assert_eq!(style_suggestions, Vec::new());
+        assert_eq!(curly_suggestions, Vec::new());
+    }
+
+    fn config_for_project_id(project_id: &str) -> BabelProjectLintTagConfig {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(META_BABEL_PROJECT_ID.to_string(), project_id.to_string());
+        let project = Project {
+            id: "task".to_string(),
+            name: "Task".to_string(),
+            speakers: Vec::new(),
+            lanes: Vec::new(),
+            segments: Vec::new(),
+            metadata,
+        };
+
+        resolve_babel_project_lint_tag_config(&project)
+    }
+
+    fn suggestion_labels(suggestions: &[TagSuggestion]) -> Vec<&str> {
+        suggestions
+            .iter()
+            .map(|suggestion| suggestion.label.as_str())
+            .collect()
     }
 }

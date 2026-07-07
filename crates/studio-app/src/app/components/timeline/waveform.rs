@@ -844,7 +844,11 @@ fn view_waveform_scrollbar(
             thumb_width,
             SCROLLBAR_THUMB_HEIGHT,
         ))
-        .on_move(move |point| Message::TimelineScrollbarHovered((point.x / width).clamp(0.0, 1.0)))
+        .on_move(move |point| Message::TimelineScrollbarHovered {
+            fraction: (point.x / width).clamp(0.0, 1.0),
+            width,
+        })
+        .on_exit(Message::TimelineScrollbarExited)
         .on_press(Message::TimelineScrollbarPressed)
         .on_release(Message::TimelineScrollbarReleased)
         .interaction(mouse::Interaction::Pointer)

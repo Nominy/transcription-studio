@@ -6,7 +6,7 @@ mod waveform;
 
 pub(crate) use builder::{
     MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimelineLaneBuildState, build_timeline_lanes,
-    build_timeline_lanes_with_segment_index,
+    build_timeline_lanes_with_segment_index, lane_color_token,
 };
 pub use builder::{
     TimelineLaneView, TimelineOverlayView, TimelineScrollbarView, TimelineSegmentIndex,

@@ -2189,7 +2189,7 @@ fn overview_waveform_uses_loaded_audio_and_reports_viewport_window() {
     assert_eq!(overview.peak_source, WaveformPeakSource::Audio);
     assert_eq!(model.visible_start_seconds, 0.0);
     assert_eq!(model.visible_end_seconds, 4.0);
-    assert_eq!(model.channels[0].peaks.len(), 192);
+    assert_eq!(model.channels[0].peaks.len(), 1_024);
     assert!((overview.viewport_left_percent - 18.75).abs() < 0.001);
     assert!((overview.viewport_width_percent - 62.5).abs() < 0.001);
     assert!((overview.playhead_percent - 50.0).abs() < 0.001);
@@ -2235,7 +2235,8 @@ fn overview_waveform_exposes_all_visible_lane_audio_models() {
             .iter()
             .map(|lane| lane.color_token.as_str())
             .collect::<Vec<_>>(),
-        vec!["speaker-1", "speaker-2"]
+        vec!["blue", "purple"],
+        "overview lane waveforms should use the same color tokens as the timeline lanes"
     );
 
     session.track_filter = TrackFilter::lane("track-2", "Speaker 2");
@@ -2249,6 +2250,62 @@ fn overview_waveform_exposes_all_visible_lane_audio_models() {
             .collect::<Vec<_>>(),
         vec!["track-2"]
     );
+    assert_eq!(
+        filtered_overview.lane_waveform_models[0].color_token, "purple",
+        "lane colors must stay stable when the track filter hides other lanes"
+    );
+}
+
+#[test]
+fn overview_segment_blocks_use_timeline_lane_color_order() {
+    let mut second_lane_segment = segment("second-lane", 1.0, 2.0, "second");
+    second_lane_segment.lane_id = "track-2".to_string();
+    let project = two_lane_project(vec![
+        segment("first-lane", 0.0, 1.0, "first"),
+        second_lane_segment,
+    ]);
+    let mut session = EditorSession::for_project(&project);
+
+    let overview = session.overview_waveform(&project);
+    assert_eq!(
+        overview
+            .blocks
+            .iter()
+            .map(|block| block.color_token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["blue", "purple"]
+    );
+    assert_eq!(
+        overview
+            .blocks
+            .iter()
+            .map(|block| block.lane_row)
+            .collect::<Vec<_>>(),
+        vec![0, 1],
+        "each lane's segment blocks should land in that lane's own overview row"
+    );
+    assert_eq!(overview.block_lane_rows, 2);
+
+    session.track_filter = TrackFilter::lane("track-2", "Speaker 2");
+    let filtered_overview = session.overview_waveform(&project);
+    assert_eq!(
+        filtered_overview
+            .blocks
+            .iter()
+            .map(|block| block.color_token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["purple"]
+    );
+    assert_eq!(
+        filtered_overview
+            .blocks
+            .iter()
+            .map(|block| block.lane_row)
+            .collect::<Vec<_>>(),
+        vec![0],
+        "filtering to one lane should collapse the overview to a single block row"
+    );
+    assert_eq!(filtered_overview.block_lane_rows, 1);
 }
 
 #[test]

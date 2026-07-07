@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 use super::browser_behavior_smoke::{
     browser_behavior_renderer_screenshot_task, browser_behavior_smoke_enabled,
 };
-use super::components::{admin_flag_reason_input_id, focusable_text_editor};
+use super::components::{
+    admin_flag_reason_input_id, focusable_text_editor, lane_vertical_zoom_input_id,
+};
 use super::diff_smoke::{diff_workbench_renderer_screenshot_task, diff_workbench_smoke_mode};
 use super::find;
 use super::formatting::{parse_speed, zoom_factor_after_babel_wheel_delta};
@@ -555,7 +557,8 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::CommitCreateRegionStart => state.commit_create_region_start(),
         Message::CommitCreateRegionEnd => state.commit_create_region_end(),
         Message::CreateRegionInputEscapePressed => {
-            if state.find_bar_open {
+            if state.cancel_lane_vertical_zoom_input() {
+            } else if state.find_bar_open {
                 state.close_find_bar();
             } else {
                 state.reset_active_create_region_time_field();
@@ -639,9 +642,15 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 return dispatch_pending_services(state, Task::done(message));
             }
         }
-        Message::FocusNext => return dispatch_pending_services(state, iced::widget::focus_next()),
-        Message::FocusPrevious => {
-            return dispatch_pending_services(state, iced::widget::focus_previous());
+        Message::GhostCursorRowNavigation(direction) => {
+            let scroll_target = state.move_ghost_cursor_row(direction);
+            return dispatch_pending_services(state, scroll_to_transcript_offset(scroll_target));
+        }
+        Message::HelperTogglePlayback => {
+            let previous_restore = state.helper_last_focus_restore.clone();
+            state.handle_helper_toggle_playback();
+            let focus_task = focus_restored_transcript_editor(state, previous_restore.as_ref());
+            return dispatch_pending_services(state, focus_task);
         }
         Message::TogglePlayback => state.toggle_playback(),
         Message::TransportTick(now) => {
@@ -727,7 +736,10 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::OverviewExited => state.exit_overview(),
         Message::OverviewPressed => state.press_overview(),
         Message::OverviewReleased => state.release_overview(),
-        Message::TimelineScrollbarHovered(fraction) => state.hover_timeline_scrollbar(fraction),
+        Message::TimelineScrollbarHovered { fraction, width } => {
+            state.hover_timeline_scrollbar_with_geometry(fraction, width);
+        }
+        Message::TimelineScrollbarExited => state.exit_timeline_scrollbar(),
         Message::TimelineScrollbarPressed => state.press_timeline_scrollbar(),
         Message::TimelineScrollbarReleased => state.release_timeline_scrollbar(),
         Message::TimelineAutoscrollPressed(lane_id) => {
@@ -868,12 +880,21 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             state.hover_lane_vertical_zoom_slider_with_geometry(lane_id, fraction, height);
         }
         Message::LaneVerticalZoomSliderPressed(lane_id) => {
-            state.press_lane_vertical_zoom_slider(&lane_id);
+            if state.press_lane_vertical_zoom_slider(&lane_id) {
+                return dispatch_pending_services(
+                    state,
+                    text_input::focus(lane_vertical_zoom_input_id()),
+                );
+            }
         }
         Message::LaneVerticalZoomSliderReleased => {
             state.release_lane_vertical_zoom_slider();
             state.persist_timeline_defaults();
         }
+        Message::LaneVerticalZoomInputChanged(value) => {
+            state.change_lane_vertical_zoom_input(value);
+        }
+        Message::SubmitLaneVerticalZoomInput => state.submit_lane_vertical_zoom_input(),
         Message::TrackFilterChanged(filter) => {
             state.with_editor_mut(|editor| editor.track_filter = filter);
             state.persist_timeline_defaults();

@@ -107,7 +107,7 @@ fn renderer_smoke_screenshot_enabled() -> bool {
 pub(super) struct BrowserBehaviorHotkeyReport {
     pub(super) captured_text_editing_preserved: bool,
     pub(super) repeated_keydown_ignored: bool,
-    pub(super) tab_focus_traversal: bool,
+    pub(super) tab_ghost_cursor_navigation: bool,
     pub(super) browser_find_from_captured_input: bool,
     pub(super) find_navigation_from_captured_input: bool,
     pub(super) warning_assertion_from_captured_input: bool,
@@ -123,7 +123,7 @@ impl BrowserBehaviorHotkeyReport {
     pub(super) fn all_passed(&self) -> bool {
         self.captured_text_editing_preserved
             && self.repeated_keydown_ignored
-            && self.tab_focus_traversal
+            && self.tab_ghost_cursor_navigation
             && self.browser_find_from_captured_input
             && self.find_navigation_from_captured_input
             && self.warning_assertion_from_captured_input
@@ -179,20 +179,20 @@ pub(super) fn browser_behavior_hotkey_report() -> BrowserBehaviorHotkeyReport {
     )
     .is_none();
 
-    let tab_focus_traversal = hotkey_message_for_event(
+    let tab_ghost_cursor_navigation = hotkey_message_for_event(
         Key::Named(Named::Tab),
         None,
         Modifiers::empty(),
         event::Status::Ignored,
         false,
-    ) == Some(Message::FocusNext)
+    ) == Some(Message::GhostCursorRowNavigation(1))
         && hotkey_message_for_event(
             Key::Named(Named::Tab),
             None,
             Modifiers::SHIFT,
             event::Status::Ignored,
             false,
-        ) == Some(Message::FocusPrevious)
+        ) == Some(Message::GhostCursorRowNavigation(-1))
         && hotkey_message_for_event(
             Key::Named(Named::Tab),
             None,
@@ -355,7 +355,7 @@ pub(super) fn browser_behavior_hotkey_report() -> BrowserBehaviorHotkeyReport {
     BrowserBehaviorHotkeyReport {
         captured_text_editing_preserved,
         repeated_keydown_ignored,
-        tab_focus_traversal,
+        tab_ghost_cursor_navigation,
         browser_find_from_captured_input,
         find_navigation_from_captured_input,
         warning_assertion_from_captured_input,
@@ -654,11 +654,11 @@ fn hotkey_message_for_event_with_cut_preview(
         && !modifiers.alt()
         && !modifiers.logo()
     {
-        return Some(if modifiers.shift() {
-            Message::FocusPrevious
+        return Some(Message::GhostCursorRowNavigation(if modifiers.shift() {
+            -1
         } else {
-            Message::FocusNext
-        });
+            1
+        }));
     }
 
     if !modifiers.shift() && !modifiers.alt() && matches!(key, Key::Named(Named::Find)) {
@@ -771,7 +771,7 @@ fn hotkey_message_for_event_with_cut_preview(
         Key::Named(Named::BrowserBack | Named::GoBack) => Some(Message::BackToProjects),
         Key::Named(Named::Undo) => Some(Message::Undo),
         Key::Named(Named::Redo) => Some(Message::Redo),
-        Key::Named(Named::Space) => Some(Message::TogglePlayback),
+        Key::Named(Named::Space) => Some(Message::HelperTogglePlayback),
         Key::Named(Named::F3) => Some(if modifiers.shift() {
             Message::FindPrevious
         } else {

@@ -354,7 +354,7 @@ fn create_preview_segment_for_lane(
     })
 }
 
-fn lane_color_token(index: usize) -> &'static str {
+pub(crate) fn lane_color_token(index: usize) -> &'static str {
     match index % 3 {
         0 => "blue",
         _ => "purple",

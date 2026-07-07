@@ -5,11 +5,12 @@ mod timing;
 
 use studio_core::{Project, Segment};
 
+use crate::{BabelProjectLintTagConfig, resolve_babel_project_lint_tag_config};
 use low_confidence::{LOW_CONFIDENCE_REASON, has_unresolved_low_confidence_word};
 use tags::{
     TAG_ONLY_PUNCTUATION_REASON, UNBRACKETED_TAG_REASON, has_tag_only_punctuation,
-    has_unbracketed_annotation_tag, malformed_curly_annotation_tag, validate_curly_brackets,
-    validate_square_brackets, validate_style_tags,
+    has_unbracketed_annotation_tag_with_tags, malformed_curly_annotation_tag_with_tags,
+    validate_curly_brackets, validate_square_brackets_with_tags, validate_style_tags_with_tags,
 };
 use text_hygiene::{
     BANNED_CHARACTERS_REASON, BANNED_WORDS_REASON, CONSECUTIVE_CAPITALS_REASON,
@@ -36,6 +37,11 @@ const EMPTY_CONTENT_REASON: &str = "Segment cannot have empty text.";
 const DOUBLE_SPACES_REASON: &str = "Double spaces are not allowed in text.";
 const LEADING_TRAILING_SPACES_REASON: &str =
     "Extra spaces at the end or beginning of segments are not allowed.";
+const NO_ANGLE_BRACKETS_REASON: &str =
+    "Angle brackets <> are not allowed in silver tier transcriptions.";
+const NO_ASTERISKS_REASON: &str =
+    "Asterisks for emphasis are not needed for silver tier transcriptions.";
+const NO_CURLY_BRACKETS_REASON: &str = "Silver tier does not use {PRO:} or {MIS:} tags.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LintStatus {
@@ -300,6 +306,9 @@ pub enum LintKind {
     StyleTagValidation,
     CurlyBracketValidation,
     MalformedCurlyBracketTag,
+    NoAngleBrackets,
+    NoAsterisks,
+    NoCurlyBrackets,
     UnresolvedLowConfidence,
     NewlineCharacters,
     UnbracketedAnnotationTag,
@@ -319,95 +328,147 @@ pub(crate) fn lint_segment(project: &Project, segment: &Segment) -> LintStatus {
 }
 
 pub(crate) fn lint_segment_issues(project: &Project, segment: &Segment) -> Vec<LintStatus> {
+    let config = resolve_babel_project_lint_tag_config(project);
+    lint_segment_issues_with_config(project, segment, config)
+}
+
+fn lint_segment_issues_with_config(
+    project: &Project,
+    segment: &Segment,
+    config: BabelProjectLintTagConfig,
+) -> Vec<LintStatus> {
     let mut issues = lint_identity_issues(project, segment);
-    if segment.text.trim().is_empty() {
+    if config.rule_enabled("empty-content") && segment.text.trim().is_empty() {
         issues.push(LintStatus::error(LintKind::EmptyText, EMPTY_CONTENT_REASON));
     }
-    if has_multiple_asterisks(&segment.text) {
+    if config.rule_enabled("multiple-asterisks") && has_multiple_asterisks(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::MultipleAsterisks,
             MULTIPLE_ASTERISKS_REASON,
         ));
     }
-    if has_unpaired_asterisk(&segment.text) {
+    if config.rule_enabled("unpaired-asterisks") && has_unpaired_asterisk(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::UnpairedAsterisks,
             UNPAIRED_ASTERISKS_REASON,
         ));
     }
-    if has_empty_emphasis(&segment.text) {
+    if config.rule_enabled("empty-emphasis") && has_empty_emphasis(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::EmptyEmphasis,
             EMPTY_EMPHASIS_REASON,
         ));
     }
-    if has_punctuation_inside_emphasis(&segment.text) {
+    if config.rule_enabled("punctuation-in-emphasis")
+        && has_punctuation_inside_emphasis(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::PunctuationInsideEmphasis,
             PUNCTUATION_INSIDE_EMPHASIS_REASON,
         ));
     }
-    if let Some(message) = validate_square_brackets(&segment.text) {
+    if config.rule_enabled("bracket-validation")
+        && let Some(message) =
+            validate_square_brackets_with_tags(&segment.text, config.bracket_tags)
+    {
         issues.push(LintStatus::error(LintKind::BracketValidation, message));
     }
-    if let Some(message) = validate_style_tags(&segment.text) {
+    if config.rule_enabled("style-tag-validation")
+        && let Some(message) = validate_style_tags_with_tags(&segment.text, config.style_tags)
+    {
         issues.push(LintStatus::error(LintKind::StyleTagValidation, message));
     }
-    if let Some(message) = validate_curly_brackets(&segment.text) {
+    if config.rule_enabled("curly-bracket-validation")
+        && let Some(message) = validate_curly_brackets(&segment.text)
+    {
         issues.push(LintStatus::error(LintKind::CurlyBracketValidation, message));
     }
-    if segment.text.contains("  ") {
+    if config.rule_enabled("double-spaces") && segment.text.contains("  ") {
         issues.push(LintStatus::error(
             LintKind::DoubleSpaces,
             DOUBLE_SPACES_REASON,
         ));
     }
-    if segment.text != segment.text.trim_start() || segment.text != segment.text.trim_end() {
+    if config.rule_enabled("leading-trailing-spaces")
+        && (segment.text != segment.text.trim_start() || segment.text != segment.text.trim_end())
+    {
         issues.push(LintStatus::error(
             LintKind::LeadingTrailingSpaces,
             LEADING_TRAILING_SPACES_REASON,
         ));
     }
-    for _ in 0..pairwise_overlap_issue_count(project, segment) {
-        issues.push(LintStatus::error(
-            LintKind::Overlap,
-            OVERLAPPING_SEGMENTS_REASON,
-        ));
+    if config.rule_enabled("overlapping-segments") {
+        for _ in 0..pairwise_overlap_issue_count(project, segment) {
+            issues.push(LintStatus::error(
+                LintKind::Overlap,
+                OVERLAPPING_SEGMENTS_REASON,
+            ));
+        }
     }
-    if has_too_close_next_segment(project, segment) {
+    if config.rule_enabled("distance-between-annotations")
+        && has_too_close_next_segment(project, segment)
+    {
         issues.push(LintStatus::error(
             LintKind::DistanceBetweenSegments,
             DISTANCE_BETWEEN_SEGMENTS_REASON,
         ));
     }
-    if segment.text.contains("---") {
+    if config.rule_enabled("triple-dash") && segment.text.contains("---") {
         issues.push(LintStatus::error(LintKind::TripleDash, TRIPLE_DASH_REASON));
     }
-    if has_spaced_double_dash(&segment.text) {
+    if config.rule_enabled("spaced-double-dash") && has_spaced_double_dash(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::SpacedDoubleDash,
             SPACED_DOUBLE_DASH_REASON,
         ));
     }
-    if has_double_dash_punctuation(&segment.text) {
+    if config.rule_enabled("double-dash-punctuation") && has_double_dash_punctuation(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::DoubleDashPunctuation,
             DOUBLE_DASH_PUNCTUATION_REASON,
         ));
     }
-    if has_double_dash_missing_space(&segment.text) {
+    if config.rule_enabled("double-dash-missing-space")
+        && has_double_dash_missing_space(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::DoubleDashMissingSpace,
             DOUBLE_DASH_MISSING_SPACE_REASON,
         ));
     }
-    if has_consecutive_punctuation(&segment.text) {
+    if config.rule_enabled("no-angle-brackets")
+        && (segment.text.contains('<') || segment.text.contains('>'))
+    {
+        issues.push(LintStatus::error(
+            LintKind::NoAngleBrackets,
+            NO_ANGLE_BRACKETS_REASON,
+        ));
+    }
+    if config.rule_enabled("no-asterisks") && segment.text.contains('*') {
+        issues.push(LintStatus::error(
+            LintKind::NoAsterisks,
+            NO_ASTERISKS_REASON,
+        ));
+    }
+    if config.rule_enabled("no-curly-brackets")
+        && (segment.text.contains('{') || segment.text.contains('}'))
+    {
+        issues.push(LintStatus::error(
+            LintKind::NoCurlyBrackets,
+            NO_CURLY_BRACKETS_REASON,
+        ));
+    }
+    if config.rule_enabled("consecutive-punctuation") && has_consecutive_punctuation(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::ConsecutivePunctuation,
             CONSECUTIVE_PUNCTUATION_REASON,
         ));
     }
-    if let Some(duplicate) = intra_segment_duplicate_in_text(&segment.text) {
+    if config.rule_enabled("intra-segment-duplicate")
+        && let Some(duplicate) = intra_segment_duplicate_in_text(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::IntraSegmentDuplicate,
             format!(
@@ -415,40 +476,50 @@ pub(crate) fn lint_segment_issues(project: &Project, segment: &Segment) -> Vec<L
             ),
         ));
     }
-    if has_duplicated_long_segment(project, segment) {
+    if config.rule_enabled("duplicated-segments") && has_duplicated_long_segment(project, segment) {
         issues.push(LintStatus::warning(
             LintKind::DuplicatedSegments,
             "Exact duplicate of another segment in this transcript.",
         ));
     }
-    if has_adjacent_mid_length_duplicate(project, segment) {
+    if config.rule_enabled("duplicated-segments-adjacent")
+        && has_adjacent_mid_length_duplicate(project, segment)
+    {
         issues.push(LintStatus::warning(
             LintKind::DuplicatedSegmentsAdjacent,
             "Possible duplicate of the adjacent segment.",
         ));
     }
-    if let Some(characters) = banned_characters_in_text(&segment.text) {
+    if config.rule_enabled("banned-characters")
+        && let Some(characters) = banned_characters_in_text(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::BannedCharacters,
             format!("{BANNED_CHARACTERS_REASON} Found: {characters}"),
         ));
     }
-    if let Some(emoji) = emoji_in_text(&segment.text) {
+    if config.rule_enabled("emoji")
+        && let Some(emoji) = emoji_in_text(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::Emoji,
             format!("Emoji are not allowed in transcriptions. Found: {emoji}"),
         ));
     }
-    if has_em_dash(&segment.text) {
+    if config.rule_enabled("em-dash") && has_em_dash(&segment.text) {
         issues.push(LintStatus::error(LintKind::EmDash, EM_DASH_REASON));
     }
-    if let Some(characters) = unsupported_unicode_in_text(&segment.text) {
+    if config.rule_enabled("unsupported-unicode")
+        && let Some(characters) = unsupported_unicode_in_text(&segment.text)
+    {
         issues.push(LintStatus::error(
             LintKind::UnsupportedUnicode,
             format!("Unsupported Unicode character(s) detected. Found: {characters}"),
         ));
     }
-    if let Some(matches) = consecutive_capitals_in_text(&segment.text) {
+    if config.rule_enabled("consecutive-capitals")
+        && let Some(matches) = consecutive_capitals_in_text(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::ConsecutiveCapitals,
             format!(
@@ -456,69 +527,82 @@ pub(crate) fn lint_segment_issues(project: &Project, segment: &Segment) -> Vec<L
             ),
         ));
     }
-    if let Some(matches) = consecutive_chars_in_text(&segment.text) {
+    if config.rule_enabled("consecutive-chars")
+        && let Some(matches) = consecutive_chars_in_text(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::ConsecutiveChars,
             format!("{CONSECUTIVE_CHARS_REASON} Found 5+ consecutive identical chars: {matches}"),
         ));
     }
-    if let Some(matches) = excessive_digits_in_text(&segment.text) {
+    if config.rule_enabled("excessive-digits")
+        && let Some(matches) = excessive_digits_in_text(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::ExcessiveDigits,
             format!("{EXCESSIVE_DIGITS_REASON} Found 13+ digit sequence: {matches}"),
         ));
     }
-    if let Some(words) = banned_words_in_text(&segment.text) {
+    if config.rule_enabled("banned-words")
+        && let Some(words) = banned_words_in_text(&segment.text)
+    {
         issues.push(LintStatus::warning(
             LintKind::BannedWords,
             format!("{BANNED_WORDS_REASON} Found: {words}"),
         ));
     }
-    if has_parentheses(&segment.text) {
+    if config.rule_enabled("parentheses-usage") && has_parentheses(&segment.text) {
         issues.push(LintStatus::warning(
             LintKind::Parentheses,
             PARENTHESES_REASON,
         ));
     }
-    if has_unpaired_quotes(&segment.text) {
+    if config.rule_enabled("unpaired-quotes") && has_unpaired_quotes(&segment.text) {
         issues.push(LintStatus::warning(
             LintKind::UnpairedQuotes,
             UNPAIRED_QUOTES_REASON,
         ));
     }
-    if let Some(tag) = malformed_curly_annotation_tag(&segment.text) {
+    if config.rule_enabled("malformed-curly-bracket-tags")
+        && let Some(tag) =
+            malformed_curly_annotation_tag_with_tags(&segment.text, config.curly_tags)
+    {
         issues.push(LintStatus::error(
             LintKind::MalformedCurlyBracketTag,
             format!(
-                "Malformed or disallowed curly-bracket tag \"{tag}\". Use {{ИСКАЖ: word}} or {{СКАЗ: word}} — exact tag, single colon, no surrounding spaces, no nested tags."
+                "Malformed or disallowed curly-bracket tag \"{tag}\". Use {{MIS: word}} or {{PRO: word}} — exact tag, single colon, no surrounding spaces, no nested tags."
             ),
         ));
     }
-    if has_unresolved_low_confidence_word(segment) {
+    if config.rule_enabled("unresolved-low-confidence")
+        && has_unresolved_low_confidence_word(segment)
+    {
         issues.push(LintStatus::warning(
             LintKind::UnresolvedLowConfidence,
             LOW_CONFIDENCE_REASON,
         ));
     }
-    if has_newline(&segment.text) {
+    if config.rule_enabled("newline-characters") && has_newline(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::NewlineCharacters,
             NEWLINE_CHARACTERS_REASON,
         ));
     }
-    if has_unbracketed_annotation_tag(&segment.text) {
+    if config.rule_enabled("unbracketed-annotation-tags")
+        && has_unbracketed_annotation_tag_with_tags(&segment.text, config.curly_tags)
+    {
         issues.push(LintStatus::warning(
             LintKind::UnbracketedAnnotationTag,
             UNBRACKETED_TAG_REASON,
         ));
     }
-    if has_tag_only_punctuation(&segment.text) {
+    if config.rule_enabled("tag-only-punctuation") && has_tag_only_punctuation(&segment.text) {
         issues.push(LintStatus::error(
             LintKind::TagOnlyPunctuation,
             TAG_ONLY_PUNCTUATION_REASON,
         ));
     }
-    if segment.end_seconds - segment.start_seconds > 45.0 {
+    if config.rule_enabled("long-segment") && segment.end_seconds - segment.start_seconds > 45.0 {
         issues.push(LintStatus::warning(LintKind::LongSegment, "long segment"));
     }
 
@@ -602,7 +686,7 @@ mod tests {
 
     use studio_core::{AudioLane, Project, Segment, Speaker};
 
-    use super::{LintKind, lint_segment};
+    use super::{LintKind, lint_segment, lint_segment_issues};
 
     #[test]
     fn linter_registry_matches_recovered_babel_rule_contract() {
@@ -868,8 +952,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn russian_gold_allows_gold_only_tags_that_russian_transcription_rejects() {
+        let text = "[музыка] <подражание>да</подражание>";
+        let gold_issues = lint_issues_with_project_metadata(
+            text,
+            &[(
+                crate::META_BABEL_PROJECT_ID,
+                "0bf29f0c-371a-506a-8b77-5fffd14e5762",
+            )],
+        );
+        let transcription_kinds = lint_kinds_with_project_metadata(
+            text,
+            &[(
+                crate::META_BABEL_PROJECT_ID,
+                "d6031436-1fd5-4c79-9b8f-2a7452fc8c4b",
+            )],
+        );
+
+        assert_eq!(gold_issues, Vec::new());
+        assert!(transcription_kinds.contains(&LintKind::BracketValidation));
+        assert!(transcription_kinds.contains(&LintKind::StyleTagValidation));
+    }
+
+    #[test]
+    fn russian_silver_uses_silver_markup_rules_without_style_tag_validation() {
+        for (text, expected_kind) in [
+            ("<не-babel>да</не-babel>", LintKind::NoAngleBrackets),
+            ("да *нет*", LintKind::NoAsterisks),
+            ("{MIS: слово}", LintKind::NoCurlyBrackets),
+        ] {
+            let kinds = lint_kinds_with_project_metadata(
+                text,
+                &[(
+                    crate::META_BABEL_PROJECT_ID,
+                    "73f8e130-9fb4-5c17-b142-5a2e75d89b6d",
+                )],
+            );
+
+            assert_eq!(kinds, vec![expected_kind]);
+        }
+    }
+
+    fn lint_issues_with_project_metadata(
+        text: &str,
+        metadata: &[(&str, &str)],
+    ) -> Vec<super::LintStatus> {
+        let project = project_with_segment_text(text, metadata);
+
+        lint_segment_issues(&project, &project.segments[0])
+    }
+
+    fn lint_kinds_with_project_metadata(text: &str, metadata: &[(&str, &str)]) -> Vec<LintKind> {
+        lint_issues_with_project_metadata(text, metadata)
+            .into_iter()
+            .map(|issue| issue.kind)
+            .collect()
+    }
+
     fn lint_text(text: &str) -> super::LintStatus {
-        let project = Project {
+        let project = project_with_segment_text(text, &[]);
+
+        lint_segment(&project, &project.segments[0])
+    }
+
+    fn project_with_segment_text(text: &str, metadata: &[(&str, &str)]) -> Project {
+        Project {
             id: "task".to_string(),
             name: "Task".to_string(),
             speakers: vec![Speaker {
@@ -892,9 +1040,10 @@ mod tests {
                 text: text.to_string(),
                 metadata: BTreeMap::new(),
             }],
-            metadata: BTreeMap::new(),
-        };
-
-        lint_segment(&project, &project.segments[0])
+            metadata: metadata
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
     }
 }

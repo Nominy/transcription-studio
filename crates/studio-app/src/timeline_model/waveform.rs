@@ -12,7 +12,7 @@ const WAVEFORM_PEAK_COUNT: usize = 96;
 const TIMELINE_RENDER_PEAK_COUNT: usize = 1024;
 const TIMELINE_RENDER_WIDTH_PX: f64 = 1_000.0;
 const TIMELINE_RENDER_MODEL_CACHE_CAPACITY: usize = 8;
-const OVERVIEW_RENDER_PEAK_COUNT: usize = 192;
+const OVERVIEW_RENDER_PEAK_COUNT: usize = 1_024;
 const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;
 
 #[derive(Debug)]
@@ -530,6 +530,7 @@ pub struct OverviewWaveformView {
     pub waveform_model: Option<WaveformRenderModel>,
     pub lane_waveform_models: Arc<[OverviewLaneWaveformView]>,
     pub blocks: Arc<[OverviewWaveformBlock]>,
+    pub block_lane_rows: usize,
     pub peak_source: WaveformPeakSource,
     pub viewport_left_percent: f32,
     pub viewport_width_percent: f32,
@@ -546,6 +547,7 @@ pub struct OverviewLaneWaveformView {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OverviewWaveformBlock {
     pub color_token: String,
+    pub lane_row: usize,
     pub left_percent: f32,
     pub width_percent: f32,
 }

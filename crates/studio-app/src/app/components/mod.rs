@@ -19,6 +19,7 @@ mod submit_dialog;
 mod task_lookup_dialog;
 mod timed_widget;
 mod timeline;
+pub(super) use timeline::lane_vertical_zoom_input_id;
 mod toolbar;
 mod transcript_table;
 mod transport_strip;

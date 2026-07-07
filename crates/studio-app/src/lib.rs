@@ -2,6 +2,7 @@ mod babel_metadata;
 pub mod capabilities;
 mod editor_model;
 mod linter;
+mod project_lint_tag_config;
 mod timeline_model;
 mod track_filter;
 mod transcript_model;
@@ -70,6 +71,10 @@ pub use editor_model::{
 pub use linter::{
     LintKind, LintSeverity, LintStatus, LinterRule, LinterRuleType, RUSSIAN_SQUARE_BRACKET_TAGS,
     RUSSIAN_STYLE_TAGS, recovered_linter_registry,
+};
+pub use project_lint_tag_config::{
+    BabelProjectLintTagConfig, BabelProjectLintTagProfile, META_BABEL_PROJECT_ID,
+    babel_project_lint_tag_metadata, resolve_babel_project_lint_tag_config,
 };
 pub use timeline_model::{
     LaneWaveform, LoopStripClientMetrics, LoopStripHit, LoopStripHitTarget, LoopStripView,

@@ -1,7 +1,9 @@
 use std::{hash::Hasher, sync::LazyLock};
 
 use iced::widget::svg::{self, Handle as SvgHandle, Svg};
-use iced::widget::{Space, button, column, container, lazy, responsive, row, text, tooltip};
+use iced::widget::{
+    Space, button, column, container, lazy, responsive, row, text, text_input, tooltip,
+};
 use iced::{Color, Element, Fill, Length, Size};
 use studio_app::{EditorSession, TimelineLaneView};
 
@@ -47,10 +49,11 @@ struct LaneControlRailDependency {
     render_vertical_zoom_slider: bool,
     collapse_tooltip: String,
     solo_aria_label: String,
+    vertical_zoom_input: Option<String>,
 }
 
 impl LaneControlRailDependency {
-    fn from_lane(lane: &TimelineLaneView) -> Self {
+    fn from_lane(lane: &TimelineLaneView, vertical_zoom_input: Option<&str>) -> Self {
         Self {
             lane_id: lane.lane_id.clone(),
             label: lane.label.clone(),
@@ -62,6 +65,7 @@ impl LaneControlRailDependency {
             render_vertical_zoom_slider: lane.viewport_state.render_vertical_zoom_slider,
             collapse_tooltip: lane.chrome.collapse_tooltip.clone(),
             solo_aria_label: lane.chrome.solo_aria_label.clone(),
+            vertical_zoom_input: vertical_zoom_input.map(str::to_string),
         }
     }
 
@@ -86,7 +90,12 @@ impl std::hash::Hash for LaneControlRailDependency {
         self.render_vertical_zoom_slider.hash(state);
         self.collapse_tooltip.hash(state);
         self.solo_aria_label.hash(state);
+        self.vertical_zoom_input.hash(state);
     }
+}
+
+pub(crate) fn lane_vertical_zoom_input_id() -> text_input::Id {
+    text_input::Id::new("lane-vertical-zoom-input")
 }
 
 pub(super) fn view_timeline_lane<'a>(
@@ -97,10 +106,11 @@ pub(super) fn view_timeline_lane<'a>(
     timeline_autoscroll_active: Option<f32>,
     magnifier: Option<WaveformMagnifierOverlay>,
     attached_create_region_popup: Option<super::waveform::AttachedCreateRegionPopup<'a>>,
+    vertical_zoom_input: Option<&str>,
 ) -> Element<'a, Message> {
     let track_height = lane.track_height;
     let color_token = lane.color_token.clone();
-    let control_rail = view_lane_control_rail(lane);
+    let control_rail = view_lane_control_rail(lane, vertical_zoom_input);
     let waveform: Element<'a, Message> = if lane.is_collapsed {
         let viewport_height = lane.viewport_state.container_height;
         container(Space::with_height(Length::Fixed(viewport_height)))
@@ -141,8 +151,14 @@ fn lane_edge_border<'a>(color_token: String, track_height: f32) -> Element<'a, M
         .into()
 }
 
-fn view_lane_control_rail(lane: &TimelineLaneView) -> Element<'static, Message> {
-    view_lazy_lane_control_rail(LaneControlRailDependency::from_lane(lane))
+fn view_lane_control_rail(
+    lane: &TimelineLaneView,
+    vertical_zoom_input: Option<&str>,
+) -> Element<'static, Message> {
+    view_lazy_lane_control_rail(LaneControlRailDependency::from_lane(
+        lane,
+        vertical_zoom_input,
+    ))
 }
 
 fn view_lazy_lane_control_rail(dependency: LaneControlRailDependency) -> Element<'static, Message> {
@@ -193,6 +209,23 @@ fn view_lane_label(dependency: &LaneControlRailDependency) -> Element<'static, M
     ]
     .height(Fill)
     .spacing(8);
+
+    if let Some(value) = &dependency.vertical_zoom_input {
+        controls = controls.push(
+            row![
+                text_input("zoom", value)
+                    .id(lane_vertical_zoom_input_id())
+                    .on_input(Message::LaneVerticalZoomInputChanged)
+                    .on_submit(Message::SubmitLaneVerticalZoomInput)
+                    .size(12)
+                    .padding(4)
+                    .width(Length::Fixed(64.0)),
+                text("x").size(12),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
+        );
+    }
 
     if dependency.render_solo_controls {
         let mute_id = dependency.lane_id.clone();

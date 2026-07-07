@@ -3,7 +3,7 @@ use crate::timeline_model::{
     OverviewLaneWaveformView, OverviewWaveformBlock, OverviewWaveformView, TimeRange,
     TimelineLaneBuildState, TimelineLaneView, TimelineSegmentIndex, TimelineSegmentPreview,
     WaveformBlock, WaveformPeakSource, build_timeline_lanes,
-    build_timeline_lanes_with_segment_index,
+    build_timeline_lanes_with_segment_index, lane_color_token,
 };
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{
@@ -173,14 +173,15 @@ impl EditorSession {
         let lane_waveform_models = project
             .lanes
             .iter()
-            .filter(|lane| self.track_filter.matches_lane(&lane.id))
-            .filter_map(|lane| {
+            .enumerate()
+            .filter(|(_, lane)| self.track_filter.matches_lane(&lane.id))
+            .filter_map(|(lane_index, lane)| {
                 self.lane_waveforms
                     .get(&lane.id)
                     .and_then(|waveform| waveform.overview_render_model(self.playhead_seconds))
                     .map(|waveform_model| OverviewLaneWaveformView {
                         lane_id: lane.id.clone(),
-                        color_token: lane.speaker_id.clone(),
+                        color_token: lane_color_token(lane_index).to_string(),
                         waveform_model,
                     })
             })
@@ -198,6 +199,7 @@ impl EditorSession {
             waveform_model,
             lane_waveform_models: lane_waveform_models.into(),
             blocks: overview_blocks(project, &self.track_filter, bounds).into(),
+            block_lane_rows: overview_block_lane_rows(project, &self.track_filter),
             viewport_left_percent: percent_of_range(self.viewport.start_seconds, bounds, duration),
             viewport_width_percent: ((self.viewport.duration_seconds() / duration) * 100.0)
                 .clamp(0.0, 100.0) as f32,
@@ -339,13 +341,15 @@ fn overview_blocks(
         .iter()
         .enumerate()
         .filter(|(_, lane)| track_filter.matches_lane(&lane.id))
-        .flat_map(|(lane_index, lane)| {
+        .enumerate()
+        .flat_map(|(lane_row, (lane_index, lane))| {
             project
                 .segments
                 .iter()
                 .filter(move |segment| segment.lane_id == lane.id)
                 .map(move |segment| OverviewWaveformBlock {
                     color_token: lane_color_token(lane_index).to_string(),
+                    lane_row,
                     left_percent: percent_of_range(segment.start_seconds, bounds, duration),
                     width_percent: (((segment.end_seconds - segment.start_seconds).max(0.0)
                         / duration)
@@ -356,13 +360,15 @@ fn overview_blocks(
         .collect()
 }
 
-fn percent_of_range(seconds: f64, bounds: TimeRange, duration: f64) -> f32 {
-    (((seconds - bounds.start_seconds) / duration) * 100.0).clamp(0.0, 100.0) as f32
+fn overview_block_lane_rows(project: &Project, track_filter: &TrackFilter) -> usize {
+    project
+        .lanes
+        .iter()
+        .filter(|lane| track_filter.matches_lane(&lane.id))
+        .count()
+        .max(1)
 }
 
-fn lane_color_token(index: usize) -> &'static str {
-    match index % 3 {
-        0 => "purple",
-        _ => "blue",
-    }
+fn percent_of_range(seconds: f64, bounds: TimeRange, duration: f64) -> f32 {
+    (((seconds - bounds.start_seconds) / duration) * 100.0).clamp(0.0, 100.0) as f32
 }

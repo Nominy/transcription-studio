@@ -68,7 +68,8 @@ use super::startup_route::{
     StartupRouteConfig, apply_startup_route_config, parse_startup_route_config,
 };
 use super::state::{
-    AppSurface, HelperFocusRestore, NativeCapabilityModalTab, TimelineAutoscrollMode,
+    AppSurface, HelperFocusRestore, LaneVerticalZoomInput, NativeCapabilityModalTab,
+    TimelineAutoscrollMode,
 };
 use super::tag_suggestions::{
     TagSuggestionKeyboardAction, TagSuggestionKind, tag_suggestions_for_draft,
@@ -1223,10 +1224,12 @@ fn overview_toolbar_viewport_drag_pans_window_without_moving_playhead() {
     let initial_drag_fraction = (initial_overview.viewport_left_percent
         + initial_overview.viewport_width_percent / 2.0)
         / 100.0;
+    let grab_offset_fraction =
+        initial_drag_fraction - initial_overview.viewport_left_percent / 100.0;
     let mut expected_editor = state.editor.as_ref().unwrap().clone();
-    expected_editor.set_overview_viewport_start_fraction(&project, initial_drag_fraction);
-    expected_editor.set_overview_viewport_start_fraction(&project, 0.45);
+    expected_editor.drag_timeline_scrollbar_thumb(&project, 0.45, grab_offset_fraction);
 
+    let viewport_before_press = state.editor.as_ref().unwrap().viewport;
     let _ = update(
         &mut state,
         Message::OverviewPointerMoved {
@@ -1235,6 +1238,11 @@ fn overview_toolbar_viewport_drag_pans_window_without_moving_playhead() {
         },
     );
     let _ = update(&mut state, Message::OverviewPressed);
+    assert_eq!(
+        state.editor.as_ref().unwrap().viewport,
+        viewport_before_press,
+        "grabbing the minimap thumb must not jump the viewport"
+    );
     let _ = update(
         &mut state,
         Message::OverviewPointerMoved {
@@ -1262,9 +1270,10 @@ fn overview_toolbar_viewport_drag_continues_after_pointer_leaves_minimap() {
     let initial_drag_fraction = (initial_overview.viewport_left_percent
         + initial_overview.viewport_width_percent / 2.0)
         / 100.0;
+    let grab_offset_fraction =
+        initial_drag_fraction - initial_overview.viewport_left_percent / 100.0;
     let mut expected_editor = state.editor.as_ref().unwrap().clone();
-    expected_editor.set_overview_viewport_start_fraction(&project, initial_drag_fraction);
-    expected_editor.set_overview_viewport_start_fraction(&project, 0.45);
+    expected_editor.drag_timeline_scrollbar_thumb(&project, 0.45, grab_offset_fraction);
 
     let _ = update(
         &mut state,
@@ -1287,6 +1296,76 @@ fn overview_toolbar_viewport_drag_continues_after_pointer_leaves_minimap() {
     let editor = state.editor.as_ref().unwrap();
     assert_eq!(editor.playhead_seconds, playhead);
     assert_eq!(editor.viewport, expected_editor.viewport);
+}
+
+#[test]
+fn overview_track_press_outside_thumb_starts_viewport_drag() {
+    let mut state = stable_sample_state();
+    let project = state.project().unwrap().clone();
+    state.with_editor_mut(|editor| editor.set_zoom(&project, 4.0));
+
+    let _ = update(
+        &mut state,
+        Message::OverviewPointerMoved {
+            fraction: 0.85,
+            width: 100.0,
+        },
+    );
+    let _ = update(&mut state, Message::OverviewPressed);
+    let viewport_after_press = state.editor.as_ref().unwrap().viewport;
+
+    let _ = update(
+        &mut state,
+        Message::OverviewPointerMoved {
+            fraction: 0.5,
+            width: 100.0,
+        },
+    );
+    let _ = update(&mut state, Message::OverviewReleased);
+
+    let editor = state.editor.as_ref().unwrap();
+    assert!(
+        editor.viewport.start_seconds < viewport_after_press.start_seconds,
+        "holding after a track click must keep dragging the viewport"
+    );
+    assert!(
+        (editor.viewport.duration_seconds() - viewport_after_press.duration_seconds()).abs()
+            < 0.001
+    );
+}
+
+#[test]
+fn waveform_scrollbar_drag_continues_after_pointer_leaves_scrollbar_strip() {
+    let mut state = stable_sample_state();
+    let _ = update(&mut state, Message::ZoomChanged(2.0));
+    let before = state.editor.as_ref().unwrap().viewport;
+    let playhead = state.editor.as_ref().unwrap().playhead_seconds;
+
+    let _ = update(
+        &mut state,
+        Message::GlobalPointerMoved(Point::new(0.0, 40.0)),
+    );
+    let _ = update(
+        &mut state,
+        Message::TimelineScrollbarHovered {
+            fraction: 0.0,
+            width: 200.0,
+        },
+    );
+    let _ = update(&mut state, Message::TimelineScrollbarPressed);
+    let _ = update(
+        &mut state,
+        Message::GlobalPointerMoved(Point::new(90.0, 400.0)),
+    );
+    let _ = update(&mut state, Message::TimelineScrollbarReleased);
+
+    let editor = state.editor.as_ref().unwrap();
+    assert_eq!(editor.playhead_seconds, playhead);
+    assert!((editor.viewport.duration_seconds() - before.duration_seconds()).abs() < 0.001);
+    assert!(
+        editor.viewport.start_seconds > before.start_seconds,
+        "global pointer moves must keep dragging the scrollbar thumb outside the strip"
+    );
 }
 
 #[test]
@@ -1597,9 +1676,21 @@ fn waveform_scrollbar_drag_pans_shared_babel_viewport_without_moving_playhead() 
     let before = state.editor.as_ref().unwrap().viewport;
     let playhead = state.editor.as_ref().unwrap().playhead_seconds;
 
-    let _ = update(&mut state, Message::TimelineScrollbarHovered(0.0));
+    let _ = update(
+        &mut state,
+        Message::TimelineScrollbarHovered {
+            fraction: 0.0,
+            width: 200.0,
+        },
+    );
     let _ = update(&mut state, Message::TimelineScrollbarPressed);
-    let _ = update(&mut state, Message::TimelineScrollbarHovered(0.45));
+    let _ = update(
+        &mut state,
+        Message::TimelineScrollbarHovered {
+            fraction: 0.45,
+            width: 200.0,
+        },
+    );
     let _ = update(&mut state, Message::TimelineScrollbarReleased);
 
     let editor = state.editor.as_ref().unwrap();
@@ -1713,7 +1804,13 @@ fn global_pointer_release_finishes_captured_timeline_control_drags() {
     let mut state = stable_sample_state();
 
     let _ = update(&mut state, Message::ZoomChanged(2.0));
-    let _ = update(&mut state, Message::TimelineScrollbarHovered(0.0));
+    let _ = update(
+        &mut state,
+        Message::TimelineScrollbarHovered {
+            fraction: 0.0,
+            width: 200.0,
+        },
+    );
     let _ = update(&mut state, Message::TimelineScrollbarPressed);
     assert!(state.timeline_scrollbar_drag_offset_fraction.is_some());
 
@@ -1762,7 +1859,13 @@ fn window_unfocus_cancels_captured_pointer_drags_and_audition_holds() {
         &mut state,
         Message::KeyboardModifiersChanged(Modifiers::COMMAND),
     );
-    let _ = update(&mut state, Message::TimelineScrollbarHovered(0.0));
+    let _ = update(
+        &mut state,
+        Message::TimelineScrollbarHovered {
+            fraction: 0.0,
+            width: 200.0,
+        },
+    );
     let _ = update(&mut state, Message::TimelineScrollbarPressed);
     let _ = update(
         &mut state,
@@ -12985,6 +13088,60 @@ fn dashboard_project_refresh_merges_discovered_queue_config_for_new_active_proje
 }
 
 #[test]
+fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile() {
+    let project_id = "0bf29f0c-371a-506a-8b77-5fffd14e5762";
+    let mut state = stable_sample_state();
+
+    let _ = update(
+        &mut state,
+        Message::DashboardProjectsLoaded(
+            serde_json::json!([
+                {
+                    "projectId": project_id,
+                    "name": "RU-tx-gold",
+                    "permissionStatus": "active",
+                    "status": "active"
+                }
+            ])
+            .to_string(),
+        ),
+    );
+
+    assert!(state.begin_dashboard_start_project(project_id));
+    assert!(state.babel_service_requests.iter().any(|request| matches!(
+        request,
+        BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id })
+            if queue_id == "f95babcc-8681-521c-a39f-66454a16347f"
+    )));
+
+    let minimal_babel_task = serde_json::json!({
+        "task_id": "loaded-claim-next-task",
+        "project_preset": "babel-review-action",
+        "speakers": [],
+        "audio_tracks": [],
+        "annotations": []
+    })
+    .to_string();
+
+    let _ = state.complete_claim_next_from_queue_success(minimal_babel_task);
+
+    let metadata = &state
+        .project()
+        .expect("claim-next task should load")
+        .metadata;
+    assert_eq!(
+        metadata.get("studio.babel.projectId").map(String::as_str),
+        Some(project_id)
+    );
+    assert_eq!(
+        metadata
+            .get("studio.babel.lintTagProfile")
+            .map(String::as_str),
+        Some("ru-tx-gold")
+    );
+}
+
+#[test]
 fn fixture_service_executor_maps_recovered_load_and_claim_requests_to_callbacks() {
     let payload = "{\"ok\":true}".to_string();
 
@@ -14088,7 +14245,7 @@ fn row_structure_action_merge_closes_menu_and_dirties_task_like_browser_dropdown
 fn hotkey_mapping_covers_transport_navigation_and_workflow_actions() {
     assert_eq!(
         hotkey_message(Key::Named(Named::Space), Modifiers::empty()),
-        Some(Message::TogglePlayback)
+        Some(Message::HelperTogglePlayback)
     );
     assert_eq!(
         hotkey_message(Key::Named(Named::ArrowRight), Modifiers::empty()),
@@ -16606,7 +16763,7 @@ fn top_toolbar_overview_uses_shared_snapshot_across_playhead_ticks() {
 fn top_toolbar_overview_preallocates_layer_stack_for_moving_playback() {
     let toolbar_source = include_str!("components/toolbar.rs");
 
-    assert!(toolbar_source.contains("const OVERVIEW_WAVEFORM_LAYER_CAPACITY: usize = 3;"));
+    assert!(toolbar_source.contains("const OVERVIEW_WAVEFORM_LAYER_CAPACITY: usize = 4;"));
     assert!(
         toolbar_source.contains("Vec::with_capacity(OVERVIEW_WAVEFORM_LAYER_CAPACITY)"),
         "moving playback should not grow the overview waveform layer Vec every frame"
@@ -16741,8 +16898,21 @@ fn top_toolbar_overview_uses_recovered_wavesurfer_filled_line_canvas() {
     let source = include_str!("components/toolbar.rs");
 
     assert!(source.contains("view_wavesurfer_line_waveform"));
-    assert!(source.contains("continuous_waveform_color"));
+    assert!(source.contains("overview_waveform_color"));
     assert!(!source.contains("Row::new()\n            .spacing(1)\n            .width(Fill)\n            .height(Length::Fixed(26.0));\n        for peak in peaks"));
+}
+
+#[test]
+fn top_toolbar_overview_waveforms_share_the_project_bounds_time_axis() {
+    let toolbar_source = include_str!("components/toolbar.rs");
+    let canvas_source = include_str!("components/wavesurfer_canvas.rs");
+
+    assert!(toolbar_source.contains("fn overview_lane_span_fraction("));
+    assert!(toolbar_source.contains("span_fraction: overview_lane_span_fraction("));
+    assert!(
+        canvas_source.contains("bounds.width * self.span_fraction"),
+        "overview lane audio must be scaled onto the shared segment-bounds axis so peaks line up with the playhead and blocks"
+    );
 }
 
 #[test]
@@ -16751,6 +16921,10 @@ fn top_toolbar_synthetic_overview_blocks_use_cached_canvas_without_per_block_wid
     let canvas_source = include_str!("components/wavesurfer_canvas.rs");
 
     assert!(toolbar_source.contains("view_overview_blocks_canvas("));
+    assert!(
+        toolbar_source.contains("layers.push(view_overview_blocks_canvas("),
+        "overview segment blocks must render as their own layer even when lane audio is loaded"
+    );
     assert!(canvas_source.contains("struct OverviewBlocksCanvas"));
     assert!(canvas_source.contains("impl canvas::Program<Message> for OverviewBlocksCanvas"));
     assert!(canvas_source.contains("frame.fill_rectangle("));
@@ -16813,7 +16987,7 @@ fn top_toolbar_overview_borrows_waveform_peaks_without_hot_path_clones() {
     assert!(source.contains("impl std::hash::Hash for OverviewWaveformPeaksDependency"));
     assert!(source.contains("view_lazy_overview_waveform_peaks("));
     assert!(source.contains("Arc::as_ptr(&self.peaks)"));
-    assert!(source.contains("let peaks = lane\n                .waveform_model"));
+    assert!(source.contains("let peaks = lane\n            .waveform_model"));
     assert!(source.contains("Arc::clone(&overview.blocks)"));
     assert!(source.contains("Arc::clone(&channel.peaks)"));
     assert!(!source.contains("overview.waveform_model.clone()"));
@@ -17004,7 +17178,10 @@ fn hotkeys_dialog_registry_matches_recovered_babel_hotkeys() {
             (
                 "Global Controls",
                 vec![
-                    (vec!["Space"], "Play/Pause"),
+                    (
+                        vec!["Space"],
+                        "Play/Pause (restores ghost cursor like Escape)"
+                    ),
                     (vec!["\u{2190}"], "Seek To Previous Segment"),
                     (vec!["\u{2192}"], "Seek To Next Segment"),
                     (vec!["Cmd/Ctrl", "Z"], "Undo"),
@@ -17073,7 +17250,14 @@ fn hotkeys_dialog_registry_matches_recovered_babel_hotkeys() {
                         "Move text before caret to previous segment",
                     ),
                     (vec!["Alt", "]"], "Move text after caret to next segment",),
-                    (vec!["Escape"], "Pause and blur / resume and restore cursor",),
+                    (
+                        vec!["Escape", "Or", "Space"],
+                        "Pause and blur / resume and restore cursor",
+                    ),
+                    (
+                        vec!["Tab", "/", "Shift", "Tab"],
+                        "Move ghost cursor to next/previous row",
+                    ),
                     (
                         vec!["Alt", "A"],
                         "Auto-convert selected digits into SKAZ notation",
@@ -17846,6 +18030,191 @@ fn helper_ghost_cursor_pending_target_follows_segment_navigation() {
 }
 
 #[test]
+fn helper_ghost_cursor_row_moves_on_tab_while_paused_and_playing() {
+    let mut state = stable_sample_state();
+    let project = state.project().unwrap().clone();
+    let blur_playhead_seconds = project.segment("annotation-1").unwrap().start_seconds;
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.select_segment_without_seek(&project, "annotation-1");
+        editor.playhead_seconds = blur_playhead_seconds;
+    }
+    state.helper_focus_restore_pending = Some(HelperFocusRestore {
+        segment_id: "annotation-1".to_string(),
+        blur_playhead_seconds,
+        restore_playhead_seconds: blur_playhead_seconds,
+        restore_offset: 0,
+        synthetic: true,
+    });
+
+    let _ = update(&mut state, Message::GhostCursorRowNavigation(1));
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-2")
+    );
+    assert_eq!(
+        state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref(),
+        Some("annotation-2")
+    );
+    assert!(
+        state
+            .helper_ghost_cursor_for_segment("annotation-2")
+            .is_some()
+    );
+
+    state.editor.as_mut().unwrap().is_playing = true;
+    let _ = update(&mut state, Message::GhostCursorRowNavigation(1));
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-3")
+    );
+    assert!(
+        state.editor.as_ref().unwrap().is_playing,
+        "tab ghost cursor row moves must not interrupt playback"
+    );
+
+    let _ = update(&mut state, Message::GhostCursorRowNavigation(-1));
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-2")
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_tab_navigation_skips_hidden_lane_rows() {
+    let mut state = stable_sample_state();
+    let _ = update(
+        &mut state,
+        Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()),
+    );
+    let project = state.project().unwrap().clone();
+    let blur_playhead_seconds = project.segment("annotation-1").unwrap().start_seconds;
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.select_segment_without_seek(&project, "annotation-1");
+        editor.playhead_seconds = blur_playhead_seconds;
+    }
+    state.helper_focus_restore_pending = Some(HelperFocusRestore {
+        segment_id: "annotation-1".to_string(),
+        blur_playhead_seconds,
+        restore_playhead_seconds: blur_playhead_seconds,
+        restore_offset: 0,
+        synthetic: true,
+    });
+
+    let _ = update(&mut state, Message::GhostCursorRowNavigation(1));
+
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-3"),
+        "tab should skip rows on collapsed/filtered lanes"
+    );
+}
+
+#[test]
+fn space_toggles_helper_playback_and_ghost_cursor_like_escape() {
+    let mut state = stable_sample_state();
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.selected_segment_id = Some("annotation-1".to_string());
+        editor.playhead_seconds = 2.0;
+        editor.is_playing = false;
+    }
+
+    let _ = update(&mut state, Message::HelperTogglePlayback);
+    let editor = state.editor.as_ref().unwrap();
+    assert!(
+        editor.is_playing,
+        "space from paused should resume playback"
+    );
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-1")
+    );
+    assert!(
+        state
+            .helper_ghost_cursor_for_segment("annotation-1")
+            .is_some()
+    );
+
+    state.editor.as_mut().unwrap().playhead_seconds = 3.75;
+    set_draft_text_with_cursor_at_end(&mut state, "annotation-2", "a bcdefghi");
+    let _ = update(&mut state, Message::HelperTogglePlayback);
+    let editor = state.editor.as_ref().unwrap();
+    assert!(
+        !editor.is_playing,
+        "space while playing should pause and restore helper focus"
+    );
+    assert_eq!(
+        state.helper_focused_segment_id.as_deref(),
+        Some("annotation-2")
+    );
+    assert!(state.helper_focus_restore_pending.is_none());
+}
+
+#[test]
+fn helper_playhead_row_deduction_only_considers_visible_lanes() {
+    let mut state = stable_sample_state();
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.selected_segment_id = Some("annotation-3".to_string());
+        editor.playhead_seconds = 4.0;
+        editor.is_playing = false;
+    }
+    let _ = update(&mut state, Message::EscapePressed);
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-2"),
+        "with all lanes visible the playhead row wins"
+    );
+
+    state.helper_focus_restore_pending = None;
+    state.helper_focused_segment_id = None;
+    state.editor.as_mut().unwrap().is_playing = false;
+    let _ = update(
+        &mut state,
+        Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()),
+    );
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.selected_segment_id = Some("annotation-3".to_string());
+        editor.playhead_seconds = 4.0;
+    }
+    let _ = update(&mut state, Message::EscapePressed);
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-3"),
+        "rows on hidden lanes must not capture the ghost cursor"
+    );
+}
+
+#[test]
 fn helper_focus_ghost_cursor_snaps_playback_offset_to_word_boundary() {
     let mut state = stable_sample_state();
     set_draft_text_with_cursor_at_end(&mut state, "annotation-2", "alpha beta gamma");
@@ -18103,14 +18472,14 @@ fn hotkey_mapping_preserves_text_input_editing() {
 }
 
 #[test]
-fn hotkey_mapping_routes_plain_tab_to_browser_focus_traversal() {
+fn hotkey_mapping_routes_plain_tab_to_ghost_cursor_row_navigation() {
     assert_eq!(
         hotkey_message_for_status(Key::Named(Named::Tab), Modifiers::empty(), Status::Ignored),
-        Some(Message::FocusNext)
+        Some(Message::GhostCursorRowNavigation(1))
     );
     assert_eq!(
         hotkey_message_for_status(Key::Named(Named::Tab), Modifiers::SHIFT, Status::Ignored),
-        Some(Message::FocusPrevious)
+        Some(Message::GhostCursorRowNavigation(-1))
     );
     assert_eq!(
         hotkey_message_for_status(Key::Named(Named::Tab), Modifiers::COMMAND, Status::Ignored),
@@ -18252,7 +18621,7 @@ fn hotkey_mapping_ignores_repeated_keydown_like_recovered_babel() {
             Status::Ignored,
             false
         ),
-        Some(Message::TogglePlayback)
+        Some(Message::HelperTogglePlayback)
     );
     assert_eq!(
         hotkey_message_for_repeat(

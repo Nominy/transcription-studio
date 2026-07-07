@@ -10,12 +10,13 @@ use std::{
 use iced::{Point, Task, keyboard::Modifiers};
 use serde_json::Value;
 use studio_app::{
-    EditorSession, LaneWaveform, LoopStripHit, LoopStripHitTarget, NoWorkModalInput,
-    NoWorkModalModel, ORIGINAL_SCRIPT_STORAGE_KEY, OverviewWaveformView,
-    SCRIPT_CONTEXT_STORAGE_KEY, StudioWorkflow, SubmitControlView, TaskLookupEffect,
-    TaskLookupState, TimeRange, TimelineLaneView, TimelineScrollbarView, TimelineSegmentIndex,
-    TimelineSegmentPreview, TrackFilter, TranscriptRowView, TransportStripView, WaveformBlock,
-    build_no_work_modal_model, load_sample_project,
+    BabelProjectLintTagConfig, EditorSession, LaneWaveform, LoopStripHit, LoopStripHitTarget,
+    META_BABEL_PROJECT_ID, NoWorkModalInput, NoWorkModalModel, ORIGINAL_SCRIPT_STORAGE_KEY,
+    OverviewWaveformView, SCRIPT_CONTEXT_STORAGE_KEY, StudioWorkflow, SubmitControlView,
+    TaskLookupEffect, TaskLookupState, TimeRange, TimelineLaneView, TimelineScrollbarView,
+    TimelineSegmentIndex, TimelineSegmentPreview, TrackFilter, TranscriptAnnotationKind,
+    TranscriptRowView, TransportStripView, WaveformBlock, babel_project_lint_tag_metadata,
+    build_no_work_modal_model, load_sample_project, resolve_babel_project_lint_tag_config,
 };
 use studio_core::{AudioLane, Project, Segment};
 use studio_waveform::{WaveformHit, WaveformHitTarget, decode_pcm16_wav};
@@ -75,6 +76,7 @@ pub(super) const SUPPORT_ID_COPIED_RESET_DELAY_MS: u64 = 2000;
 const TIMELINE_SCROLLBAR_MIN_THUMB_FRACTION: f32 = 0.024;
 const LANE_VERTICAL_ZOOM_SLIDER_MIN: f32 = 0.3;
 const LANE_VERTICAL_ZOOM_SLIDER_MAX: f32 = 1000.0;
+const DEFAULT_LANE_VERTICAL_ZOOM: f32 = 20.0;
 const TRANSCRIPT_ROWS_CACHE_TRACE_ENV: &str = "STUDIO_TRACE_TRANSCRIPT_CACHE";
 const TIMELINE_DRAG_TRACE_ENV: &str = "STUDIO_TRACE_TIMELINE_DRAG";
 const AUDIO_PLAYBACK_TRACE_ENV: &str = "STUDIO_LOG_AUDIO_PLAYBACK";
@@ -93,6 +95,7 @@ const STARTUP_PLAYBACK_SMOKE_DELAY_FRAMES_ENV: &str = "STUDIO_SMOKE_PLAYBACK_DEL
 pub(super) const BABEL_TRACK_CELL_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const BABEL_PLAYBACK_SPEED_STEPS: [f32; 6] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0];
 const BABEL_ROUTE_METADATA_KEYS: &[&str] = &[
+    META_BABEL_PROJECT_ID,
     META_REVIEW_ACTION_ID,
     META_ACTIVE_QUEUE_ID,
     META_QUEUE_ID,
@@ -142,6 +145,7 @@ pub(super) enum NativeCapabilityModalTab {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct DashboardState {
     pub(super) projects: Vec<DashboardProject>,
+    pub(super) project_id: String,
     pub(super) chunked_queue_id: String,
     pub(super) stitched_queue_id: String,
     pub(super) review_action_id: String,
@@ -458,13 +462,18 @@ pub(super) struct StudioState {
     pub(super) overview_pointer_sample: Option<OverviewPointerSample>,
     pub(super) overview_drag_capture: Option<DragAxisCapture>,
     pub(super) overview_drag_active: bool,
+    pub(super) overview_drag_grab_offset_fraction: f32,
     pub(super) timeline_scrollbar_hover_fraction: Option<f32>,
+    pub(super) timeline_scrollbar_pointer_sample: Option<OverviewPointerSample>,
+    pub(super) timeline_scrollbar_drag_capture: Option<DragAxisCapture>,
     pub(super) timeline_scrollbar_drag_offset_fraction: Option<f32>,
     pub(super) lane_vertical_zoom_slider_hover: Option<LaneVerticalZoomSliderHover>,
     pub(super) lane_vertical_zoom_slider_pointer_sample:
         Option<LaneVerticalZoomSliderPointerSample>,
     pub(super) lane_vertical_zoom_slider_drag_capture: Option<LaneVerticalZoomSliderDragCapture>,
     pub(super) active_lane_vertical_zoom_slider_id: Option<String>,
+    pub(super) lane_vertical_zoom_input: Option<LaneVerticalZoomInput>,
+    pub(super) last_lane_vertical_zoom_slider_press: Option<LaneVerticalZoomSliderPress>,
     pub(super) last_track_cell_press: Option<TrackCellPress>,
     pub(super) last_transcript_row_press: Option<TranscriptRowPress>,
     pub(super) transcript_row_hover_segment_id: Option<String>,
@@ -611,12 +620,17 @@ impl Default for StudioState {
             overview_pointer_sample: None,
             overview_drag_capture: None,
             overview_drag_active: false,
+            overview_drag_grab_offset_fraction: 0.0,
             timeline_scrollbar_hover_fraction: None,
+            timeline_scrollbar_pointer_sample: None,
+            timeline_scrollbar_drag_capture: None,
             timeline_scrollbar_drag_offset_fraction: None,
             lane_vertical_zoom_slider_hover: None,
             lane_vertical_zoom_slider_pointer_sample: None,
             lane_vertical_zoom_slider_drag_capture: None,
             active_lane_vertical_zoom_slider_id: None,
+            lane_vertical_zoom_input: None,
+            last_lane_vertical_zoom_slider_press: None,
             last_track_cell_press: None,
             last_transcript_row_press: None,
             transcript_row_hover_segment_id: None,
@@ -833,6 +847,19 @@ impl DragAxisCapture {
 pub(super) struct LaneVerticalZoomSliderDragCapture {
     pub(super) lane_id: String,
     pub(super) axis: DragAxisCapture,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LaneVerticalZoomInput {
+    pub(super) lane_id: String,
+    pub(super) value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LaneVerticalZoomSliderPress {
+    pub(super) lane_id: String,
+    pub(super) at: Instant,
+    pub(super) zoom_before: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1226,6 +1253,12 @@ impl StudioState {
         matches!(&self.workflow, Ok(workflow) if workflow.can_redo())
     }
 
+    pub(super) fn project_lint_tag_config(&self) -> BabelProjectLintTagConfig {
+        self.project()
+            .map(resolve_babel_project_lint_tag_config)
+            .unwrap_or_default()
+    }
+
     pub(super) fn should_show_tag_suggestions(
         &self,
         segment_id: &str,
@@ -1273,7 +1306,10 @@ impl StudioState {
             self.clear_tag_suggestion_state_for_segment(segment_id);
             return;
         };
-        let suggestions = tag_suggestions::tag_suggestions_for_draft(draft);
+        let suggestions = tag_suggestions::tag_suggestions_for_draft_with_config(
+            draft,
+            self.project_lint_tag_config(),
+        );
         if suggestions.is_empty() {
             self.clear_tag_suggestion_state_for_segment(segment_id);
             return;
@@ -1569,6 +1605,8 @@ impl StudioState {
         match StudioWorkflow::from_babel_json(&payload.source).map_err(|error| error.to_string()) {
             Ok(mut workflow) => {
                 workflow.merge_project_metadata(route_metadata);
+                let lint_tag_metadata = babel_project_lint_tag_metadata(workflow.project());
+                workflow.merge_project_metadata(lint_tag_metadata);
                 self.replace_workflow(workflow, kind.success_status().to_string());
                 let loaded = self.load_lane_waveforms_from_base(&payload.audio_base_dir);
                 self.append_waveform_status(loaded);
@@ -2282,24 +2320,37 @@ impl StudioState {
     }
 
     pub(super) fn handle_helper_unfocused_escape(&mut self) {
+        if !self.try_helper_unfocused_toggle() {
+            self.status = "Helper focus toggle unavailable: no selected segment.".to_string();
+        }
+    }
+
+    pub(super) fn handle_helper_toggle_playback(&mut self) {
+        if !self.try_helper_unfocused_toggle() {
+            self.toggle_playback();
+        }
+    }
+
+    fn try_helper_unfocused_toggle(&mut self) -> bool {
         if self.editor.as_ref().is_some_and(|editor| editor.is_playing) {
             self.restore_helper_focus_for_current_playhead();
             self.set_playback_paused(true);
-            return;
+            return true;
         }
 
-        let Some(segment_id) = self
-            .helper_segment_id_at_playhead()
-            .or_else(|| self.editor.as_ref()?.selected_segment_id.clone())
-        else {
-            self.status = "Helper focus toggle unavailable: no selected segment.".to_string();
-            return;
+        let Some(segment_id) = self.helper_segment_id_at_playhead().or_else(|| {
+            self.editor
+                .as_ref()
+                .and_then(|editor| editor.selected_segment_id.clone())
+        }) else {
+            return false;
         };
 
         self.helper_focus_restore_pending =
             self.helper_focus_restore_for_segment(&segment_id, true, None);
         self.helper_focused_segment_id = None;
         self.set_playback_paused(false);
+        true
     }
 
     pub(super) fn adjust_playback_speed(&mut self, direction: i32) {
@@ -2506,10 +2557,17 @@ impl StudioState {
 
     fn helper_segment_id_at_playhead(&self) -> Option<String> {
         let project = self.project()?;
-        let playhead = self.editor.as_ref()?.playhead_seconds;
+        let editor = self.editor.as_ref()?;
+        let playhead = editor.playhead_seconds;
         project
             .segments
             .iter()
+            .filter(|segment| match &editor.track_filter {
+                TrackFilter::All => true,
+                TrackFilter::Lane { id, .. } => id == &segment.lane_id,
+            })
+            .filter(|segment| !editor.collapsed_lane_ids.contains(&segment.lane_id))
+            .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
             .filter(|segment| segment.start_seconds <= playhead && playhead < segment.end_seconds)
             .min_by(|left, right| {
                 left.start_seconds
@@ -2657,6 +2715,7 @@ impl StudioState {
             self.dashboard.error = Some("Project is no longer available.".to_string());
             return false;
         };
+        self.dashboard.project_id = project.id;
         self.dashboard.chunked_queue_id = project.chunked_queue_id;
         self.dashboard.stitched_queue_id = project.stitched_queue_id;
         self.begin_dashboard_claim_next_task()
@@ -2755,6 +2814,11 @@ impl StudioState {
         let Some(metadata) = metadata else {
             return;
         };
+        if self.dashboard.project_id.is_empty()
+            && let Some(value) = metadata.get(META_BABEL_PROJECT_ID)
+        {
+            self.dashboard.project_id = value.clone();
+        }
         if self.dashboard.chunked_queue_id.is_empty()
             && let Some(value) = metadata.get(META_CHUNKED_QUEUE_ID)
         {
@@ -2779,6 +2843,10 @@ impl StudioState {
 
     fn merge_dashboard_route_metadata(&mut self) {
         let mut entries = Vec::new();
+        let project_id = self.dashboard.project_id.trim();
+        if !project_id.is_empty() {
+            entries.push((META_BABEL_PROJECT_ID.to_string(), project_id.to_string()));
+        }
         let chunked_queue_id = self.dashboard.chunked_queue_id.trim();
         if !chunked_queue_id.is_empty() {
             entries.push((
@@ -3355,7 +3423,49 @@ impl StudioState {
         self.hover_lane_vertical_zoom_slider(lane_id, fraction);
     }
 
-    pub(super) fn press_lane_vertical_zoom_slider(&mut self, lane_id: &str) {
+    pub(super) fn press_lane_vertical_zoom_slider(&mut self, lane_id: &str) -> bool {
+        self.press_lane_vertical_zoom_slider_at(lane_id, Instant::now())
+    }
+
+    pub(in crate::app) fn press_lane_vertical_zoom_slider_at(
+        &mut self,
+        lane_id: &str,
+        at: Instant,
+    ) -> bool {
+        let is_double_click = self
+            .last_lane_vertical_zoom_slider_press
+            .as_ref()
+            .is_some_and(|press| {
+                press.lane_id == lane_id
+                    && at
+                        .checked_duration_since(press.at)
+                        .is_some_and(|elapsed| elapsed <= BABEL_TRACK_CELL_DOUBLE_CLICK_WINDOW)
+            });
+        if is_double_click {
+            let zoom_before = self
+                .last_lane_vertical_zoom_slider_press
+                .take()
+                .and_then(|press| press.zoom_before)
+                .unwrap_or(DEFAULT_LANE_VERTICAL_ZOOM);
+            // Undo the click-to-set jump from the first press and hand the
+            // exact value over to a typed input instead.
+            self.with_editor_mut(|editor| editor.set_lane_vertical_zoom(lane_id, zoom_before));
+            self.release_lane_vertical_zoom_slider();
+            self.lane_vertical_zoom_input = Some(LaneVerticalZoomInput {
+                lane_id: lane_id.to_string(),
+                value: format!("{zoom_before}"),
+            });
+            return true;
+        }
+
+        self.last_lane_vertical_zoom_slider_press = Some(LaneVerticalZoomSliderPress {
+            lane_id: lane_id.to_string(),
+            at,
+            zoom_before: self
+                .editor
+                .as_ref()
+                .and_then(|editor| editor.lane_vertical_zoom.get(lane_id).copied()),
+        });
         self.active_lane_vertical_zoom_slider_id = Some(lane_id.to_string());
         if self
             .lane_vertical_zoom_slider_drag_capture
@@ -3372,6 +3482,38 @@ impl StudioState {
         {
             self.set_lane_vertical_zoom_from_slider_fraction(lane_id, fraction);
         }
+        false
+    }
+
+    pub(super) fn change_lane_vertical_zoom_input(&mut self, value: String) {
+        if let Some(input) = self.lane_vertical_zoom_input.as_mut() {
+            input.value = value;
+        }
+    }
+
+    pub(super) fn submit_lane_vertical_zoom_input(&mut self) {
+        let Some(input) = self.lane_vertical_zoom_input.clone() else {
+            return;
+        };
+        let raw = input
+            .value
+            .trim()
+            .trim_end_matches(['x', 'X'])
+            .trim()
+            .replace(',', ".");
+        let Some(value) = raw.parse::<f32>().ok().filter(|value| value.is_finite()) else {
+            self.status = format!("Vertical zoom `{}` is not a number.", input.value);
+            return;
+        };
+        let clamped = value.clamp(LANE_VERTICAL_ZOOM_SLIDER_MIN, LANE_VERTICAL_ZOOM_SLIDER_MAX);
+        self.with_editor_mut(|editor| editor.set_lane_vertical_zoom(&input.lane_id, clamped));
+        self.persist_timeline_defaults();
+        self.lane_vertical_zoom_input = None;
+        self.status = format!("Lane vertical zoom set to {clamped}x.");
+    }
+
+    pub(super) fn cancel_lane_vertical_zoom_input(&mut self) -> bool {
+        self.lane_vertical_zoom_input.take().is_some()
     }
 
     pub(super) fn release_lane_vertical_zoom_slider(&mut self) {
@@ -3479,25 +3621,31 @@ impl StudioState {
         let Some(fraction) = self.overview_hover_fraction else {
             return;
         };
-        if self.overview_fraction_is_inside_viewport(fraction) {
-            self.overview_drag_active = true;
-            if self.overview_drag_capture.is_none() {
-                self.refresh_overview_drag_capture();
-            }
-            self.drag_overview_viewport(fraction);
-        } else {
+        if !self.overview_fraction_is_inside_viewport(fraction) {
+            // Track click: jump the viewport under the pointer first, then keep
+            // dragging it like a regular thumb grab.
             self.seek_overview_fraction(fraction);
         }
+        self.overview_drag_active = true;
+        self.overview_drag_grab_offset_fraction = self.overview_grab_offset_fraction(fraction);
+        if self.overview_drag_capture.is_none() {
+            self.refresh_overview_drag_capture();
+        }
+        // The grab offset makes a drag at the press fraction a no-op, so the
+        // viewport only starts moving with the first pointer move.
     }
 
     pub(super) fn release_overview(&mut self) {
         self.overview_drag_active = false;
+        self.overview_drag_grab_offset_fraction = 0.0;
         self.overview_drag_capture = None;
     }
 
     pub(super) fn pointer_capture_subscription_active(&self) -> bool {
         self.overview_pointer_sample.is_some()
             || self.overview_drag_active
+            || self.timeline_scrollbar_pointer_sample.is_some()
+            || self.timeline_scrollbar_drag_offset_fraction.is_some()
             || self.lane_vertical_zoom_slider_pointer_sample.is_some()
             || self.active_lane_vertical_zoom_slider_id.is_some()
     }
@@ -3516,6 +3664,19 @@ impl StudioState {
             }
         } else {
             self.refresh_overview_drag_capture();
+        }
+
+        if let Some(grab_offset_fraction) = self.timeline_scrollbar_drag_offset_fraction {
+            if self.timeline_scrollbar_drag_capture.is_none() {
+                self.refresh_timeline_scrollbar_drag_capture();
+            }
+            if let Some(capture) = self.timeline_scrollbar_drag_capture {
+                let fraction = capture.fraction_at(position.x);
+                self.timeline_scrollbar_hover_fraction = Some(fraction);
+                self.drag_timeline_scrollbar_thumb(fraction, grab_offset_fraction);
+            }
+        } else {
+            self.refresh_timeline_scrollbar_drag_capture();
         }
 
         if let Some(lane_id) = self.active_lane_vertical_zoom_slider_id.clone() {
@@ -3578,17 +3739,57 @@ impl StudioState {
         }
     }
 
+    pub(super) fn hover_timeline_scrollbar_with_geometry(&mut self, fraction: f32, width: f32) {
+        let fraction = sanitize_fraction(fraction);
+        self.timeline_scrollbar_pointer_sample = Some(OverviewPointerSample {
+            fraction,
+            width: width.max(1.0),
+        });
+        if self.timeline_scrollbar_drag_offset_fraction.is_none()
+            || self.timeline_scrollbar_drag_capture.is_none()
+        {
+            self.refresh_timeline_scrollbar_drag_capture();
+        }
+        self.hover_timeline_scrollbar(fraction);
+    }
+
+    pub(super) fn exit_timeline_scrollbar(&mut self) {
+        if self.timeline_scrollbar_drag_offset_fraction.is_none() {
+            self.timeline_scrollbar_hover_fraction = None;
+            self.timeline_scrollbar_pointer_sample = None;
+            self.timeline_scrollbar_drag_capture = None;
+        }
+    }
+
     pub(super) fn press_timeline_scrollbar(&mut self) {
         let Some(fraction) = self.timeline_scrollbar_hover_fraction else {
             return;
         };
         let grab_offset_fraction = self.timeline_scrollbar_grab_offset_fraction(fraction);
         self.timeline_scrollbar_drag_offset_fraction = Some(grab_offset_fraction);
+        if self.timeline_scrollbar_drag_capture.is_none() {
+            self.refresh_timeline_scrollbar_drag_capture();
+        }
         self.drag_timeline_scrollbar_thumb(fraction, grab_offset_fraction);
     }
 
     pub(super) fn release_timeline_scrollbar(&mut self) {
         self.timeline_scrollbar_drag_offset_fraction = None;
+        self.timeline_scrollbar_drag_capture = None;
+    }
+
+    fn refresh_timeline_scrollbar_drag_capture(&mut self) {
+        let (Some(position), Some(sample)) = (
+            self.last_global_pointer_position,
+            self.timeline_scrollbar_pointer_sample,
+        ) else {
+            return;
+        };
+        self.timeline_scrollbar_drag_capture = Some(DragAxisCapture::from_pointer_sample(
+            position.x,
+            sample.fraction,
+            sample.width,
+        ));
     }
 
     fn drag_timeline_scrollbar_thumb(&mut self, fraction: f32, grab_offset_fraction: f32) {
@@ -3645,19 +3846,39 @@ impl StudioState {
         let Some(project) = self.project().cloned() else {
             return;
         };
+        let grab_offset_fraction = if self.overview_drag_active {
+            self.overview_drag_grab_offset_fraction
+        } else {
+            0.0
+        };
         self.with_editor_mut(|editor| {
-            editor.set_overview_viewport_start_fraction(&project, fraction);
+            editor.drag_timeline_scrollbar_thumb(&project, fraction, grab_offset_fraction);
         });
     }
 
-    fn overview_fraction_is_inside_viewport(&self, fraction: f32) -> bool {
+    fn overview_viewport_fractions(&self) -> Option<(f32, f32)> {
         let (Some(project), Some(editor)) = (self.project(), self.editor.as_ref()) else {
-            return false;
+            return None;
         };
         let overview = self.overview_waveform_snapshot_for_render(project, editor);
-        let left = overview.overview.viewport_left_percent / 100.0;
-        let right = left + overview.overview.viewport_width_percent / 100.0;
-        left <= fraction && fraction <= right
+        Some((
+            overview.overview.viewport_left_percent / 100.0,
+            (overview.overview.viewport_width_percent / 100.0).max(0.0),
+        ))
+    }
+
+    fn overview_fraction_is_inside_viewport(&self, fraction: f32) -> bool {
+        let Some((left, width)) = self.overview_viewport_fractions() else {
+            return false;
+        };
+        left <= fraction && fraction <= left + width
+    }
+
+    fn overview_grab_offset_fraction(&self, fraction: f32) -> f32 {
+        let Some((left, width)) = self.overview_viewport_fractions() else {
+            return 0.0;
+        };
+        (fraction - left).clamp(0.0, width)
     }
 
     pub(super) fn load_lane_waveforms_from_base(&mut self, base: impl AsRef<Path>) -> usize {
@@ -4431,6 +4652,7 @@ fn overview_waveform_with_dynamic_state(
         waveform_model: cached.waveform_model.clone(),
         lane_waveform_models: Arc::clone(&cached.lane_waveform_models),
         blocks: Arc::clone(&cached.blocks),
+        block_lane_rows: cached.block_lane_rows,
         peak_source: cached.peak_source,
         viewport_left_percent: percent_of_range_for_overview(
             editor.viewport.start_seconds,
