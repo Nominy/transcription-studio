@@ -51,6 +51,11 @@ use super::startup_route::{
     META_DISPLAY_FEEDBACK, META_FEEDBACK_INITIAL_OPEN, META_TASK_LOOKUP_PROCESSED_ID,
     META_TASK_LOOKUP_REVIEW_ACTION_ID,
 };
+use super::subaccounts::{
+    ManagedSubaccount, SubaccountOwnerDashboard, SubaccountOwnerRequest, SubaccountSession,
+    clear_default_subaccount_session, default_subaccount_relay_host_url,
+    dispatch_subaccount_owner_requests, read_default_subaccount_session,
+};
 use super::tag_suggestions::{self, TagSuggestionKeyboardAction};
 use super::transcript_virtualization::{
     DEFAULT_TRANSCRIPT_VIEWPORT_HEIGHT, TRANSCRIPT_VIRTUAL_OVERSCAN_VIEWPORTS,
@@ -73,7 +78,7 @@ const RECOVERED_FIXTURE_AUDIO_DIR: &str = concat!(
     "/../studio-babel/tests/fixtures/recovered/babel-fixture"
 );
 pub(super) const SUPPORT_ID_COPIED_RESET_DELAY_MS: u64 = 2000;
-const TIMELINE_SCROLLBAR_MIN_THUMB_FRACTION: f32 = 0.024;
+pub(super) const TIMELINE_SCROLLBAR_MIN_THUMB_FRACTION: f32 = 0.024;
 const LANE_VERTICAL_ZOOM_SLIDER_MIN: f32 = 0.3;
 const LANE_VERTICAL_ZOOM_SLIDER_MAX: f32 = 1000.0;
 const DEFAULT_LANE_VERTICAL_ZOOM: f32 = 20.0;
@@ -136,6 +141,14 @@ pub(super) enum AppSurface {
     Editor,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum DashboardSection {
+    #[default]
+    Projects,
+    Subaccounts,
+    Settings,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeCapabilityModalTab {
     Reviewer,
@@ -144,6 +157,7 @@ pub(super) enum NativeCapabilityModalTab {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct DashboardState {
+    pub(super) section: DashboardSection,
     pub(super) projects: Vec<DashboardProject>,
     pub(super) project_id: String,
     pub(super) chunked_queue_id: String,
@@ -160,6 +174,25 @@ pub(super) struct DashboardProject {
     pub(super) name: String,
     pub(super) chunked_queue_id: String,
     pub(super) stitched_queue_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct SubaccountOwnerPanelState {
+    pub(super) host_url: String,
+    pub(super) create_label: String,
+    pub(super) assignment_drafts: BTreeMap<String, String>,
+    pub(super) is_pending: bool,
+    pub(super) error: Option<String>,
+    pub(super) subaccounts: Vec<ManagedSubaccount>,
+}
+
+impl SubaccountOwnerPanelState {
+    fn with_default_host() -> Self {
+        Self {
+            host_url: default_subaccount_relay_host_url(),
+            ..Self::default()
+        }
+    }
 }
 
 pub(super) fn timeline_loop_runtime_trace_line(
@@ -436,6 +469,8 @@ pub(super) struct HelperGhostCursorView {
 pub(super) struct StudioState {
     pub(super) app_surface: AppSurface,
     pub(super) native_auth_flow: Option<NativeAuthFlowState>,
+    pub(super) subaccount_session: Option<SubaccountSession>,
+    pub(super) subaccount_owner: SubaccountOwnerPanelState,
     pub(super) dashboard: DashboardState,
     pub(super) updater: UpdatePanelState,
     pub(super) workflow: Result<StudioWorkflow, String>,
@@ -513,6 +548,8 @@ pub(super) struct StudioState {
     pub(super) dispatched_babel_service_requests: Vec<BabelServiceRequest>,
     pub(super) review_backend_requests: Vec<ReviewBackendRequest>,
     pub(super) dispatched_review_backend_requests: Vec<ReviewBackendRequest>,
+    pub(super) subaccount_owner_requests: Vec<SubaccountOwnerRequest>,
+    pub(super) dispatched_subaccount_owner_requests: Vec<SubaccountOwnerRequest>,
     pub(super) native_capability_panel_open: bool,
     pub(super) native_capability_modal_tab: NativeCapabilityModalTab,
     pub(super) reviewer_session_id: String,
@@ -594,6 +631,8 @@ impl Default for StudioState {
         let mut state = Self {
             app_surface: AppSurface::Dashboard,
             native_auth_flow: None,
+            subaccount_session: None,
+            subaccount_owner: SubaccountOwnerPanelState::with_default_host(),
             dashboard: DashboardState::default(),
             updater: UpdatePanelState::default(),
             workflow,
@@ -670,6 +709,8 @@ impl Default for StudioState {
             dispatched_babel_service_requests: Vec::new(),
             review_backend_requests: Vec::new(),
             dispatched_review_backend_requests: Vec::new(),
+            subaccount_owner_requests: Vec::new(),
+            dispatched_subaccount_owner_requests: Vec::new(),
             native_capability_panel_open: false,
             native_capability_modal_tab: NativeCapabilityModalTab::Reviewer,
             reviewer_session_id: String::new(),
@@ -1715,6 +1756,27 @@ impl StudioState {
         dispatch_review_backend_requests(new_requests)
     }
 
+    pub(super) fn dispatch_new_subaccount_owner_requests(&mut self) -> Task<Message> {
+        if self.native_auth_flow_blocks_service_dispatch() {
+            return Task::none();
+        }
+
+        let new_requests: Vec<_> = self
+            .subaccount_owner_requests
+            .iter()
+            .filter(|request| !self.dispatched_subaccount_owner_requests.contains(request))
+            .cloned()
+            .collect();
+
+        if new_requests.is_empty() {
+            return Task::none();
+        }
+
+        self.dispatched_subaccount_owner_requests
+            .extend(new_requests.iter().cloned());
+        dispatch_subaccount_owner_requests(new_requests)
+    }
+
     pub(super) fn transcript_rows_for_render(
         &self,
         project: &Project,
@@ -2603,6 +2665,9 @@ impl StudioState {
             if flow.can_submit_code() {
                 return Some(Message::NativeAuthVerifyLogin);
             }
+            if flow.can_submit_subaccount_login() {
+                return Some(Message::NativeAuthSubaccountLogin);
+            }
             if flow.can_start_login() {
                 return Some(Message::NativeAuthStartLogin);
             }
@@ -2629,6 +2694,24 @@ impl StudioState {
     }
 
     pub(super) fn open_native_auth_gate_from_store(&mut self) {
+        match read_default_subaccount_session() {
+            Ok(Some(session)) => {
+                self.subaccount_session = Some(session);
+                self.native_auth_flow = None;
+                if self.app_surface == AppSurface::Dashboard {
+                    self.queue_dashboard_projects_refresh();
+                }
+                return;
+            }
+            Ok(None) => {
+                self.subaccount_session = None;
+            }
+            Err(error) => {
+                self.subaccount_session = None;
+                self.status = format!("Sub-account session ignored: {error}");
+            }
+        }
+
         match NativeAuthFlowState::startup_from_default_store() {
             NativeAuthStartup::Authenticated => {
                 self.native_auth_flow = None;
@@ -2655,13 +2738,21 @@ impl StudioState {
     pub(super) fn enter_dashboard(&mut self) {
         self.app_surface = AppSurface::Dashboard;
         self.dashboard.is_pending = false;
-        self.status = "Babel dashboard ready.".to_string();
+        self.status = if self.subaccount_session.is_some() {
+            "Sub-account dashboard ready.".to_string()
+        } else {
+            "Babel dashboard ready.".to_string()
+        };
     }
 
     pub(super) fn queue_dashboard_projects_refresh(&mut self) {
         self.dashboard.is_pending = true;
         self.dashboard.error = None;
-        self.status = "Loading Babel projects...".to_string();
+        self.status = if self.subaccount_session.is_some() {
+            "Loading assigned projects...".to_string()
+        } else {
+            "Loading Babel projects...".to_string()
+        };
         self.drain_babel_service_requests_matching(|request| {
             matches!(request, BabelServiceRequest::LoadWorkerProjects)
         });
@@ -2678,9 +2769,15 @@ impl StudioState {
             Ok(projects) => {
                 self.dashboard.projects = projects;
                 self.dashboard.error = None;
+                let label = if self.subaccount_session.is_some() {
+                    "assigned project"
+                } else {
+                    "Babel project"
+                };
                 self.status = format!(
-                    "Loaded {} Babel project{}.",
+                    "Loaded {} {}{}.",
                     self.dashboard.projects.len(),
+                    label,
                     if self.dashboard.projects.len() == 1 {
                         ""
                     } else {
@@ -2690,7 +2787,11 @@ impl StudioState {
             }
             Err(error) => {
                 self.dashboard.error = Some(error.clone());
-                self.status = format!("Babel projects load failed: {error}");
+                self.status = if self.subaccount_session.is_some() {
+                    format!("Assigned projects load failed: {error}")
+                } else {
+                    format!("Babel projects load failed: {error}")
+                };
             }
         }
     }
@@ -2701,7 +2802,11 @@ impl StudioState {
         });
         self.dashboard.is_pending = false;
         self.dashboard.error = Some(error.clone());
-        self.status = format!("Babel projects load failed: {error}");
+        self.status = if self.subaccount_session.is_some() {
+            format!("Assigned projects load failed: {error}")
+        } else {
+            format!("Babel projects load failed: {error}")
+        };
     }
 
     pub(super) fn begin_dashboard_start_project(&mut self, project_id: &str) -> bool {
@@ -2807,6 +2912,223 @@ impl StudioState {
                 },
             ));
         true
+    }
+
+    pub(super) fn set_subaccount_session(&mut self, session: SubaccountSession) {
+        self.subaccount_session = Some(session);
+        self.native_auth_flow = None;
+        self.enter_dashboard();
+        self.queue_dashboard_projects_refresh();
+    }
+
+    pub(super) fn clear_subaccount_session(&mut self) -> Result<(), String> {
+        clear_default_subaccount_session()?;
+        self.subaccount_session = None;
+        self.open_native_auth_gate_from_store();
+        Ok(())
+    }
+
+    pub(super) fn open_subaccount_login(&mut self) {
+        self.native_auth_flow = Some(NativeAuthFlowState::subaccount_login_prompt());
+        self.app_surface = AppSurface::Dashboard;
+        self.status = "Sub-account sign-in required.".to_string();
+    }
+
+    pub(super) fn set_dashboard_section(&mut self, section: DashboardSection) {
+        self.dashboard.section = section;
+        if section == DashboardSection::Subaccounts
+            && self.subaccount_session.is_none()
+            && self.subaccount_owner.subaccounts.is_empty()
+            && !self.subaccount_owner.is_pending
+            && !self.subaccount_owner.host_url.trim().is_empty()
+        {
+            self.queue_subaccount_owner_refresh();
+        }
+    }
+
+    pub(super) fn toggle_subaccount_owner_project_assignment(
+        &mut self,
+        subaccount_id: &str,
+        project_id: &str,
+        selected: bool,
+    ) {
+        if self.subaccount_owner.is_pending {
+            return;
+        }
+        let subaccount_id = subaccount_id.trim();
+        let project_id = project_id.trim();
+        if subaccount_id.is_empty() || project_id.is_empty() {
+            return;
+        }
+
+        let known_project_ids = self
+            .dashboard
+            .projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>();
+        let mut project_ids = self
+            .subaccount_owner
+            .assignment_drafts
+            .get(subaccount_id)
+            .map(|draft| parse_project_assignment_csv(draft))
+            .unwrap_or_default();
+        if project_ids.is_empty() && !selected {
+            project_ids = known_project_ids.clone();
+        }
+
+        if selected {
+            if !project_ids.iter().any(|id| id == project_id) {
+                project_ids.push(project_id.to_string());
+            }
+        } else {
+            project_ids.retain(|id| id != project_id);
+        }
+
+        let mut seen = BTreeSet::new();
+        project_ids.retain(|id| seen.insert(id.clone()));
+        project_ids.sort_by_key(|id| {
+            known_project_ids
+                .iter()
+                .position(|known| known == id)
+                .unwrap_or(usize::MAX)
+        });
+        if !known_project_ids.is_empty()
+            && project_ids.len() == known_project_ids.len()
+            && project_ids
+                .iter()
+                .all(|id| known_project_ids.iter().any(|known| known == id))
+        {
+            project_ids.clear();
+        }
+        self.subaccount_owner
+            .assignment_drafts
+            .insert(subaccount_id.to_string(), project_ids.join(", "));
+        self.subaccount_owner.error = None;
+    }
+
+    pub(super) fn queue_subaccount_owner_refresh(&mut self) -> bool {
+        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        if host_url.is_empty() {
+            self.subaccount_owner.error = Some("Relay host URL is required.".to_string());
+            self.status = "Sub-account owner refresh blocked: missing relay host URL.".to_string();
+            return false;
+        }
+        self.subaccount_owner.is_pending = true;
+        self.subaccount_owner.error = None;
+        self.status = "Loading Sub-account dashboard...".to_string();
+        self.subaccount_owner_requests
+            .push(SubaccountOwnerRequest::LoadDashboard { host_url });
+        true
+    }
+
+    pub(super) fn begin_subaccount_owner_create(&mut self) -> bool {
+        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        let label = self.subaccount_owner.create_label.trim().to_string();
+        if host_url.is_empty() || label.is_empty() {
+            self.subaccount_owner.error =
+                Some("Relay host URL and sub-account label are required.".to_string());
+            self.status = "Sub-account create blocked: missing host URL or label.".to_string();
+            return false;
+        }
+        self.subaccount_owner.is_pending = true;
+        self.subaccount_owner.error = None;
+        self.status = "Creating Sub-account...".to_string();
+        self.subaccount_owner_requests
+            .push(SubaccountOwnerRequest::Create { host_url, label });
+        true
+    }
+
+    pub(super) fn begin_subaccount_owner_revoke(&mut self, subaccount_id: &str) -> bool {
+        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        if host_url.is_empty() || subaccount_id.trim().is_empty() {
+            self.subaccount_owner.error =
+                Some("Relay host URL and sub-account ID are required.".to_string());
+            self.status = "Sub-account revoke blocked: missing host URL or ID.".to_string();
+            return false;
+        }
+        self.subaccount_owner.is_pending = true;
+        self.subaccount_owner.error = None;
+        self.status = "Revoking Sub-account...".to_string();
+        self.subaccount_owner_requests
+            .push(SubaccountOwnerRequest::Revoke {
+                host_url,
+                subaccount_id: subaccount_id.trim().to_string(),
+            });
+        true
+    }
+
+    pub(super) fn begin_subaccount_owner_assignment(&mut self, subaccount_id: &str) -> bool {
+        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        let draft = self
+            .subaccount_owner
+            .assignment_drafts
+            .get(subaccount_id)
+            .cloned()
+            .unwrap_or_default();
+        let project_ids = parse_project_assignment_csv(&draft);
+        if host_url.is_empty() || subaccount_id.trim().is_empty() {
+            self.subaccount_owner.error =
+                Some("Relay host URL and sub-account ID are required.".to_string());
+            self.status =
+                "Sub-account project assignment blocked: missing host URL or ID.".to_string();
+            return false;
+        }
+        self.subaccount_owner.is_pending = true;
+        self.subaccount_owner.error = None;
+        self.status = "Saving Sub-account project assignment...".to_string();
+        self.subaccount_owner_requests
+            .push(SubaccountOwnerRequest::AssignProjects {
+                host_url,
+                subaccount_id: subaccount_id.trim().to_string(),
+                project_ids,
+            });
+        true
+    }
+
+    pub(super) fn complete_subaccount_owner_dashboard(
+        &mut self,
+        dashboard: SubaccountOwnerDashboard,
+    ) {
+        self.subaccount_owner_requests.clear();
+        self.dispatched_subaccount_owner_requests.clear();
+        self.subaccount_owner.is_pending = false;
+        self.subaccount_owner.error = None;
+        self.subaccount_owner.subaccounts = dashboard.subaccounts;
+        self.sync_subaccount_owner_assignment_drafts();
+        self.subaccount_owner.create_label.clear();
+        self.status = format!(
+            "Loaded {} Sub-account{}.",
+            self.subaccount_owner.subaccounts.len(),
+            if self.subaccount_owner.subaccounts.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    }
+
+    pub(super) fn fail_subaccount_owner_request(&mut self, error: String) {
+        self.subaccount_owner_requests.clear();
+        self.dispatched_subaccount_owner_requests.clear();
+        self.subaccount_owner.is_pending = false;
+        self.subaccount_owner.error = Some(error.clone());
+        self.status = format!("Sub-account request failed: {error}");
+    }
+
+    pub(super) fn sync_subaccount_owner_assignment_drafts(&mut self) {
+        let subaccounts = self.subaccount_owner.subaccounts.clone();
+        self.subaccount_owner.assignment_drafts.retain(|id, _| {
+            subaccounts
+                .iter()
+                .any(|subaccount| subaccount.id.as_str() == id.as_str())
+        });
+        for subaccount in subaccounts {
+            self.subaccount_owner
+                .assignment_drafts
+                .entry(subaccount.id)
+                .or_insert_with(|| subaccount.allowed_project_ids.join(", "));
+        }
     }
 
     fn refresh_dashboard_from_project_metadata(&mut self) {
@@ -3086,7 +3408,7 @@ impl StudioState {
         self.large_project_live_pan_frame = self.large_project_live_pan_frame.wrapping_add(1);
         let delta = if pan_phase < 12 { 1.0 } else { -1.0 };
         self.with_project_and_editor_mut(|project, editor| {
-            editor.pan_viewport_by_scroll_delta(project, delta);
+            editor.pan_viewport_by_wheel_pixels(project, delta);
         });
     }
 
@@ -4790,6 +5112,15 @@ fn audio_playback_trace_enabled() -> bool {
 
 fn audio_playback_startup_trace_enabled() -> bool {
     std::env::var_os(AUDIO_STARTUP_TRACE_ENV).is_some_and(|value| value != "0")
+}
+
+fn parse_project_assignment_csv(source: &str) -> Vec<String> {
+    source
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn dashboard_projects_from_payload(source: &str) -> Result<Vec<DashboardProject>, String> {

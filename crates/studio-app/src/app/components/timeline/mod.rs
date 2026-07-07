@@ -16,6 +16,7 @@ use super::super::StudioState;
 use super::super::styles::editor_band_style;
 use super::create_region_dialog;
 use super::timed_widget::view_timed;
+const TIMELINE_WHEEL_LINE_PIXELS: f32 = 60.0;
 
 pub(super) fn view_timeline<'a>(
     state: &'a StudioState,
@@ -89,10 +90,37 @@ pub(super) fn view_timeline<'a>(
             .style(editor_band_style),
     )
     .on_scroll(|delta| {
-        let (delta_x, delta_y) = match delta {
-            mouse::ScrollDelta::Lines { x, y } | mouse::ScrollDelta::Pixels { x, y } => (x, y),
-        };
+        let (delta_x, delta_y) = timeline_wheel_delta_pixels(delta);
         Message::TimelineWheelScrolled { delta_x, delta_y }
     })
     .into()
+}
+
+fn timeline_wheel_delta_pixels(delta: mouse::ScrollDelta) -> (f32, f32) {
+    match delta {
+        mouse::ScrollDelta::Lines { x, y } => (
+            x * TIMELINE_WHEEL_LINE_PIXELS,
+            y * TIMELINE_WHEEL_LINE_PIXELS,
+        ),
+        mouse::ScrollDelta::Pixels { x, y } => (x, y),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::mouse;
+
+    use super::timeline_wheel_delta_pixels;
+
+    #[test]
+    fn wheel_lines_normalize_to_pixels_while_pixel_deltas_pass_through() {
+        assert_eq!(
+            timeline_wheel_delta_pixels(mouse::ScrollDelta::Lines { x: 1.5, y: -2.0 }),
+            (90.0, -120.0)
+        );
+        assert_eq!(
+            timeline_wheel_delta_pixels(mouse::ScrollDelta::Pixels { x: 1.25, y: -0.5 }),
+            (1.25, -0.5)
+        );
+    }
 }

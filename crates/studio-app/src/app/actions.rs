@@ -11,7 +11,7 @@ use super::components::{
 };
 use super::diff_smoke::{diff_workbench_renderer_screenshot_task, diff_workbench_smoke_mode};
 use super::find;
-use super::formatting::{parse_speed, zoom_factor_after_babel_wheel_delta};
+use super::formatting::{parse_speed, zoom_factor_after_timeline_wheel_pixels};
 use super::large_project_smoke::{
     large_project_renderer_screenshot_task, large_project_smoke_enabled,
 };
@@ -21,6 +21,7 @@ use super::native_auth::{
 };
 use super::native_auth_cli::native_babel_url;
 use super::state::HelperFocusRestore;
+use super::subaccounts::login_with_subaccount_code;
 use super::tag_suggestions;
 use super::updater::{check_for_updates, install_available_update};
 use super::workbench_shell_smoke::{
@@ -86,7 +87,7 @@ pub(super) fn timeline_wheel_runtime_trace_line(
     current_viewport: TimeRange,
 ) -> String {
     format!(
-        "Transcription Studio timeline wheel: route={route} delta_x={delta_x:.3} delta_y={delta_y:.3} zoom={previous_zoom:.3}->{current_zoom:.3} viewport={:.3}-{:.3}s->{:.3}-{:.3}s",
+        "Transcription Studio timeline wheel: route={route} delta_x_px={delta_x:.3} delta_y_px={delta_y:.3} zoom={previous_zoom:.3}->{current_zoom:.3} viewport={:.3}-{:.3}s->{:.3}-{:.3}s",
         previous_viewport.start_seconds,
         previous_viewport.end_seconds,
         current_viewport.start_seconds,
@@ -337,6 +338,122 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                     }
                 }
             }
+        }
+        Message::NativeAuthUseSubaccountMode => {
+            if state
+                .native_auth_flow
+                .as_ref()
+                .is_none_or(|flow| !flow.is_pending)
+            {
+                state.open_subaccount_login();
+            }
+        }
+        Message::NativeAuthUseBabelMode => {
+            if state
+                .native_auth_flow
+                .as_ref()
+                .is_none_or(|flow| !flow.is_pending)
+            {
+                state.native_auth_flow = Some(NativeAuthFlowState::login_prompt());
+                state.status = "Babel sign-in selected.".to_string();
+            }
+        }
+        Message::NativeAuthSubaccountHostChanged(host_url) => {
+            if let Some(flow) = state.native_auth_flow.as_mut()
+                && !flow.is_pending
+            {
+                flow.subaccount_host_url = host_url;
+                flow.error = None;
+            }
+        }
+        Message::NativeAuthSubaccountCodeChanged(code) => {
+            if let Some(flow) = state.native_auth_flow.as_mut()
+                && !flow.is_pending
+            {
+                flow.subaccount_code = code;
+                flow.error = None;
+            }
+        }
+        Message::NativeAuthSubaccountLogin => {
+            if let Some(flow) = state.native_auth_flow.as_mut() {
+                if !flow.can_submit_subaccount_login() {
+                    return dispatch_pending_services(state, Task::none());
+                }
+                let host_url = flow.subaccount_host_url.trim().to_string();
+                let code = flow.subaccount_code.trim().to_string();
+                flow.is_pending = true;
+                flow.error = None;
+                state.status = "Signing in to Sub-account relay...".to_string();
+                return dispatch_pending_services(
+                    state,
+                    Task::perform(
+                        login_with_subaccount_code(host_url, code),
+                        Message::NativeAuthSubaccountLoginFinished,
+                    ),
+                );
+            }
+        }
+        Message::NativeAuthSubaccountLoginFinished(result) => match result {
+            Ok(session) => {
+                state.set_subaccount_session(session);
+            }
+            Err(error) => {
+                if let Some(flow) = state.native_auth_flow.as_mut() {
+                    flow.is_pending = false;
+                    flow.error = Some(error.clone());
+                }
+                state.status = format!("Sub-account sign-in failed: {error}");
+            }
+        },
+        Message::SubaccountSignOut => {
+            if let Err(error) = state.clear_subaccount_session() {
+                state.status = format!("Sub-account sign-out failed: {error}");
+            }
+        }
+        Message::DashboardSectionChanged(section) => {
+            state.set_dashboard_section(section);
+        }
+        Message::SubaccountOwnerHostUrlChanged(value) => {
+            if !state.subaccount_owner.is_pending {
+                state.subaccount_owner.host_url = value;
+                state.subaccount_owner.error = None;
+            }
+        }
+        Message::SubaccountOwnerCreateLabelChanged(value) => {
+            if !state.subaccount_owner.is_pending {
+                state.subaccount_owner.create_label = value;
+                state.subaccount_owner.error = None;
+            }
+        }
+        Message::SubaccountOwnerRefresh => {
+            state.queue_subaccount_owner_refresh();
+        }
+        Message::SubaccountOwnerCreate => {
+            state.begin_subaccount_owner_create();
+        }
+        Message::SubaccountOwnerRevoke(subaccount_id) => {
+            state.begin_subaccount_owner_revoke(&subaccount_id);
+        }
+        Message::SubaccountOwnerAssignmentChanged(subaccount_id, value) => {
+            if !state.subaccount_owner.is_pending {
+                state
+                    .subaccount_owner
+                    .assignment_drafts
+                    .insert(subaccount_id, value);
+                state.subaccount_owner.error = None;
+            }
+        }
+        Message::SubaccountOwnerProjectToggled(subaccount_id, project_id, selected) => {
+            state.toggle_subaccount_owner_project_assignment(&subaccount_id, &project_id, selected);
+        }
+        Message::SubaccountOwnerSaveAssignment(subaccount_id) => {
+            state.begin_subaccount_owner_assignment(&subaccount_id);
+        }
+        Message::SubaccountOwnerDashboardLoaded(dashboard) => {
+            state.complete_subaccount_owner_dashboard(dashboard);
+        }
+        Message::SubaccountOwnerRequestFailed(error) => {
+            state.fail_subaccount_owner_request(error);
         }
         Message::DashboardRefreshProjects => state.queue_dashboard_projects_refresh(),
         Message::DashboardProjectsLoaded(source) => {
@@ -756,7 +873,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                     .as_ref()
                     .map(|hover| hover.hit.time_seconds);
                 let handled = state.with_project_and_editor_mut(|project, editor| {
-                    let zoom = zoom_factor_after_babel_wheel_delta(editor.zoom, delta_y);
+                    let zoom = zoom_factor_after_timeline_wheel_pixels(editor.zoom, delta_y);
                     if let Some(anchor_time_seconds) = anchor_time_seconds {
                         editor.set_zoom_around_time(project, zoom, anchor_time_seconds);
                     } else {
@@ -770,7 +887,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             } else if state.keyboard_modifiers.shift() {
                 let previous = timeline_wheel_trace_state(state);
                 let handled = state.with_project_and_editor_mut(|project, editor| {
-                    editor.pan_viewport_by_scroll_delta(project, delta_y);
+                    editor.pan_viewport_by_wheel_pixels(project, delta_y);
                 });
                 if handled {
                     trace_timeline_wheel_route(state, "shift-pan", delta_x, delta_y, previous);
@@ -778,7 +895,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             } else if delta_x != 0.0 {
                 let previous = timeline_wheel_trace_state(state);
                 let handled = state.with_project_and_editor_mut(|project, editor| {
-                    editor.pan_viewport_by_scroll_delta(project, delta_x);
+                    editor.pan_viewport_by_wheel_pixels(project, delta_x);
                 });
                 if handled {
                     trace_timeline_wheel_route(state, "horizontal-pan", delta_x, delta_y, previous);
@@ -1337,6 +1454,7 @@ fn dispatch_pending_services(state: &mut StudioState, task: Task<Message>) -> Ta
         task,
         state.dispatch_new_babel_service_requests(),
         state.dispatch_new_review_backend_requests(),
+        state.dispatch_new_subaccount_owner_requests(),
     ])
 }
 

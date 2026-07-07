@@ -8,7 +8,8 @@ use studio_waveform::WaveformHit;
 use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_input::OutsideInteractionContext;
 use super::review_backend_client::ReviewBackendRequest;
-use super::state::NativeCapabilityModalTab;
+use super::state::{DashboardSection, NativeCapabilityModalTab};
+use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
 use super::tag_suggestions::{TagSuggestion, TagSuggestionKeyboardAction};
 use super::time_edit::TimeField;
 use super::updater::UpdateCheckSummary;
@@ -82,6 +83,24 @@ pub(super) enum Message {
     NativeAuthVerifyLogin,
     NativeAuthVerifyLoginFinished(Result<(), String>),
     NativeAuthBackToLogin,
+    NativeAuthUseSubaccountMode,
+    NativeAuthUseBabelMode,
+    NativeAuthSubaccountHostChanged(String),
+    NativeAuthSubaccountCodeChanged(String),
+    NativeAuthSubaccountLogin,
+    NativeAuthSubaccountLoginFinished(Result<SubaccountSession, String>),
+    SubaccountSignOut,
+    DashboardSectionChanged(DashboardSection),
+    SubaccountOwnerHostUrlChanged(String),
+    SubaccountOwnerCreateLabelChanged(String),
+    SubaccountOwnerRefresh,
+    SubaccountOwnerCreate,
+    SubaccountOwnerRevoke(String),
+    SubaccountOwnerAssignmentChanged(String, String),
+    SubaccountOwnerSaveAssignment(String),
+    SubaccountOwnerProjectToggled(String, String, bool),
+    SubaccountOwnerDashboardLoaded(SubaccountOwnerDashboard),
+    SubaccountOwnerRequestFailed(String),
     DashboardRefreshProjects,
     DashboardProjectsLoaded(String),
     DashboardProjectsLoadFailed(String),

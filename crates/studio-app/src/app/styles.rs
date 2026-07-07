@@ -1,8 +1,16 @@
 use iced::widget::{button, container, slider, text_editor, text_input};
 use iced::{Background, Color, Theme, border};
 use studio_app::LintSeverity;
+const PERCENT_PORTION_SCALE: f32 = 100.0;
+
 pub(crate) fn portion(percent: f32) -> u16 {
-    percent.round().clamp(1.0, 1000.0) as u16
+    if !percent.is_finite() || percent <= 0.0 {
+        return 0;
+    }
+
+    (percent * PERCENT_PORTION_SCALE)
+        .round()
+        .clamp(1.0, 10_000.0) as u16
 }
 
 pub(crate) fn color_for_token(token: &str) -> Color {
@@ -593,7 +601,14 @@ mod tests {
     use iced::widget::button;
     use iced::{Background, Color, Theme};
 
-    use super::{outline_button_style, table_plain_button_style, transcript_row_style};
+    use super::{outline_button_style, portion, table_plain_button_style, transcript_row_style};
+
+    #[test]
+    fn portions_preserve_centipercent_steps_and_allow_zero_width() {
+        assert_eq!(portion(0.0), 0);
+        assert_eq!(portion(0.25), 25);
+        assert_eq!(portion(0.26), 26);
+    }
 
     #[test]
     fn table_plain_buttons_keep_browser_like_hover_pressed_and_disabled_feedback() {

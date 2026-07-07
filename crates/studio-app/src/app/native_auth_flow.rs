@@ -6,6 +6,12 @@ pub(super) enum NativeAuthStep {
     Code,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NativeAuthMode {
+    Babel,
+    Subaccount,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum NativeAuthStartup {
     Authenticated,
@@ -14,9 +20,12 @@ pub(super) enum NativeAuthStartup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NativeAuthFlowState {
+    pub(super) mode: NativeAuthMode,
     pub(super) step: NativeAuthStep,
     pub(super) identifier: String,
     pub(super) code: String,
+    pub(super) subaccount_host_url: String,
+    pub(super) subaccount_code: String,
     pub(super) pending_sign_in_id: Option<String>,
     pub(super) pending_phone_number_id: Option<String>,
     pub(super) is_pending: bool,
@@ -68,9 +77,12 @@ impl NativeAuthFlowState {
 
     pub(super) fn login_prompt() -> Self {
         Self {
+            mode: NativeAuthMode::Babel,
             step: NativeAuthStep::Login,
             identifier: String::new(),
             code: String::new(),
+            subaccount_host_url: super::subaccounts::default_subaccount_relay_host_url(),
+            subaccount_code: String::new(),
             pending_sign_in_id: None,
             pending_phone_number_id: None,
             is_pending: false,
@@ -84,8 +96,11 @@ impl NativeAuthFlowState {
     ) -> Self {
         Self {
             step: NativeAuthStep::Code,
+            mode: NativeAuthMode::Babel,
             identifier: String::new(),
             code: String::new(),
+            subaccount_host_url: super::subaccounts::default_subaccount_relay_host_url(),
+            subaccount_code: String::new(),
             pending_sign_in_id: Some(pending_sign_in_id),
             pending_phone_number_id,
             is_pending: false,
@@ -93,8 +108,31 @@ impl NativeAuthFlowState {
         }
     }
 
+    pub(super) fn subaccount_login_prompt() -> Self {
+        Self {
+            mode: NativeAuthMode::Subaccount,
+            step: NativeAuthStep::Login,
+            identifier: String::new(),
+            code: String::new(),
+            subaccount_host_url: super::subaccounts::default_subaccount_relay_host_url(),
+            subaccount_code: String::new(),
+            pending_sign_in_id: None,
+            pending_phone_number_id: None,
+            is_pending: false,
+            error: None,
+        }
+    }
+
+    pub(super) fn is_babel_mode(&self) -> bool {
+        self.mode == NativeAuthMode::Babel
+    }
+
+    pub(super) fn is_subaccount_mode(&self) -> bool {
+        self.mode == NativeAuthMode::Subaccount
+    }
+
     pub(super) fn is_code_step(&self) -> bool {
-        self.step == NativeAuthStep::Code
+        self.is_babel_mode() && self.step == NativeAuthStep::Code
     }
 
     pub(super) fn can_submit_code(&self) -> bool {
@@ -102,7 +140,17 @@ impl NativeAuthFlowState {
     }
 
     pub(super) fn can_start_login(&self) -> bool {
-        self.step == NativeAuthStep::Login && !self.is_pending && !self.identifier.trim().is_empty()
+        self.is_babel_mode()
+            && self.step == NativeAuthStep::Login
+            && !self.is_pending
+            && !self.identifier.trim().is_empty()
+    }
+
+    pub(super) fn can_submit_subaccount_login(&self) -> bool {
+        self.is_subaccount_mode()
+            && !self.is_pending
+            && !self.subaccount_host_url.trim().is_empty()
+            && !self.subaccount_code.trim().is_empty()
     }
 }
 

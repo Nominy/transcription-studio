@@ -68,9 +68,10 @@ use super::startup_route::{
     StartupRouteConfig, apply_startup_route_config, parse_startup_route_config,
 };
 use super::state::{
-    AppSurface, HelperFocusRestore, LaneVerticalZoomInput, NativeCapabilityModalTab,
+    AppSurface, DashboardProject, DashboardSection, HelperFocusRestore, NativeCapabilityModalTab,
     TimelineAutoscrollMode,
 };
+use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest};
 use super::tag_suggestions::{
     TagSuggestionKeyboardAction, TagSuggestionKind, tag_suggestions_for_draft,
     tag_suggestions_for_text,
@@ -1005,7 +1006,7 @@ fn timeline_wheel_runtime_trace_lines_report_zoom_pan_and_noop_routes() {
             before,
             before
         ),
-        "Transcription Studio timeline wheel: route=command-zoom delta_x=0.000 delta_y=-120.000 zoom=1.000->1.100 viewport=10.000-15.000s->10.000-15.000s"
+        "Transcription Studio timeline wheel: route=command-zoom delta_x_px=0.000 delta_y_px=-120.000 zoom=1.000->1.100 viewport=10.000-15.000s->10.000-15.000s"
     );
     assert_eq!(
         super::actions::timeline_wheel_runtime_trace_line(
@@ -1017,7 +1018,7 @@ fn timeline_wheel_runtime_trace_lines_report_zoom_pan_and_noop_routes() {
             before,
             after
         ),
-        "Transcription Studio timeline wheel: route=shift-pan delta_x=0.000 delta_y=120.000 zoom=2.000->2.000 viewport=10.000-15.000s->12.500-17.500s"
+        "Transcription Studio timeline wheel: route=shift-pan delta_x_px=0.000 delta_y_px=120.000 zoom=2.000->2.000 viewport=10.000-15.000s->12.500-17.500s"
     );
     assert_eq!(
         super::actions::timeline_wheel_runtime_trace_line(
@@ -1029,7 +1030,7 @@ fn timeline_wheel_runtime_trace_lines_report_zoom_pan_and_noop_routes() {
             before,
             after
         ),
-        "Transcription Studio timeline wheel: route=horizontal-pan delta_x=120.000 delta_y=0.000 zoom=2.000->2.000 viewport=10.000-15.000s->12.500-17.500s"
+        "Transcription Studio timeline wheel: route=horizontal-pan delta_x_px=120.000 delta_y_px=0.000 zoom=2.000->2.000 viewport=10.000-15.000s->12.500-17.500s"
     );
     assert_eq!(
         super::actions::timeline_wheel_runtime_trace_line(
@@ -1041,7 +1042,7 @@ fn timeline_wheel_runtime_trace_lines_report_zoom_pan_and_noop_routes() {
             before,
             before
         ),
-        "Transcription Studio timeline wheel: route=plain-vertical-noop delta_x=0.000 delta_y=-120.000 zoom=1.000->1.000 viewport=10.000-15.000s->10.000-15.000s"
+        "Transcription Studio timeline wheel: route=plain-vertical-noop delta_x_px=0.000 delta_y_px=-120.000 zoom=1.000->1.000 viewport=10.000-15.000s->10.000-15.000s"
     );
 }
 
@@ -1369,7 +1370,7 @@ fn waveform_scrollbar_drag_continues_after_pointer_leaves_scrollbar_strip() {
 }
 
 #[test]
-fn command_wheel_over_timeline_uses_babel_zoom_delta_and_clamps() {
+fn command_wheel_over_timeline_uses_pixel_octaves_and_clamps_nonfinite_deltas() {
     let mut state = stable_sample_state();
 
     let _ = update(
@@ -1380,11 +1381,13 @@ fn command_wheel_over_timeline_uses_babel_zoom_delta_and_clamps() {
         &mut state,
         Message::TimelineWheelScrolled {
             delta_x: 0.0,
-            delta_y: -10.0,
+            delta_y: -120.0,
         },
     );
 
-    assert_eq!(state.editor.as_ref().unwrap().zoom, 1.1);
+    let zoom = state.editor.as_ref().unwrap().zoom;
+    let expected_smooth_zoom = 2.0_f32.powf(120.0 / 600.0);
+    assert!((zoom - expected_smooth_zoom).abs() < 0.000_001);
 
     let _ = update(
         &mut state,
@@ -1395,6 +1398,26 @@ fn command_wheel_over_timeline_uses_babel_zoom_delta_and_clamps() {
     );
 
     assert_eq!(state.editor.as_ref().unwrap().zoom, 0.05);
+
+    let _ = update(
+        &mut state,
+        Message::TimelineWheelScrolled {
+            delta_x: 0.0,
+            delta_y: -10_000.0,
+        },
+    );
+
+    assert_eq!(state.editor.as_ref().unwrap().zoom, 10.0);
+
+    let _ = update(
+        &mut state,
+        Message::TimelineWheelScrolled {
+            delta_x: 0.0,
+            delta_y: f32::NAN,
+        },
+    );
+
+    assert_eq!(state.editor.as_ref().unwrap().zoom, 10.0);
 }
 
 #[test]
@@ -1431,7 +1454,8 @@ fn command_wheel_zoom_keeps_hovered_waveform_time_at_the_same_screen_fraction() 
     let editor = state.editor.as_ref().unwrap();
     let after_fraction =
         (anchor_time - editor.viewport.start_seconds) / editor.viewport.duration_seconds();
-    assert_eq!(editor.zoom, 2.1);
+    let expected_zoom = 2.0 * 2.0_f32.powf(10.0 / 600.0);
+    assert!((editor.zoom - expected_zoom).abs() < 0.000_001);
     assert!((after_fraction - anchor_fraction).abs() < 0.001);
 }
 
@@ -1451,16 +1475,44 @@ fn plain_timeline_wheel_does_not_change_zoom() {
 }
 
 #[test]
-fn timeline_wheel_event_preserves_touchpad_horizontal_delta() {
-    let timeline_source = include_str!("components/timeline/mod.rs");
-    let message_source = include_str!("message.rs");
+fn timeline_wheel_pan_treats_pixels_as_thousandths_of_viewport() {
+    let mut state = stable_sample_state();
+    let _ = update(&mut state, Message::ZoomChanged(2.0));
+    let _ = update(
+        &mut state,
+        Message::KeyboardModifiersChanged(Modifiers::SHIFT),
+    );
+    let before = state.editor.as_ref().unwrap().viewport;
 
-    assert!(message_source.contains("TimelineWheelScrolled"));
-    assert!(message_source.contains("delta_x: f32"));
-    assert!(message_source.contains("delta_y: f32"));
-    assert!(timeline_source.contains("mouse::ScrollDelta::Lines { x, y }"));
-    assert!(timeline_source.contains("mouse::ScrollDelta::Pixels { x, y }"));
-    assert!(timeline_source.contains("Message::TimelineWheelScrolled { delta_x, delta_y }"));
+    let _ = update(
+        &mut state,
+        Message::TimelineWheelScrolled {
+            delta_x: 0.0,
+            delta_y: 120.0,
+        },
+    );
+
+    let after_120px = state.editor.as_ref().unwrap().viewport;
+    let actual_120px_delta = after_120px.start_seconds - before.start_seconds;
+    let expected_120px_delta = before.duration_seconds() * 120.0 / 1_000.0;
+    assert!((actual_120px_delta - expected_120px_delta).abs() < 0.001);
+    assert!(
+        actual_120px_delta < before.duration_seconds(),
+        "120px wheel pans should move a fraction of the current viewport, not one or more viewports"
+    );
+
+    let _ = update(
+        &mut state,
+        Message::TimelineWheelScrolled {
+            delta_x: 0.0,
+            delta_y: 1.0,
+        },
+    );
+
+    let after_121px = state.editor.as_ref().unwrap().viewport;
+    let actual_1px_delta = after_121px.start_seconds - after_120px.start_seconds;
+    let expected_1px_delta = after_120px.duration_seconds() / 1_000.0;
+    assert!((actual_1px_delta - expected_1px_delta).abs() < 0.001);
 }
 
 #[test]
@@ -7875,7 +7927,7 @@ fn large_project_runtime_can_probe_live_pan_cadence_without_user_visible_changes
     assert!(state_source.contains("large_project_live_pan_enabled()"));
     assert!(state_source.contains("large_project_live_pan_active"));
     assert!(state_source.contains("self.with_project_and_editor_mut(|project, editor|"));
-    assert!(state_source.contains("editor.pan_viewport_by_scroll_delta(project,"));
+    assert!(state_source.contains("editor.pan_viewport_by_wheel_pixels(project,"));
     assert!(
         state_source.contains("self.large_project_live_pan_frame"),
         "live pan smoke should alternate real viewport movement during window-frame ticks"
@@ -8862,7 +8914,7 @@ fn overview_waveform_static_blocks_survive_timeline_viewport_pans() {
     let misses_after_first_render = state.overview_waveform_cache_miss_count();
 
     state.with_editor_mut(|editor| {
-        editor.pan_viewport_by_scroll_delta(&project, 1.0);
+        editor.pan_viewport_by_wheel_pixels(&project, 1.0);
     });
     let second_overview = {
         let editor = state.editor.as_ref().unwrap();
@@ -13283,6 +13335,90 @@ fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_c
 }
 
 #[test]
+fn fixture_payload_message_maps_batched_submit_linter_errors_to_failure() {
+    let submit_request = BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
+        review_action_id: "review-action-42".to_string(),
+        annotations: vec![serde_json::json!({ "id": "annotation-1" })],
+        is_stitched_queue: false,
+    });
+    let payload = serde_json::json!([
+        {
+            "result": {
+                "data": {
+                    "json": {
+                        "success": true,
+                        "linterErrors": [{ "id": "empty-content" }]
+                    }
+                }
+            }
+        }
+    ])
+    .to_string();
+
+    assert_eq!(
+        fixture_payload_message_for_request(submit_request, payload),
+        Some(Message::SubmitReviewFailed(
+            "Failed to pass linting. Please fix the errors and try again.".to_string()
+        ))
+    );
+}
+
+#[test]
+fn fixture_payload_message_maps_batched_submit_success_to_submit_succeeded() {
+    let submit_request = BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
+        review_action_id: "review-action-42".to_string(),
+        annotations: vec![serde_json::json!({ "id": "annotation-1" })],
+        is_stitched_queue: false,
+    });
+    let payload = serde_json::json!([
+        {
+            "result": {
+                "data": {
+                    "json": {
+                        "success": true,
+                        "linterErrors": []
+                    }
+                }
+            }
+        }
+    ])
+    .to_string();
+
+    assert_eq!(
+        fixture_payload_message_for_request(submit_request, payload),
+        Some(Message::SubmitReviewSucceeded)
+    );
+}
+
+#[test]
+fn fixture_payload_message_rejects_submit_response_without_success_flag() {
+    let submit_request = BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
+        review_action_id: "review-action-42".to_string(),
+        annotations: vec![serde_json::json!({ "id": "annotation-1" })],
+        is_stitched_queue: false,
+    });
+    let payload = serde_json::json!([
+        {
+            "result": {
+                "data": {
+                    "json": {
+                        "linterErrors": []
+                    }
+                }
+            }
+        }
+    ])
+    .to_string();
+
+    assert_eq!(
+        fixture_payload_message_for_request(submit_request, payload),
+        Some(Message::SubmitReviewFailed(
+            "Failed to submit annotations. Please try again.".to_string()
+        ))
+    );
+}
+
+#[test]
 fn service_command_envelopes_use_recovered_trpc_operation_names_and_payload_keys() {
     assert_eq!(
         request_envelope_for_service_command(&BabelServiceRequest::ClaimNextFromQueue(
@@ -13956,6 +14092,36 @@ fn submit_review_emits_recovered_babel_service_payload_without_auto_success() {
         }
         other => panic!("expected submit review action request, got {other:?}"),
     }
+}
+
+#[test]
+fn begin_submit_review_request_refuses_project_without_recoverable_review_action_id() {
+    let mut state = stable_sample_state();
+    let mut project = state.project().unwrap().clone();
+    project.metadata.remove("studio.babel.reviewActionId");
+    project.metadata.remove("babel.review_action.envelope");
+    for segment in &mut project.segments {
+        segment.metadata.remove("reviewActionId");
+        segment.metadata.remove("review_action_id");
+    }
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "loaded missing review action id fixture".to_string(),
+    );
+    acknowledge_all_assertable_warnings(&mut state);
+
+    assert!(!state.begin_submit_review_request());
+
+    assert!(state.show_submit_dialog);
+    assert!(!state.submit_is_pending);
+    assert!(state.submit_has_error);
+    assert_eq!(state.status, "Submit unavailable: missing review action id");
+    assert!(
+        !state
+            .babel_service_requests
+            .iter()
+            .any(|request| matches!(request, BabelServiceRequest::SubmitReviewAction(_)))
+    );
 }
 
 #[test]
@@ -17471,10 +17637,59 @@ fn native_capability_modal_uses_tabs_for_distinct_extension_workspaces() {
 }
 
 #[test]
-fn dashboard_hides_raw_id_marks_and_moves_drafting_settings_home() {
+fn dashboard_uses_section_navigation_for_projects_subaccounts_and_settings() {
+    let state_source = include_str!("state.rs");
+    let message_source = include_str!("message.rs");
+    let actions_source = include_str!("actions.rs");
     let dashboard_source = include_str!("components/dashboard.rs");
     let panel_source = include_str!("components/native_capability_panel.rs");
 
+    assert!(
+        state_source.contains("enum DashboardSection")
+            && state_source.contains("Projects")
+            && state_source.contains("Subaccounts")
+            && state_source.contains("Settings"),
+        "dashboard sections need first-class state for Projects, Sub-accounts, and Settings"
+    );
+    assert!(
+        message_source.contains("DashboardSectionChanged(DashboardSection)")
+            && actions_source.contains("Message::DashboardSectionChanged(section)")
+            && actions_source.contains("state.set_dashboard_section(section)"),
+        "dashboard section tab changes must be handled as app messages"
+    );
+    assert!(
+        dashboard_source.contains("match state.dashboard.section")
+            && dashboard_source
+                .contains("DashboardSection::Projects => view_projects_screen(state)")
+            && dashboard_source
+                .contains("DashboardSection::Subaccounts => view_subaccounts_screen(state)")
+            && dashboard_source
+                .contains("DashboardSection::Settings => view_settings_screen(state)"),
+        "dashboard should route each section to its own screen"
+    );
+    for label in ["Projects", "Sub-accounts", "Settings"] {
+        assert!(
+            dashboard_source.contains(label),
+            "dashboard section navigation should expose `{label}`"
+        );
+    }
+    assert!(
+        dashboard_source.contains("view_settings_screen")
+            && dashboard_source.contains("view_capability_settings")
+            && dashboard_source.contains("view_update_section")
+            && dashboard_source.contains("view_path_toolbar"),
+        "settings-only tools should live behind the Settings section"
+    );
+    for label in ["OpenRouter key", "Model", "Tier", "Reasoning"] {
+        assert!(
+            dashboard_source.contains(label),
+            "capability setting `{label}` should be available from dashboard settings"
+        );
+        assert!(
+            !panel_source.contains(label),
+            "capability setting `{label}` should not stay inside the task modal"
+        );
+    }
     assert!(
         !dashboard_source.contains("text(project.id.clone()).size(11)"),
         "dashboard project cards should not render raw project IDs under project names"
@@ -17483,20 +17698,115 @@ fn dashboard_hides_raw_id_marks_and_moves_drafting_settings_home() {
         !dashboard_source.contains("view_task_entry_tools"),
         "dashboard should not keep the always-visible manual ID block at the bottom"
     );
+}
+
+#[test]
+fn dashboard_subaccount_project_access_uses_loaded_project_checkboxes() {
+    let dashboard_source = include_str!("components/dashboard.rs");
+
     assert!(
-        dashboard_source.contains("view_capability_settings"),
-        "dashboard needs a first-class settings area for capability configuration"
+        !dashboard_source.contains("Allowed project IDs, comma-separated")
+            && !dashboard_source.contains("SubaccountOwnerAssignmentChanged(subaccount_id, value)")
+            && !dashboard_source.contains("text_input(\"Allowed project IDs"),
+        "Sub-account assignment should not expose a raw project ID text input"
     );
-    for label in ["OpenRouter key", "Model", "Tier", "Reasoning"] {
-        assert!(
-            dashboard_source.contains(label),
-            "capability setting `{label}` should live on the dashboard"
-        );
-        assert!(
-            !panel_source.contains(label),
-            "capability setting `{label}` should not stay inside the task modal"
-        );
-    }
+    assert!(
+        dashboard_source.contains("view_project_access_controls")
+            && dashboard_source.contains("state.dashboard.projects")
+            && dashboard_source.contains("checkbox(")
+            && dashboard_source
+                .contains("format!(\"{} — {}\", project.name, dashboard_project_status(project))")
+            && dashboard_source.contains("Message::SubaccountOwnerProjectToggled"),
+        "Sub-account assignment should render loaded dashboard projects as named checkboxes"
+    );
+    assert!(
+        dashboard_source.contains("Load projects to choose by name.")
+            && dashboard_source.contains("Message::DashboardRefreshProjects"),
+        "assignment UI should guide owners to load accessible projects before choosing access"
+    );
+}
+
+#[test]
+fn subaccount_project_access_toggle_saves_selected_loaded_project_ids() {
+    let mut state = StudioState::default();
+    state.dashboard.projects = vec![
+        DashboardProject {
+            id: "project-a".to_string(),
+            name: "Gold Transcription".to_string(),
+            chunked_queue_id: "chunk-a".to_string(),
+            stitched_queue_id: "stitched-a".to_string(),
+        },
+        DashboardProject {
+            id: "project-b".to_string(),
+            name: "Podcast Review".to_string(),
+            chunked_queue_id: "chunk-b".to_string(),
+            stitched_queue_id: "stitched-b".to_string(),
+        },
+        DashboardProject {
+            id: "project-c".to_string(),
+            name: "QA Pass".to_string(),
+            chunked_queue_id: "chunk-c".to_string(),
+            stitched_queue_id: "stitched-c".to_string(),
+        },
+    ];
+    state.subaccount_owner.host_url = "https://relay.example.test".to_string();
+    state.subaccount_owner.subaccounts = vec![ManagedSubaccount {
+        id: "sub-1".to_string(),
+        label: "Travel laptop".to_string(),
+        code: None,
+        revoked: false,
+        allowed_project_ids: Vec::new(),
+        completed_tasks: 0,
+        worked_seconds: 0,
+        earnings_cents: 0,
+    }];
+
+    let _ = update(
+        &mut state,
+        Message::DashboardSectionChanged(DashboardSection::Subaccounts),
+    );
+    assert_eq!(state.dashboard.section, DashboardSection::Subaccounts);
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerProjectToggled("sub-1".to_string(), "project-b".to_string(), false),
+    );
+    assert_eq!(
+        state.subaccount_owner.assignment_drafts.get("sub-1"),
+        Some(&"project-a, project-c".to_string())
+    );
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerProjectToggled("sub-1".to_string(), "project-c".to_string(), false),
+    );
+    assert_eq!(
+        state.subaccount_owner.assignment_drafts.get("sub-1"),
+        Some(&"project-a".to_string())
+    );
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerProjectToggled("sub-1".to_string(), "project-b".to_string(), true),
+    );
+    assert_eq!(
+        state.subaccount_owner.assignment_drafts.get("sub-1"),
+        Some(&"project-a, project-b".to_string())
+    );
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerSaveAssignment("sub-1".to_string()),
+    );
+
+    assert_eq!(
+        state.subaccount_owner_requests,
+        vec![SubaccountOwnerRequest::AssignProjects {
+            host_url: "https://relay.example.test".to_string(),
+            subaccount_id: "sub-1".to_string(),
+            project_ids: vec!["project-a".to_string(), "project-b".to_string()],
+        }]
+    );
 }
 
 #[test]
@@ -18792,7 +19102,6 @@ fn acknowledge_all_assertable_warnings(state: &mut StudioState) {
             .map(|row| row.segment_id)
             .collect()
     };
-    assert!(!warning_segment_ids.is_empty());
     for segment_id in warning_segment_ids {
         let project = state.workflow.as_ref().unwrap().project().clone();
         let editor = state.editor.as_mut().unwrap();

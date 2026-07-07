@@ -11,7 +11,7 @@ use iced::{Color, Element, Fill, Length, Point, Rectangle, Renderer, Size, Theme
 use studio_app::{OverviewWaveformBlock, WaveformBlock};
 
 use super::super::Message;
-use super::super::styles::{color_for_token, portion, region_border_color_for_token};
+use super::super::styles::{color_for_token, region_border_color_for_token};
 use super::playhead_line::view_playhead_line;
 
 static WAVEFORM_CANVAS_CACHE_GROUP: LazyLock<canvas::Group> = LazyLock::new(canvas::Group::unique);
@@ -1081,25 +1081,28 @@ impl Iterator for OverviewBlockWidths<'_> {
 }
 
 fn overview_window_rect(left_percent: f32, width_percent: f32, width: f32) -> (f32, f32) {
-    let right_percent = 100.0 - left_percent - width_percent;
-    let left_portion = f32::from(portion(left_percent));
-    let width_portion = f32::from(portion(width_percent));
-    let total_portion = (left_portion + width_portion + f32::from(portion(right_percent))).max(1.0);
-    (
-        width * left_portion / total_portion,
-        width * width_portion / total_portion,
-    )
+    percent_rect_px(left_percent, width_percent, width)
 }
 
 fn waveform_scrollbar_thumb_rect(left_percent: f32, width_percent: f32, width: f32) -> (f32, f32) {
-    let right_percent = (100.0 - left_percent - width_percent).max(0.0);
-    let left_portion = f32::from(portion(left_percent));
-    let width_portion = f32::from(portion(width_percent));
-    let total_portion = (left_portion + width_portion + f32::from(portion(right_percent))).max(1.0);
-    (
-        width * left_portion / total_portion,
-        width * width_portion / total_portion,
-    )
+    percent_rect_px(left_percent, width_percent, width)
+}
+
+fn percent_rect_px(left_percent: f32, width_percent: f32, width: f32) -> (f32, f32) {
+    let total_width = width.max(0.0);
+    let left_fraction = if left_percent.is_finite() {
+        (left_percent / 100.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let width_fraction = if width_percent.is_finite() {
+        (width_percent / 100.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let left_px = total_width * left_fraction;
+    let width_px = (total_width * width_fraction).min((total_width - left_px).max(0.0));
+    (left_px, width_px)
 }
 
 fn time_window_block_percentages(
@@ -1184,8 +1187,9 @@ mod tests {
     use studio_app::{OverviewWaveformBlock, WaveformBlock, WaveformPeakSource};
 
     use super::{
-        RegionFillTimeWindow, overview_block_widths, synthetic_waveform_block_widths,
-        time_window_waveform_block_widths,
+        RegionFillTimeWindow, overview_block_widths, overview_window_rect,
+        synthetic_waveform_block_widths, time_window_waveform_block_widths,
+        waveform_scrollbar_thumb_rect,
     };
 
     fn overview_block(
@@ -1200,6 +1204,17 @@ mod tests {
             left_percent,
             width_percent,
         }
+    }
+
+    #[test]
+    fn overview_and_scrollbar_rects_preserve_subpercent_pixel_movement() {
+        let (overview_left, overview_width) = overview_window_rect(0.125, 0.5, 800.0);
+        assert!((overview_left - 1.0).abs() < 0.000_001);
+        assert!((overview_width - 4.0).abs() < 0.000_001);
+
+        let (scrollbar_left, scrollbar_width) = waveform_scrollbar_thumb_rect(0.25, 10.125, 800.0);
+        assert!((scrollbar_left - 2.0).abs() < 0.000_001);
+        assert!((scrollbar_width - 81.0).abs() < 0.000_001);
     }
 
     #[test]

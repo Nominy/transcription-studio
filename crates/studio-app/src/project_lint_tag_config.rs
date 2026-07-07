@@ -238,6 +238,8 @@ const LEGACY_RUSSIAN_ENABLED_LINTER_IDS: &[&str] = &[
     "malformed-curly-bracket-tags",
     "banned-characters",
     "emoji",
+    "em-dash",
+    "unsupported-unicode",
     "consecutive-capitals",
     "consecutive-chars",
     "excessive-digits",
@@ -245,6 +247,7 @@ const LEGACY_RUSSIAN_ENABLED_LINTER_IDS: &[&str] = &[
     "parentheses-usage",
     "unpaired-quotes",
     "tag-only-punctuation",
+    "long-segment",
 ];
 
 const RUSSIAN_TRANSCRIPTION_ENABLED_LINTER_IDS: &[&str] = &[
@@ -273,6 +276,8 @@ const RUSSIAN_TRANSCRIPTION_ENABLED_LINTER_IDS: &[&str] = &[
     "unbracketed-annotation-tags",
     "banned-characters",
     "emoji",
+    "em-dash",
+    "unsupported-unicode",
     "consecutive-capitals",
     "consecutive-chars",
     "excessive-digits",
@@ -280,6 +285,7 @@ const RUSSIAN_TRANSCRIPTION_ENABLED_LINTER_IDS: &[&str] = &[
     "parentheses-usage",
     "unpaired-quotes",
     "tag-only-punctuation",
+    "long-segment",
 ];
 
 const RUSSIAN_SILVER_ENABLED_LINTER_IDS: &[&str] = &[
@@ -300,6 +306,9 @@ const RUSSIAN_SILVER_ENABLED_LINTER_IDS: &[&str] = &[
     "duplicated-segments-adjacent",
     "banned-characters",
     "emoji",
+    "em-dash",
+    "unsupported-unicode",
+    "long-segment",
 ];
 
 const ENGLISH_ENABLED_LINTER_IDS: &[&str] = &[
@@ -330,6 +339,8 @@ const ENGLISH_ENABLED_LINTER_IDS: &[&str] = &[
     "unbracketed-annotation-tags",
     "banned-characters",
     "emoji",
+    "em-dash",
+    "unsupported-unicode",
     "consecutive-capitals",
     "consecutive-chars",
     "excessive-digits",
@@ -337,6 +348,7 @@ const ENGLISH_ENABLED_LINTER_IDS: &[&str] = &[
     "parentheses-usage",
     "unpaired-quotes",
     "tag-only-punctuation",
+    "long-segment",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

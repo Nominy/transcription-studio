@@ -20,6 +20,7 @@ use super::service_callbacks::{
     LoadReviewActionRequest, SaveAnnotationsRequest, SkipReviewActionRequest,
     SubmitReviewActionRequest,
 };
+use super::subaccounts::{subaccount_relay_payload_for_request, subaccount_session_is_active};
 
 const STUDIO_BABEL_SERVICE_FIXTURE_JSON: &str = "STUDIO_BABEL_SERVICE_FIXTURE_JSON";
 const STUDIO_BABEL_SERVICE_FIXTURE_PATH: &str = "STUDIO_BABEL_SERVICE_FIXTURE_PATH";
@@ -89,6 +90,13 @@ async fn service_payload_for_request(request: &BabelServiceRequest) -> Result<St
 
     if let Some(payload) = command_payload_for_request(request)? {
         return Ok(payload);
+    }
+
+    let envelope = request_envelope_for_service_command(request);
+    if let Some(payload) = subaccount_relay_payload_for_request(request, envelope).await? {
+        return Ok(normalize_service_response_payload_for_request(
+            request, &payload,
+        ));
     }
 
     if let Some(payload) = live_payload_for_request(request).await? {
@@ -195,7 +203,7 @@ fn submit_review_message_from_payload(payload: &str) -> Message {
 }
 
 pub(super) fn babel_remote_mutations_configured() -> bool {
-    command_configured() || live_service_explicitly_enabled()
+    command_configured() || live_service_explicitly_enabled() || subaccount_session_is_active()
 }
 
 fn simple_mutation_message_from_payload(
@@ -243,7 +251,7 @@ fn decode_service_payload(payload: &str) -> Result<Value, String> {
 }
 
 fn response_success(value: &Value) -> bool {
-    first_bool_by_key(value, &["success", "ok"]).unwrap_or(true)
+    first_bool_by_key(value, &["success", "ok"]).unwrap_or(false)
 }
 
 fn response_error(value: &Value, fallback: &str) -> String {
@@ -253,11 +261,16 @@ fn response_error(value: &Value, fallback: &str) -> String {
 }
 
 fn linter_error_count(value: &Value) -> usize {
-    value
-        .get("linterErrors")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default()
+    match value {
+        Value::Object(map) => {
+            if let Some(errors) = map.get("linterErrors").and_then(Value::as_array) {
+                return errors.len();
+            }
+            map.values().map(linter_error_count).sum()
+        }
+        Value::Array(items) => items.iter().map(linter_error_count).sum(),
+        _ => 0,
+    }
 }
 
 fn first_bool_by_key(value: &Value, keys: &[&str]) -> Option<bool> {
@@ -1650,6 +1663,52 @@ mod tests {
         assert!(request_contains(&babel_requests[0], "formStepResponseId"));
     }
 
+    #[tokio::test]
+    async fn subaccount_session_routes_babel_service_envelope_to_relay() {
+        let _env = TestEnv::with_live_native_auth();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let relay = MockJsonServer::start(vec![
+            r#"{"payload":{"success":true,"updatedAt":"2026-07-07T12:00:00Z"}}"#,
+        ]);
+        let store_path = temp.path().join("subaccount-session.json");
+        fs::write(
+            &store_path,
+            format!(
+                r#"{{"version":1,"hostUrl":"{}","token":"relay-token","subaccountId":"sub-1"}}"#,
+                relay.base_url
+            ),
+        )
+        .expect("write subaccount store");
+        set_env_var("STUDIO_SUBACCOUNT_SESSION_STORE", store_path.as_os_str());
+        let request = BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
+            review_action_id: "review-action-1".to_string(),
+            annotations: vec![json!({ "id": "annotation-1" })],
+        });
+
+        let payload = service_payload_for_request(&request)
+            .await
+            .expect("relay payload");
+
+        assert_eq!(
+            payload,
+            r#"{"success":true,"updatedAt":"2026-07-07T12:00:00Z"}"#
+        );
+        let relay_requests = relay.join();
+        assert!(request_contains(
+            &relay_requests[0],
+            "POST /api/subaccounts/babel-service"
+        ));
+        assert!(request_contains(
+            &relay_requests[0],
+            "Authorization: Bearer relay-token"
+        ));
+        assert!(request_contains(
+            &relay_requests[0],
+            "transcriptions.saveAnnotationsByReviewActionId"
+        ));
+        assert!(request_contains(&relay_requests[0], "saveAnnotations"));
+    }
+
     fn write_service_adapter_script(path: &Path) {
         #[cfg(windows)]
         {
@@ -1691,6 +1750,7 @@ mod tests {
 
     struct TestEnv {
         _guard: MutexGuard<'static, ()>,
+        _temp_dir: tempfile::TempDir,
         saved: Vec<(&'static str, Option<OsString>)>,
     }
 
@@ -1706,6 +1766,8 @@ mod tests {
                 STUDIO_BABEL_SERVICE_BASE_URL,
                 "STUDIO_BABEL_AUTH_STORE",
                 "STUDIO_BABEL_CLERK_URL",
+                "STUDIO_SUBACCOUNT_SESSION_STORE",
+                "STUDIO_SUBACCOUNT_RELAY_URL",
             ];
             let saved = names
                 .into_iter()
@@ -1714,8 +1776,17 @@ mod tests {
             for (name, _) in &saved {
                 remove_env_var(name);
             }
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            set_env_var(
+                "STUDIO_SUBACCOUNT_SESSION_STORE",
+                temp_dir
+                    .path()
+                    .join("missing-subaccount-session.json")
+                    .as_os_str(),
+            );
             Self {
                 _guard: guard,
+                _temp_dir: temp_dir,
                 saved,
             }
         }

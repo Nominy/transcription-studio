@@ -8,6 +8,7 @@ use super::SegmentDraft;
 pub(crate) const BABEL_ZOOM_SLIDER_MIN: f32 = 10.0;
 pub(crate) const BABEL_ZOOM_SLIDER_MAX: f32 = 2000.0;
 pub(crate) const BABEL_ZOOM_DISPLAY_DIVISOR: f32 = 200.0;
+const TIMELINE_WHEEL_ZOOM_OCTAVE_PIXELS: f32 = 600.0;
 pub(crate) const BABEL_SPEED_OPTIONS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0];
 pub(crate) fn parse_seconds(_label: &str, value: &str) -> Result<f64, String> {
     let trimmed = value.trim();
@@ -105,9 +106,28 @@ pub(crate) fn babel_slider_from_zoom_factor(zoom: f32) -> f32 {
     (zoom * BABEL_ZOOM_DISPLAY_DIVISOR).clamp(BABEL_ZOOM_SLIDER_MIN, BABEL_ZOOM_SLIDER_MAX)
 }
 
-pub(crate) fn zoom_factor_after_babel_wheel_delta(current_zoom: f32, delta_y: f32) -> f32 {
-    let slider_value = babel_slider_from_zoom_factor(current_zoom) - delta_y * 2.0;
-    zoom_factor_from_babel_slider(slider_value)
+pub(crate) fn zoom_factor_after_timeline_wheel_pixels(
+    current_zoom: f32,
+    delta_y_pixels: f32,
+) -> f32 {
+    let zoom = if current_zoom.is_finite() {
+        current_zoom
+    } else {
+        1.0
+    }
+    .clamp(
+        BABEL_ZOOM_SLIDER_MIN / BABEL_ZOOM_DISPLAY_DIVISOR,
+        BABEL_ZOOM_SLIDER_MAX / BABEL_ZOOM_DISPLAY_DIVISOR,
+    );
+    if !delta_y_pixels.is_finite() {
+        return zoom;
+    }
+
+    let scale = 2.0_f32.powf(-delta_y_pixels / TIMELINE_WHEEL_ZOOM_OCTAVE_PIXELS);
+    (zoom * scale).clamp(
+        BABEL_ZOOM_SLIDER_MIN / BABEL_ZOOM_DISPLAY_DIVISOR,
+        BABEL_ZOOM_SLIDER_MAX / BABEL_ZOOM_DISPLAY_DIVISOR,
+    )
 }
 
 pub(crate) fn format_seconds_for_edit(value: f64) -> String {
@@ -130,4 +150,30 @@ pub(crate) fn write_text_file(path: &str, contents: &str) -> Result<(), String> 
 
     fs::write(path, contents)
         .map_err(|error| format!("failed to write `{}`: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zoom_factor_after_timeline_wheel_pixels;
+
+    #[test]
+    fn timeline_wheel_zoom_uses_pixel_octaves_and_clamps_invalid_input() {
+        let zoom = zoom_factor_after_timeline_wheel_pixels(1.0, -120.0);
+        let expected = 2.0_f32.powf(120.0 / 600.0);
+        assert!((zoom - expected).abs() < 0.000_001);
+
+        assert_eq!(zoom_factor_after_timeline_wheel_pixels(1.0, 10_000.0), 0.05);
+        assert_eq!(
+            zoom_factor_after_timeline_wheel_pixels(1.0, -10_000.0),
+            10.0
+        );
+        assert_eq!(
+            zoom_factor_after_timeline_wheel_pixels(1.25, f32::INFINITY),
+            1.25
+        );
+        assert_eq!(
+            zoom_factor_after_timeline_wheel_pixels(1.25, f32::NAN),
+            1.25
+        );
+    }
 }

@@ -12,6 +12,7 @@ use super::native_auth::{
     default_native_auth_store_path, mint_native_babel_authorization_from_store, native_clerk_url,
 };
 use super::native_auth_cli::native_babel_url;
+use super::subaccounts::subaccount_audio_presigned_urls;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BabelPayloadLoadKind {
@@ -203,6 +204,10 @@ fn rewrite_remote_audio_sources(
 async fn fetch_presigned_urls(s3_urls: Vec<String>) -> Result<BTreeMap<String, String>, String> {
     if s3_urls.is_empty() {
         return Ok(BTreeMap::new());
+    }
+
+    if let Some(urls) = subaccount_audio_presigned_urls(&s3_urls).await? {
+        return Ok(urls);
     }
 
     let babel_url = native_babel_url();

@@ -7,6 +7,7 @@ use crate::transcript_model::format_mm_ss;
 use studio_core::Project;
 
 const BABEL_OVERLAY_DURATION_SECONDS: f64 = 1.0;
+const TIMELINE_WHEEL_PAN_VIEWPORT_PIXELS: f64 = 1_000.0;
 
 impl EditorSession {
     pub fn toggle_playback(&mut self) {
@@ -95,8 +96,8 @@ impl EditorSession {
         };
     }
 
-    pub fn pan_viewport_by_scroll_delta(&mut self, project: &Project, delta_y: f32) {
-        if !delta_y.is_finite() || delta_y == 0.0 {
+    pub fn pan_viewport_by_wheel_pixels(&mut self, project: &Project, delta_pixels: f32) {
+        if !delta_pixels.is_finite() || delta_pixels == 0.0 {
             return;
         }
         let bounds = TimeRange::for_project(project);
@@ -109,7 +110,7 @@ impl EditorSession {
             return;
         }
 
-        let delta_seconds = duration * delta_y as f64 * 0.05;
+        let delta_seconds = duration * delta_pixels as f64 / TIMELINE_WHEEL_PAN_VIEWPORT_PIXELS;
         let max_start = bounds.end_seconds - duration;
         let start_seconds =
             (self.viewport.start_seconds + delta_seconds).clamp(bounds.start_seconds, max_start);

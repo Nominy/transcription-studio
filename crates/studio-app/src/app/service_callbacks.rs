@@ -90,10 +90,7 @@ pub(super) fn build_save_annotations_request(
         .map_err(|error| format!("could not build Babel save payload: {error}"))?;
     let value: Value = serde_json::from_str(&exported)
         .map_err(|error| format!("could not decode Babel save payload: {error}"))?;
-    let annotations = find_array_by_key(&value, "annotations")
-        .cloned()
-        .unwrap_or_default();
-
+    let annotations = annotations_from_babel_export(&value)?;
     if review_action_id.is_empty() {
         return Err("missing review action id".to_string());
     }
@@ -114,10 +111,11 @@ pub(super) fn build_submit_review_action_request(
         .map_err(|error| format!("could not build Babel submit payload: {error}"))?;
     let value: Value = serde_json::from_str(&exported)
         .map_err(|error| format!("could not decode Babel submit payload: {error}"))?;
-    let annotations = find_array_by_key(&value, "annotations")
-        .cloned()
-        .unwrap_or_default();
+    let annotations = annotations_from_babel_export(&value)?;
 
+    if review_action_id.is_empty() {
+        return Err("missing review action id".to_string());
+    }
     Ok(SubmitReviewActionRequest {
         review_action_id,
         annotations,
@@ -248,6 +246,12 @@ fn metadata_bool(project: &Project, key: &str) -> bool {
             "true" | "1" | "yes" | "on" | "True" | "TRUE" | "Yes" | "YES" | "On" | "ON"
         )
     })
+}
+
+fn annotations_from_babel_export(value: &Value) -> Result<Vec<Value>, String> {
+    find_array_by_key(value, "annotations")
+        .cloned()
+        .ok_or_else(|| "could not find annotations array in Babel export".to_string())
 }
 
 fn first_nonempty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {

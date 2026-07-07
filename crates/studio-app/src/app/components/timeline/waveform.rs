@@ -17,7 +17,7 @@ use studio_app::{
 use studio_waveform::WaveformHitTarget;
 
 use super::super::super::Message;
-use super::super::super::state::WaveformMagnifierOverlay;
+use super::super::super::state::{TIMELINE_SCROLLBAR_MIN_THUMB_FRACTION, WaveformMagnifierOverlay};
 use super::super::super::styles::{
     action_menu_popup_style, hover_cursor_style, hover_label_style, overlay_range_style, portion,
     table_plain_button_style, waveform_backdrop_style, waveform_magnifier_center_line_style,
@@ -35,7 +35,7 @@ use super::ruler;
 
 const SCROLLBAR_THUMB_HEIGHT: f32 = 7.0;
 const SCROLLBAR_BOTTOM_OFFSET: f32 = 4.0;
-const SCROLLBAR_THUMB_MIN_PERCENT: f32 = 2.4;
+const SCROLLBAR_THUMB_MIN_PERCENT: f32 = TIMELINE_SCROLLBAR_MIN_THUMB_FRACTION * 100.0;
 const SYNTHETIC_REGION_PEAK_SCALE: f64 = 0.045;
 const REGION_HANDLE_HIT_ZONE_WIDTH: f32 = 12.0;
 const REGION_TIMESTAMP_TOOLTIP_TOP_OFFSET: f32 = -22.0;

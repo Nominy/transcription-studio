@@ -515,6 +515,10 @@ fn browser_behavior_project(disabled_controls: bool) -> Project {
         "annotation".to_string(),
     );
     metadata.insert(
+        "studio.babel.reviewActionId".to_string(),
+        "browser-behavior-review-action".to_string(),
+    );
+    metadata.insert(
         "studio.babel.dropClaim.available".to_string(),
         "true".to_string(),
     );
