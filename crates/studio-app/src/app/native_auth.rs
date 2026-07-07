@@ -16,6 +16,7 @@ const CLERK_JS_VERSION: &str = "5.127.0";
 const DEFAULT_CLERK_URL: &str = "https://clerk.babel.audio";
 const STUDIO_BABEL_AUTH_STORE: &str = "STUDIO_BABEL_AUTH_STORE";
 const STUDIO_BABEL_CLERK_URL: &str = "STUDIO_BABEL_CLERK_URL";
+const NATIVE_AUTH_STORE_FILE_NAME: &str = "babel-auth.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NativeAuthCookie {
@@ -156,6 +157,54 @@ pub(super) fn save_native_auth_store(path: &Path, store: &NativeAuthStore) -> Re
         )
     })
 }
+pub(super) fn executable_native_auth_store_path() -> Result<PathBuf, String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("failed to locate Transcription Studio executable: {error}"))?;
+    native_auth_store_path_next_to_executable(&executable)
+}
+
+fn native_auth_store_path_next_to_executable(executable: &Path) -> Result<PathBuf, String> {
+    let directory = executable.parent().ok_or_else(|| {
+        format!(
+            "failed to locate executable directory for {}",
+            executable.display()
+        )
+    })?;
+    Ok(directory.join(NATIVE_AUTH_STORE_FILE_NAME))
+}
+
+fn application_support_native_auth_store_path() -> PathBuf {
+    application_support_dir_named("TranscriptionStudio").join(NATIVE_AUTH_STORE_FILE_NAME)
+}
+
+pub(super) fn detach_native_auth_store_to_executable() -> Result<PathBuf, String> {
+    if let Ok(path) = env::var(STUDIO_BABEL_AUTH_STORE)
+        && !path.trim().is_empty()
+    {
+        return Err(format!(
+            "{STUDIO_BABEL_AUTH_STORE} is set to {}; unset it before detaching the auth store",
+            path.trim()
+        ));
+    }
+
+    let target = executable_native_auth_store_path()?;
+    let source = default_native_auth_store_path();
+    detach_native_auth_store_to_path(&source, &target)?;
+    Ok(target)
+}
+
+fn detach_native_auth_store_to_path(source: &Path, target: &Path) -> Result<(), String> {
+    if source == target {
+        if !target.exists() {
+            save_native_auth_store(target, &NativeAuthStore::default())?;
+        }
+        return Ok(());
+    }
+
+    let store = read_native_auth_store_or_default(source)?;
+    save_native_auth_store(target, &store)?;
+    Ok(())
+}
 
 pub(super) fn default_native_auth_store_path() -> PathBuf {
     if let Ok(path) = env::var(STUDIO_BABEL_AUTH_STORE)
@@ -163,7 +212,12 @@ pub(super) fn default_native_auth_store_path() -> PathBuf {
     {
         return PathBuf::from(path.trim());
     }
-    application_support_dir_named("TranscriptionStudio").join("babel-auth.json")
+    if let Ok(path) = executable_native_auth_store_path()
+        && path.is_file()
+    {
+        return path;
+    }
+    application_support_native_auth_store_path()
 }
 
 pub(super) fn native_clerk_url() -> String {
@@ -909,6 +963,42 @@ mod tests {
                 same_site: String::new(),
                 expires_at: Some(1_814_289_611_000),
             }]
+        );
+    }
+
+    #[test]
+    fn detach_native_auth_store_copies_current_store_to_executable_target() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("app-support").join("babel-auth.json");
+        let target = native_auth_store_path_next_to_executable(
+            &temp.path().join("detached").join("studio-app.exe"),
+        )
+        .expect("target path");
+        let store = NativeAuthStore {
+            cookies: vec![NativeAuthCookie {
+                name: "__client".to_string(),
+                value: "client-cookie".to_string(),
+                domain: "clerk.babel.audio".to_string(),
+                path: "/".to_string(),
+                secure: true,
+                http_only: true,
+                same_site: "Lax".to_string(),
+                expires_at: None,
+            }],
+            pending_sign_in_id: None,
+            pending_phone_number_id: None,
+        };
+        save_native_auth_store(&source, &store).expect("source store should write");
+
+        detach_native_auth_store_to_path(&source, &target).expect("store should detach");
+
+        assert_eq!(
+            read_native_auth_store(&target).expect("target store should read"),
+            store
+        );
+        assert!(
+            source.exists(),
+            "detaching should copy the auth store, not move it"
         );
     }
 

@@ -16,8 +16,8 @@ use super::large_project_smoke::{
     large_project_renderer_screenshot_task, large_project_smoke_enabled,
 };
 use super::native_auth::{
-    NativeAuthStore, default_native_auth_store_path, native_clerk_url, save_native_auth_store,
-    start_phone_code_login, verify_phone_code_login,
+    NativeAuthStore, default_native_auth_store_path, detach_native_auth_store_to_executable,
+    native_clerk_url, save_native_auth_store, start_phone_code_login, verify_phone_code_login,
 };
 use super::native_auth_cli::native_babel_url;
 use super::state::HelperFocusRestore;
@@ -358,6 +358,20 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 state.status = "Babel sign-in selected.".to_string();
             }
         }
+        Message::NativeAuthDetachStore => match detach_native_auth_store_to_executable() {
+            Ok(path) => {
+                let status = format!("Babel auth store detached to {}.", path.display());
+                state.open_native_auth_gate_from_store();
+                if state.native_auth_flow.is_some() {
+                    state.status = format!("{status} Sign in to populate it.");
+                } else {
+                    state.status = status;
+                }
+            }
+            Err(error) => {
+                state.status = format!("Babel auth store detach failed: {error}");
+            }
+        },
         Message::NativeAuthSubaccountHostChanged(host_url) => {
             if let Some(flow) = state.native_auth_flow.as_mut()
                 && !flow.is_pending

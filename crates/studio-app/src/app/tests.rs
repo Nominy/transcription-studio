@@ -17675,6 +17675,7 @@ fn dashboard_uses_section_navigation_for_projects_subaccounts_and_settings() {
     }
     assert!(
         dashboard_source.contains("view_settings_screen")
+            && dashboard_source.contains("view_auth_store_settings")
             && dashboard_source.contains("view_capability_settings")
             && dashboard_source.contains("view_update_section")
             && dashboard_source.contains("view_path_toolbar"),
@@ -17690,6 +17691,13 @@ fn dashboard_uses_section_navigation_for_projects_subaccounts_and_settings() {
             "capability setting `{label}` should not stay inside the task modal"
         );
     }
+    assert!(
+        dashboard_source.contains("Detach auth store")
+            && message_source.contains("NativeAuthDetachStore")
+            && actions_source.contains("Message::NativeAuthDetachStore")
+            && actions_source.contains("detach_native_auth_store_to_executable"),
+        "dashboard settings should let local testers detach the Babel auth store next to the executable"
+    );
     assert!(
         !dashboard_source.contains("text(project.id.clone()).size(11)"),
         "dashboard project cards should not render raw project IDs under project names"

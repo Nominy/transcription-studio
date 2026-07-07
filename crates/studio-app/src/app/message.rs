@@ -85,6 +85,7 @@ pub(super) enum Message {
     NativeAuthBackToLogin,
     NativeAuthUseSubaccountMode,
     NativeAuthUseBabelMode,
+    NativeAuthDetachStore,
     NativeAuthSubaccountHostChanged(String),
     NativeAuthSubaccountCodeChanged(String),
     NativeAuthSubaccountLogin,

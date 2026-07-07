@@ -673,13 +673,33 @@ fn live_trpc_request_parts(
 }
 
 fn live_trpc_method_for_operation(operation: &str) -> LiveTrpcMethod {
-    match operation {
-        "worker.getProjects"
-        | "transcriptions.getReviewActionDataById"
-        | "transcriptions.getLatestReviewActionByProcessedTranscriptionId" => LiveTrpcMethod::Get,
-        BABEL_DASHBOARD_PROJECTS_OPERATIONS => LiveTrpcMethod::Get,
-        _ => LiveTrpcMethod::Post,
+    if operation
+        .split(',')
+        .all(|name| live_trpc_query_operation(name.trim()))
+    {
+        LiveTrpcMethod::Get
+    } else {
+        LiveTrpcMethod::Post
     }
+}
+
+fn live_trpc_query_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "worker.get"
+            | "worker.queryWorkerMetadata"
+            | "worker.getProjects"
+            | "qa.isQaWorker"
+            | "worker.getOnboardingProject"
+            | "actionItems.getWorkerActionItems"
+            | "conferencing.getMyCallCount"
+            | "milestones.getAllProjectMilestones"
+            | "worker.getActiveQuests"
+            | "timer.getActiveTemporaryRates"
+            | "transcriptions.getReviewActionDataById"
+            | "transcriptions.getLatestReviewActionByProcessedTranscriptionId"
+            | "audits.getPresignedUrls"
+    )
 }
 
 async fn execute_live_trpc_request(parts: LiveTrpcRequestParts) -> Result<String, String> {
@@ -1459,6 +1479,34 @@ mod tests {
             r#"{"success":true,"updatedAt":"2026-06-28T10:00:00Z"}"#
         );
     }
+    #[test]
+    fn normalized_trpc_mutation_payloads_drive_editor_messages() {
+        let payload =
+            r#"[{"result":{"data":{"json":{"success":true,"updatedAt":"2026-06-28T10:00:00Z"}}}}]"#;
+        let normalized = normalize_service_response_payload(payload);
+
+        assert!(matches!(
+            save_annotations_message_from_payload(&normalized),
+            Message::SaveProgressSucceeded(_)
+        ));
+        assert!(matches!(
+            submit_review_message_from_payload(&normalized),
+            Message::SubmitReviewSucceeded
+        ));
+        assert!(matches!(
+            simple_mutation_message_from_payload(
+                &normalized,
+                Message::DropClaimSucceeded,
+                Message::DropClaimFailed,
+                "drop failed",
+            ),
+            Message::DropClaimSucceeded
+        ));
+        assert!(matches!(
+            feedback_draft_message_from_payload(&normalized),
+            Message::FeedbackDraftSaved(_)
+        ));
+    }
 
     #[test]
     fn live_trpc_request_parts_match_babel_batch_post_contract() {
@@ -1523,6 +1571,126 @@ mod tests {
         assert!(parts.url.contains("%2210%22"));
         assert!(parts.redacted_summary().contains("method=Get"));
         assert!(!parts.redacted_summary().contains("super-secret"));
+    }
+
+    #[test]
+    fn live_trpc_method_routes_all_editor_requests() {
+        let auth = || LiveAuthHeaders {
+            cookie: Some("babel_session=super-secret".to_string()),
+            authorization: None,
+        };
+        let annotations = vec![json!({ "id": "annotation-1" })];
+        let cases = vec![
+            (
+                BabelServiceRequest::LoadWorkerProjects,
+                LiveTrpcMethod::Get,
+                "worker.get,worker.queryWorkerMetadata,worker.getProjects",
+            ),
+            (
+                BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
+                    review_action_id: "review-action-1".to_string(),
+                    annotations: annotations.clone(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.saveAnnotationsByReviewActionId",
+            ),
+            (
+                BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
+                    review_action_id: "review-action-1".to_string(),
+                    annotations: annotations.clone(),
+                    is_stitched_queue: false,
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.submitTranscriptReviewAction",
+            ),
+            (
+                BabelServiceRequest::DropWorkerAction(DropWorkerActionRequest {
+                    queue_id: "queue-1".to_string(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.dropWorkerAction",
+            ),
+            (
+                BabelServiceRequest::SkipReviewAction(SkipReviewActionRequest {
+                    review_action_id: "review-action-1".to_string(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.skipTranscriptReviewAction",
+            ),
+            (
+                BabelServiceRequest::AdminRateReviewAction(AdminRateReviewActionRequest {
+                    review_action_id: "review-action-1".to_string(),
+                    rating: 5,
+                    rating_reason: Some("clear".to_string()),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.adminRateTtsTranscription",
+            ),
+            (
+                BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest {
+                    queue_id: "queue-1".to_string(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.claimNextReviewActionFromReviewQueue",
+            ),
+            (
+                BabelServiceRequest::ClaimByProcessedTranscription(
+                    ClaimByProcessedTranscriptionRequest {
+                        processed_transcription_id: "processed-1".to_string(),
+                        queue_id: "queue-1".to_string(),
+                    },
+                ),
+                LiveTrpcMethod::Post,
+                "transcriptions.claimReviewActionByProcessedTranscriptionId",
+            ),
+            (
+                BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest {
+                    review_action_id: "review-action-1".to_string(),
+                }),
+                LiveTrpcMethod::Get,
+                "transcriptions.getReviewActionDataById",
+            ),
+            (
+                BabelServiceRequest::LoadLatestReviewAction(LoadLatestReviewActionRequest {
+                    processed_transcription_id: "processed-1".to_string(),
+                    queue_id: "queue-1".to_string(),
+                }),
+                LiveTrpcMethod::Get,
+                "transcriptions.getLatestReviewActionByProcessedTranscriptionId",
+            ),
+            (
+                BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveRequest {
+                    form_step_response_id: "form-step-response-1".to_string(),
+                    input_responses: vec![FeedbackInputResponse {
+                        form_input_id: "comment".to_string(),
+                        value: "Looks good".to_string(),
+                    }],
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptionFeedbackForm.saveDraft",
+            ),
+        ];
+
+        for (request, expected_method, expected_operation) in cases {
+            let envelope = request_envelope_for_service_command(&request);
+            let parts =
+                live_trpc_request_parts(&envelope, "https://dashboard.babel.audio/", auth())
+                    .expect("request parts");
+            assert_eq!(parts.method, expected_method, "{expected_operation}");
+            assert!(
+                parts.url.contains(expected_operation),
+                "url {} should contain {expected_operation}",
+                parts.url
+            );
+            match expected_method {
+                LiveTrpcMethod::Get => assert!(parts.body.is_none(), "{expected_operation}"),
+                LiveTrpcMethod::Post => assert!(parts.body.is_some(), "{expected_operation}"),
+            }
+        }
+        assert_eq!(
+            live_trpc_method_for_operation("audits.getPresignedUrls"),
+            LiveTrpcMethod::Get
+        );
     }
 
     #[test]

@@ -5,6 +5,9 @@ use iced::widget::{
 };
 use iced::{Color, Element, Fill, Length};
 
+use super::super::native_auth::{
+    default_native_auth_store_path, executable_native_auth_store_path,
+};
 use super::super::state::DashboardSection;
 use super::super::styles::{panel_style, subtle_panel_style};
 use super::super::{DEFAULT_EXPORT_PATH, DEFAULT_IMPORT_PATH, Message, StudioState};
@@ -155,6 +158,7 @@ fn view_subaccounts_screen(state: &StudioState) -> Element<'_, Message> {
 
 fn view_settings_screen(state: &StudioState) -> Element<'_, Message> {
     column![
+        view_auth_store_settings(),
         view_capability_settings(state),
         view_update_section(state),
         view_path_toolbar(state),
@@ -235,6 +239,38 @@ fn view_subaccount_section(state: &StudioState) -> Element<'_, Message> {
         .width(Fill)
         .style(subtle_panel_style)
         .into()
+}
+fn view_auth_store_settings() -> Element<'static, Message> {
+    let current_path = default_native_auth_store_path();
+    let target_label = executable_native_auth_store_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("Unavailable: {error}"));
+
+    container(
+        column![
+            column![
+                text("Babel auth store").size(15),
+                text("Detach copies the current Babel auth store next to the executable and future launches prefer that local copy.").size(12),
+            ]
+            .spacing(3),
+            horizontal_rule(1),
+            column![
+                text(format!("Current: {}", current_path.display())).size(12),
+                text(format!("Detached target: {target_label}")).size(12),
+            ]
+            .spacing(3),
+            row![
+                Space::with_width(Fill),
+                button(text("Detach auth store")).on_press(Message::NativeAuthDetachStore),
+            ]
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(8),
+    )
+    .padding(10)
+    .width(Fill)
+    .style(subtle_panel_style)
+    .into()
 }
 
 fn view_subaccount_owner_controls(state: &StudioState) -> Element<'_, Message> {

@@ -482,7 +482,7 @@ async fn audio_presigned_urls(
             "payload": { "s3Urls": request.s3_urls },
         }))
         .await?;
-    Ok(Json(json!({ "payload": payload })))
+    Ok(Json(normalize_audio_presign_payload(payload)))
 }
 
 fn require_owner(headers: &HeaderMap, config: &RelayConfig) -> Result<(), RelayError> {
@@ -632,15 +632,20 @@ fn queue_request_is_allowed(
     else {
         return true;
     };
+    project_id_for_queue_id(store, queue_id).is_some_and(|project_id| {
+        subaccount
+            .allowed_project_ids
+            .iter()
+            .any(|id| id == project_id)
+    })
+}
+
+fn project_id_for_queue_id<'a>(store: &'a RelayStore, queue_id: &str) -> Option<&'a str> {
     store
         .known_project_queues
         .get(queue_id)
-        .is_some_and(|project_id| {
-            subaccount
-                .allowed_project_ids
-                .iter()
-                .any(|id| id == project_id)
-        })
+        .map(String::as_str)
+        .or_else(|| recovered_project_id_for_queue_id(queue_id))
 }
 
 fn filter_projects_payload(payload: &str, allowed_project_ids: &[String]) -> String {
@@ -796,6 +801,71 @@ fn collect_project_likes_into<'a>(value: &'a Value, projects: &mut Vec<&'a Value
         _ => {}
     }
 }
+struct RecoveredBabelProjectQueue {
+    project_id: &'static str,
+    chunked_queue_id: &'static str,
+    stitched_queue_id: &'static str,
+}
+
+const RECOVERED_BABEL_PROJECT_QUEUES: &[RecoveredBabelProjectQueue] = &[
+    RecoveredBabelProjectQueue {
+        project_id: "0bf29f0c-371a-506a-8b77-5fffd14e5762",
+        chunked_queue_id: "f95babcc-8681-521c-a39f-66454a16347f",
+        stitched_queue_id: "a47543d7-8687-5ffe-95d3-754387fe3426",
+    },
+    RecoveredBabelProjectQueue {
+        project_id: "1c97f55a-3868-4861-9778-d39ee80cda3d",
+        chunked_queue_id: "bab7b5be-eb9e-43a0-b713-16b9d2fed66a",
+        stitched_queue_id: "638f1a1f-d811-4140-ad5e-ec92a84c03ae",
+    },
+    RecoveredBabelProjectQueue {
+        project_id: "46f0510f-4822-40dd-905c-63a5b54791d5",
+        chunked_queue_id: "866acc27-eb40-51ee-bb4e-57b4cb15fb0c",
+        stitched_queue_id: "a10c7c04-49bc-5376-97d6-03c3d154bfa8",
+    },
+    RecoveredBabelProjectQueue {
+        project_id: "72f8c096-278e-4808-b92b-c752c6a71991",
+        chunked_queue_id: "40ab3a13-32d2-5095-a67c-eaa1fb109fbd",
+        stitched_queue_id: "6d29da26-5417-5e96-a6f5-7235e1dd40e4",
+    },
+];
+
+fn recovered_project_id_for_queue_id(queue_id: &str) -> Option<&'static str> {
+    let queue_id = queue_id.trim();
+    RECOVERED_BABEL_PROJECT_QUEUES
+        .iter()
+        .find(|project| {
+            project.chunked_queue_id == queue_id || project.stitched_queue_id == queue_id
+        })
+        .map(|project| project.project_id)
+}
+
+fn normalize_audio_presign_payload(payload: String) -> Value {
+    let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+        return json!({ "payload": payload });
+    };
+    let urls = trpc_json_payload(&value)
+        .or_else(|| value.get("urls"))
+        .or_else(|| value.get("presignedUrls"))
+        .or_else(|| value.get("data"))
+        .unwrap_or(&value);
+    if urls.is_object() {
+        json!({ "urls": urls.clone() })
+    } else {
+        json!({ "payload": value })
+    }
+}
+
+fn trpc_json_payload(value: &Value) -> Option<&Value> {
+    if let Value::Array(items) = value {
+        return items.first().and_then(trpc_json_payload);
+    }
+    value
+        .pointer("/result/data/json")
+        .or_else(|| value.pointer("/data/json"))
+        .or_else(|| value.pointer("/result/data"))
+        .or_else(|| value.pointer("/data"))
+}
 
 fn is_project_like(value: &Value) -> bool {
     !project_id_for(value).is_empty()
@@ -865,6 +935,7 @@ fn random_secret(prefix: &str) -> String {
 
 fn random_human_code() -> String {
     let mut bytes = [0u8; 6];
+
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes).to_ascii_uppercase()
 }
@@ -908,6 +979,53 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+    #[test]
+    fn restricted_subaccount_allows_recovered_queue_ids_for_assigned_project() {
+        let subaccount = SubaccountRecord {
+            id: "sub-1".to_string(),
+            label: "Tester".to_string(),
+            code: "CODE".to_string(),
+            allowed_project_ids: vec!["0bf29f0c-371a-506a-8b77-5fffd14e5762".to_string()],
+            revoked: false,
+            analytics: AnalyticsRecord::default(),
+            active_claims: BTreeMap::new(),
+        };
+        let store = RelayStore::default();
+
+        assert!(queue_request_is_allowed(
+            &subaccount,
+            &json!({ "payload": { "queueId": "f95babcc-8681-521c-a39f-66454a16347f" } }),
+            &store
+        ));
+        assert!(!queue_request_is_allowed(
+            &subaccount,
+            &json!({ "payload": { "queueId": "40ab3a13-32d2-5095-a67c-eaa1fb109fbd" } }),
+            &store
+        ));
+    }
+
+    #[test]
+    fn normalizes_trpc_audio_presign_payload_for_subaccount_clients() {
+        let payload = json!([{
+            "result": {
+                "data": {
+                    "json": {
+                        "s3://bucket/audio.wav": "https://signed.example/audio.wav"
+                    }
+                }
+            }
+        }])
+        .to_string();
+
+        assert_eq!(
+            normalize_audio_presign_payload(payload),
+            json!({
+                "urls": {
+                    "s3://bucket/audio.wav": "https://signed.example/audio.wav"
+                }
+            })
+        );
+    }
 
     #[tokio::test]
     async fn owner_can_create_assign_login_relay_and_collect_analytics() {

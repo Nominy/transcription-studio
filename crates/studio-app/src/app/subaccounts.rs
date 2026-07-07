@@ -80,9 +80,22 @@ struct RelayAuth {
 pub(super) fn default_subaccount_session_store_path() -> PathBuf {
     env::var_os(SUBACCOUNT_SESSION_STORE_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            application_support_dir_named("Transcription Studio").join(DEFAULT_SESSION_FILE_NAME)
-        })
+        .unwrap_or_else(default_subaccount_session_store_path_without_env)
+}
+
+fn default_subaccount_session_store_path_without_env() -> PathBuf {
+    #[cfg(test)]
+    {
+        return env::temp_dir().join(format!(
+            "transcription-studio-test-subaccount-session-{}.json",
+            std::process::id()
+        ));
+    }
+
+    #[cfg(not(test))]
+    {
+        application_support_dir_named("Transcription Studio").join(DEFAULT_SESSION_FILE_NAME)
+    }
 }
 
 pub(super) fn default_subaccount_relay_host_url() -> String {
@@ -514,6 +527,7 @@ fn parse_presigned_map(body: &str) -> Result<BTreeMap<String, String>, String> {
         .get("urls")
         .or_else(|| source.get("presignedUrls"))
         .or_else(|| source.get("data"))
+        .or_else(|| trpc_json_payload(source))
         .unwrap_or(source);
     let map = data
         .as_object()
@@ -528,6 +542,17 @@ fn parse_presigned_map(body: &str) -> Result<BTreeMap<String, String>, String> {
                 .map(|signed| (source.clone(), signed.to_string()))
         })
         .collect())
+}
+
+fn trpc_json_payload(value: &Value) -> Option<&Value> {
+    if let Value::Array(items) = value {
+        return items.first().and_then(trpc_json_payload);
+    }
+    value
+        .pointer("/result/data/json")
+        .or_else(|| value.pointer("/data/json"))
+        .or_else(|| value.pointer("/result/data"))
+        .or_else(|| value.pointer("/data"))
 }
 
 pub(super) fn parse_owner_dashboard(body: &str) -> Result<SubaccountOwnerDashboard, String> {
@@ -670,6 +695,19 @@ mod tests {
         assert_eq!(
             normalize_relay_host_url("relay.example.test/").expect("normalized"),
             "https://relay.example.test"
+        );
+    }
+
+    #[test]
+    fn parses_trpc_audio_presign_response() {
+        let urls = parse_presigned_map(
+            r#"[{"result":{"data":{"json":{"s3://bucket/audio.wav":"https://signed.example/audio.wav"}}}}]"#,
+        )
+        .expect("presigned urls");
+
+        assert_eq!(
+            urls.get("s3://bucket/audio.wav").map(String::as_str),
+            Some("https://signed.example/audio.wav")
         );
     }
 
