@@ -869,17 +869,10 @@ fn view_waveform_scrollbar(
 
 fn waveform_interaction(
     autoscroll_active: bool,
-    hover: Option<&WaveformHoverOverlay>,
+    _hover: Option<&WaveformHoverOverlay>,
 ) -> mouse::Interaction {
     if autoscroll_active {
         return autoscroll_interaction(true);
-    }
-
-    if matches!(
-        hover.map(|hover| hover.target),
-        Some(WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle)
-    ) {
-        return mouse::Interaction::ResizingHorizontally;
     }
 
     autoscroll_interaction(false)

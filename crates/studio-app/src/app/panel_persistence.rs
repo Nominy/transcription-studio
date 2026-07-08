@@ -50,6 +50,18 @@ impl PanelCollapseStorage {
         read_stored_collapsed_state(self.values.get(key).map(String::as_str))
     }
 
+    pub(super) fn value(&self, key: &str) -> Option<&str> {
+        self.values.get(key).map(String::as_str)
+    }
+
+    pub(super) fn set_value(&mut self, key: &str, value: String) -> io::Result<()> {
+        let changed = self.values.insert(key.to_string(), value.clone()).as_ref() != Some(&value);
+        if changed {
+            self.save()?;
+        }
+        Ok(())
+    }
+
     pub(super) fn apply_tts_panel_effects(&mut self, effects: &[TtsPanelEffect]) -> io::Result<()> {
         let mut changed = false;
         for effect in effects {

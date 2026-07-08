@@ -401,11 +401,11 @@ impl StudioState {
             return;
         };
 
-        let Some(segment) = self
-            .project()
-            .and_then(|project| project.segment(&segment_id))
-            .cloned()
-        else {
+        let Some(project) = self.project().cloned() else {
+            self.status = format!("Segment `{segment_id}` was not found.");
+            return;
+        };
+        let Some(segment) = project.segment(&segment_id).cloned() else {
             self.status = format!("Segment `{segment_id}` was not found.");
             return;
         };
@@ -420,27 +420,11 @@ impl StudioState {
             return;
         }
 
-        self.select_segment_without_seek(&segment_id);
-        if !matches!(
-            hit.target,
-            WaveformHitTarget::RegionBody
-                | WaveformHitTarget::RegionStartHandle
-                | WaveformHitTarget::RegionEndHandle
-        ) {
-            return;
-        }
-
-        self.active_waveform_drag = Some(WaveformDrag {
-            lane_id: lane_id.to_string(),
-            segment_id,
-            target: hit.target,
-            grab_time_seconds: hit.time_seconds,
-            original_start_seconds: segment.start_seconds,
-            original_end_seconds: segment.end_seconds,
-            preview_start_seconds: segment.start_seconds,
-            preview_end_seconds: segment.end_seconds,
-            has_moved: false,
+        self.with_editor_mut(|editor| {
+            editor.select_segment_without_seek(&project, &segment_id);
+            editor.seek_to_time(&project, hit.time_seconds);
         });
+        self.restart_audio_playback_if_playing();
     }
 
     pub(in crate::app) fn press_timeline_autoscroll(&mut self, lane_id: &str) {

@@ -1,12 +1,13 @@
 use std::time::Instant;
 
 use iced::widget::text_editor;
-use iced::{Point, keyboard::Modifiers};
+use iced::{Event, Point, event, keyboard::Modifiers, window};
 use studio_app::{LoopStripHit, TrackFilter};
 use studio_waveform::WaveformHit;
 
 use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_input::OutsideInteractionContext;
+use super::keybinds::{HotkeyAction, KeyBinding};
 use super::review_backend_client::ReviewBackendRequest;
 use super::state::{DashboardSection, NativeCapabilityModalTab};
 use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
@@ -30,6 +31,11 @@ pub(super) enum AuditionKey {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Message {
+    RuntimeEvent {
+        event: Event,
+        status: event::Status,
+        window: window::Id,
+    },
     KeyboardModifiersChanged(Modifiers),
     RightShiftChanged(bool),
     AuditionKeyChanged(AuditionKey, bool),
@@ -209,6 +215,10 @@ pub(super) enum Message {
     ResetSubmissionIdCopied,
     ShowHotkeys,
     CloseHotkeys,
+    StartHotkeyCapture(HotkeyAction),
+    CancelHotkeyCapture,
+    ResetHotkeyBinding(HotkeyAction),
+    HotkeyBindingCaptured(HotkeyAction, KeyBinding),
     OpenFind,
     CloseFind,
     FindQueryChanged(String),

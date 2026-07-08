@@ -168,7 +168,7 @@ fn view_editor<'a>(
         content = stack![
             content,
             view_modal_layer(
-                hotkeys_dialog::view_hotkeys_dialog(),
+                hotkeys_dialog::view_hotkeys_dialog(state),
                 Some(Message::CloseHotkeys),
             ),
         ]

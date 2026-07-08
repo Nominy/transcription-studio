@@ -9,6 +9,7 @@ use studio_app::SUBMISSION_ID_COPY_RESET_DELAY_MS;
 
 use super::browser_behavior_smoke::browser_behavior_smoke_enabled;
 use super::diff_smoke::diff_workbench_smoke_mode;
+use super::keybinds::{HotkeyAction, HotkeyBindings, KeyBinding};
 use super::large_project_smoke::large_project_smoke_enabled;
 use super::workbench_shell_smoke::workbench_shell_smoke_enabled;
 use super::{AuditionKey, Message, StudioState};
@@ -24,19 +25,8 @@ const RENDERER_SMOKE_SCREENSHOT_ENV: &str = "STUDIO_SMOKE_RENDERER_SCREENSHOT";
 const CTRL_F: &str = "\u{6}";
 const CTRL_G: &str = "\u{7}";
 const CTRL_J: &str = "\n";
-const CTRL_Y: &str = "\u{19}";
-const CTRL_Z: &str = "\u{1a}";
 pub(crate) fn subscription(state: &StudioState) -> Subscription<Message> {
-    let cut_preview_overlay_active = state
-        .editor
-        .as_ref()
-        .is_some_and(|editor| editor.overlay_range.is_some());
-    let hotkey_handler = if cut_preview_overlay_active {
-        hotkey_event_message_cut_preview
-    } else {
-        hotkey_event_message
-    };
-    let mut subscriptions = vec![event::listen_with(hotkey_handler)];
+    let mut subscriptions = vec![event::listen_with(runtime_event_message)];
     if state.pointer_capture_subscription_active() {
         subscriptions.push(event::listen_with(pointer_capture_event_message));
     }
@@ -368,6 +358,49 @@ pub(super) fn browser_behavior_hotkey_report() -> BrowserBehaviorHotkeyReport {
     }
 }
 
+fn runtime_event_message(
+    event: Event,
+    status: event::Status,
+    window: window::Id,
+) -> Option<Message> {
+    let should_route = matches!(
+        &event,
+        Event::Keyboard(_)
+            | Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left | mouse::Button::Middle
+            ))
+            | Event::Window(window::Event::Unfocused | window::Event::CloseRequested)
+    );
+    should_route.then_some(Message::RuntimeEvent {
+        event,
+        status,
+        window,
+    })
+}
+
+pub(super) fn event_message_for_state(
+    state: &StudioState,
+    event: Event,
+    status: event::Status,
+    window: window::Id,
+) -> Option<Message> {
+    if let Some(action) = state.hotkey_capture {
+        return hotkey_capture_event_message(event, status, window, action);
+    }
+    let cut_preview_overlay_active = state
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.overlay_range.is_some());
+    hotkey_event_message_with_bindings(
+        event,
+        status,
+        window,
+        cut_preview_overlay_active,
+        &state.hotkey_bindings,
+    )
+}
+
+#[cfg(test)]
 fn hotkey_event_message(
     event: Event,
     status: event::Status,
@@ -376,6 +409,7 @@ fn hotkey_event_message(
     hotkey_event_message_with_cut_preview(event, status, window, false)
 }
 
+#[cfg(test)]
 fn hotkey_event_message_cut_preview(
     event: Event,
     status: event::Status,
@@ -384,11 +418,28 @@ fn hotkey_event_message_cut_preview(
     hotkey_event_message_with_cut_preview(event, status, window, true)
 }
 
+#[cfg(test)]
 fn hotkey_event_message_with_cut_preview(
+    event: Event,
+    status: event::Status,
+    window: window::Id,
+    cut_preview_overlay_active: bool,
+) -> Option<Message> {
+    hotkey_event_message_with_bindings(
+        event,
+        status,
+        window,
+        cut_preview_overlay_active,
+        &HotkeyBindings::default(),
+    )
+}
+
+fn hotkey_event_message_with_bindings(
     event: Event,
     status: event::Status,
     _window: window::Id,
     cut_preview_overlay_active: bool,
+    hotkey_bindings: &HotkeyBindings,
 ) -> Option<Message> {
     match event {
         Event::Keyboard(keyboard::Event::KeyPressed {
@@ -403,13 +454,14 @@ fn hotkey_event_message_with_cut_preview(
             {
                 return Some(Message::RightShiftChanged(true));
             }
-            hotkey_message_for_event_with_cut_preview(
+            hotkey_message_for_event_with_cut_preview_and_bindings(
                 key,
                 Some(physical_key),
                 modifiers,
                 status,
                 false,
                 cut_preview_overlay_active,
+                hotkey_bindings,
             )
         }
         Event::Keyboard(keyboard::Event::KeyReleased { key, location, .. }) => {
@@ -426,6 +478,28 @@ fn hotkey_event_message_with_cut_preview(
         }
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle)) => {
             Some(Message::TimelineAutoscrollReleased)
+        }
+        Event::Window(window::Event::Unfocused) => Some(Message::WindowUnfocused),
+        Event::Window(window::Event::CloseRequested) => Some(Message::WindowCloseRequested),
+        _ => None,
+    }
+}
+
+fn hotkey_capture_event_message(
+    event: Event,
+    _status: event::Status,
+    _window: window::Id,
+    action: HotkeyAction,
+) -> Option<Message> {
+    match event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            physical_key,
+            modifiers,
+            ..
+        }) => KeyBinding::from_physical(physical_key, modifiers)
+            .map(|binding| Message::HotkeyBindingCaptured(action, binding)),
+        Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+            Some(Message::KeyboardModifiersChanged(modifiers))
         }
         Event::Window(window::Event::Unfocused) => Some(Message::WindowUnfocused),
         Event::Window(window::Event::CloseRequested) => Some(Message::WindowCloseRequested),
@@ -522,9 +596,31 @@ fn hotkey_message_for_event_with_cut_preview(
     is_repeat: bool,
     cut_preview_overlay_active: bool,
 ) -> Option<Message> {
+    hotkey_message_for_event_with_cut_preview_and_bindings(
+        key,
+        physical_key,
+        modifiers,
+        status,
+        is_repeat,
+        cut_preview_overlay_active,
+        &HotkeyBindings::default(),
+    )
+}
+
+fn hotkey_message_for_event_with_cut_preview_and_bindings(
+    key: Key,
+    physical_key: Option<Physical>,
+    modifiers: Modifiers,
+    status: event::Status,
+    is_repeat: bool,
+    cut_preview_overlay_active: bool,
+    hotkey_bindings: &HotkeyBindings,
+) -> Option<Message> {
     if is_repeat {
         return None;
     }
+
+    let effective_physical_key = physical_key.or_else(|| fallback_physical_key_for_tests(&key));
 
     if status != event::Status::Captured
         && !modifiers.control()
@@ -544,87 +640,69 @@ fn hotkey_message_for_event_with_cut_preview(
         }
     }
 
-    let key = key.as_ref();
-
     if status == event::Status::Captured {
-        if !modifiers.control()
-            && !modifiers.alt()
-            && !modifiers.logo()
-            && !modifiers.command()
-            && matches!(key, Key::Named(Named::F3))
-        {
-            return Some(if modifiers.shift() {
-                Message::FindPrevious
-            } else {
-                Message::FindNext
-            });
+        if hotkey_bindings.matches(
+            HotkeyAction::FindPrevious,
+            effective_physical_key,
+            modifiers,
+        ) {
+            return Some(Message::FindPrevious);
         }
-
-        if modifiers.command()
-            && !modifiers.shift()
-            && !modifiers.alt()
-            && key_character_is(&key, "f", CTRL_F)
-        {
+        if hotkey_bindings.matches(HotkeyAction::FindNext, effective_physical_key, modifiers) {
+            return Some(Message::FindNext);
+        }
+        if hotkey_bindings.matches(HotkeyAction::OpenFind, effective_physical_key, modifiers) {
             return Some(Message::OpenFind);
         }
-
-        if !modifiers.shift() && !modifiers.alt() && matches!(key, Key::Named(Named::Find)) {
-            return Some(Message::OpenFind);
-        }
-
-        if modifiers.command() && !modifiers.alt() && key_character_is(&key, "g", CTRL_G) {
-            return Some(if modifiers.shift() {
-                Message::FindPrevious
-            } else {
-                Message::FindNext
-            });
-        }
-
-        if modifiers.command()
-            && !modifiers.shift()
-            && !modifiers.alt()
-            && key_character_or_code_is(&key, physical_key, "j", CTRL_J, Code::KeyJ)
-        {
+        if hotkey_bindings.matches(
+            HotkeyAction::ToggleActiveWarningAssertion,
+            effective_physical_key,
+            modifiers,
+        ) {
             return Some(Message::ToggleActiveWarningAssertion);
         }
-
-        if modifiers.command() && !modifiers.alt() && matches!(key, Key::Named(Named::Enter)) {
+        if hotkey_bindings.matches(
+            HotkeyAction::CreateRegionSubmit,
+            effective_physical_key,
+            modifiers,
+        ) {
             return Some(Message::SubmitCreateRegion);
         }
-
-        if modifiers.alt()
-            && !modifiers.control()
-            && !modifiers.logo()
-            && !modifiers.command()
-            && let Some(message) = helper_text_hotkey_message(&key, physical_key, modifiers.shift())
+        if let Some(message) =
+            helper_text_hotkey_message(effective_physical_key, modifiers, hotkey_bindings)
         {
             return Some(message);
         }
-
-        if !modifiers.control()
-            && !modifiers.alt()
-            && !modifiers.logo()
-            && !modifiers.command()
-            && matches!(key, Key::Named(Named::Escape))
-        {
+        if hotkey_bindings.matches(
+            HotkeyAction::CreateRegionEscape,
+            effective_physical_key,
+            modifiers,
+        ) {
             return Some(Message::CreateRegionInputEscapePressed);
         }
-
         return None;
     }
 
-    if cut_preview_overlay_active
-        && !modifiers.alt()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-    {
-        if key_character_or_code_is(&key, physical_key, "s", "", Code::KeyS) {
-            return Some(Message::CommitCutPreviewOverlay {
-                smart_split: !modifiers.shift(),
-            });
+    if cut_preview_overlay_active {
+        if hotkey_bindings.matches(
+            HotkeyAction::CommitCutPreviewPlainSplit,
+            effective_physical_key,
+            modifiers,
+        ) {
+            return Some(Message::CommitCutPreviewOverlay { smart_split: false });
         }
-        if !modifiers.shift() && key_character_or_code_is(&key, physical_key, "l", "", Code::KeyL) {
+        if hotkey_bindings.matches(
+            HotkeyAction::CommitCutPreviewSmartSplit,
+            effective_physical_key,
+            modifiers,
+        ) {
+            return Some(Message::CommitCutPreviewOverlay { smart_split: true });
+        }
+        if hotkey_bindings.matches(
+            HotkeyAction::LoopCutPreviewOverlay,
+            effective_physical_key,
+            modifiers,
+        ) {
             return Some(Message::LoopCutPreviewOverlay);
         }
     }
@@ -635,131 +713,134 @@ fn hotkey_message_for_event_with_cut_preview(
         && !modifiers.alt()
         && !modifiers.logo()
     {
-        if physical_key_is(physical_key, Code::Digit1) {
-            return Some(Message::AdjustPlaybackSpeed(1));
+        if physical_key_is(effective_physical_key, Code::ArrowLeft) {
+            return Some(Message::RightShiftSegmentNavigation(-1));
         }
-        if physical_key_is(physical_key, Code::Digit2) {
-            return Some(Message::AdjustPlaybackSpeed(-1));
-        }
-        match key {
-            Key::Named(Named::ArrowLeft) => return Some(Message::RightShiftSegmentNavigation(-1)),
-            Key::Named(Named::ArrowRight) => return Some(Message::RightShiftSegmentNavigation(1)),
-            _ => {}
+        if physical_key_is(effective_physical_key, Code::ArrowRight) {
+            return Some(Message::RightShiftSegmentNavigation(1));
         }
     }
 
-    if matches!(key, Key::Named(Named::Tab))
-        && !modifiers.command()
-        && !modifiers.control()
-        && !modifiers.alt()
-        && !modifiers.logo()
-    {
-        return Some(Message::GhostCursorRowNavigation(if modifiers.shift() {
-            -1
-        } else {
-            1
-        }));
+    if hotkey_bindings.matches(
+        HotkeyAction::IncreasePlaybackSpeed,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::AdjustPlaybackSpeed(1));
     }
-
-    if !modifiers.shift() && !modifiers.alt() && matches!(key, Key::Named(Named::Find)) {
+    if hotkey_bindings.matches(
+        HotkeyAction::DecreasePlaybackSpeed,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::AdjustPlaybackSpeed(-1));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::GhostCursorPrevious,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::GhostCursorRowNavigation(-1));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::GhostCursorNext,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::GhostCursorRowNavigation(1));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::FindPrevious,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::FindPrevious);
+    }
+    if hotkey_bindings.matches(HotkeyAction::FindNext, effective_physical_key, modifiers) {
+        return Some(Message::FindNext);
+    }
+    if hotkey_bindings.matches(HotkeyAction::OpenFind, effective_physical_key, modifiers) {
         return Some(Message::OpenFind);
     }
-
-    if modifiers.alt()
-        && modifiers.shift()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-    {
-        match key {
-            Key::Named(Named::ArrowUp) => return Some(Message::MergeSelectedSegmentAbove),
-            Key::Named(Named::ArrowDown) => return Some(Message::MergeSelectedSegmentBelow),
-            _ => {}
-        }
-        if key_character_or_code_is(&key, physical_key, "s", "", Code::KeyS) {
-            return Some(Message::AutoSegmentVisibleSilences);
-        }
-        if key_character_or_code_is(&key, physical_key, "g", "", Code::KeyG) {
-            return Some(Message::DraftTranscribeSelectedSegment);
-        }
+    if hotkey_bindings.matches(
+        HotkeyAction::ToggleActiveWarningAssertion,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::ToggleActiveWarningAssertion);
     }
-
-    if modifiers.alt()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-        && key_character_or_code_is(&key, physical_key, "r", "", Code::KeyR)
-    {
-        return Some(if modifiers.shift() {
-            Message::TrimAllVisibleSegmentsToAudio
-        } else {
-            Message::TrimCurrentSegmentToAudio
-        });
+    if hotkey_bindings.matches(HotkeyAction::Undo, effective_physical_key, modifiers) {
+        return Some(Message::Undo);
     }
-
-    if modifiers.alt()
-        && !modifiers.shift()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-        && key_character_or_code_is(&key, physical_key, "c", "", Code::KeyC)
-    {
+    if hotkey_bindings.matches(HotkeyAction::Redo, effective_physical_key, modifiers) {
+        return Some(Message::Redo);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MergeSelectedSegmentAbove,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::MergeSelectedSegmentAbove);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MergeSelectedSegmentBelow,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::MergeSelectedSegmentBelow);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::AutoSegmentVisibleSilences,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::AutoSegmentVisibleSilences);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::DraftTranscribeSelectedSegment,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::DraftTranscribeSelectedSegment);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::TrimAllVisibleSegmentsToAudio,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::TrimAllVisibleSegmentsToAudio);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::TrimCurrentSegmentToAudio,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::TrimCurrentSegmentToAudio);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::AutoInsertSegmentAtCaret,
+        effective_physical_key,
+        modifiers,
+    ) {
         return Some(Message::AutoInsertSegmentAtCaret);
     }
-
-    if modifiers.command() {
-        if key_character_is(&key, "f", CTRL_F) && !modifiers.shift() {
-            return Some(Message::OpenFind);
-        }
-        if key_character_is(&key, "g", CTRL_G) {
-            return Some(if modifiers.shift() {
-                Message::FindPrevious
-            } else {
-                Message::FindNext
-            });
-        }
-        if key_character_or_code_is(&key, physical_key, "j", CTRL_J, Code::KeyJ) {
-            return Some(Message::ToggleActiveWarningAssertion);
-        }
-        if key_character_or_code_is(&key, physical_key, "y", CTRL_Y, Code::KeyY) {
-            return Some(Message::Redo);
-        }
-        if key_character_or_code_is(&key, physical_key, "z", CTRL_Z, Code::KeyZ) {
-            return Some(if modifiers.shift() {
-                Message::Redo
-            } else {
-                Message::Undo
-            });
-        }
-        return None;
-    }
-
-    if !modifiers.shift()
-        && !modifiers.alt()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-        && key_character_or_code_is(&key, physical_key, "d", "", Code::KeyD)
-    {
+    if hotkey_bindings.matches(
+        HotkeyAction::DeleteSelectedSegment,
+        effective_physical_key,
+        modifiers,
+    ) {
         return Some(Message::DeleteSelectedSegment);
     }
-
-    if modifiers.alt()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-        && let Some(message) = helper_text_hotkey_message(&key, physical_key, modifiers.shift())
+    if let Some(message) =
+        helper_text_hotkey_message(effective_physical_key, modifiers, hotkey_bindings)
     {
         return Some(message);
     }
-
-    if modifiers.alt()
-        && !modifiers.shift()
-        && !modifiers.control()
-        && !modifiers.logo()
-        && !modifiers.command()
-        && matches!(key, Key::Named(Named::ArrowLeft))
-    {
+    if hotkey_bindings.matches(
+        HotkeyAction::BackToProjects,
+        effective_physical_key,
+        modifiers,
+    ) {
         return Some(Message::BackToProjects);
     }
 
@@ -767,91 +848,149 @@ fn hotkey_message_for_event_with_cut_preview(
         return None;
     }
 
-    match key {
-        Key::Named(Named::BrowserBack | Named::GoBack) => Some(Message::BackToProjects),
-        Key::Named(Named::Undo) => Some(Message::Undo),
-        Key::Named(Named::Redo) => Some(Message::Redo),
-        Key::Named(Named::Space) => Some(Message::HelperTogglePlayback),
-        Key::Named(Named::F3) => Some(if modifiers.shift() {
-            Message::FindPrevious
-        } else {
-            Message::FindNext
-        }),
-        Key::Named(Named::ArrowLeft) => Some(Message::PreviousSegment),
-        Key::Named(Named::ArrowRight) => Some(Message::NextSegment),
-        Key::Named(Named::Escape) => Some(Message::EscapePressed),
-        Key::Named(Named::Enter) => Some(Message::ActivateDefaultSurfaceAction),
-        Key::Character("l") | Key::Character("L")
-            if !physical_key
-                .is_some_and(|physical| !matches!(physical, Physical::Code(Code::KeyL))) =>
-        {
-            Some(Message::ToggleLoop)
-        }
-        Key::Character("t") | Key::Character("T")
-            if !physical_key
-                .is_some_and(|physical| !matches!(physical, Physical::Code(Code::KeyT))) =>
-        {
-            Some(Message::ToggleOverlay)
-        }
-        _ if physical_key_is(physical_key, Code::KeyL) => Some(Message::ToggleLoop),
-        _ if physical_key_is(physical_key, Code::KeyT) => Some(Message::ToggleOverlay),
-        _ => None,
+    if hotkey_bindings.matches(HotkeyAction::PlayPause, effective_physical_key, modifiers) {
+        return Some(Message::HelperTogglePlayback);
     }
-}
+    if hotkey_bindings.matches(
+        HotkeyAction::PreviousSegment,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::PreviousSegment);
+    }
+    if hotkey_bindings.matches(HotkeyAction::NextSegment, effective_physical_key, modifiers) {
+        return Some(Message::NextSegment);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::EscapePressed,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::EscapePressed);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::ActivateDefaultSurfaceAction,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::ActivateDefaultSurfaceAction);
+    }
+    if hotkey_bindings.matches(HotkeyAction::ToggleLoop, effective_physical_key, modifiers) {
+        return Some(Message::ToggleLoop);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::ToggleOverlay,
+        effective_physical_key,
+        modifiers,
+    ) {
+        return Some(Message::ToggleOverlay);
+    }
 
-fn helper_text_hotkey_message(
-    key: &Key<&str>,
-    physical_key: Option<Physical>,
-    shift: bool,
-) -> Option<Message> {
-    if physical_key_is(physical_key, Code::Backquote) {
-        return Some(Message::ResetSpeakerWorkflow);
-    }
-    if !shift && physical_key_is(physical_key, Code::Digit1) {
-        return Some(Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()));
-    }
-    if !shift && physical_key_is(physical_key, Code::Digit2) {
-        return Some(Message::SwitchSpeakerWorkflowLane("Speaker 2".to_string()));
-    }
-    if !shift && key_character_or_code_is(key, physical_key, "x", "", Code::KeyX) {
-        return Some(Message::RewindPlaybackOneSecond);
-    }
-    if !shift && key_character_or_code_is(key, physical_key, "[", "", Code::BracketLeft) {
-        return Some(Message::MoveTextBeforeCaretToPreviousSegment);
-    }
-    if !shift && key_character_or_code_is(key, physical_key, "]", "", Code::BracketRight) {
-        return Some(Message::MoveTextAfterCaretToNextSegment);
-    }
-    if !shift && key_character_or_code_is(key, physical_key, "a", "", Code::KeyA) {
-        return Some(Message::ConvertSelectedNumberToSkaz);
-    }
-    if key_character_or_code_is(key, physical_key, "f", "", Code::KeyF) {
-        return Some(if shift {
-            Message::AutofixAllLintRows
-        } else {
-            Message::AutofixCurrentLintRow
-        });
-    }
     None
 }
 
-fn key_character_is(key: &Key<&str>, expected: &str, control_character: &str) -> bool {
-    match key {
-        Key::Character(value) => {
-            value.eq_ignore_ascii_case(expected) || *value == control_character
-        }
-        _ => false,
-    }
+fn fallback_physical_key_for_tests(key: &Key) -> Option<Physical> {
+    let code = match key.as_ref() {
+        Key::Named(Named::BrowserBack | Named::GoBack) => Code::BrowserBack,
+        Key::Named(Named::Undo) => Code::Undo,
+        Key::Named(Named::Redo) => Code::Again,
+        Key::Named(Named::Space) => Code::Space,
+        Key::Named(Named::F3) => Code::F3,
+        Key::Named(Named::Find) => Code::Find,
+        Key::Named(Named::ArrowLeft) => Code::ArrowLeft,
+        Key::Named(Named::ArrowRight) => Code::ArrowRight,
+        Key::Named(Named::ArrowUp) => Code::ArrowUp,
+        Key::Named(Named::ArrowDown) => Code::ArrowDown,
+        Key::Named(Named::Escape) => Code::Escape,
+        Key::Named(Named::Enter) => Code::Enter,
+        Key::Named(Named::Tab) => Code::Tab,
+        Key::Character(value) => character_physical_code_for_tests(value)?,
+        _ => return None,
+    };
+    Some(Physical::Code(code))
 }
 
-fn key_character_or_code_is(
-    key: &Key<&str>,
+fn character_physical_code_for_tests(value: &str) -> Option<Code> {
+    Some(match value {
+        "`" => Code::Backquote,
+        "[" => Code::BracketLeft,
+        "]" => Code::BracketRight,
+        "a" | "A" | "\u{1}" => Code::KeyA,
+        "c" | "C" | "\u{3}" => Code::KeyC,
+        "d" | "D" => Code::KeyD,
+        "f" | "F" | "\u{6}" => Code::KeyF,
+        "g" | "G" | "\u{7}" => Code::KeyG,
+        "j" | "J" | "\n" => Code::KeyJ,
+        "l" | "L" => Code::KeyL,
+        "r" | "R" => Code::KeyR,
+        "s" | "S" => Code::KeyS,
+        "t" | "T" => Code::KeyT,
+        "x" | "X" | "\u{18}" => Code::KeyX,
+        "y" | "Y" | "\u{19}" => Code::KeyY,
+        "z" | "Z" | "\u{1a}" => Code::KeyZ,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        _ => return None,
+    })
+}
+
+fn helper_text_hotkey_message(
     physical_key: Option<Physical>,
-    expected: &str,
-    control_character: &str,
-    code: Code,
-) -> bool {
-    physical_key_is(physical_key, code) || key_character_is(key, expected, control_character)
+    modifiers: Modifiers,
+    hotkey_bindings: &HotkeyBindings,
+) -> Option<Message> {
+    if hotkey_bindings.matches(HotkeyAction::ResetSpeakerWorkflow, physical_key, modifiers) {
+        return Some(Message::ResetSpeakerWorkflow);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::SwitchSpeakerWorkflowLane1,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::SwitchSpeakerWorkflowLane2,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::SwitchSpeakerWorkflowLane("Speaker 2".to_string()));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::RewindPlaybackOneSecond,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::RewindPlaybackOneSecond);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MoveTextBeforeCaretToPreviousSegment,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::MoveTextBeforeCaretToPreviousSegment);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MoveTextAfterCaretToNextSegment,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::MoveTextAfterCaretToNextSegment);
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::ConvertSelectedNumberToSkaz,
+        physical_key,
+        modifiers,
+    ) {
+        return Some(Message::ConvertSelectedNumberToSkaz);
+    }
+    if hotkey_bindings.matches(HotkeyAction::AutofixAllLintRows, physical_key, modifiers) {
+        return Some(Message::AutofixAllLintRows);
+    }
+    if hotkey_bindings.matches(HotkeyAction::AutofixCurrentLintRow, physical_key, modifiers) {
+        return Some(Message::AutofixCurrentLintRow);
+    }
+    None
 }
 
 fn physical_key_is(physical_key: Option<Physical>, code: Code) -> bool {
@@ -920,7 +1059,7 @@ fn audition_key_for_physical_key(physical_key: Physical) -> Option<AuditionKey> 
 
 #[cfg(test)]
 mod tests {
-    use iced::keyboard::key::{Code, Physical};
+    use iced::keyboard::key::{Code, Named, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use iced::{Event, event, keyboard, window};
 
@@ -974,6 +1113,29 @@ mod tests {
             }),
             status,
             window::Id::unique(),
+        )
+    }
+
+    fn key_press_message_with_bindings(
+        key: Key,
+        physical_key: Physical,
+        modifiers: Modifiers,
+        status: event::Status,
+        hotkey_bindings: &HotkeyBindings,
+    ) -> Option<Message> {
+        hotkey_event_message_with_bindings(
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key,
+                physical_key,
+                location: Location::Standard,
+                modifiers,
+                text: None,
+            }),
+            status,
+            window::Id::unique(),
+            false,
+            hotkey_bindings,
         )
     }
 
@@ -1065,6 +1227,91 @@ mod tests {
                 event::Status::Ignored,
             ),
             Some(Message::ToggleOverlay)
+        );
+    }
+
+    #[test]
+    fn delete_selected_segment_default_routes_unmodified_d_only_outside_captured_text_input() {
+        assert_eq!(
+            key_press_message(
+                Key::Character("d".into()),
+                Physical::Code(Code::KeyD),
+                event::Status::Ignored,
+            ),
+            Some(Message::DeleteSelectedSegment)
+        );
+        assert_eq!(
+            key_press_message_with_modifiers(
+                Key::Named(Named::Backspace),
+                Physical::Code(Code::Backspace),
+                Modifiers::CTRL,
+                event::Status::Ignored,
+            ),
+            None,
+            "Ctrl+Backspace must stay available for browser-style text editing"
+        );
+        assert_eq!(
+            key_press_message_with_modifiers(
+                Key::Named(Named::Backspace),
+                Physical::Code(Code::Backspace),
+                Modifiers::CTRL,
+                event::Status::Captured,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn configurable_shortcuts_match_physical_code_and_replace_action_defaults() {
+        let mut bindings = HotkeyBindings::default();
+        bindings.set_override(
+            HotkeyAction::DeleteSelectedSegment,
+            KeyBinding::new(Modifiers::ALT, Code::KeyK),
+        );
+
+        assert_eq!(
+            key_press_message_with_bindings(
+                Key::Character("x".into()),
+                Physical::Code(Code::KeyK),
+                Modifiers::ALT,
+                event::Status::Ignored,
+                &bindings,
+            ),
+            Some(Message::DeleteSelectedSegment),
+            "the configured physical key code should win over the logical character"
+        );
+        assert_eq!(
+            key_press_message_with_bindings(
+                Key::Character("k".into()),
+                Physical::Code(Code::KeyB),
+                Modifiers::ALT,
+                event::Status::Ignored,
+                &bindings,
+            ),
+            None,
+            "the logical character must not trigger when the physical key is different"
+        );
+        assert_eq!(
+            key_press_message_with_bindings(
+                Key::Character("d".into()),
+                Physical::Code(Code::KeyD),
+                Modifiers::empty(),
+                event::Status::Ignored,
+                &bindings,
+            ),
+            None,
+            "overriding an action should disable its unmodified D default"
+        );
+        assert_eq!(
+            key_press_message_with_bindings(
+                Key::Named(Named::Backspace),
+                Physical::Code(Code::Backspace),
+                Modifiers::CTRL,
+                event::Status::Ignored,
+                &bindings,
+            ),
+            None,
+            "overriding an action must not introduce Ctrl+Backspace as a hidden fallback"
         );
     }
 

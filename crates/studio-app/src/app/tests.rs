@@ -3138,6 +3138,16 @@ fn helper_row_action_hotkeys_route_only_when_not_typing() {
         None
     );
     assert_eq!(
+        hotkey_message_for_physical_status(
+            Key::Named(Named::Backspace),
+            Physical::Code(Code::Backspace),
+            Modifiers::CTRL,
+            Status::Ignored,
+        ),
+        None,
+        "Ctrl+Backspace must not be a global delete-segment shortcut"
+    );
+    assert_eq!(
         hotkey_message_for_status(
             Key::Named(Named::ArrowUp),
             Modifiers::ALT | Modifiers::SHIFT,
@@ -4454,12 +4464,93 @@ fn waveform_command_press_splits_at_engine_hit_time_without_block_fraction() {
 }
 
 #[test]
-fn waveform_segment_click_selects_without_moving_playhead() {
+fn waveform_segment_click_selects_and_seeks_to_hit_time_without_dragging() {
     let mut state = stable_sample_state();
+    let original = state
+        .workflow
+        .as_ref()
+        .unwrap()
+        .project()
+        .segment("annotation-1")
+        .unwrap()
+        .clone();
+    let lane_id = original.lane_id.clone();
+    let hit_time = (original.start_seconds + original.end_seconds) / 2.0;
     state.with_editor_mut(|editor| {
         editor.playhead_seconds = 8.75;
     });
     let before_viewport = state.editor.as_ref().unwrap().viewport;
+
+    let _ = update(
+        &mut state,
+        Message::WaveformHitHovered(
+            lane_id.clone(),
+            WaveformHit {
+                target: WaveformHitTarget::RegionBody,
+                region_id: Some(original.id.clone()),
+                time_seconds: hit_time,
+            },
+        ),
+    );
+    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
+
+    let editor = state.editor.as_ref().unwrap();
+    assert_eq!(
+        editor.selected_segment_id.as_deref(),
+        Some(original.id.as_str())
+    );
+    assert_eq!(editor.playhead_seconds, hit_time);
+    assert_eq!(editor.viewport, before_viewport);
+    assert!(state.active_waveform_drag.is_none());
+    assert!(!state.audio_playback.is_active());
+
+    let _ = update(
+        &mut state,
+        Message::WaveformHitHovered(
+            lane_id.clone(),
+            WaveformHit {
+                target: WaveformHitTarget::RegionBody,
+                region_id: Some(original.id.clone()),
+                time_seconds: hit_time + 0.4,
+            },
+        ),
+    );
+    let during_hover = state
+        .workflow
+        .as_ref()
+        .unwrap()
+        .project()
+        .segment(&original.id)
+        .unwrap();
+    assert_eq!(during_hover.start_seconds, original.start_seconds);
+    assert_eq!(during_hover.end_seconds, original.end_seconds);
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.active_waveform_drag.is_none());
+
+    let _ = update(&mut state, Message::WaveformHitReleased(lane_id));
+
+    let released = state
+        .workflow
+        .as_ref()
+        .unwrap()
+        .project()
+        .segment(&original.id)
+        .unwrap();
+    assert_eq!(released.start_seconds, original.start_seconds);
+    assert_eq!(released.end_seconds, original.end_seconds);
+    assert_eq!(state.editor.as_ref().unwrap().playhead_seconds, hit_time);
+    assert!(state.active_waveform_drag.is_none());
+}
+
+#[test]
+fn waveform_segment_click_restarts_active_playback_from_hit_time() {
+    let mut state = imported_audio_state_for_audition(1.0, 3.0);
+    state.with_editor_mut(|editor| {
+        editor.playhead_seconds = 0.25;
+    });
+    let _ = update(&mut state, Message::TogglePlayback);
+    assert!(state.audio_playback.is_active());
+    assert_eq!(state.audio_playback.last_start_seconds, 0.25);
 
     let _ = update(
         &mut state,
@@ -4481,60 +4572,13 @@ fn waveform_segment_click_selects_without_moving_playhead() {
         Message::WaveformHitReleased("track-1".to_string()),
     );
 
-    assert_eq!(
-        state
-            .editor
-            .as_ref()
-            .unwrap()
-            .selected_segment_id
-            .as_deref(),
-        Some("annotation-1")
-    );
-    assert_eq!(state.editor.as_ref().unwrap().playhead_seconds, 8.75);
-    assert_eq!(state.editor.as_ref().unwrap().viewport, before_viewport);
-    assert!(!state.audio_playback.is_active());
-    assert!(state.active_waveform_drag.is_none());
-}
-
-#[test]
-fn waveform_segment_double_click_selects_without_moving_playhead() {
-    let mut state = stable_sample_state();
-    state.with_editor_mut(|editor| {
-        editor.playhead_seconds = 8.75;
-    });
-    let before_viewport = state.editor.as_ref().unwrap().viewport;
-
-    for time_seconds in [1.5, 1.7] {
-        let _ = update(
-            &mut state,
-            Message::WaveformHitHovered(
-                "track-1".to_string(),
-                WaveformHit {
-                    target: WaveformHitTarget::RegionBody,
-                    region_id: Some("annotation-1".to_string()),
-                    time_seconds,
-                },
-            ),
-        );
-        let _ = update(
-            &mut state,
-            Message::WaveformHitPressed("track-1".to_string()),
-        );
-        let _ = update(
-            &mut state,
-            Message::WaveformHitReleased("track-1".to_string()),
-        );
-
-        if time_seconds == 1.5 {
-            assert_eq!(state.editor.as_ref().unwrap().playhead_seconds, 8.75);
-        }
-    }
-
     let editor = state.editor.as_ref().unwrap();
+    assert!(editor.is_playing);
     assert_eq!(editor.selected_segment_id.as_deref(), Some("annotation-1"));
-    assert_eq!(editor.playhead_seconds, 8.75);
-    assert_eq!(editor.viewport, before_viewport);
-    assert!(!state.audio_playback.is_active());
+    assert_eq!(editor.playhead_seconds, 1.5);
+    assert!(state.audio_playback.is_active());
+    assert_eq!(state.audio_playback.last_start_seconds, 1.5);
+    assert_eq!(state.audio_playback.last_end_seconds, None);
     assert!(state.active_waveform_drag.is_none());
 }
 
@@ -4692,62 +4736,7 @@ fn identical_waveform_hover_without_drag_keeps_cached_hover_state() {
 }
 
 #[test]
-fn waveform_start_handle_drag_updates_segment_start_from_engine_hit_time() {
-    let mut state = stable_sample_state();
-    let original_end = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .end_seconds;
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: 1.0,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed("track-1".to_string()),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: 1.25,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitReleased("track-1".to_string()),
-    );
-
-    let segment = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap();
-    assert_eq!(segment.start_seconds, 1.25);
-    assert_eq!(segment.end_seconds, original_end);
-    assert!(state.active_waveform_drag.is_none());
-}
-
-#[test]
-fn waveform_drag_hover_previews_segment_without_dirtying_project_until_release() {
+fn waveform_segment_handle_press_does_not_trim_or_start_drag() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -4758,6 +4747,10 @@ fn waveform_drag_hover_previews_segment_without_dirtying_project_until_release()
         .unwrap()
         .clone();
     let lane_id = original.lane_id.clone();
+    state.with_editor_mut(|editor| {
+        editor.playhead_seconds = 8.75;
+    });
+    let before_viewport = state.editor.as_ref().unwrap().viewport;
 
     let _ = update(
         &mut state,
@@ -4765,7 +4758,7 @@ fn waveform_drag_hover_previews_segment_without_dirtying_project_until_release()
             lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: original.start_seconds,
             },
         ),
@@ -4777,46 +4770,40 @@ fn waveform_drag_hover_previews_segment_without_dirtying_project_until_release()
             lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: original.start_seconds + 0.25,
             },
         ),
     );
+    let _ = update(&mut state, Message::WaveformHitReleased(lane_id.clone()));
 
-    let during_hover = state
+    let segment = state
         .workflow
         .as_ref()
         .unwrap()
         .project()
-        .segment("annotation-1")
+        .segment(&original.id)
         .unwrap();
-    assert_eq!(during_hover.start_seconds, original.start_seconds);
-    assert_eq!(during_hover.end_seconds, original.end_seconds);
-    assert!(!state.editor.as_ref().unwrap().is_dirty);
-    let drag = state
-        .active_waveform_drag
-        .as_ref()
-        .expect("drag should remain active until pointer release");
-    assert_eq!(drag.preview_start_seconds, original.start_seconds + 0.25);
-    assert_eq!(drag.preview_end_seconds, original.end_seconds);
-
-    let _ = update(&mut state, Message::WaveformHitReleased(lane_id));
-
-    let committed = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap();
-    assert_eq!(committed.start_seconds, original.start_seconds + 0.25);
-    assert_eq!(committed.end_seconds, original.end_seconds);
-    assert!(state.editor.as_ref().unwrap().is_dirty);
+    let editor = state.editor.as_ref().unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert_eq!(
+        editor.selected_segment_id.as_deref(),
+        Some(original.id.as_str())
+    );
+    assert_eq!(editor.playhead_seconds, original.start_seconds);
+    assert_eq!(editor.viewport, before_viewport);
+    assert!(!editor.is_dirty);
     assert!(state.active_waveform_drag.is_none());
+    assert!(
+        state
+            .waveform_magnifier_overlay_for_lane(&lane_id)
+            .is_none()
+    );
 }
 
 #[test]
-fn waveform_drag_preview_updates_timeline_block_before_release() {
+fn waveform_region_body_hover_after_press_keeps_timeline_block_at_original_bounds() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -4841,7 +4828,7 @@ fn waveform_drag_preview_updates_timeline_block_before_release() {
             lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: grab_time,
             },
         ),
@@ -4853,7 +4840,7 @@ fn waveform_drag_preview_updates_timeline_block_before_release() {
             lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: grab_time + 0.4,
             },
         ),
@@ -4864,387 +4851,26 @@ fn waveform_drag_preview_updates_timeline_block_before_release() {
         let editor = state.editor.as_ref().unwrap();
         state.timeline_lanes_snapshot_for_render(&project, editor)
     };
-    let preview_block = lanes
+    let block = lanes
         .iter()
         .find(|lane| lane.lane_id == lane_id)
         .unwrap()
         .blocks
         .iter()
-        .find(|block| block.segment_id == "annotation-1")
-        .unwrap();
-    assert!((preview_block.start_seconds - (original.start_seconds + 0.4)).abs() < 0.000_001);
-    assert!((preview_block.end_seconds - (original.end_seconds + 0.4)).abs() < 0.000_001);
-
-    let project_segment = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap();
-    assert_eq!(project_segment.start_seconds, original.start_seconds);
-    assert_eq!(project_segment.end_seconds, original.end_seconds);
-}
-
-#[test]
-fn waveform_edge_drag_exposes_recovered_magnifier_overlay_model() {
-    let mut state = stable_sample_state();
-    let original = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-    let lane_id = original.lane_id.clone();
-    state.with_editor_mut(|editor| {
-        editor.viewport = TimeRange {
-            start_seconds: 0.0,
-            end_seconds: 10.0,
-        };
-    });
-
-    assert!(
-        state
-            .waveform_magnifier_overlay_for_lane(&lane_id)
-            .is_none()
-    );
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: original.start_seconds,
-            },
-        ),
-    );
-    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: original.start_seconds + 0.25,
-            },
-        ),
-    );
-
-    let overlay = state
-        .waveform_magnifier_overlay_for_lane(&lane_id)
-        .expect("edge trim drag should expose Babel's recovered magnifier overlay");
-    assert_eq!(overlay.scale, 3.0);
-    assert_eq!(overlay.width_px, 180.0);
-    assert_eq!(overlay.max_height_px, 150.0);
-    assert!((overlay.time_seconds - (original.start_seconds + 0.25)).abs() < 0.000_001);
-    assert!((overlay.fraction - ((original.start_seconds + 0.25) / 10.0) as f32).abs() < 0.000_001);
-    assert!(
-        state
-            .waveform_magnifier_overlay_for_lane("missing-lane")
-            .is_none()
-    );
-
-    let _ = update(&mut state, Message::WaveformHitReleased(lane_id.clone()));
-    assert!(
-        state
-            .waveform_magnifier_overlay_for_lane(&lane_id)
-            .is_none()
-    );
-}
-
-#[test]
-fn waveform_body_drag_does_not_show_edge_magnifier() {
-    let mut state = stable_sample_state();
-    let original = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-    let lane_id = original.lane_id.clone();
-    let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: grab_time,
-            },
-        ),
-    );
-    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: grab_time + 0.2,
-            },
-        ),
-    );
-
-    assert!(
-        state
-            .waveform_magnifier_overlay_for_lane(&lane_id)
-            .is_none(),
-        "Babel shows the 3x magnifier for edge trims, not whole-region drags"
-    );
-}
-
-#[test]
-fn waveform_drag_preview_reuses_prewarmed_segment_block_peaks() {
-    let project = cache_sized_two_lane_project();
-    let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
-    let mut state = stable_sample_state();
-    state.replace_workflow(
-        StudioWorkflow::from_project(project),
-        "Loaded waveform edge drag cache project.".to_string(),
-    );
-    state.with_editor_mut(|editor| {
-        editor.set_lane_waveform(
-            "track-1",
-            LaneWaveform::from_decoded(decoded_audio_for_duration(duration_seconds)),
-        );
-        editor.viewport = TimeRange {
-            start_seconds: 20.0,
-            end_seconds: 25.0,
-        };
-    });
-
-    let project = state.project().unwrap().clone();
-    let original = project
-        .segment("annotation-0002")
-        .expect("track-1 segment should exist in the first timeline viewport")
-        .clone();
-    {
-        let editor = state.editor.as_ref().unwrap();
-        let _ = state.timeline_lanes_snapshot_for_render(&project, editor);
-    }
-    let stats_after_prewarm = state
-        .editor
-        .as_ref()
-        .unwrap()
-        .lane_waveforms
-        .get("track-1")
-        .unwrap()
-        .segment_peak_cache_stats();
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed(original.lane_id.clone()),
-    );
-
-    for offset in [0.05, 0.1, 0.15, 0.2] {
-        let preview_start = original.start_seconds + offset;
-        let _ = update(
-            &mut state,
-            Message::WaveformHitHovered(
-                original.lane_id.clone(),
-                WaveformHit {
-                    target: WaveformHitTarget::RegionStartHandle,
-                    region_id: Some(original.id.clone()),
-                    time_seconds: preview_start,
-                },
-            ),
-        );
-        let lanes = {
-            let editor = state.editor.as_ref().unwrap();
-            state.timeline_lanes_snapshot_for_render(&project, editor)
-        };
-        let preview_block = lanes
-            .iter()
-            .find(|lane| lane.lane_id == original.lane_id)
-            .unwrap()
-            .blocks
-            .iter()
-            .find(|block| block.segment_id == original.id)
-            .unwrap();
-        assert!((preview_block.start_seconds - preview_start).abs() < 0.000_001);
-    }
-
-    let stats_after_drag_previews = state
-        .editor
-        .as_ref()
-        .unwrap()
-        .lane_waveforms
-        .get("track-1")
-        .unwrap()
-        .segment_peak_cache_stats();
-    assert_eq!(
-        stats_after_drag_previews.misses, stats_after_prewarm.misses,
-        "edge-drag preview frames should reuse the original segment's prewarmed block data instead of recomputing peaks for each temporary boundary"
-    );
-}
-
-#[test]
-fn edge_drag_preview_keeps_full_region_fill_for_existing_segment() {
-    let project = cache_sized_two_lane_project();
-    let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
-    let mut state = stable_sample_state();
-    state.replace_workflow(
-        StudioWorkflow::from_project(project),
-        "Loaded waveform edge drag jitter project.".to_string(),
-    );
-    state.with_editor_mut(|editor| {
-        editor.set_lane_waveform(
-            "track-1",
-            LaneWaveform::from_decoded(decoded_audio_for_duration(duration_seconds)),
-        );
-        editor.viewport = TimeRange {
-            start_seconds: 20.0,
-            end_seconds: 25.0,
-        };
-    });
-
-    let project = state.project().unwrap().clone();
-    let original = project
-        .segment("annotation-0002")
-        .expect("track-1 segment should exist in the first timeline viewport")
-        .clone();
-    {
-        let editor = state.editor.as_ref().unwrap();
-        let lanes = state.timeline_lanes_snapshot_for_render(&project, editor);
-        let lane = lanes
-            .iter()
-            .find(|lane| lane.lane_id == original.lane_id)
-            .unwrap();
-        assert!(lane.blocks.len() < lane.strip_blocks.len());
-    }
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed(original.lane_id.clone()),
-    );
-
-    let preview_start = original.start_seconds + 0.2;
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: preview_start,
-            },
-        ),
-    );
-
-    let lanes = {
-        let editor = state.editor.as_ref().unwrap();
-        state.timeline_lanes_snapshot_for_render(&project, editor)
-    };
-    let lane = lanes
-        .iter()
-        .find(|lane| lane.lane_id == original.lane_id)
-        .unwrap();
-    let preview_block = lane
-        .blocks
-        .iter()
         .find(|block| block.segment_id == original.id)
         .unwrap();
-    assert!((preview_block.start_seconds - preview_start).abs() < 0.000_001);
-    assert!((preview_block.end_seconds - original.end_seconds).abs() < 0.000_001);
-
-    let strip_block = lane
-        .strip_blocks
-        .iter()
-        .find(|block| block.segment_id == original.id)
-        .unwrap();
+    assert_eq!(block.start_seconds, original.start_seconds);
+    assert_eq!(block.end_seconds, original.end_seconds);
+    assert!(state.active_waveform_drag.is_none());
     assert!(
-        (strip_block.start_seconds - preview_start).abs() < 0.000_001,
-        "edge-drag preview should keep drawing the full preview region fill, not just a handle/border"
+        state
+            .waveform_magnifier_overlay_for_lane(&lane_id)
+            .is_none()
     );
-    assert!((strip_block.end_seconds - original.end_seconds).abs() < 0.000_001);
 }
 
 #[test]
-fn waveform_edge_drag_does_not_seek_playhead_to_grab_time() {
-    let mut state = stable_sample_state();
-    let original = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-    state.with_editor_mut(|editor| {
-        editor.playhead_seconds = 8.75;
-    });
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed(original.lane_id.clone()),
-    );
-
-    assert_eq!(state.editor.as_ref().unwrap().playhead_seconds, 8.75);
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds + 0.2,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitReleased(original.lane_id.clone()),
-    );
-
-    assert_eq!(state.editor.as_ref().unwrap().playhead_seconds, 8.75);
-}
-
-#[test]
-fn waveform_edge_drag_commit_preserves_viewport_instead_of_recentering_playhead() {
+fn waveform_segment_handle_click_seeks_without_trimming_or_recentering_viewport() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -5280,36 +4906,27 @@ fn waveform_edge_drag_commit_preserves_viewport_instead_of_recentering_playhead(
     );
     let _ = update(
         &mut state,
-        Message::WaveformHitHovered(
-            original.lane_id.clone(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
-                region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds + 0.2,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
         Message::WaveformHitReleased(original.lane_id.clone()),
     );
 
     let editor = state.editor.as_ref().unwrap();
-    let committed = state
+    let segment = state
         .workflow
         .as_ref()
         .unwrap()
         .project()
-        .segment("annotation-1")
+        .segment(&original.id)
         .unwrap();
-    assert_eq!(committed.start_seconds, original.start_seconds + 0.2);
-    assert_eq!(committed.end_seconds, original.end_seconds);
-    assert_eq!(editor.playhead_seconds, 80.0);
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert_eq!(editor.playhead_seconds, original.start_seconds);
     assert_eq!(editor.viewport, before_viewport);
+    assert!(!editor.is_dirty);
+    assert!(state.active_waveform_drag.is_none());
 }
 
 #[test]
-fn waveform_region_body_drag_moves_segment_without_changing_duration() {
+fn global_pointer_release_after_waveform_segment_press_does_not_commit_move() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -5319,103 +4936,47 @@ fn waveform_region_body_drag_moves_segment_without_changing_duration() {
         .segment("annotation-1")
         .unwrap()
         .clone();
-    let duration = original.end_seconds - original.start_seconds;
+    let lane_id = original.lane_id.clone();
     let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
 
     let _ = update(
         &mut state,
         Message::WaveformHitHovered(
-            "track-1".to_string(),
+            lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: grab_time,
             },
         ),
     );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed("track-1".to_string()),
-    );
+    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
     let _ = update(
         &mut state,
         Message::WaveformHitHovered(
-            "track-1".to_string(),
+            lane_id,
             WaveformHit {
                 target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: grab_time + 0.4,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitReleased("track-1".to_string()),
-    );
-
-    let moved = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap();
-    assert!((moved.start_seconds - (original.start_seconds + 0.4)).abs() < f64::EPSILON * 8.0);
-    assert!((moved.end_seconds - moved.start_seconds - duration).abs() < f64::EPSILON * 8.0);
-}
-
-#[test]
-fn global_pointer_release_finishes_captured_waveform_drag() {
-    let mut state = stable_sample_state();
-    let original = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-    let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
-
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: grab_time,
-            },
-        ),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed("track-1".to_string()),
-    );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: grab_time + 0.25,
             },
         ),
     );
-    assert!(state.active_waveform_drag.is_some());
+    assert!(state.active_waveform_drag.is_none());
 
     let _ = update(&mut state, Message::GlobalPointerReleased);
 
-    let moved = state
+    let segment = state
         .workflow
         .as_ref()
         .unwrap()
         .project()
-        .segment("annotation-1")
+        .segment(&original.id)
         .unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
     assert!(state.active_waveform_drag.is_none());
-    assert!((moved.start_seconds - (original.start_seconds + 0.25)).abs() < f64::EPSILON * 8.0);
 }
 
 #[test]
@@ -6585,7 +6146,7 @@ fn babel_day_to_day_mismatch_attached_add_region_uses_waveform_popup_overlay() {
 }
 
 #[test]
-fn separate_waveform_drag_gestures_are_separate_undo_steps() {
+fn waveform_region_body_press_hover_release_does_not_create_boundary_undo_step() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -6595,103 +6156,48 @@ fn separate_waveform_drag_gestures_are_separate_undo_steps() {
         .segment("annotation-1")
         .unwrap()
         .clone();
+    let lane_id = original.lane_id.clone();
     let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
-
-    drag_region_body(&mut state, grab_time, grab_time + 0.4);
-    let after_first_drag = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-
-    drag_region_body(&mut state, grab_time + 0.4, grab_time + 0.7);
-    let after_second_drag = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-
-    assert_ne!(
-        after_first_drag.start_seconds,
-        after_second_drag.start_seconds
-    );
-
-    let _ = update(&mut state, Message::Undo);
-
-    let restored = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap();
-    assert_eq!(restored.start_seconds, after_first_drag.start_seconds);
-    assert_eq!(restored.end_seconds, after_first_drag.end_seconds);
-}
-
-#[test]
-fn repeated_hover_updates_within_one_waveform_drag_are_one_undo_step() {
-    let mut state = stable_sample_state();
-    let original = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment("annotation-1")
-        .unwrap()
-        .clone();
-    let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
+    assert!(!state.can_undo());
 
     let _ = update(
         &mut state,
         Message::WaveformHitHovered(
-            "track-1".to_string(),
+            lane_id.clone(),
             WaveformHit {
                 target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
+                region_id: Some(original.id.clone()),
                 time_seconds: grab_time,
             },
         ),
     );
-    let _ = update(
-        &mut state,
-        Message::WaveformHitPressed("track-1".to_string()),
-    );
+    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
     for move_time in [grab_time + 0.2, grab_time + 0.4, grab_time + 0.6] {
         let _ = update(
             &mut state,
             Message::WaveformHitHovered(
-                "track-1".to_string(),
+                lane_id.clone(),
                 WaveformHit {
                     target: WaveformHitTarget::RegionBody,
-                    region_id: Some("annotation-1".to_string()),
+                    region_id: Some(original.id.clone()),
                     time_seconds: move_time,
                 },
             ),
         );
     }
-    let _ = update(
-        &mut state,
-        Message::WaveformHitReleased("track-1".to_string()),
-    );
+    let _ = update(&mut state, Message::WaveformHitReleased(lane_id));
 
-    let _ = update(&mut state, Message::Undo);
-
-    let restored = state
+    let segment = state
         .workflow
         .as_ref()
         .unwrap()
         .project()
-        .segment("annotation-1")
+        .segment(&original.id)
         .unwrap();
-    assert_eq!(restored.start_seconds, original.start_seconds);
-    assert_eq!(restored.end_seconds, original.end_seconds);
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert!(!state.can_undo());
+    assert!(state.active_waveform_drag.is_none());
 }
 
 #[test]
@@ -17232,48 +16738,6 @@ fn timeline_waveform_wires_browser_style_middle_mouse_autoscroll_handlers() {
 }
 
 #[test]
-fn timeline_waveform_uses_resize_cursor_on_region_edges() {
-    let waveform_source = include_str!("components/timeline/waveform.rs");
-    let timeline_source = include_str!("components/timeline/mod.rs");
-
-    assert!(timeline_source.contains("target: hover.hit.target"));
-    assert!(waveform_source.contains("target: WaveformHitTarget"));
-    assert!(waveform_source.contains("fn waveform_interaction("));
-    assert!(waveform_source.contains("WaveformHitTarget::RegionStartHandle"));
-    assert!(waveform_source.contains("WaveformHitTarget::RegionEndHandle"));
-    assert!(waveform_source.contains("mouse::Interaction::ResizingHorizontally"));
-    assert!(
-        waveform_source
-            .matches("let interaction = waveform_interaction(")
-            .count()
-            >= 2
-    );
-    assert!(waveform_source.contains(".interaction(interaction)"));
-}
-
-#[test]
-fn timeline_waveform_renders_recovered_edge_drag_magnifier() {
-    let state_source = include_str!("state.rs");
-    let waveform_source = include_str!("components/timeline/waveform.rs");
-    let timeline_source = include_str!("components/timeline/mod.rs");
-    let lane_source = include_str!("components/timeline/lane.rs");
-    let style_source = include_str!("styles.rs");
-
-    assert!(state_source.contains("WaveformMagnifierOverlay"));
-    assert!(state_source.contains("waveform_magnifier_overlay_for_lane"));
-    assert!(state_source.contains("WAVEFORM_MAGNIFIER_SCALE: f32 = 3.0"));
-    assert!(state_source.contains("WAVEFORM_MAGNIFIER_WIDTH_PX: f32 = 180.0"));
-    assert!(state_source.contains("WAVEFORM_MAGNIFIER_MAX_HEIGHT_PX: f32 = 150.0"));
-    assert!(timeline_source.contains("waveform_magnifier_overlay_for_lane"));
-    assert!(lane_source.contains("magnifier"));
-    assert!(waveform_source.contains("WaveformMagnifierOverlay"));
-    assert!(waveform_source.contains("view_waveform_magnifier"));
-    assert!(waveform_source.contains("view_waveform_magnifier_center_line"));
-    assert!(style_source.contains("waveform_magnifier_style"));
-    assert!(style_source.contains("waveform_magnifier_center_line_style"));
-}
-
-#[test]
 fn timeline_waveform_outlines_hovered_and_create_preview_regions() {
     let waveform_source = include_str!("components/timeline/waveform.rs");
 
@@ -17406,7 +16870,7 @@ fn hotkeys_dialog_registry_matches_recovered_babel_hotkeys() {
                     (vec!["Alt", "`"], "Reset speaker workflow lanes"),
                     (vec!["Alt", "X"], "Rewind playback 1000ms"),
                     (vec!["Shift", "1/2"], "Increase / decrease playback speed",),
-                    (vec!["D"], "Delete current segment when not typing"),
+                    (vec!["D"], "Delete current segment when not typing",),
                     (
                         vec!["Alt", "Shift", "Up/Down"],
                         "Merge with adjacent segment"
@@ -17503,7 +16967,7 @@ fn hotkeys_dialog_renders_ported_helper_extension_rows() {
         helper
             .1
             .iter()
-            .any(|row| row.0 == vec!["D"] && row.1.contains("Delete current segment"))
+            .any(|row| { row.0 == vec!["D"] && row.1.contains("Delete current segment") })
     );
     assert!(
         helper
@@ -18950,33 +18414,6 @@ fn hotkey_mapping_ignores_repeated_keydown_like_recovered_babel() {
         ),
         None
     );
-}
-
-fn drag_region_body(state: &mut StudioState, grab_time_seconds: f64, move_time_seconds: f64) {
-    let _ = update(
-        state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: grab_time_seconds,
-            },
-        ),
-    );
-    let _ = update(state, Message::WaveformHitPressed("track-1".to_string()));
-    let _ = update(
-        state,
-        Message::WaveformHitHovered(
-            "track-1".to_string(),
-            WaveformHit {
-                target: WaveformHitTarget::RegionBody,
-                region_id: Some("annotation-1".to_string()),
-                time_seconds: move_time_seconds,
-            },
-        ),
-    );
-    let _ = update(state, Message::WaveformHitReleased("track-1".to_string()));
 }
 
 fn open_create_region_dialog_from_waveform(

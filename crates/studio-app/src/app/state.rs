@@ -27,6 +27,7 @@ use super::babel_audio::{
     prepare_babel_audio_payload,
 };
 use super::hotkeys::TRANSPORT_TICK_SECONDS;
+use super::keybinds::{HOTKEY_STORAGE_KEY, HotkeyAction, HotkeyBindings, KeyBinding};
 use super::large_project_smoke::{
     large_project_live_pan_enabled, large_project_live_transcript_scroll_enabled,
 };
@@ -581,6 +582,8 @@ pub(super) struct StudioState {
     pub(super) native_capability_last_response: Option<String>,
     pub(super) native_capability_last_error: Option<String>,
     pub(super) show_hotkeys_dialog: bool,
+    pub(super) hotkey_bindings: HotkeyBindings,
+    pub(super) hotkey_capture: Option<HotkeyAction>,
     pub(super) show_exit_confirm_dialog: bool,
     pub(super) playback_followed_segment_id: Option<String>,
     pub(super) find_bar_open: bool,
@@ -628,6 +631,8 @@ impl Default for StudioState {
             panel_collapse_storage.is_collapsed(SCRIPT_CONTEXT_STORAGE_KEY);
         let original_script_panel_hidden =
             panel_collapse_storage.is_collapsed(ORIGINAL_SCRIPT_STORAGE_KEY);
+        let hotkey_bindings =
+            HotkeyBindings::from_storage(panel_collapse_storage.value(HOTKEY_STORAGE_KEY));
         let mut state = Self {
             app_surface: AppSurface::Dashboard,
             native_auth_flow: None,
@@ -741,6 +746,8 @@ impl Default for StudioState {
             draft_audio_guard: None,
             native_capability_last_response: None,
             native_capability_last_error: None,
+            hotkey_bindings,
+            hotkey_capture: None,
             show_hotkeys_dialog: false,
             show_exit_confirm_dialog: false,
             playback_followed_segment_id: None,
@@ -767,10 +774,48 @@ impl Default for StudioState {
         state.update_feedback_submit_metadata();
         state.reset_segment_drafts();
         state.refresh_dashboard_from_project_metadata();
+
         state.hydrate_reviewer_selection_from_project_metadata();
         state.hydrate_timeline_defaults_from_project_metadata();
         state.load_lane_waveforms_from_base(bundled_assets_dir());
         state
+    }
+}
+
+impl StudioState {
+    pub(super) fn start_hotkey_capture(&mut self, action: HotkeyAction) {
+        self.hotkey_capture = Some(action);
+        self.status = "Press the new key combination.".to_string();
+    }
+
+    pub(super) fn cancel_hotkey_capture(&mut self) {
+        self.hotkey_capture = None;
+        self.status = "Hotkey change canceled.".to_string();
+    }
+
+    pub(super) fn apply_hotkey_binding(&mut self, action: HotkeyAction, binding: KeyBinding) {
+        self.hotkey_bindings.set_override(action, binding);
+        self.hotkey_capture = None;
+        self.persist_hotkey_bindings();
+        self.status = "Hotkey updated.".to_string();
+    }
+
+    pub(super) fn reset_hotkey_binding(&mut self, action: HotkeyAction) {
+        self.hotkey_bindings.reset_override(action);
+        if self.hotkey_capture == Some(action) {
+            self.hotkey_capture = None;
+        }
+        self.persist_hotkey_bindings();
+        self.status = "Hotkey reset to default.".to_string();
+    }
+
+    fn persist_hotkey_bindings(&mut self) {
+        if let Err(error) = self
+            .panel_collapse_storage
+            .set_value(HOTKEY_STORAGE_KEY, self.hotkey_bindings.to_storage())
+        {
+            self.status = format!("Hotkey preference could not be saved: {error}");
+        }
     }
 }
 

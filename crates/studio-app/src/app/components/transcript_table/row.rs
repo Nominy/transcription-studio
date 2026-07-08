@@ -835,6 +835,21 @@ fn babel_transcript_key_binding_with_selection(
         }
     }
 
+    if event.modifiers.control()
+        && !event.modifiers.alt()
+        && !event.modifiers.logo()
+        && !event.modifiers.shift()
+        && matches!(
+            event.key.as_ref(),
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace)
+        )
+    {
+        return Some(text_editor::Binding::Sequence(vec![
+            text_editor::Binding::Select(text_editor::Motion::WordLeft),
+            text_editor::Binding::Backspace,
+        ]));
+    }
+
     if event.modifiers.command() && !event.modifiers.alt() {
         if transcript_key_character_is(&event.key, "a", "\u{1}") {
             return Some(iced::widget::text_editor::Binding::SelectAll);
@@ -984,7 +999,7 @@ fn transcript_should_swallow_modified_text_input(
 mod tests {
     use iced::keyboard::{Key, Modifiers, key::Named};
     use iced::mouse;
-    use iced::widget::text_editor::{Binding, KeyPress, Status};
+    use iced::widget::text_editor::{Binding, KeyPress, Motion, Status};
 
     use super::{Message, TagSuggestionKeyboardAction};
 
@@ -1141,6 +1156,23 @@ mod tests {
                 key_press(Key::Named(Named::Paste), Modifiers::empty()),
             ),
             Some(Binding::Paste)
+        );
+    }
+
+    #[test]
+    fn babel_transcript_editor_ctrl_backspace_deletes_previous_word_like_browser() {
+        let binding = super::babel_transcript_key_binding(
+            "annotation-1",
+            false,
+            key_press(Key::Named(Named::Backspace), Modifiers::CTRL),
+        );
+
+        assert_eq!(
+            binding,
+            Some(Binding::Sequence(vec![
+                Binding::Select(Motion::WordLeft),
+                Binding::Backspace,
+            ]))
         );
     }
 

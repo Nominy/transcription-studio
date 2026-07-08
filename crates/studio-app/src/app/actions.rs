@@ -12,6 +12,7 @@ use super::components::{
 use super::diff_smoke::{diff_workbench_renderer_screenshot_task, diff_workbench_smoke_mode};
 use super::find;
 use super::formatting::{parse_speed, zoom_factor_after_timeline_wheel_pixels};
+use super::hotkeys;
 use super::large_project_smoke::{
     large_project_renderer_screenshot_task, large_project_smoke_enabled,
 };
@@ -138,6 +139,17 @@ fn trace_timeline_wheel_route(
 
 pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message> {
     match message {
+        Message::RuntimeEvent {
+            event,
+            status,
+            window,
+        } => {
+            if let Some(routed_message) =
+                hotkeys::event_message_for_state(state, event, status, window)
+            {
+                return update(state, routed_message);
+            }
+        }
         Message::KeyboardModifiersChanged(modifiers) => {
             state.keyboard_modifiers = modifiers;
             if !modifiers.shift() {
@@ -736,7 +748,16 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::ResetSubmissionIdCopied => state.copied_submission_id = false,
         Message::ShowHotkeys => state.show_hotkeys_dialog = true,
-        Message::CloseHotkeys => state.show_hotkeys_dialog = false,
+        Message::CloseHotkeys => {
+            state.show_hotkeys_dialog = false;
+            state.hotkey_capture = None;
+        }
+        Message::StartHotkeyCapture(action) => state.start_hotkey_capture(action),
+        Message::CancelHotkeyCapture => state.cancel_hotkey_capture(),
+        Message::ResetHotkeyBinding(action) => state.reset_hotkey_binding(action),
+        Message::HotkeyBindingCaptured(action, binding) => {
+            state.apply_hotkey_binding(action, binding)
+        }
         Message::OpenFind => {
             state.open_find_bar();
             return dispatch_pending_services(

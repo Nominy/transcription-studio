@@ -18,6 +18,7 @@ mod helper_text;
 mod helper_timeline;
 mod hotkeys;
 mod io_actions;
+mod keybinds;
 mod large_project_smoke;
 mod message;
 mod native_auth;
