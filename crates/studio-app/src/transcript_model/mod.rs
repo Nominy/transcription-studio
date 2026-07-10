@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::babel_metadata::project_is_read_only;
 use crate::linter::{
-    LintKind, LintStatus, ServerLintSnapshot, lint_segment_issues, server_lint_issues_for_segment,
+    LintKind, LintStatus, ProjectLintAnalysis, ServerLintSnapshot, server_lint_issues_for_segment,
     warning_key,
 };
 use crate::track_filter::TrackFilter;
@@ -173,6 +173,7 @@ pub(crate) fn build_transcript_rows(
     let mut segments: Vec<_> = project.segments.iter().collect();
     segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
     let row_availability = compute_row_availability(project);
+    let lint_analysis = ProjectLintAnalysis::new(project);
     let selected_compare_action_id = selected_compare_action_id(project);
     let track_options = build_transcript_track_options(project);
     let reviewer_lookup = ReviewerLookup::for_project(project);
@@ -187,9 +188,9 @@ pub(crate) fn build_transcript_rows(
             let annotation_type_label = annotation_kind.label();
             let mut raw_lint_issues = server_lint_issues_for_segment(server_lint_snapshot, segment);
             raw_lint_issues.extend(if annotation_kind.is_transcription() {
-                lint_segment_issues(project, segment)
+                lint_analysis.lint_segment_issues(segment)
             } else {
-                crate::linter::lint_region_issues(project, segment)
+                lint_analysis.lint_region_issues(segment)
             });
             let has_asserted_warning = raw_lint_issues.iter().any(|issue| {
                 warning_key(segment, issue).is_some_and(|key| asserted_warning_keys.contains(&key))
@@ -407,4 +408,104 @@ fn speaker_label(project: &Project, speaker_id: &str) -> String {
         .find(|speaker| speaker.id == speaker_id)
         .map(|speaker| speaker.label.clone())
         .unwrap_or_else(|| speaker_id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        hint::black_box,
+        time::Instant,
+    };
+
+    use studio_core::{AudioLane, Project, Segment, Speaker};
+
+    use super::build_transcript_rows;
+    use crate::track_filter::TrackFilter;
+
+    #[test]
+    #[ignore = "release-only cold transcript analysis benchmark"]
+    fn cold_large_project_transcript_analysis() {
+        let project = large_lint_project();
+        let active_regions = BTreeMap::new();
+        let asserted_warnings = BTreeSet::new();
+        let mut samples = Vec::with_capacity(7);
+        let mut issue_count = 0;
+
+        for _ in 0..7 {
+            let started = Instant::now();
+            let rows = black_box(build_transcript_rows(
+                black_box(&project),
+                &TrackFilter::All,
+                None,
+                &active_regions,
+                false,
+                &asserted_warnings,
+                None,
+            ));
+            samples.push(started.elapsed());
+            assert_eq!(rows.len(), 1_200);
+            issue_count = rows.iter().map(|row| row.lint_issues.len()).sum();
+            black_box(rows);
+        }
+
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2];
+        let p95 = samples[samples.len() - 1];
+        assert_eq!(issue_count, 4_493);
+        eprintln!(
+            "cold_large_project_transcript_analysis rows=1200 lanes=2 samples={} issues={issue_count} median_us={} p95_us={}",
+            samples.len(),
+            median.as_micros(),
+            p95.as_micros(),
+        );
+    }
+
+    fn large_lint_project() -> Project {
+        let speakers = (0..2)
+            .map(|index| Speaker {
+                id: format!("speaker-{index}"),
+                label: format!("Speaker {index}"),
+            })
+            .collect::<Vec<_>>();
+        let lanes = (0..2)
+            .map(|index| AudioLane {
+                id: format!("lane-{index}"),
+                speaker_id: format!("speaker-{index}"),
+                label: format!("Speaker {index}"),
+                source_path: format!("speaker_{index}.wav"),
+            })
+            .collect::<Vec<_>>();
+        let segments = (0..1_200)
+            .map(|index| {
+                let lane_index = index % 2;
+                let pair_index = (index / 2) % 2;
+                let text = if pair_index == 0 {
+                    "mid length duplicate text"
+                } else {
+                    "long duplicate transcription content"
+                };
+                let start_seconds = index as f64 * 0.5;
+                Segment {
+                    id: format!("segment-{index:04}"),
+                    source_annotation_id: None,
+                    speaker_id: format!("speaker-{lane_index}"),
+                    lane_id: format!("lane-{lane_index}"),
+                    start_seconds,
+                    end_seconds: start_seconds + 1.2,
+                    text: text.to_string(),
+                    metadata: BTreeMap::new(),
+                }
+            })
+            .collect();
+
+        Project {
+            id: "large-lint-project".to_string(),
+            name: "Large lint project".to_string(),
+            speakers,
+            lanes,
+            segments,
+            metadata: BTreeMap::new(),
+        }
+    }
 }

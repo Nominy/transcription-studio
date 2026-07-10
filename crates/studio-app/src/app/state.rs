@@ -617,6 +617,7 @@ pub(super) struct StudioState {
     pub(super) transcript_layout_generation: u64,
     pub(super) transcript_layout_cache: RefCell<TranscriptLayoutRenderCache>,
     pub(super) timeline_lanes_generation: u64,
+    pub(super) timeline_segment_index_generation: u64,
     pub(super) timeline_segment_index_cache: RefCell<TimelineSegmentIndexRenderCache>,
     pub(super) timeline_lanes_cache: RefCell<TimelineLanesRenderCache>,
     pub(super) timeline_static_block_prewarm_cache: RefCell<TimelineStaticBlockPrewarmCache>,
@@ -786,6 +787,7 @@ impl Default for StudioState {
             transcript_layout_generation: 0,
             transcript_layout_cache: RefCell::new(TranscriptLayoutRenderCache::default()),
             timeline_lanes_generation: 0,
+            timeline_segment_index_generation: 0,
             timeline_segment_index_cache: RefCell::new(TimelineSegmentIndexRenderCache::default()),
             timeline_lanes_cache: RefCell::new(TimelineLanesRenderCache::default()),
             timeline_static_block_prewarm_cache: RefCell::new(
@@ -2016,7 +2018,7 @@ impl StudioState {
         &self,
         project: &Project,
     ) -> (Arc<TimelineSegmentIndex>, TimeRange) {
-        let generation = self.transcript_rows_generation;
+        let generation = self.timeline_segment_index_generation;
         let mut cache = self.timeline_segment_index_cache.borrow_mut();
         if let Some(entry) = cache.entry.as_ref()
             && entry.generation == generation
@@ -2336,6 +2338,14 @@ impl StudioState {
     }
 
     #[cfg(test)]
+    pub(super) fn timeline_static_block_prewarm_lane_count(&self) -> usize {
+        self.timeline_static_block_prewarm_cache
+            .borrow()
+            .prewarmed_lanes
+            .len()
+    }
+
+    #[cfg(test)]
     pub(super) fn timeline_project_bounds_cache_miss_count(&self) -> usize {
         self.timeline_segment_index_cache.borrow().miss_count
     }
@@ -2359,6 +2369,8 @@ impl StudioState {
 
     fn invalidate_transcript_rows_cache(&mut self) {
         self.transcript_rows_generation = self.transcript_rows_generation.wrapping_add(1);
+        self.timeline_segment_index_generation =
+            self.timeline_segment_index_generation.wrapping_add(1);
         self.transcript_rows_cache.borrow_mut().entry = None;
         self.timeline_segment_index_cache.borrow_mut().entry = None;
         self.invalidate_transcript_layout_cache();
@@ -5273,7 +5285,11 @@ impl StudioState {
     }
 
     pub(super) fn invalidate_lint_view_caches(&mut self) {
-        self.invalidate_transcript_rows_cache();
+        self.transcript_rows_generation = self.transcript_rows_generation.wrapping_add(1);
+        self.transcript_rows_cache.borrow_mut().entry = None;
+        self.invalidate_transcript_layout_cache();
+        self.transport_strip_cache.borrow_mut().entries.clear();
+        self.submit_control_cache.borrow_mut().entry = None;
     }
 
     pub(super) fn fail_skip_chunk(&mut self, error: String) {

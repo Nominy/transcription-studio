@@ -38,9 +38,26 @@ jobs:
       - name: Scan git history
         run: gitleaks detect --source . --redact --verbose
 
+  fmt:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
   rust:
     name: Rust workspace (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: fmt
 
     strategy:
       fail-fast: false
@@ -61,16 +78,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}
+          cache-on-failure: true
 
       - name: Install Node.js
         if: runner.os == 'Windows'
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Check formatting
-        run: cargo fmt --all --check
 
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings

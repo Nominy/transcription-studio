@@ -11,7 +11,7 @@ on:
         options:
           - alpha
       version:
-        description: Optional package version override. Blank uses crates/studio-app/Cargo.toml.
+        description: Optional version assertion. If set, it must match crates/studio-app/Cargo.toml.
         required: false
         type: string
       target:
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: velopack-macos-${{ inputs.channel }}-${{ inputs.target }}
+  group: velopack-macos-${{ inputs.channel }}
   cancel-in-progress: false
 
 jobs:
@@ -97,6 +97,9 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
       STUDIO_DEFAULT_UPDATE_FEED_URL: ${{ matrix.feed_url }}
       REMOTE_PATH: ${{ inputs.remote_base_path }}/${{ matrix.feed_suffix }}
+      FEED_SUFFIX: ${{ matrix.feed_suffix }}
+      PUBLISH_DIR: ${{ github.workspace }}/target/velopack/Publish
+      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
       HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
       APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
       APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
@@ -109,13 +112,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: alpha-${{ matrix.runtime }}
+          cache-on-failure: true
+
       - name: Install .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
-      - name: Install Velopack CLI
-        run: dotnet tool update -g vpk
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
 
       - name: Import Developer ID signing assets
         if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
@@ -155,15 +164,9 @@ jobs:
       - name: Build Velopack artifacts
         shell: bash
         run: |
+          rm -rf target/velopack/Releases target/velopack/Publish
           chmod +x ./tools/package-alpha-macos.sh
           ./tools/package-alpha-macos.sh
-
-      - name: Upload Velopack artifacts
-        uses: actions/upload-artifact@v5
-        with:
-          name: transcription-studio-${{ inputs.channel }}-${{ matrix.target }}
-          path: target/velopack/Releases/*
-          if-no-files-found: error
 
       - name: Publish artifacts to VPS
         if: ${{ inputs.publish_to_vps }}
@@ -178,16 +181,178 @@ jobs:
           : "${ALPHA_SSH_HOST:?ALPHA_SSH_HOST secret is required when publish_to_vps is true.}"
           : "${ALPHA_SSH_USER:?ALPHA_SSH_USER secret is required when publish_to_vps is true.}"
           : "${ALPHA_SSH_PRIVATE_KEY:?ALPHA_SSH_PRIVATE_KEY secret is required when publish_to_vps is true.}"
+          if [[ ! "$REMOTE_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || \
+             [[ "$REMOTE_PATH" == *"//"* ]] || \
+             [[ "$REMOTE_PATH" =~ (^|/)\.\.(/|$) ]]; then
+            echo "remote_base_path produced an unsafe remote path: $REMOTE_PATH" >&2
+            exit 1
+          fi
+          remote_platform_root="/var/tmp/transcription-studio-alpha-incoming/$FEED_SUFFIX"
+          if [[ "$REMOTE_PATH" == "$remote_platform_root" ]] || \
+             [[ "$REMOTE_PATH" == "$remote_platform_root/"* ]] || \
+             [[ "$remote_platform_root" == "$REMOTE_PATH/"* ]]; then
+            echo "Remote live and incoming paths must not overlap: $REMOTE_PATH and $remote_platform_root" >&2
+            exit 1
+          fi
 
           port="${ALPHA_SSH_PORT:-22}"
           key_path="$RUNNER_TEMP/transcription_studio_alpha_deploy_key"
           printf '%s\n' "$ALPHA_SSH_PRIVATE_KEY" > "$key_path"
           chmod 600 "$key_path"
 
+          manifest="$PUBLISH_DIR/publish-manifest.json"
+          version="$(python3 - "$manifest" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], "r", encoding="utf-8-sig") as handle:
+              print(json.load(handle)["Version"])
+          PY
+          )"
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "Unsafe publish version: $version" >&2
+            exit 1
+          fi
+          manifest_hash="$(shasum -a 256 "$manifest" | cut -d ' ' -f 1)"
+          deployment_id="$version-${manifest_hash:0:16}"
+          remote_deployment="$remote_platform_root/deployments/$deployment_id"
+          remote_payload="$remote_deployment/Publish"
+          remote_rollback_root="$remote_platform_root/rollbacks"
+          remote_lock="$remote_platform_root/publish.lock"
+
           target="${ALPHA_SSH_USER}@${ALPHA_SSH_HOST}"
           ssh_args=(-i "$key_path" -p "$port" -o StrictHostKeyChecking=accept-new)
           scp_args=(-i "$key_path" -P "$port" -o StrictHostKeyChecking=accept-new)
 
-          ssh "${ssh_args[@]}" "$target" "mkdir -p '$REMOTE_PATH'"
-          scp "${scp_args[@]}" target/velopack/Releases/* "${target}:$REMOTE_PATH/"
-          ssh "${ssh_args[@]}" "$target" "find '$REMOTE_PATH' -maxdepth 1 -type f -printf '%f %s bytes\n' | sort"
+          ssh "${ssh_args[@]}" "$target" \
+            "rm -rf '$remote_deployment' && mkdir -p '$remote_deployment'"
+          scp "${scp_args[@]}" -r "$PUBLISH_DIR" "${target}:$remote_deployment/"
+          ssh "${ssh_args[@]}" "$target" sh -s -- \
+            "$remote_payload" "$REMOTE_PATH" "$remote_rollback_root" \
+            "$remote_lock" "$CHANNEL" "$deployment_id" <<'REMOTE'
+          set -eu
+          incoming=$1
+          live=$2
+          rollback_root=$3
+          lock_path=$4
+          channel=$5
+          deployment_id=$6
+          manifest="$incoming/publish-manifest.json"
+
+          verify_manifest() {
+            root=$1
+            kind=${2:-all}
+            python3 - "$root" "$manifest" "$kind" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1]).resolve()
+          kind = sys.argv[3]
+          with open(sys.argv[2], "r", encoding="utf-8-sig") as handle:
+              manifest = json.load(handle)
+          for entry in manifest["Files"]:
+              if kind != "all" and entry["Kind"] != kind:
+                  continue
+              relative = entry["RelativeFileName"]
+              pure = pathlib.PurePosixPath(relative)
+              if (
+                  not relative
+                  or pure.is_absolute()
+                  or any(part in ("", ".", "..") for part in pure.parts)
+                  or "\\" in relative
+                  or "\n" in relative
+                  or "\r" in relative
+              ):
+                  raise SystemExit(f"unsafe publish path: {relative!r}")
+              path = (root / pathlib.Path(*pure.parts)).resolve()
+              try:
+                  path.relative_to(root)
+              except ValueError as error:
+                  raise SystemExit(f"publish path escapes root: {relative}") from error
+              if not path.is_file():
+                  raise SystemExit(f"missing publish file: {relative}")
+              if path.stat().st_size != int(entry["Size"]):
+                  raise SystemExit(f"publish size mismatch: {relative}")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest.casefold() != str(entry["SHA256"]).casefold():
+                  raise SystemExit(f"publish SHA-256 mismatch: {relative}")
+          PY
+          }
+
+          list_assets() {
+            python3 - "$manifest" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], "r", encoding="utf-8-sig") as handle:
+              manifest = json.load(handle)
+          for entry in manifest["Files"]:
+              if entry["Kind"] == "asset":
+                  print(entry["RelativeFileName"])
+          PY
+          }
+
+          promote_file() {
+            relative=$1
+            source="$incoming/$relative"
+            destination="$live/$relative"
+            mkdir -p "$(dirname "$destination")"
+            if [ -f "$destination" ] && cmp -s "$source" "$destination"; then
+              return
+            fi
+            temporary="$destination.incoming-$deployment_id"
+            cp -p "$source" "$temporary"
+            mv -f "$temporary" "$destination"
+          }
+
+          verify_manifest "$incoming" all
+          mkdir -p "$live" "$rollback_root" "$(dirname "$lock_path")"
+          exec 9>"$lock_path"
+          flock 9
+
+          # Versioned packages are immutable: old feed hashes and rollback metadata depend on them.
+          list_assets | while IFS= read -r relative; do
+            case "$relative" in
+              *.nupkg)
+                if [ -f "$live/$relative" ] && ! cmp -s "$incoming/$relative" "$live/$relative"; then
+                  printf 'Refusing to replace existing versioned package with different bytes: %s\n' \
+                    "$relative" >&2
+                  exit 1
+                fi
+                ;;
+            esac
+          done
+
+          rollback="$rollback_root/$(date -u +%Y%m%dT%H%M%SZ)-$deployment_id"
+          mkdir -p "$rollback"
+          for relative in "assets.$channel.json" "RELEASES-$channel" "releases.$channel.json"; do
+            if [ -f "$live/$relative" ]; then
+              cp -p "$live/$relative" "$rollback/$relative"
+            fi
+          done
+
+          list_assets | while IFS= read -r relative; do
+            promote_file "$relative"
+          done
+          verify_manifest "$live" asset
+
+          # Promote the primary update feed last, after every referenced package exists.
+          promote_file "assets.$channel.json"
+          promote_file "RELEASES-$channel"
+          promote_file "releases.$channel.json"
+          verify_manifest "$live" metadata
+          rm -rf "$incoming"
+          printf 'Published %s to %s; previous metadata: %s\n' \
+            "$deployment_id" "$live" "$rollback"
+          REMOTE
+          ssh "${ssh_args[@]}" "$target" \
+            "find '$REMOTE_PATH' -maxdepth 1 -type f -printf '%f %s bytes\n' | sort"
+
+      - name: Upload Velopack publish payload
+        uses: actions/upload-artifact@v5
+        with:
+          name: transcription-studio-${{ inputs.channel }}-${{ matrix.target }}
+          path: target/velopack/Publish/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

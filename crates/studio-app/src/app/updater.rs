@@ -68,7 +68,7 @@ impl Default for UpdatePanelState {
         Self {
             feed_url: configured_update_feed_url(),
             current_version: env!("CARGO_PKG_VERSION").to_string(),
-            build_commit: option_env!("STUDIO_GIT_COMMIT")
+            build_commit: option_env!("STUDIO_BUILD_GIT_COMMIT")
                 .unwrap_or("unknown")
                 .to_string(),
             phase: UpdatePhase::Idle,

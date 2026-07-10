@@ -16708,6 +16708,120 @@ fn moving_playback_reuses_cached_timeline_segment_index_across_viewport_misses()
 }
 
 #[test]
+fn lint_only_invalidation_preserves_timeline_waveform_caches() {
+    let mut state = stable_sample_state();
+    state.replace_workflow(
+        StudioWorkflow::from_project(cache_sized_two_lane_project()),
+        "Loaded lint invalidation project.".to_string(),
+    );
+    let project = state.project().unwrap().clone();
+    let duration_seconds = TimeRange::for_project(&project).end_seconds + 1.0;
+    state.with_editor_mut(|editor| {
+        editor.set_lane_waveform(
+            "track-1",
+            LaneWaveform::from_decoded(decoded_audio_for_duration(duration_seconds)),
+        );
+        editor.set_lane_waveform(
+            "track-2",
+            LaneWaveform::from_decoded(decoded_audio_for_duration(duration_seconds)),
+        );
+    });
+
+    let (rows_before, lanes_before, overview_before) = {
+        let editor = state.editor.as_ref().unwrap();
+        let rows = state.transcript_rows_snapshot_for_render(&project, editor);
+        let _ = state.transcript_layout_for_render(rows.as_ref(), editor);
+        let lanes = state.timeline_lanes_snapshot_for_render(&project, editor);
+        let overview = state.overview_waveform_snapshot_for_render(&project, editor);
+        let _ = state.transport_strip_snapshot_for_render(&project, editor);
+        let _ = state.submit_control_snapshot_for_render(&project, editor);
+        (rows, lanes, overview)
+    };
+    let rows_misses = state.transcript_rows_cache_miss_count();
+    let layout_misses = state.transcript_layout_cache_miss_count();
+    let lanes_misses = state.timeline_lanes_cache_miss_count();
+    let index_misses = state.timeline_segment_index_cache_miss_count();
+    let overview_misses = state.overview_waveform_cache_miss_count();
+    let transport_misses = state.transport_strip_cache_miss_count();
+    let submit_misses = state.submit_control_cache_miss_count();
+    let prewarmed_lanes = state.timeline_static_block_prewarm_lane_count();
+    let static_block_counts = state
+        .editor
+        .as_ref()
+        .unwrap()
+        .lane_waveforms
+        .values()
+        .map(LaneWaveform::cached_static_block_count)
+        .collect::<Vec<_>>();
+    assert!(prewarmed_lanes > 0);
+    assert!(static_block_counts.iter().all(|count| *count > 0));
+
+    let revision = state.editor.as_ref().unwrap().current_edit_revision();
+    assert!(state.install_server_lint_snapshot(
+        revision,
+        vec![ServerLintIssue {
+            annotation_id: project.segments[0].id.clone(),
+            reason: "Server lint changed only.".to_string(),
+            severity: LintSeverity::Warning,
+        }],
+    ));
+
+    let (rows_after, lanes_after, overview_after) = {
+        let editor = state.editor.as_ref().unwrap();
+        let rows = state.transcript_rows_snapshot_for_render(&project, editor);
+        let _ = state.transcript_layout_for_render(rows.as_ref(), editor);
+        let lanes = state.timeline_lanes_snapshot_for_render(&project, editor);
+        let overview = state.overview_waveform_snapshot_for_render(&project, editor);
+        let _ = state.transport_strip_snapshot_for_render(&project, editor);
+        let _ = state.submit_control_snapshot_for_render(&project, editor);
+        (rows, lanes, overview)
+    };
+
+    assert!(!std::sync::Arc::ptr_eq(&rows_before, &rows_after));
+    assert!(rows_after.iter().any(|row| {
+        row.lint_issues
+            .iter()
+            .any(|issue| issue.message == "Server lint changed only.")
+    }));
+    assert!(std::sync::Arc::ptr_eq(&lanes_before, &lanes_after));
+    assert!(std::sync::Arc::ptr_eq(
+        &overview_before.overview,
+        &overview_after.overview
+    ));
+    assert_eq!(state.transcript_rows_cache_miss_count(), rows_misses + 1);
+    assert_eq!(
+        state.transcript_layout_cache_miss_count(),
+        layout_misses + 1
+    );
+    assert_eq!(
+        state.transport_strip_cache_miss_count(),
+        transport_misses + 1
+    );
+    assert_eq!(state.submit_control_cache_miss_count(), submit_misses + 1);
+    assert_eq!(state.timeline_lanes_cache_miss_count(), lanes_misses);
+    assert_eq!(
+        state.timeline_segment_index_cache_miss_count(),
+        index_misses
+    );
+    assert_eq!(state.overview_waveform_cache_miss_count(), overview_misses);
+    assert_eq!(
+        state.timeline_static_block_prewarm_lane_count(),
+        prewarmed_lanes
+    );
+    assert_eq!(
+        state
+            .editor
+            .as_ref()
+            .unwrap()
+            .lane_waveforms
+            .values()
+            .map(LaneWaveform::cached_static_block_count)
+            .collect::<Vec<_>>(),
+        static_block_counts
+    );
+}
+
+#[test]
 fn moving_playback_reuses_cached_project_bounds_across_viewport_misses() {
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -18325,10 +18439,6 @@ fn updater_defaults_to_alpha_feed_and_current_version() {
 
     assert_eq!(state.updater.feed_url, DEFAULT_UPDATE_FEED_URL);
     assert_eq!(state.updater.current_version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(
-        state.updater.build_commit,
-        option_env!("STUDIO_GIT_COMMIT").unwrap_or("unknown")
-    );
     assert!(matches!(state.updater.phase, UpdatePhase::Idle));
     assert_eq!(
         state.updater.status_label(),
@@ -18336,6 +18446,75 @@ fn updater_defaults_to_alpha_feed_and_current_version() {
     );
     assert!(state.updater.can_check());
     assert!(!state.updater.can_install());
+}
+
+#[test]
+fn updater_build_metadata_uses_the_exact_packaged_commit_or_unknown() {
+    let state = StudioState::default();
+
+    assert_eq!(
+        state.updater.build_commit,
+        option_env!("STUDIO_BUILD_GIT_COMMIT").unwrap_or("unknown")
+    );
+}
+
+#[test]
+fn build_metadata_does_not_depend_on_a_git_aware_build_script() {
+    assert!(
+        !Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("build.rs")
+            .exists()
+    );
+
+    let updater_source = include_str!("updater.rs");
+    assert!(updater_source.contains("option_env!(\"STUDIO_BUILD_GIT_COMMIT\")"));
+    assert!(!updater_source.contains("STUDIO_GIT_COMMIT"));
+}
+
+#[test]
+fn cargo_dev_profile_keeps_incremental_builds_with_reduced_debug_info() {
+    let workspace_manifest = include_str!("../../../../Cargo.toml");
+    let dev_profile = workspace_manifest
+        .split_once("[profile.dev]")
+        .expect("workspace manifest should define a dev profile")
+        .1
+        .split("\n[")
+        .next()
+        .expect("dev profile should have a body");
+
+    assert!(dev_profile.lines().any(|line| line.trim() == "debug = 1"));
+    assert!(
+        dev_profile
+            .lines()
+            .any(|line| line.trim() == "incremental = true")
+    );
+}
+
+#[test]
+fn ci_runs_format_once_and_restores_per_os_rust_caches() {
+    let workflow = include_str!("../../../../.github/workflows/ci.yml");
+    assert_eq!(workflow.matches("cargo fmt --all --check").count(), 1);
+
+    let fmt_job = workflow
+        .split_once("\n  fmt:\n")
+        .expect("CI should define one formatting job")
+        .1
+        .split_once("\n  rust:\n")
+        .expect("formatting should be separate from Rust jobs")
+        .0;
+    assert!(fmt_job.contains("runs-on: ubuntu-latest"));
+
+    let rust_job = workflow
+        .split_once("\n  rust:\n")
+        .expect("CI should define Rust jobs")
+        .1;
+    assert!(rust_job.contains("needs: fmt"));
+    assert!(rust_job.contains("Swatinem/rust-cache@v2"));
+    assert!(rust_job.contains("shared-key: ci-${{ runner.os }}"));
+    assert!(rust_job.contains("cache-on-failure: true"));
+    assert!(!rust_job.contains("cargo fmt --all --check"));
+    assert!(rust_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
+    assert!(rust_job.contains("cargo test --workspace --all-targets --locked"));
 }
 
 #[test]
@@ -18433,28 +18612,163 @@ fn windows_release_main_uses_gui_subsystem_to_avoid_console_window() {
 }
 
 #[test]
-fn windows_alpha_release_scripts_use_velopack_and_ethernetservers() {
+fn windows_alpha_release_scripts_publish_only_atomic_current_payloads() {
     let package_script = include_str!("../../../../tools/package-alpha-windows.ps1");
     let publish_script = include_str!("../../../../tools/publish-alpha-windows.ps1");
     let release_doc = include_str!("../../../../docs/release/windows-alpha.md");
     let workflow = include_str!("../../../../.github/workflows/windows-alpha.yml");
+    let tool_manifest = include_str!("../../../../.config/dotnet-tools.json");
 
-    assert!(package_script.contains("vpk pack"));
-    assert!(package_script.contains("--channel"));
-    assert!(package_script.contains("TranscriptionStudio.exe"));
-    assert!(workflow.contains("$packageArgs = @{"));
-    assert!(workflow.contains("Channel = $env:CHANNEL"));
-    assert!(workflow.contains(".\\tools\\package-alpha-windows.ps1 @packageArgs"));
-    assert!(!workflow.contains("$args = @("));
-    assert!(!workflow.contains("$packageArgs = @("));
-    assert!(publish_script.contains("$packageArgs = @{"));
-    assert!(publish_script.contains("OutputDir = $releaseDir"));
-    assert!(publish_script.contains("ssh ethernetservers"));
-    assert!(publish_script.contains("scp"));
+    assert!(package_script.contains("New-PublishDirectory"));
+    assert!(package_script.contains("publish-manifest.json"));
+    assert!(package_script.contains("Version override"));
+    assert!(package_script.contains("RelativeFileName"));
+    assert!(workflow.contains("dotnet tool restore"));
+    assert!(workflow.contains("dotnet tool run vpk -- download http"));
+    assert!(!workflow.contains("Invoke-RestMethod"));
+    assert!(!workflow.contains("foreach ($asset in $feed.Assets)"));
+    assert!(workflow.contains("Remove-Item -LiteralPath $releaseDir -Recurse -Force"));
+    assert!(workflow.contains("Swatinem/rust-cache@v2"));
+    assert!(workflow.contains("STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}"));
+    assert!(workflow.contains("path: target/velopack/Publish/"));
+    assert!(!workflow.contains("path: target/velopack/Releases/"));
+    assert!(workflow.contains("compression-level: 0"));
+    assert!(workflow.contains("retention-days: 3"));
+    let publish_step = workflow.find("- name: Publish artifacts to VPS").unwrap();
+    let artifact_step = workflow
+        .find("- name: Upload Velopack publish payload")
+        .unwrap();
+    assert!(publish_step < artifact_step);
+
+    assert!(publish_script.contains("RemoteIncomingRoot"));
+    assert!(publish_script.contains("publish-manifest.json"));
+    assert!(publish_script.contains("flock 9"));
+    assert!(publish_script.contains("verify_manifest \"$incoming\" all"));
+    assert!(publish_script.contains("Assert-NonOverlappingRemotePaths"));
+    assert!(publish_script.contains("Refusing to replace existing versioned package"));
+    assert!(publish_script.contains("$deploymentVersion = $Version.Replace(\"+\", \"_\")"));
+    let assets_promotion = publish_script
+        .find("promote_file \"assets.$channel.json\"")
+        .unwrap();
+    let feed_promotion = publish_script
+        .find("promote_file \"releases.$channel.json\"")
+        .unwrap();
+    assert!(assets_promotion < feed_promotion);
     assert!(publish_script.contains("/var/www/transcription-studio/alpha/win-x64"));
+    assert!(tool_manifest.contains("\"vpk\""));
+    assert!(tool_manifest.contains("\"version\": \"1.2.0\""));
     assert!(release_doc.contains("STUDIO_UPDATE_FEED_URL"));
     assert!(release_doc.contains("releases.alpha.json"));
     assert!(release_doc.contains("TranscriptionStudio-alpha-Setup.exe"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_alpha_packager_validates_fake_asset_index_and_selects_only_current_files() {
+    use std::collections::BTreeSet;
+    use std::process::Command;
+
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sandbox = repo_root
+        .join("target")
+        .join(format!("release-script-test-{}", std::process::id()));
+    let output_dir = sandbox.join("Releases");
+    let stage_dir = sandbox.join("stage");
+    let publish_dir = sandbox.join("Publish");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let source_exe = sandbox.join("studio-app.exe");
+    std::fs::write(&source_exe, b"MZ fake executable").unwrap();
+    let fake_vpk = sandbox.join("fake-vpk.cmd");
+    std::fs::write(&fake_vpk, b"@echo off\r\nexit /b 0\r\n").unwrap();
+
+    std::fs::write(
+        output_dir.join("assets.alpha.json"),
+        r#"[{"RelativeFileName":"current.nupkg","Type":"Full"},{"RelativeFileName":"current-setup.exe","Type":"Installer"}]"#,
+    )
+    .unwrap();
+    std::fs::write(output_dir.join("current.nupkg"), b"current package").unwrap();
+    std::fs::write(output_dir.join("current-setup.exe"), b"current installer").unwrap();
+    std::fs::write(output_dir.join("historical.nupkg"), b"historical package").unwrap();
+    std::fs::write(output_dir.join("RELEASES-alpha"), b"legacy feed").unwrap();
+    std::fs::write(output_dir.join("releases.alpha.json"), br#"{"Assets":[]}"#).unwrap();
+
+    let package_script = repo_root.join("tools/package-alpha-windows.ps1");
+    let run_packager = |publish: &std::path::Path| {
+        Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&package_script)
+            .arg("-SkipBuild")
+            .arg("-SourceExe")
+            .arg(&source_exe)
+            .arg("-VpkCommand")
+            .arg(&fake_vpk)
+            .arg("-StageDir")
+            .arg(&stage_dir)
+            .arg("-OutputDir")
+            .arg(&output_dir)
+            .arg("-PublishDir")
+            .arg(publish)
+            .output()
+            .unwrap()
+    };
+
+    let success = run_packager(&publish_dir);
+    assert!(
+        success.status.success(),
+        "fake packager failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&success.stdout),
+        String::from_utf8_lossy(&success.stderr)
+    );
+    let published = std::fs::read_dir(&publish_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        published,
+        [
+            "RELEASES-alpha",
+            "assets.alpha.json",
+            "current-setup.exe",
+            "current.nupkg",
+            "publish-manifest.json",
+            "releases.alpha.json",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    assert!(!publish_dir.join("historical.nupkg").exists());
+
+    std::fs::write(
+        output_dir.join("assets.alpha.json"),
+        r#"[{"RelativeFileName":"../escape.nupkg","Type":"Full"}]"#,
+    )
+    .unwrap();
+    let traversal = run_packager(&sandbox.join("TraversalPublish"));
+    assert!(!traversal.status.success());
+    assert!(
+        String::from_utf8_lossy(&traversal.stderr).contains("outside repo root"),
+        "{}",
+        String::from_utf8_lossy(&traversal.stderr)
+    );
+
+    std::fs::write(
+        output_dir.join("assets.alpha.json"),
+        r#"[{"RelativeFileName":"missing.nupkg","Type":"Full"}]"#,
+    )
+    .unwrap();
+    let missing = run_packager(&sandbox.join("MissingPublish"));
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("missing file"),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+
+    std::fs::remove_dir_all(sandbox).unwrap();
 }
 
 #[test]

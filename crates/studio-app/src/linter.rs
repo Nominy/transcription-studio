@@ -3,6 +3,8 @@ mod tags;
 mod text_hygiene;
 mod timing;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use studio_core::{Project, Segment};
 
 use crate::{BabelProjectLintTagConfig, resolve_babel_project_lint_tag_config};
@@ -27,8 +29,8 @@ use text_hygiene::{
     has_unpaired_quotes, intra_segment_duplicate_in_text, unsupported_unicode_in_text,
 };
 use timing::{
-    DISTANCE_BETWEEN_SEGMENTS_REASON, OVERLAPPING_SEGMENTS_REASON, has_too_close_next_segment,
-    overlaps_same_lane, pairwise_overlap_issue_count,
+    DISTANCE_BETWEEN_SEGMENTS_REASON, OVERLAPPING_SEGMENTS_REASON, SegmentTimingAnalysis,
+    analyze_project_timing,
 };
 
 pub use tags::{RUSSIAN_SQUARE_BRACKET_TAGS, RUSSIAN_STYLE_TAGS};
@@ -94,15 +96,52 @@ pub struct ServerLintIssue {
     pub severity: LintSeverity,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ServerLintSnapshot {
     pub revision: u64,
     pub issues: Vec<ServerLintIssue>,
+    issue_indices_by_annotation_id: BTreeMap<String, Vec<usize>>,
 }
+
+impl std::fmt::Debug for ServerLintSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServerLintSnapshot")
+            .field("revision", &self.revision)
+            .field("issues", &self.issues)
+            .finish()
+    }
+}
+
+impl PartialEq for ServerLintSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision && self.issues == other.issues
+    }
+}
+
+impl Eq for ServerLintSnapshot {}
 
 impl ServerLintSnapshot {
     pub fn new(revision: u64, issues: Vec<ServerLintIssue>) -> Self {
-        Self { revision, issues }
+        let mut issue_indices_by_annotation_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, issue) in issues.iter().enumerate() {
+            issue_indices_by_annotation_id
+                .entry(issue.annotation_id.clone())
+                .or_default()
+                .push(index);
+        }
+        Self {
+            revision,
+            issues,
+            issue_indices_by_annotation_id,
+        }
+    }
+
+    fn issue_indices(&self, annotation_id: &str) -> &[usize] {
+        self.issue_indices_by_annotation_id
+            .get(annotation_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 }
 
@@ -339,6 +378,121 @@ pub enum LintKind {
     LongSegment,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SegmentProjectLintAnalysis {
+    timing: SegmentTimingAnalysis,
+    duplicated_long_segment: bool,
+    adjacent_mid_length_duplicate: bool,
+    lane_exists: bool,
+}
+
+pub(crate) struct ProjectLintAnalysis<'a> {
+    config: BabelProjectLintTagConfig,
+    lane_ids: BTreeSet<&'a str>,
+    by_segment_id: BTreeMap<&'a str, SegmentProjectLintAnalysis>,
+}
+
+impl<'a> ProjectLintAnalysis<'a> {
+    pub(crate) fn new(project: &'a Project) -> Self {
+        let config = resolve_babel_project_lint_tag_config(project);
+        let lane_ids = project
+            .lanes
+            .iter()
+            .map(|lane| lane.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut by_segment_id = analyze_project_timing(project)
+            .into_iter()
+            .map(|(segment_id, timing)| {
+                (
+                    segment_id,
+                    SegmentProjectLintAnalysis {
+                        timing,
+                        ..SegmentProjectLintAnalysis::default()
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for segment in &project.segments {
+            by_segment_id.entry(&segment.id).or_default().lane_exists =
+                lane_ids.contains(segment.lane_id.as_str());
+        }
+
+        let mut sorted_segments = project
+            .segments
+            .iter()
+            .filter(|segment| !segment.text.trim().is_empty() && segment.start_seconds.is_finite())
+            .collect::<Vec<_>>();
+        sorted_segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+
+        let mut seen_long_content = BTreeSet::new();
+        for segment in sorted_segments.iter().copied() {
+            let content = segment.text.trim();
+            if content.len() >= 30 && !seen_long_content.insert(content) {
+                by_segment_id
+                    .entry(&segment.id)
+                    .or_default()
+                    .duplicated_long_segment = true;
+            }
+        }
+        for segment in project
+            .segments
+            .iter()
+            .filter(|segment| !segment.start_seconds.is_finite())
+        {
+            let content = segment.text.trim();
+            if content.len() >= 30 && seen_long_content.contains(content) {
+                by_segment_id
+                    .entry(&segment.id)
+                    .or_default()
+                    .duplicated_long_segment = true;
+            }
+        }
+        for pair in sorted_segments.windows(2) {
+            let current = pair[0];
+            let next = pair[1];
+            let content = next.text.trim();
+            if (20..30).contains(&content.len()) && current.text.trim() == content {
+                by_segment_id
+                    .entry(&next.id)
+                    .or_default()
+                    .adjacent_mid_length_duplicate = true;
+            }
+        }
+
+        Self {
+            config,
+            lane_ids,
+            by_segment_id,
+        }
+    }
+
+    pub(crate) fn lint_segment_issues(&self, segment: &Segment) -> Vec<LintStatus> {
+        lint_segment_issues_with_analysis(self, segment)
+    }
+
+    pub(crate) fn lint_region_issues(&self, segment: &Segment) -> Vec<LintStatus> {
+        let segment_analysis = self.segment_analysis(segment);
+        let mut issues = lint_identity_issues(self, segment, segment_analysis);
+        if segment_analysis.timing.overlaps_same_lane {
+            issues.push(LintStatus::error(
+                LintKind::Overlap,
+                OVERLAPPING_SEGMENTS_REASON,
+            ));
+        }
+        issues
+    }
+
+    fn segment_analysis(&self, segment: &Segment) -> SegmentProjectLintAnalysis {
+        self.by_segment_id
+            .get(segment.id.as_str())
+            .copied()
+            .unwrap_or(SegmentProjectLintAnalysis {
+                lane_exists: self.lane_ids.contains(segment.lane_id.as_str()),
+                ..SegmentProjectLintAnalysis::default()
+            })
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn lint_segment(project: &Project, segment: &Segment) -> LintStatus {
     lint_segment_issues(project, segment)
@@ -347,9 +501,9 @@ pub(crate) fn lint_segment(project: &Project, segment: &Segment) -> LintStatus {
         .unwrap_or_else(|| LintStatus::pass("OK"))
 }
 
+#[cfg(test)]
 pub(crate) fn lint_segment_issues(project: &Project, segment: &Segment) -> Vec<LintStatus> {
-    let config = resolve_babel_project_lint_tag_config(project);
-    lint_segment_issues_with_config(project, segment, config)
+    ProjectLintAnalysis::new(project).lint_segment_issues(segment)
 }
 
 pub(crate) fn server_lint_issues_for_segment(
@@ -360,16 +514,49 @@ pub(crate) fn server_lint_issues_for_segment(
         return Vec::new();
     };
 
-    snapshot
-        .issues
-        .iter()
-        .filter(|issue| server_lint_issue_matches_segment(issue, segment))
-        .map(|issue| LintStatus {
+    let direct_indices = snapshot.issue_indices(&segment.id);
+    let source_indices = segment
+        .source_annotation_id
+        .as_deref()
+        .filter(|source_id| *source_id != segment.id.as_str())
+        .map(|source_id| snapshot.issue_indices(source_id))
+        .unwrap_or_default();
+    let mut direct_position = 0;
+    let mut source_position = 0;
+    let mut issues = Vec::with_capacity(direct_indices.len() + source_indices.len());
+    while direct_position < direct_indices.len() || source_position < source_indices.len() {
+        let direct_index = direct_indices.get(direct_position).copied();
+        let source_index = source_indices.get(source_position).copied();
+        let index = match (direct_index, source_index) {
+            (Some(direct), Some(source)) if direct <= source => {
+                direct_position += 1;
+                if direct == source {
+                    source_position += 1;
+                }
+                direct
+            }
+            (Some(_), Some(source)) => {
+                source_position += 1;
+                source
+            }
+            (Some(direct), None) => {
+                direct_position += 1;
+                direct
+            }
+            (None, Some(source)) => {
+                source_position += 1;
+                source
+            }
+            (None, None) => break,
+        };
+        let issue = &snapshot.issues[index];
+        issues.push(LintStatus {
             severity: issue.severity,
             message: issue.reason.clone(),
             kind: LintKind::BabelServer,
-        })
-        .collect()
+        });
+    }
+    issues
 }
 
 pub(crate) fn server_lint_issue_matches_segment(
@@ -383,12 +570,13 @@ pub(crate) fn server_lint_issue_matches_segment(
             .is_some_and(|source_id| issue.annotation_id == source_id)
 }
 
-fn lint_segment_issues_with_config(
-    project: &Project,
+fn lint_segment_issues_with_analysis(
+    analysis: &ProjectLintAnalysis<'_>,
     segment: &Segment,
-    config: BabelProjectLintTagConfig,
 ) -> Vec<LintStatus> {
-    let mut issues = lint_identity_issues(project, segment);
+    let segment_analysis = analysis.segment_analysis(segment);
+    let config = analysis.config;
+    let mut issues = lint_identity_issues(analysis, segment, segment_analysis);
     if config.rule_enabled("empty-content") && segment.text.trim().is_empty() {
         issues.push(LintStatus::error(LintKind::EmptyText, EMPTY_CONTENT_REASON));
     }
@@ -449,7 +637,7 @@ fn lint_segment_issues_with_config(
         ));
     }
     if config.rule_enabled("overlapping-segments") {
-        for _ in 0..pairwise_overlap_issue_count(project, segment) {
+        for _ in 0..segment_analysis.timing.adjacent_overlap_issue_count {
             issues.push(LintStatus::error(
                 LintKind::Overlap,
                 OVERLAPPING_SEGMENTS_REASON,
@@ -457,7 +645,7 @@ fn lint_segment_issues_with_config(
         }
     }
     if config.rule_enabled("distance-between-annotations")
-        && has_too_close_next_segment(project, segment)
+        && segment_analysis.timing.has_too_close_next_segment
     {
         issues.push(LintStatus::error(
             LintKind::DistanceBetweenSegments,
@@ -527,14 +715,14 @@ fn lint_segment_issues_with_config(
             ),
         ));
     }
-    if config.rule_enabled("duplicated-segments") && has_duplicated_long_segment(project, segment) {
+    if config.rule_enabled("duplicated-segments") && segment_analysis.duplicated_long_segment {
         issues.push(LintStatus::warning(
             LintKind::DuplicatedSegments,
             "Exact duplicate of another segment in this transcript.",
         ));
     }
     if config.rule_enabled("duplicated-segments-adjacent")
-        && has_adjacent_mid_length_duplicate(project, segment)
+        && segment_analysis.adjacent_mid_length_duplicate
     {
         issues.push(LintStatus::warning(
             LintKind::DuplicatedSegmentsAdjacent,
@@ -660,19 +848,16 @@ fn lint_segment_issues_with_config(
     issues
 }
 
+#[cfg(test)]
 pub(crate) fn lint_region_issues(project: &Project, segment: &Segment) -> Vec<LintStatus> {
-    let mut issues = lint_identity_issues(project, segment);
-    if overlaps_same_lane(project, segment) {
-        issues.push(LintStatus::error(
-            LintKind::Overlap,
-            OVERLAPPING_SEGMENTS_REASON,
-        ));
-    }
-
-    issues
+    ProjectLintAnalysis::new(project).lint_region_issues(segment)
 }
 
-fn lint_identity_issues(project: &Project, segment: &Segment) -> Vec<LintStatus> {
+fn lint_identity_issues(
+    _analysis: &ProjectLintAnalysis<'_>,
+    segment: &Segment,
+    segment_analysis: SegmentProjectLintAnalysis,
+) -> Vec<LintStatus> {
     let mut issues = Vec::new();
     if !segment.start_seconds.is_finite()
         || !segment.end_seconds.is_finite()
@@ -683,47 +868,11 @@ fn lint_identity_issues(project: &Project, segment: &Segment) -> Vec<LintStatus>
             "start before end is required",
         ));
     }
-    if !project.lanes.iter().any(|lane| lane.id == segment.lane_id) {
+    if !segment_analysis.lane_exists {
         issues.push(LintStatus::error(LintKind::UnknownTrack, "unknown track"));
     }
 
     issues
-}
-
-fn has_duplicated_long_segment(project: &Project, segment: &Segment) -> bool {
-    let content = segment.text.trim();
-    if content.len() < 30 {
-        return false;
-    }
-
-    sorted_transcription_segments(project)
-        .into_iter()
-        .take_while(|candidate| candidate.id != segment.id)
-        .any(|candidate| candidate.text.trim() == content)
-}
-
-fn has_adjacent_mid_length_duplicate(project: &Project, segment: &Segment) -> bool {
-    let content = segment.text.trim();
-    if content.len() < 20 || content.len() >= 30 {
-        return false;
-    }
-
-    let sorted = sorted_transcription_segments(project);
-    sorted.windows(2).any(|window| {
-        let current = window[0];
-        let next = window[1];
-        next.id == segment.id && current.text.trim() == content
-    })
-}
-
-fn sorted_transcription_segments(project: &Project) -> Vec<&Segment> {
-    let mut segments = project
-        .segments
-        .iter()
-        .filter(|segment| !segment.text.trim().is_empty() && segment.start_seconds.is_finite())
-        .collect::<Vec<_>>();
-    segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
-    segments
 }
 
 pub(crate) fn warning_key(segment: &Segment, lint: &LintStatus) -> Option<String> {
@@ -737,7 +886,10 @@ mod tests {
 
     use studio_core::{AudioLane, Project, Segment, Speaker};
 
-    use super::{LintKind, lint_segment, lint_segment_issues};
+    use super::{
+        LintKind, LintSeverity, ProjectLintAnalysis, ServerLintIssue, ServerLintSnapshot,
+        lint_region_issues, lint_segment, lint_segment_issues, server_lint_issues_for_segment,
+    };
 
     #[test]
     fn linter_registry_matches_recovered_babel_rule_contract() {
@@ -1054,6 +1206,160 @@ mod tests {
 
             assert_eq!(kinds, vec![expected_kind]);
         }
+    }
+
+    #[test]
+    fn project_analysis_matches_single_segment_lint_apis() {
+        let mut project = project_with_segment_text("", &[]);
+        project.segments = vec![
+            Segment {
+                id: "overlap-left".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "lane-1".to_string(),
+                start_seconds: 0.0,
+                end_seconds: 3.0,
+                text: "alpha beta gamma delta".to_string(),
+                metadata: BTreeMap::new(),
+            },
+            Segment {
+                id: "overlap-right".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "lane-1".to_string(),
+                start_seconds: 2.5,
+                end_seconds: 4.0,
+                text: "alpha beta gamma delta".to_string(),
+                metadata: BTreeMap::new(),
+            },
+            Segment {
+                id: "long-original".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "lane-1".to_string(),
+                start_seconds: 6.0,
+                end_seconds: 7.0,
+                text: "alpha beta gamma delta epsilon zeta".to_string(),
+                metadata: BTreeMap::new(),
+            },
+            Segment {
+                id: "long-duplicate".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "missing".to_string(),
+                start_seconds: 8.0,
+                end_seconds: 9.0,
+                text: "alpha beta gamma delta epsilon zeta".to_string(),
+                metadata: BTreeMap::new(),
+            },
+            Segment {
+                id: "region".to_string(),
+                source_annotation_id: None,
+                speaker_id: "speaker-1".to_string(),
+                lane_id: "lane-1".to_string(),
+                start_seconds: 1.0,
+                end_seconds: 1.5,
+                text: String::new(),
+                metadata: BTreeMap::from([(
+                    "type".to_string(),
+                    serde_json::json!("non-transcription"),
+                )]),
+            },
+        ];
+        let analysis = ProjectLintAnalysis::new(&project);
+
+        for segment in &project.segments {
+            let is_transcription = segment
+                .metadata
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("transcription")
+                == "transcription";
+            let contextual = if is_transcription {
+                analysis.lint_segment_issues(segment)
+            } else {
+                analysis.lint_region_issues(segment)
+            };
+            let single_segment = if is_transcription {
+                lint_segment_issues(&project, segment)
+            } else {
+                lint_region_issues(&project, segment)
+            };
+            assert_eq!(contextual, single_segment, "segment {}", segment.id);
+        }
+    }
+
+    #[test]
+    fn server_lint_index_preserves_order_and_multiplicity_across_both_ids() {
+        let mut segment = project_with_segment_text("clean", &[]).segments.remove(0);
+        segment.id = "internal".to_string();
+        segment.source_annotation_id = Some("source".to_string());
+        let snapshot = ServerLintSnapshot::new(
+            0,
+            vec![
+                ServerLintIssue {
+                    annotation_id: "source".to_string(),
+                    reason: "source first".to_string(),
+                    severity: LintSeverity::Warning,
+                },
+                ServerLintIssue {
+                    annotation_id: "internal".to_string(),
+                    reason: "internal second".to_string(),
+                    severity: LintSeverity::Error,
+                },
+                ServerLintIssue {
+                    annotation_id: "source".to_string(),
+                    reason: "source third".to_string(),
+                    severity: LintSeverity::Warning,
+                },
+                ServerLintIssue {
+                    annotation_id: "unmatched".to_string(),
+                    reason: "not returned".to_string(),
+                    severity: LintSeverity::Error,
+                },
+                ServerLintIssue {
+                    annotation_id: "internal".to_string(),
+                    reason: "internal fourth".to_string(),
+                    severity: LintSeverity::Error,
+                },
+            ],
+        );
+        assert_eq!(
+            server_lint_issues_for_segment(Some(&snapshot), &segment)
+                .into_iter()
+                .map(|issue| issue.message)
+                .collect::<Vec<_>>(),
+            vec![
+                "source first",
+                "internal second",
+                "source third",
+                "internal fourth",
+            ]
+        );
+
+        segment.source_annotation_id = Some(segment.id.clone());
+        let coincident = ServerLintSnapshot::new(
+            0,
+            vec![
+                ServerLintIssue {
+                    annotation_id: "internal".to_string(),
+                    reason: "duplicate one".to_string(),
+                    severity: LintSeverity::Warning,
+                },
+                ServerLintIssue {
+                    annotation_id: "internal".to_string(),
+                    reason: "duplicate two".to_string(),
+                    severity: LintSeverity::Warning,
+                },
+            ],
+        );
+        assert_eq!(
+            server_lint_issues_for_segment(Some(&coincident), &segment)
+                .into_iter()
+                .map(|issue| issue.message)
+                .collect::<Vec<_>>(),
+            vec!["duplicate one", "duplicate two"]
+        );
     }
 
     fn lint_issues_with_project_metadata(

@@ -7,11 +7,16 @@ The private GitHub repository is expected to build and package the alpha channel
 `CI` runs on pushes, pull requests, and manual dispatch:
 
 - Gitleaks scans the full git history with redacted output.
-- Windows and macOS builds run `cargo fmt --all --check` and `cargo test --workspace --locked` with `RUST_TEST_THREADS=4`. The test step compiles the same workspace graph, so CI skips a separate `cargo check` pass, and the capped libtest worker count avoids over-scheduling the heavy app smoke tests.
+- One Ubuntu job runs `cargo fmt --all --check`.
+- Windows and macOS Rust jobs wait for formatting, restore OS-specific Cargo caches, run strict Clippy for all workspace targets, and run all workspace tests with `RUST_TEST_THREADS=4`.
+
+The Rust cache primarily reuses the expensive Iced/WGPU, networking, audio, and platform dependency graph. `--locked` remains mandatory.
 
 ## Windows Alpha Package
 
-`Windows Alpha Package` is a manual workflow. It builds the Velopack Windows artifacts and uploads `target/velopack/Releases/*` as a workflow artifact.
+`Windows Alpha Package` is a manual workflow. It restores the repository-pinned Velopack 1.2.0 tool and an OS-specific Rust release cache. `vpk download http` primes only the latest full release needed for delta generation instead of downloading every historical package.
+
+The package step creates a clean `target/velopack/Publish` directory from `assets.alpha.json`. When VPS publication is enabled, only that directory is uploaded to unserved incoming storage, validated by size and SHA-256, and promoted under a remote lock with feed metadata last. The small publish directory is then retained as a three-day, uncompressed workflow artifact.
 
 Defaults:
 
@@ -19,11 +24,13 @@ Defaults:
 - Feed URL: `https://reviewgen.ovh/transcription-studio/alpha/win-x64`
 - Remote path: `/var/www/transcription-studio/alpha/win-x64`
 
-The workflow downloads the current feed packages before packaging so Velopack can create delta packages when a previous full package exists.
+The package version must equal `crates/studio-app/Cargo.toml`; workflow overrides cannot create a package/application version mismatch.
 
 ## macOS Alpha Package
 
-`macOS Alpha Package` is a manual workflow. It builds the Velopack macOS artifacts and uploads `target/velopack/Releases/*` as workflow artifacts. The workflow sets `MACOSX_DEPLOYMENT_TARGET=14.0` and compiles `STUDIO_DEFAULT_UPDATE_FEED_URL` into each package so the in-app updater checks the matching feed.
+`macOS Alpha Package` is a manual matrix workflow. Each runtime restores its own Rust release cache and the pinned Velopack tool, runs one `vpk pack` pass, and creates the same clean `Publish` payload used by Windows. The former redundant `vpk bundle` pass is not part of the release path.
+
+Optional VPS publication uses per-runtime incoming storage, manifest validation, a remote lock, asset-first promotion, feed-last replacement, and rollback metadata. The Sonoma target remains separate until compatibility is proven on a real Sonoma machine.
 
 Defaults:
 
@@ -53,11 +60,11 @@ Optional macOS signing secrets:
 
 ## VPS Publish Secrets
 
-Publishing is disabled by default. To let Actions upload to the VPS, add these repository secrets:
+Publishing is disabled by default. To let Actions stage and atomically promote a release on the VPS, add these repository secrets:
 
 - `ALPHA_SSH_HOST`: VPS host or IP.
-- `ALPHA_SSH_USER`: SSH user with write access to the release directory.
+- `ALPHA_SSH_USER`: SSH user with write access to the incoming and release directories.
 - `ALPHA_SSH_PRIVATE_KEY`: private deploy key for that user.
 - `ALPHA_SSH_PORT`: optional SSH port, defaults to `22`.
 
-Keep `publish_to_vps` off when you only want a downloadable Actions artifact for local testing.
+Package jobs inject `STUDIO_BUILD_GIT_COMMIT=${{ github.sha }}` so installed builds retain exact source identity without making local Cargo builds watch Git refs. Keep `publish_to_vps` off when you only want a downloadable Actions artifact for local testing.

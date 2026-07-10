@@ -14,17 +14,16 @@ Release builds set `STUDIO_DEFAULT_UPDATE_FEED_URL` at compile time so the insta
 
 ## Build Artifacts
 
-Run this on macOS:
+Restore the repository-pinned Velopack CLI, then run this on macOS:
 
 ```bash
-INSTALL_VPK=1 ./tools/package-alpha-macos.sh
+dotnet tool restore
+./tools/package-alpha-macos.sh
 ```
 
-The script builds `studio-app`, stages it as `TranscriptionStudio`, creates a Velopack `.app` bundle with `vpk bundle`, and creates release/update artifacts with `vpk pack`. Artifacts are written to:
+The script builds `studio-app`, stages it as `TranscriptionStudio`, and runs one `vpk pack` pass. Velopack creates the application bundle and release/update artifacts together; a separate `vpk bundle` pass is unnecessary.
 
-```text
-target/velopack/Releases
-```
+The complete local feed is written to `target/velopack/Releases`. A clean deployment payload containing only the current indexed assets, feed metadata, and `publish-manifest.json` is written to `target/velopack/Publish`.
 
 The script builds for the current Mac architecture. Use `RUNTIME=osx-arm64` on Apple Silicon and `RUNTIME=osx-x64` on Intel; it will fail instead of cross-compiling to the wrong Velopack runtime.
 
@@ -61,4 +60,4 @@ System Settings -> Privacy & Security -> Open Anyway
 
 For signed and notarized builds, send the generated installer package when available. After installation, the dashboard Updates section shows the current version, update feed, and buttons for `Check for updates` and `Install update`.
 
-Keep old files in the hosted feed directory. Velopack uses `releases.alpha.json` plus package history to serve updates.
+Keep old versioned packages in the hosted feed directory. Publication uploads only the current `Publish` payload to incoming storage, validates its manifest, promotes package assets before feed metadata under a remote lock, and retains previous feed metadata for rollback.
