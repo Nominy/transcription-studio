@@ -19880,9 +19880,7 @@ fn autoresearch_polish_score() {
     println!("METRIC text_loss_bytes={text_loss_bytes}");
     println!("NAVIGATION_POLISH_METRICS_JSON={navigation_metrics}");
     println!("METRIC navigation_polish_score={navigation_score}");
-    println!(
-        "METRIC navigation_polish_checks_passed={navigation_passed_checks}"
-    );
+    println!("METRIC navigation_polish_checks_passed={navigation_passed_checks}");
     println!(
         "METRIC navigation_polish_checks_failed={}",
         navigation_total_checks - navigation_passed_checks
