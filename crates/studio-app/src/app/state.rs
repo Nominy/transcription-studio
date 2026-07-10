@@ -5154,15 +5154,41 @@ impl StudioState {
         self.with_editor_mut(EditorSession::mark_saved);
     }
 
+    fn reconcile_helper_focus_with_project(&mut self, project: &Project) {
+        if self
+            .helper_focused_segment_id
+            .as_deref()
+            .is_some_and(|segment_id| project.segment(segment_id).is_none())
+        {
+            self.helper_focused_segment_id = None;
+        }
+        if self
+            .helper_focus_restore_pending
+            .as_ref()
+            .is_some_and(|restore| project.segment(&restore.segment_id).is_none())
+        {
+            self.helper_focus_restore_pending = None;
+        }
+        if self
+            .helper_last_focus_restore
+            .as_ref()
+            .is_some_and(|restore| project.segment(&restore.segment_id).is_none())
+        {
+            self.helper_last_focus_restore = None;
+        }
+    }
+
     pub(super) fn reconcile_editor_with_project(&mut self) {
         if let Some(project) = self.project().cloned() {
             self.with_editor_mut(|editor| editor.reconcile_project(&project));
+            self.reconcile_helper_focus_with_project(&project);
         }
     }
 
     pub(super) fn reconcile_editor_with_project_preserving_viewport(&mut self) {
         if let Some(project) = self.project().cloned() {
             self.with_editor_mut(|editor| editor.reconcile_project_preserving_viewport(&project));
+            self.reconcile_helper_focus_with_project(&project);
         }
     }
 
