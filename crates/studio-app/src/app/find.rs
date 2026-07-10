@@ -53,7 +53,7 @@ impl StudioState {
             (None, false) => 0,
         };
         let next_segment_id = matches[next_index].clone();
-        self.select_segment(&next_segment_id);
+        self.select_segment_without_seek(&next_segment_id);
     }
 
     pub(super) fn find_match_summary(
@@ -155,7 +155,7 @@ impl StudioState {
             return;
         };
 
-        self.select_segment(&segment_id);
+        self.select_segment_without_seek(&segment_id);
     }
 }
 
