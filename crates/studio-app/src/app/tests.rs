@@ -20045,6 +20045,258 @@ fn autoresearch_polish_score() {
             == Some("annotation-1")
     );
 
+    let mut ownership_score = 0_u32;
+    let mut ownership_total_weight = 0_u32;
+    let mut ownership_passed_checks = 0_u32;
+    let mut ownership_total_checks = 0_u32;
+    let mut ownership_group_scores = BTreeMap::<&'static str, u32>::new();
+    let mut ownership_failed_ids = Vec::<&'static str>::new();
+
+    macro_rules! ownership_check {
+        ($group:literal, $id:literal, $weight:literal, $condition:expr) => {{
+            let condition = $condition;
+            ownership_total_weight += $weight;
+            ownership_total_checks += 1;
+            let group_score = ownership_group_scores.entry($group).or_default();
+            if condition {
+                ownership_score += $weight;
+                *group_score += $weight;
+                ownership_passed_checks += 1;
+            } else {
+                ownership_failed_ids.push($id);
+            }
+        }};
+    }
+
+    let mut speaker_switch_state = stable_sample_state();
+    speaker_switch_state.select_segment_without_seek("annotation-2");
+    let speaker_restore = HelperFocusRestore {
+        segment_id: "annotation-2".to_string(),
+        blur_playhead_seconds: 4.0,
+        restore_playhead_seconds: 4.0,
+        restore_offset: 1,
+        synthetic: false,
+    };
+    speaker_switch_state.helper_focused_segment_id = Some("annotation-2".to_string());
+    speaker_switch_state.helper_focus_restore_pending = Some(speaker_restore.clone());
+    speaker_switch_state.helper_last_focus_restore = Some(speaker_restore);
+    let _ = update(
+        &mut speaker_switch_state,
+        Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()),
+    );
+    let speaker_visible_rows = speaker_switch_state.visible_transcription_rows_sorted();
+    let speaker_selected = speaker_switch_state
+        .editor
+        .as_ref()
+        .unwrap()
+        .selected_segment_id
+        .as_deref();
+    ownership_check!(
+        "speaker_workflow",
+        "ownership.speaker_switch_reconciles_selection",
+        75,
+        speaker_selected.is_none()
+            || speaker_visible_rows
+                .iter()
+                .any(|(segment_id, _)| Some(segment_id.as_str()) == speaker_selected)
+    );
+    ownership_check!(
+        "speaker_workflow",
+        "ownership.speaker_switch_reconciles_helper_ids",
+        75,
+        speaker_switch_state.helper_focused_segment_id.is_none()
+            && speaker_switch_state.helper_focus_restore_pending.is_none()
+            && speaker_switch_state.helper_last_focus_restore.is_none()
+    );
+    let _ = update(&mut speaker_switch_state, Message::DeleteSelectedSegment);
+    ownership_check!(
+        "speaker_workflow",
+        "ownership.speaker_switch_blocks_hidden_delete",
+        100,
+        speaker_switch_state
+            .project()
+            .unwrap()
+            .segment("annotation-2")
+            .is_some()
+    );
+
+    let mut track_move_state = stable_sample_state();
+    let _ = update(
+        &mut track_move_state,
+        Message::SwitchSpeakerWorkflowLane("Speaker 1".to_string()),
+    );
+    track_move_state.select_segment_without_seek("annotation-1");
+    let track_restore = HelperFocusRestore {
+        segment_id: "annotation-1".to_string(),
+        blur_playhead_seconds: 2.0,
+        restore_playhead_seconds: 2.0,
+        restore_offset: 1,
+        synthetic: false,
+    };
+    track_move_state.helper_focused_segment_id = Some("annotation-1".to_string());
+    track_move_state.helper_focus_restore_pending = Some(track_restore.clone());
+    track_move_state.helper_last_focus_restore = Some(track_restore);
+    let _ = update(
+        &mut track_move_state,
+        Message::SegmentTrackChanged("annotation-1".to_string(), "track-speaker-2".to_string()),
+    );
+    let track_move_visible_rows = track_move_state.visible_transcription_rows_sorted();
+    let track_move_selected = track_move_state
+        .editor
+        .as_ref()
+        .unwrap()
+        .selected_segment_id
+        .as_deref();
+    ownership_check!(
+        "track_move",
+        "ownership.track_move_reconciles_selection",
+        75,
+        track_move_selected.is_none()
+            || track_move_visible_rows
+                .iter()
+                .any(|(segment_id, _)| Some(segment_id.as_str()) == track_move_selected)
+    );
+    ownership_check!(
+        "track_move",
+        "ownership.track_move_reconciles_helper_ids",
+        75,
+        track_move_state.helper_focused_segment_id.is_none()
+            && track_move_state.helper_focus_restore_pending.is_none()
+            && track_move_state.helper_last_focus_restore.is_none()
+    );
+    let _ = update(&mut track_move_state, Message::DeleteSelectedSegment);
+    ownership_check!(
+        "track_move",
+        "ownership.track_move_blocks_hidden_delete",
+        100,
+        track_move_state
+            .project()
+            .unwrap()
+            .segment("annotation-1")
+            .is_some()
+    );
+
+    let mut merge_reconcile_state = StudioState::default();
+    merge_reconcile_state.replace_workflow(
+        StudioWorkflow::from_project(large_two_lane_project(4)),
+        "Loaded merge ownership benchmark fixture.".to_string(),
+    );
+    let merge_project = merge_reconcile_state.project().unwrap().clone();
+    merge_reconcile_state.with_editor_mut(|editor| {
+        editor.track_filter = studio_app::TrackFilter::lane("track-2", "Speaker 2");
+        editor.select_segment_without_seek(&merge_project, "annotation-0003");
+    });
+    let _ = update(
+        &mut merge_reconcile_state,
+        Message::MergeSegmentBelow("annotation-0001".to_string()),
+    );
+    let merge_visible_rows = merge_reconcile_state.visible_transcription_rows_sorted();
+    let merge_selected = merge_reconcile_state
+        .editor
+        .as_ref()
+        .unwrap()
+        .selected_segment_id
+        .as_deref();
+    ownership_check!(
+        "structural_reconcile",
+        "ownership.merge_reanchors_selection_visibly",
+        100,
+        merge_selected.is_none()
+            || merge_visible_rows
+                .iter()
+                .any(|(segment_id, _)| Some(segment_id.as_str()) == merge_selected)
+    );
+    let _ = update(&mut merge_reconcile_state, Message::DeleteSelectedSegment);
+    ownership_check!(
+        "structural_reconcile",
+        "ownership.merge_never_exposes_hidden_delete_target",
+        100,
+        merge_reconcile_state
+            .project()
+            .unwrap()
+            .segment("annotation-0000")
+            .is_some()
+    );
+
+    let mut captured_caret_state = stable_sample_state();
+    captured_caret_state.select_segment_without_seek("annotation-3");
+    captured_caret_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    set_draft_text_with_cursor_after_chars(
+        &mut captured_caret_state,
+        "annotation-3",
+        "wrong stay",
+        5,
+    );
+    let captured_history_before = captured_caret_state.cross_row_text_undo_stack.len();
+    let captured_caret_message = hotkey_message_for_physical_status(
+        Key::Character("[".into()),
+        Physical::Code(Code::BracketLeft),
+        Modifiers::ALT,
+        Status::Captured,
+    );
+    ownership_check!(
+        "caret_routing",
+        "ownership.global_captured_caret_move_is_inert",
+        75,
+        captured_caret_message.is_none()
+    );
+    if let Some(message) = captured_caret_message {
+        let _ = update(&mut captured_caret_state, message);
+    }
+    ownership_check!(
+        "caret_routing",
+        "ownership.nontranscript_capture_cannot_mutate_drafts",
+        75,
+        captured_caret_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text
+            == "previous"
+            && captured_caret_state
+                .segment_drafts
+                .get("annotation-3")
+                .unwrap()
+                .text
+                == "wrong stay"
+            && !captured_caret_state.editor.as_ref().unwrap().is_dirty
+            && captured_caret_state.cross_row_text_undo_stack.len() == captured_history_before
+    );
+    ownership_check!(
+        "caret_routing",
+        "ownership.focused_editor_routes_row_addressed_caret_move",
+        150,
+        super::components::focusable_text_editor::transcript_caret_hotkey_target_for_test(
+            "annotation-3",
+            Some(Physical::Code(Code::BracketLeft)),
+            Modifiers::ALT,
+            Status::Captured,
+            &captured_caret_state.hotkey_bindings,
+        ) == Some(("annotation-3".to_string(), -1))
+    );
+
+    ownership_failed_ids.sort_unstable();
+    assert_eq!(
+        ownership_total_weight, 1_000,
+        "command ownership weights must total 1000"
+    );
+    assert_eq!(
+        ownership_total_checks, 11,
+        "command ownership check count must stay explicit"
+    );
+    let ownership_metrics = serde_json::json!({
+        "schema": 1,
+        "score": ownership_score,
+        "passed": ownership_passed_checks,
+        "total": ownership_total_checks,
+        "groups": ownership_group_scores,
+        "failed": ownership_failed_ids,
+    });
+
     transition_failed_ids.sort_unstable();
     assert_eq!(
         transition_total_weight, 1_000,
@@ -20117,5 +20369,12 @@ fn autoresearch_polish_score() {
     println!(
         "METRIC transition_polish_checks_failed={}",
         transition_total_checks - transition_passed_checks
+    );
+    println!("COMMAND_OWNERSHIP_METRICS_JSON={ownership_metrics}");
+    println!("METRIC command_ownership_score={ownership_score}");
+    println!("METRIC command_ownership_checks_passed={ownership_passed_checks}");
+    println!(
+        "METRIC command_ownership_checks_failed={}",
+        ownership_total_checks - ownership_passed_checks
     );
 }

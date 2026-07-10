@@ -23,6 +23,17 @@ pub(in crate::app) fn blur_transcript_text_editors() -> Task<Message> {
     text_input::focus(text_input::Id::new(TRANSCRIPT_TEXT_EDITOR_BLUR_ID))
 }
 
+#[cfg(test)]
+pub(in crate::app) fn transcript_caret_hotkey_target_for_test(
+    _segment_id: &str,
+    _physical_key: Option<iced::keyboard::key::Physical>,
+    _modifiers: iced::keyboard::Modifiers,
+    _child_status: iced::event::Status,
+    _hotkey_bindings: &crate::app::keybinds::HotkeyBindings,
+) -> Option<(String, i32)> {
+    None
+}
+
 pub(super) fn view_focusable_text_editor<'a>(
     id: text_input::Id,
     content: Element<'a, Message>,
