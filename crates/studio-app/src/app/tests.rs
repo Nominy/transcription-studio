@@ -19638,6 +19638,223 @@ fn autoresearch_polish_score() {
             && browser_report.drop_claim_disabled
     );
 
+    let mut navigation_score = 0_u32;
+    let mut navigation_total_weight = 0_u32;
+    let mut navigation_passed_checks = 0_u32;
+    let mut navigation_total_checks = 0_u32;
+    let mut navigation_group_scores = BTreeMap::<&'static str, u32>::new();
+    let mut navigation_failed_ids = Vec::<&'static str>::new();
+
+    macro_rules! navigation_check {
+        ($group:literal, $id:literal, $weight:literal, $condition:expr) => {{
+            let condition = $condition;
+            navigation_total_weight += $weight;
+            navigation_total_checks += 1;
+            let group_score = navigation_group_scores.entry($group).or_default();
+            if condition {
+                navigation_score += $weight;
+                *group_score += $weight;
+                navigation_passed_checks += 1;
+            } else {
+                navigation_failed_ids.push($id);
+            }
+        }};
+    }
+
+    let mut filtered_state = stable_sample_state();
+    filtered_state.select_segment("annotation-1");
+    let _ = update(
+        &mut filtered_state,
+        Message::TrackFilterChanged(studio_app::TrackFilter::lane(
+            "track-speaker-2",
+            "Speaker 2",
+        )),
+    );
+    let filtered_project = filtered_state.project().unwrap().clone();
+    let filtered_rows = {
+        let editor = filtered_state.editor.as_ref().unwrap();
+        editor.transcript_rows(&filtered_project)
+    };
+    let filtered_selection = filtered_state
+        .editor
+        .as_ref()
+        .unwrap()
+        .selected_segment_id
+        .as_deref();
+    navigation_check!(
+        "visibility",
+        "visibility.filter_reconciles_hidden_selection",
+        100,
+        filtered_selection.is_none()
+            || filtered_rows
+                .iter()
+                .any(|row| Some(row.segment_id.as_str()) == filtered_selection)
+    );
+    let hidden_segment_before_delete = filtered_project.segment("annotation-1").is_some();
+    let _ = update(&mut filtered_state, Message::DeleteSelectedSegment);
+    navigation_check!(
+        "visibility",
+        "visibility.hidden_selected_row_cannot_be_deleted",
+        200,
+        hidden_segment_before_delete
+            && filtered_state
+                .project()
+                .unwrap()
+                .segment("annotation-1")
+                .is_some()
+    );
+
+    let mut find_state = stable_sample_state();
+    find_state.with_editor_mut(|editor| {
+        editor.playhead_seconds = 80.0;
+        editor.viewport.start_seconds = 72.0;
+        editor.viewport.end_seconds = 88.0;
+    });
+    let find_playhead_before = find_state.editor.as_ref().unwrap().playhead_seconds;
+    let find_viewport_before = find_state.editor.as_ref().unwrap().viewport;
+    let _ = update(
+        &mut find_state,
+        Message::FindQueryChanged("Здравствуйте".to_string()),
+    );
+    navigation_check!(
+        "find",
+        "find.query_preserves_playhead",
+        100,
+        find_state.editor.as_ref().unwrap().playhead_seconds == find_playhead_before
+    );
+    navigation_check!(
+        "find",
+        "find.query_preserves_timeline_viewport",
+        100,
+        find_state.editor.as_ref().unwrap().viewport == find_viewport_before
+    );
+
+    let mut draft_find_state = stable_sample_state();
+    draft_find_state.select_segment_without_seek("annotation-1");
+    draft_find_state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text("unique unsaved navigation benchmark phrase".to_string());
+    let _ = update(
+        &mut draft_find_state,
+        Message::FindQueryChanged("unique unsaved navigation benchmark".to_string()),
+    );
+    navigation_check!(
+        "find",
+        "find.searches_live_draft_text",
+        100,
+        draft_find_state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref()
+            == Some("annotation-3")
+    );
+
+    let mut deleted_focus_state = stable_sample_state();
+    deleted_focus_state.select_segment_without_seek("annotation-1");
+    let deleted_restore = HelperFocusRestore {
+        segment_id: "annotation-1".to_string(),
+        blur_playhead_seconds: 1.2,
+        restore_playhead_seconds: 1.2,
+        restore_offset: 2,
+        synthetic: false,
+    };
+    deleted_focus_state.helper_focused_segment_id = Some("annotation-1".to_string());
+    deleted_focus_state.helper_focus_restore_pending = Some(deleted_restore.clone());
+    deleted_focus_state.helper_last_focus_restore = Some(deleted_restore);
+    let _ = update(&mut deleted_focus_state, Message::DeleteSelectedSegment);
+    navigation_check!(
+        "focus_lifecycle",
+        "focus.deleted_row_clears_focused_id",
+        70,
+        deleted_focus_state.helper_focused_segment_id.is_none()
+    );
+    navigation_check!(
+        "focus_lifecycle",
+        "focus.deleted_row_clears_pending_restore",
+        70,
+        deleted_focus_state.helper_focus_restore_pending.is_none()
+    );
+    navigation_check!(
+        "focus_lifecycle",
+        "focus.deleted_row_clears_last_restore",
+        60,
+        deleted_focus_state.helper_last_focus_restore.is_none()
+    );
+
+    let mut focused_move_state = stable_sample_state();
+    focused_move_state.select_segment_without_seek("annotation-3");
+    focused_move_state.helper_focused_segment_id = Some("annotation-1".to_string());
+    set_draft_text_with_cursor_after_chars(
+        &mut focused_move_state,
+        "annotation-1",
+        "focused row",
+        3,
+    );
+    set_draft_text_with_cursor_after_chars(
+        &mut focused_move_state,
+        "annotation-3",
+        "wrong stay",
+        5,
+    );
+    let _ = update(
+        &mut focused_move_state,
+        Message::MoveTextBeforeCaretToPreviousSegment,
+    );
+    let focused_move_focused = focused_move_state
+        .segment_drafts
+        .get("annotation-1")
+        .unwrap();
+    let focused_move_selected = focused_move_state
+        .segment_drafts
+        .get("annotation-3")
+        .unwrap();
+    navigation_check!(
+        "focused_commands",
+        "focus.alt_left_preserves_boundary_focused_row",
+        60,
+        focused_move_focused.text == "focused row"
+    );
+    navigation_check!(
+        "focused_commands",
+        "focus.alt_left_does_not_mutate_stale_selection",
+        60,
+        focused_move_selected.text == "wrong stay"
+    );
+    navigation_check!(
+        "focused_commands",
+        "focus.rejected_focused_move_stays_clean",
+        40,
+        !focused_move_state.editor.as_ref().unwrap().is_dirty
+    );
+    navigation_check!(
+        "focused_commands",
+        "focus.rejected_focused_move_preserves_cursor",
+        40,
+        focused_move_focused.text_content.cursor_position() == (0, 3)
+    );
+
+    navigation_failed_ids.sort_unstable();
+    assert_eq!(
+        navigation_total_weight, 1_000,
+        "navigation polish weights must total 1000"
+    );
+    assert_eq!(
+        navigation_total_checks, 12,
+        "navigation polish check count must stay explicit"
+    );
+    let navigation_metrics = serde_json::json!({
+        "schema": 1,
+        "score": navigation_score,
+        "passed": navigation_passed_checks,
+        "total": navigation_total_checks,
+        "groups": navigation_group_scores,
+        "failed": navigation_failed_ids,
+    });
+
     failed_ids.sort_unstable();
     assert_eq!(total_weight, 1_000, "polish weights must total 1000");
     assert_eq!(total_checks, 15, "polish check count must stay explicit");
@@ -19661,4 +19878,13 @@ fn autoresearch_polish_score() {
         total_checks - passed_checks
     );
     println!("METRIC text_loss_bytes={text_loss_bytes}");
+    println!("NAVIGATION_POLISH_METRICS_JSON={navigation_metrics}");
+    println!("METRIC navigation_polish_score={navigation_score}");
+    println!(
+        "METRIC navigation_polish_checks_passed={navigation_passed_checks}"
+    );
+    println!(
+        "METRIC navigation_polish_checks_failed={}",
+        navigation_total_checks - navigation_passed_checks
+    );
 }
