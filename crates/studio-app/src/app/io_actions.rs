@@ -7,7 +7,7 @@ use super::StudioState;
 use super::formatting::write_text_file;
 use super::recovery::{discover_recovery_drafts, recovery_snapshot_path, remove_recovery_snapshot};
 use super::service_callbacks::{
-    BabelServiceRequest, SaveRequestToken, build_save_annotations_request,
+    BabelServiceRequest, SaveRequestToken, build_save_annotations_request_with_asserted_warnings,
 };
 use super::service_executor::babel_remote_mutations_configured;
 
@@ -183,13 +183,22 @@ impl StudioState {
             self.refresh_recovery_drafts();
         }
 
+        let asserted_warning_keys = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.asserted_warning_keys.clone())
+            .unwrap_or_default();
         if remote_save {
             let mut request = match self
                 .workflow
                 .as_ref()
                 .map_err(|error| format!("no workflow loaded: {error}"))
-                .and_then(build_save_annotations_request)
-            {
+                .and_then(|workflow| {
+                    build_save_annotations_request_with_asserted_warnings(
+                        workflow,
+                        &asserted_warning_keys,
+                    )
+                }) {
                 Ok(request) => request,
                 Err(error) => {
                     self.with_editor_mut(|editor| {
@@ -209,13 +218,14 @@ impl StudioState {
         let last_saved_at = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-        self.complete_save_progress_success(token, last_saved_at);
+        self.complete_save_progress_success(token, last_saved_at, None);
     }
 
     pub(super) fn complete_save_progress_success(
         &mut self,
         token: SaveRequestToken,
         last_saved: String,
+        issues: Option<Vec<studio_app::ServerLintIssue>>,
     ) -> bool {
         if token.workspace_generation != self.workspace_generation {
             return false;
@@ -227,6 +237,9 @@ impl StudioState {
         self.with_editor_mut(|editor| {
             completed = editor.complete_save_for_revision(token.revision, true, last_saved);
         });
+        if let Some(issues) = issues {
+            self.install_server_lint_snapshot(token.revision, issues);
+        }
         if !completed {
             return false;
         }
@@ -246,6 +259,7 @@ impl StudioState {
         &mut self,
         token: SaveRequestToken,
         error: String,
+        issues: Option<Vec<studio_app::ServerLintIssue>>,
     ) -> bool {
         if token.workspace_generation != self.workspace_generation {
             return false;
@@ -257,6 +271,9 @@ impl StudioState {
         self.with_editor_mut(|editor| {
             completed = editor.complete_save_for_revision(token.revision, false, error.clone());
         });
+        if let Some(issues) = issues {
+            self.install_server_lint_snapshot(token.revision, issues);
+        }
         if !completed {
             return false;
         }
@@ -295,6 +312,7 @@ impl StudioState {
         self.auto_save_reviewer_comments();
     }
 
+    #[cfg(test)]
     pub(super) fn submit_review(&mut self) {
         if self.block_read_only_edit("Submit") {
             return;

@@ -13,25 +13,26 @@ use studio_app::{
     PROCESSED_TRANSCRIPTION_PLACEHOLDER, READ_ONLY_SELECT_DESCRIPTION, REVIEW_ACTION_PLACEHOLDER,
     ReadOnlyActionCommand, ReviewActionStripView, ReviewEventThrottleInput, ReviewState,
     SCRIPT_CONTEXT_STORAGE_KEY, STITCHED_SELECT_DESCRIPTION, SUBMISSION_ID_COPY_RESET_DELAY_MS,
-    SaveTooltipVariant, ScriptContextPanelInput, StudioWorkflow, SubmissionCopyIcon,
-    SubmitDialogDescriptionTone, SubmitTooltipVariant, TaskLookupEffect, TaskLookupEvent,
-    TaskLookupInitialInput, TaskLookupSelectInput, TimeRange, TrackFilter,
-    TranscriptActionMenuEntryView, TranscriptAnnotationDiffSource, TranscriptAnnotationKind,
-    TranscriptDiffCellKind, TranscriptRowKind, TranscriptRowVisibleCells, TranscriptTextDirection,
-    TranscriptWordDiffKind, TranscriptWordDiffStatus, TtsPanelEffect, WaveformPeakSource,
-    build_annotation_diff_actions, build_annotation_diff_pair, build_annotation_status_map,
-    build_collapsible_panel_model, build_confirm_edit_model, build_no_work_modal_model,
-    build_original_script_panel_model, build_script_context_panel_model, build_select_action_model,
-    build_toolbar_feedback_button, build_transcription_diff_actions, build_transcription_diff_pair,
-    choose_annotation_compare_selection, choose_transcription_compare_selection,
-    clear_feedback_draft, client_x_to_loop_time, compute_assessment_phase,
-    compute_assessment_retry, compute_assessment_submit_target, compute_buffered_playback_range,
-    compute_feedback_draft_reset, compute_feedback_draft_save_request,
-    compute_final_assessment_submit_success, compute_practice_submit_success,
-    compute_review_event_throttle, create_initial_task_lookup_state, get_rubric_fields_for_flags,
-    has_other_feedback_flag, is_transcription_compare_newer, match_annotation_diff_rows,
-    parse_feedback_responses, read_stored_collapsed_state, reduce_collapsible_panel_toggle,
-    reduce_no_work_modal_event, reduce_task_lookup_event, resolve_annotation_diff_perspective,
+    SaveTooltipVariant, ScriptContextPanelInput, ServerLintIssue, ServerLintSnapshot,
+    StudioWorkflow, SubmissionCopyIcon, SubmitDialogDescriptionTone, SubmitTooltipVariant,
+    TaskLookupEffect, TaskLookupEvent, TaskLookupInitialInput, TaskLookupSelectInput, TimeRange,
+    TrackFilter, TranscriptActionMenuEntryView, TranscriptAnnotationDiffSource,
+    TranscriptAnnotationKind, TranscriptDiffCellKind, TranscriptRowKind, TranscriptRowVisibleCells,
+    TranscriptTextDirection, TranscriptWordDiffKind, TranscriptWordDiffStatus, TtsPanelEffect,
+    WaveformPeakSource, build_annotation_diff_actions, build_annotation_diff_pair,
+    build_annotation_status_map, build_collapsible_panel_model, build_confirm_edit_model,
+    build_no_work_modal_model, build_original_script_panel_model, build_script_context_panel_model,
+    build_select_action_model, build_toolbar_feedback_button, build_transcription_diff_actions,
+    build_transcription_diff_pair, choose_annotation_compare_selection,
+    choose_transcription_compare_selection, clear_feedback_draft, client_x_to_loop_time,
+    compute_assessment_phase, compute_assessment_retry, compute_assessment_submit_target,
+    compute_buffered_playback_range, compute_feedback_draft_reset,
+    compute_feedback_draft_save_request, compute_final_assessment_submit_success,
+    compute_practice_submit_success, compute_review_event_throttle,
+    create_initial_task_lookup_state, get_rubric_fields_for_flags, has_other_feedback_flag,
+    is_transcription_compare_newer, match_annotation_diff_rows, parse_feedback_responses,
+    read_stored_collapsed_state, reduce_collapsible_panel_toggle, reduce_no_work_modal_event,
+    reduce_task_lookup_event, resolve_annotation_diff_perspective,
     resolve_submission_id_copy_failure, resolve_submission_id_copy_success,
     serialize_feedback_draft, trim_task_lookup_field_value,
 };
@@ -887,7 +888,7 @@ fn submit_control_uses_recovered_babel_error_copy_and_annotation_blockers() {
     assert!(submit.trigger_disabled);
     assert_eq!(
         submit.dialog_description,
-        "Failed to submit annotations. Please try again."
+        "Submission was rejected. See the status bar below for the exact reason."
     );
     assert_eq!(
         submit.dialog_description_tone,
@@ -4642,4 +4643,179 @@ fn assessment_phase_submit_success_and_retry_match_recovered_babel_contract() {
     let retry = compute_assessment_retry();
     assert!(!retry.is_assessment_read_only);
     assert!(retry.disable_diff_mode);
+}
+
+#[test]
+fn imported_server_lint_maps_by_source_annotation_id() {
+    let mut imported = segment("internal-id", 1.0, 2.0, "clean");
+    imported.source_annotation_id = Some("babel-source-id".to_string());
+    let mut project = project_with_segments(vec![imported]);
+    project.metadata.insert(
+        "babel.extra.package".to_string(),
+        serde_json::json!({
+            "lintErrors": [{
+                "annotationId": "babel-source-id",
+                "reason": "Exact server reason",
+                "severity": "warning"
+            }]
+        })
+        .to_string(),
+    );
+
+    let session = EditorSession::for_project(&project);
+    let snapshot = session
+        .server_lint_snapshot()
+        .expect("imported lint array should hydrate a checked snapshot");
+    assert_eq!(snapshot.revision, 0);
+    assert_eq!(snapshot.issues.len(), 1);
+    assert_eq!(snapshot.issues[0].annotation_id, "babel-source-id");
+    assert_eq!(snapshot.issues[0].reason, "Exact server reason");
+    assert_eq!(snapshot.issues[0].severity, LintSeverity::Warning);
+
+    let row = session.transcript_rows(&project).remove(0);
+    assert_eq!(row.lint.kind, LintKind::BabelServer);
+    assert_eq!(row.lint.message, "Exact server reason");
+}
+
+#[test]
+fn imported_empty_server_lint_is_distinct_from_unchecked() {
+    let unchecked_project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let unchecked = EditorSession::for_project(&unchecked_project);
+    assert!(unchecked.server_lint_snapshot().is_none());
+
+    let mut checked_project = unchecked_project;
+    checked_project.metadata.insert(
+        "babel.extra.package".to_string(),
+        serde_json::json!({ "lint_errors": [] }).to_string(),
+    );
+    let checked = EditorSession::for_project(&checked_project);
+    let snapshot = checked
+        .server_lint_snapshot()
+        .expect("an imported empty array is an authoritative clean result");
+    assert!(snapshot.issues.is_empty());
+}
+
+#[test]
+fn edits_invalidate_server_lint_and_reject_stale_installation() {
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    project.metadata.insert(
+        "babel.extra.package".to_string(),
+        serde_json::json!({ "lintErrors": [] }).to_string(),
+    );
+    let mut session = EditorSession::for_project(&project);
+    let stale_snapshot = session.server_lint_snapshot().unwrap().clone();
+
+    session.mark_dirty();
+
+    assert_eq!(session.current_edit_revision(), 1);
+    assert!(session.server_lint_snapshot().is_none());
+    assert!(!session.set_server_lint_snapshot(stale_snapshot));
+    assert!(session.set_server_lint_snapshot(ServerLintSnapshot::new(1, Vec::new())));
+    assert!(session.server_lint_snapshot().is_some());
+}
+
+#[test]
+fn server_lint_is_primary_before_native_row_lint() {
+    let project = project_with_segments(vec![segment("bad", 1.0, 2.0, "")]);
+    let mut session = EditorSession::for_project(&project);
+    assert!(session.set_server_lint_snapshot(ServerLintSnapshot::new(
+        0,
+        vec![ServerLintIssue {
+            annotation_id: "bad".to_string(),
+            reason: "Server issue wins".to_string(),
+            severity: LintSeverity::Warning,
+        }],
+    )));
+
+    let row = session.transcript_rows(&project).remove(0);
+    assert_eq!(row.lint.kind, LintKind::BabelServer);
+    assert_eq!(row.lint.message, "Server issue wins");
+    assert_eq!(row.lint_issues[1].kind, LintKind::EmptyText);
+}
+
+#[test]
+fn unmatched_and_malformed_server_lint_remain_global_blockers() {
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    project.metadata.insert(
+        "babel.extra.package".to_string(),
+        serde_json::json!({
+            "lintErrors": [
+                {
+                    "annotationId": "missing-row",
+                    "reason": "Global server blocker",
+                    "severity": "error"
+                },
+                {
+                    "annotationId": 17,
+                    "severity": "warning"
+                }
+            ]
+        })
+        .to_string(),
+    );
+    let session = EditorSession::for_project(&project);
+    let snapshot = session.server_lint_snapshot().unwrap();
+
+    assert_eq!(snapshot.issues.len(), 2);
+    assert_eq!(snapshot.issues[0].reason, "Global server blocker");
+    assert_eq!(snapshot.issues[1].severity, LintSeverity::Error);
+    assert!(
+        snapshot.issues[1]
+            .reason
+            .contains("Malformed Babel server lint issue")
+    );
+    assert_eq!(session.blocking_lint_count(&project), 2);
+    assert!(!session.can_submit_review(&project));
+}
+
+#[test]
+fn unchecked_babel_project_keeps_native_lint_advisory_for_preflight() {
+    let mut project = project_with_segments(vec![segment("native-false-positive", 1.0, 2.0, "")]);
+    project.metadata.insert(
+        "studio.babel.projectId".to_string(),
+        "babel-project".to_string(),
+    );
+    let session = EditorSession::for_project(&project);
+
+    assert!(session.server_lint_snapshot().is_none());
+    assert_eq!(
+        session.transcript_rows(&project)[0].lint.severity,
+        LintSeverity::Error
+    );
+    assert!(session.can_submit_review(&project));
+    let submit = session.submit_control(&project, false, false, false);
+    assert_eq!(
+        submit.trigger_tooltip_variant,
+        SubmitTooltipVariant::Success
+    );
+    assert!(!submit.trigger_disabled);
+}
+
+#[test]
+fn server_warning_assertion_uses_exact_segment_reason_and_invalidates_snapshot() {
+    let mut project = project_with_segments(vec![segment("internal-id", 1.0, 2.0, "clean")]);
+    project.segments[0].source_annotation_id = Some("source-id".to_string());
+    project.metadata.insert(
+        "studio.babel.projectId".to_string(),
+        "babel-project".to_string(),
+    );
+    let mut session = EditorSession::for_project(&project);
+    assert!(session.set_server_lint_snapshot(ServerLintSnapshot::new(
+        0,
+        vec![ServerLintIssue {
+            annotation_id: "source-id".to_string(),
+            reason: "Keep this exact warning".to_string(),
+            severity: LintSeverity::Warning,
+        }],
+    )));
+
+    assert!(session.toggle_warning_assertion(&project));
+
+    assert!(
+        session
+            .asserted_warning_keys
+            .contains("internal-id::Keep this exact warning")
+    );
+    assert_eq!(session.current_edit_revision(), 1);
+    assert!(session.server_lint_snapshot().is_none());
 }

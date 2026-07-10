@@ -2,14 +2,14 @@ use std::time::Instant;
 
 use iced::widget::text_editor;
 use iced::{Event, Point, event, keyboard::Modifiers, window};
-use studio_app::{LoopStripHit, TrackFilter};
+use studio_app::{LoopStripHit, ServerLintIssue, TrackFilter};
 use studio_waveform::WaveformHit;
 
 use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_input::OutsideInteractionContext;
 use super::keybinds::{HotkeyAction, KeyBinding};
 use super::review_backend_client::ReviewBackendRequest;
-use super::service_callbacks::SaveRequestToken;
+use super::service_callbacks::{SaveRequestToken, SubmitRequestToken};
 use super::state::{DashboardSection, NativeCapabilityModalTab};
 use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
 use super::tag_suggestions::{TagSuggestion, TagSuggestionKeyboardAction};
@@ -58,19 +58,38 @@ pub(super) enum Message {
     CancelSubmitReview,
     SubmitReview,
     #[allow(dead_code)]
-    SubmitReviewSucceeded,
+    LintAnnotationsSucceeded {
+        token: SubmitRequestToken,
+        issues: Vec<ServerLintIssue>,
+    },
     #[allow(dead_code)]
-    SubmitReviewFailed(String),
+    LintAnnotationsFailed {
+        token: SubmitRequestToken,
+        error: String,
+        issues: Option<Vec<ServerLintIssue>>,
+    },
+    #[allow(dead_code)]
+    SubmitReviewSucceeded {
+        token: SubmitRequestToken,
+    },
+    #[allow(dead_code)]
+    SubmitReviewFailed {
+        token: SubmitRequestToken,
+        error: String,
+        issues: Option<Vec<ServerLintIssue>>,
+    },
     SaveProgress,
     #[allow(dead_code)]
     SaveProgressSucceeded {
         token: SaveRequestToken,
         last_saved: String,
+        issues: Option<Vec<ServerLintIssue>>,
     },
     #[allow(dead_code)]
     SaveProgressFailed {
         token: SaveRequestToken,
         error: String,
+        issues: Option<Vec<ServerLintIssue>>,
     },
     AutoSaveTick,
     DropClaim,

@@ -12,11 +12,12 @@ use serde_json::Value;
 use studio_app::{
     BabelProjectLintTagConfig, EditorSession, LaneWaveform, LoopStripHit, LoopStripHitTarget,
     META_BABEL_PROJECT_ID, NoWorkModalInput, NoWorkModalModel, ORIGINAL_SCRIPT_STORAGE_KEY,
-    OverviewWaveformView, SCRIPT_CONTEXT_STORAGE_KEY, StudioWorkflow, SubmitControlView,
-    TaskLookupEffect, TaskLookupState, TimeRange, TimelineLaneView, TimelineScrollbarView,
-    TimelineSegmentIndex, TimelineSegmentPreview, TrackFilter, TranscriptAnnotationKind,
-    TranscriptRowView, TransportStripView, WaveformBlock, babel_project_lint_tag_metadata,
-    build_no_work_modal_model, load_sample_project, resolve_babel_project_lint_tag_config,
+    OverviewWaveformView, ReviewState, SCRIPT_CONTEXT_STORAGE_KEY, ServerLintIssue,
+    ServerLintSnapshot, StudioWorkflow, SubmitControlView, TaskLookupEffect, TaskLookupState,
+    TimeRange, TimelineLaneView, TimelineScrollbarView, TimelineSegmentIndex,
+    TimelineSegmentPreview, TrackFilter, TranscriptAnnotationKind, TranscriptRowView,
+    TransportStripView, WaveformBlock, babel_project_lint_tag_metadata, build_no_work_modal_model,
+    load_sample_project, resolve_babel_project_lint_tag_config,
 };
 use studio_core::{AudioLane, Project, Segment};
 use studio_waveform::{WaveformHit, WaveformHitTarget, decode_pcm16_wav};
@@ -44,8 +45,9 @@ use super::service_callbacks::{
     BabelServiceRequest, ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest,
     LoadLatestReviewActionRequest, LoadReviewActionRequest, META_ACTIVE_QUEUE_ID,
     META_CHUNKED_QUEUE_ID, META_QUEUE_ID, META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID,
-    SaveRequestToken, build_admin_rate_review_action_request, build_drop_worker_action_request,
-    build_skip_review_action_request, build_submit_review_action_request,
+    SaveRequestToken, SubmitRequestToken, build_admin_rate_review_action_request,
+    build_drop_worker_action_request, build_lint_annotations_request,
+    build_skip_review_action_request, build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
     dispatch_babel_service_requests, is_dispatchable_babel_service_request,
@@ -1529,7 +1531,12 @@ impl StudioState {
     pub(super) fn replace_workflow(&mut self, workflow: StudioWorkflow, status: String) {
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+            matches!(
+                request,
+                BabelServiceRequest::SaveAnnotations(_)
+                    | BabelServiceRequest::LintAnnotations(_)
+                    | BabelServiceRequest::SubmitReviewAction(_)
+            )
         });
         self.audio_playback.stop();
         self.editor = Some(EditorSession::for_project(workflow.project()));
@@ -3031,7 +3038,12 @@ impl StudioState {
         self.show_exit_confirm_dialog = false;
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+            matches!(
+                request,
+                BabelServiceRequest::SaveAnnotations(_)
+                    | BabelServiceRequest::LintAnnotations(_)
+                    | BabelServiceRequest::SubmitReviewAction(_)
+            )
         });
         self.mark_saved();
         Some(pending.intent)
@@ -3045,6 +3057,13 @@ impl StudioState {
                 workspace_generation: self.workspace_generation,
                 revision,
             })
+    }
+
+    pub(super) fn current_submit_request_token(&self) -> Option<SubmitRequestToken> {
+        self.editor.as_ref().map(|editor| SubmitRequestToken {
+            workspace_generation: self.workspace_generation,
+            revision: editor.current_edit_revision(),
+        })
     }
 
     pub(super) fn queue_dashboard_projects_refresh(&mut self) {
@@ -4846,12 +4865,20 @@ impl StudioState {
             self.submit_has_error = true;
             return false;
         }
+        let Some(token) = self.current_submit_request_token() else {
+            self.status = "Submit unavailable: no editor session.".to_string();
+            self.show_submit_dialog = true;
+            self.submit_has_error = true;
+            return false;
+        };
+        let asserted_warning_keys = editor.asserted_warning_keys.clone();
         let request = match self
             .workflow
             .as_ref()
             .map_err(|error| format!("no workflow loaded: {error}"))
-            .and_then(build_submit_review_action_request)
-        {
+            .and_then(|workflow| {
+                build_lint_annotations_request(workflow, &asserted_warning_keys, token)
+            }) {
             Ok(request) => request,
             Err(error) => {
                 self.status = format!("Submit unavailable: {error}");
@@ -4863,22 +4890,124 @@ impl StudioState {
 
         self.show_submit_dialog = true;
         self.submit_is_pending = true;
-        self.status = "Submitting review...".to_string();
+        self.status = "Checking Babel lint...".to_string();
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(
+                request,
+                BabelServiceRequest::LintAnnotations(_)
+                    | BabelServiceRequest::SubmitReviewAction(_)
+            )
+        });
+        self.babel_service_requests
+            .push(BabelServiceRequest::LintAnnotations(request));
+        true
+    }
+
+    pub(super) fn complete_lint_annotations_success(
+        &mut self,
+        token: SubmitRequestToken,
+        issues: Vec<ServerLintIssue>,
+    ) -> bool {
+        if !self.submit_callback_is_current(
+            token,
+            |request| matches!(request, BabelServiceRequest::LintAnnotations(request) if request.token == token),
+        ) {
+            return false;
+        }
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(request, BabelServiceRequest::LintAnnotations(request) if request.token == token)
+        });
+        self.install_server_lint_snapshot(token.revision, issues.clone());
+        if !issues.is_empty() {
+            self.block_submit_for_server_lint(&issues);
+            return false;
+        }
+
+        self.queue_submit_review_action(token, "Submitting review...")
+    }
+
+    pub(super) fn complete_lint_annotations_failure(
+        &mut self,
+        token: SubmitRequestToken,
+        error: String,
+        issues: Option<Vec<ServerLintIssue>>,
+    ) -> bool {
+        if !self.submit_callback_is_current(
+            token,
+            |request| matches!(request, BabelServiceRequest::LintAnnotations(request) if request.token == token),
+        ) {
+            return false;
+        }
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(request, BabelServiceRequest::LintAnnotations(request) if request.token == token)
+        });
+        if let Some(issues) = issues.filter(|issues| !issues.is_empty()) {
+            self.install_server_lint_snapshot(token.revision, issues.clone());
+            self.block_submit_for_server_lint(&issues);
+            return false;
+        }
+        let endpoint_unavailable = error.contains("transcriptions.lintAnnotations")
+            && (error.contains("No procedure found")
+                || error.contains("NOT_FOUND")
+                || error.contains("HTTP 404"));
+        if endpoint_unavailable {
+            return self.queue_submit_review_action(
+                token,
+                "Babel lint endpoint unavailable; submitting for authoritative validation...",
+            );
+        }
+        self.fail_submit_preflight(error);
+        false
+    }
+
+    fn queue_submit_review_action(&mut self, token: SubmitRequestToken, status: &str) -> bool {
+        let asserted_warning_keys = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.asserted_warning_keys.clone())
+            .unwrap_or_default();
+        let request = match self
+            .workflow
+            .as_ref()
+            .map_err(|error| format!("no workflow loaded: {error}"))
+            .and_then(|workflow| {
+                build_submit_review_action_request_with_asserted_warnings(
+                    workflow,
+                    &asserted_warning_keys,
+                    token,
+                )
+            }) {
+            Ok(request) => request,
+            Err(error) => {
+                self.fail_submit_preflight(format!("could not build submit request: {error}"));
+                return false;
+            }
+        };
+        self.status = status.to_string();
         self.babel_service_requests
             .push(BabelServiceRequest::SubmitReviewAction(request));
         true
     }
 
-    pub(super) fn complete_submit_review_success(&mut self) {
-        if !self.submit_is_pending {
+    pub(super) fn complete_submit_review_success(&mut self, token: SubmitRequestToken) {
+        if !self.submit_callback_is_current(
+            token,
+            |request| matches!(request, BabelServiceRequest::SubmitReviewAction(request) if request.token == token),
+        ) {
             return;
         }
-
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SubmitReviewAction(_))
+            matches!(request, BabelServiceRequest::SubmitReviewAction(request) if request.token == token)
         });
-        self.submit_review();
-        if !self.submit_has_error {
+        self.submit_is_pending = false;
+        if self.with_workflow_mut("Submit", |workflow| {
+            workflow.mark_review_passed();
+            Ok("Review submitted; Babel export will mark the action as pass.".to_string())
+        }) {
+            self.with_editor_mut(|editor| editor.review_state = ReviewState::Submitted);
+            self.mark_saved();
+            self.show_submit_dialog = false;
+            self.submit_has_error = false;
             let notice = self.status.clone();
             self.enter_dashboard();
             self.queue_dashboard_projects_refresh();
@@ -4887,18 +5016,31 @@ impl StudioState {
         }
     }
 
-    pub(super) fn complete_submit_review_failure(&mut self, error: String) {
-        if !self.submit_is_pending {
+    pub(super) fn complete_submit_review_failure(
+        &mut self,
+        token: SubmitRequestToken,
+        error: String,
+        issues: Option<Vec<ServerLintIssue>>,
+    ) {
+        if !self.submit_callback_is_current(
+            token,
+            |request| matches!(request, BabelServiceRequest::SubmitReviewAction(request) if request.token == token),
+        ) {
             return;
         }
-
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(request, BabelServiceRequest::SubmitReviewAction(request) if request.token == token)
+        });
+        if let Some(issues) = issues.filter(|issues| !issues.is_empty()) {
+            self.install_server_lint_snapshot(token.revision, issues.clone());
+            self.block_submit_for_server_lint(&issues);
+            return;
+        }
         self.submit_is_pending = false;
         self.submit_has_error = true;
         self.show_submit_dialog = true;
-        self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SubmitReviewAction(_))
-        });
         self.status = format!("Submit failed: {error}");
+        self.invalidate_lint_view_caches();
     }
 
     pub(super) fn begin_drop_claim_request(&mut self) -> bool {
@@ -5060,6 +5202,80 @@ impl StudioState {
         }
     }
 
+    fn submit_callback_is_current(
+        &self,
+        token: SubmitRequestToken,
+        expected_request: impl Fn(&BabelServiceRequest) -> bool,
+    ) -> bool {
+        token.workspace_generation == self.workspace_generation
+            && self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.current_edit_revision() == token.revision)
+            && self.babel_service_requests.iter().any(expected_request)
+    }
+
+    pub(super) fn install_server_lint_snapshot(
+        &mut self,
+        revision: u64,
+        issues: Vec<ServerLintIssue>,
+    ) -> bool {
+        let metadata_issues = issues.clone();
+        let mut installed = false;
+        self.with_editor_mut(|editor| {
+            installed = editor.set_server_lint_snapshot(ServerLintSnapshot::new(revision, issues));
+        });
+        if installed {
+            if let Ok(workflow) = &mut self.workflow {
+                workflow.set_babel_lint_snapshot_metadata(&metadata_issues);
+            }
+            self.invalidate_lint_view_caches();
+        }
+        installed
+    }
+
+    fn block_submit_for_server_lint(&mut self, issues: &[ServerLintIssue]) {
+        self.submit_is_pending = false;
+        self.submit_has_error = true;
+        self.show_submit_dialog = true;
+        let reasons = issues
+            .iter()
+            .map(|issue| issue.reason.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.status = format!("Submit blocked by Babel lint: {reasons}");
+
+        let selected_segment_id = self.project().and_then(|project| {
+            issues.iter().find_map(|issue| {
+                project
+                    .segments
+                    .iter()
+                    .find(|segment| {
+                        segment.id == issue.annotation_id
+                            || segment.source_annotation_id.as_deref()
+                                == Some(issue.annotation_id.as_str())
+                    })
+                    .map(|segment| segment.id.clone())
+            })
+        });
+        if let (Some(project), Some(segment_id)) = (self.project().cloned(), selected_segment_id) {
+            self.with_editor_mut(|editor| editor.select_segment(&project, &segment_id));
+        }
+        self.invalidate_lint_view_caches();
+    }
+
+    fn fail_submit_preflight(&mut self, error: String) {
+        self.submit_is_pending = false;
+        self.submit_has_error = true;
+        self.show_submit_dialog = true;
+        self.status = format!("Submit lint check failed: {error}");
+        self.invalidate_lint_view_caches();
+    }
+
+    pub(super) fn invalidate_lint_view_caches(&mut self) {
+        self.invalidate_transcript_rows_cache();
+    }
+
     pub(super) fn fail_skip_chunk(&mut self, error: String) {
         if !self.skip_is_pending {
             return;
@@ -5176,7 +5392,36 @@ impl StudioState {
     }
 
     pub(super) fn mark_dirty(&mut self) {
+        let invalidates_snapshot = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.server_lint_snapshot().is_some());
         self.with_editor_mut(EditorSession::mark_dirty);
+        if invalidates_snapshot {
+            if let Ok(workflow) = &mut self.workflow {
+                workflow.clear_babel_lint_snapshot_metadata();
+            }
+            self.invalidate_lint_view_caches();
+        }
+        self.cancel_pending_submit_for_edit();
+    }
+
+    pub(super) fn cancel_pending_submit_for_edit(&mut self) {
+        if !self.submit_is_pending {
+            return;
+        }
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(
+                request,
+                BabelServiceRequest::LintAnnotations(_)
+                    | BabelServiceRequest::SubmitReviewAction(_)
+            )
+        });
+        self.submit_is_pending = false;
+        self.submit_has_error = false;
+        self.show_submit_dialog = true;
+        self.status = "Transcript changed; submit again to recheck Babel lint.".to_string();
+        self.invalidate_lint_view_caches();
     }
 
     pub(super) fn mark_saved(&mut self) {

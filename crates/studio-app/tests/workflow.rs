@@ -1,4 +1,4 @@
-use studio_app::StudioWorkflow;
+use studio_app::{LintSeverity, ServerLintIssue, StudioWorkflow};
 use studio_babel::BabelTaskPackage;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 
@@ -110,6 +110,45 @@ fn workflow_exports_recovered_review_action_json_in_original_envelope_shape() {
         })
         .expect("edited annotation should export");
     assert_eq!(edited["content"], "Edited through workflow.");
+}
+
+#[test]
+fn workflow_server_lint_metadata_tracks_current_snapshot_and_invalidation() {
+    let mut workflow =
+        StudioWorkflow::from_babel_json(REVIEW_ACTION_JSON).expect("review action should import");
+    let issue = ServerLintIssue {
+        annotation_id: "eaa5afc3-3d59-4267-b073-d390d0b48060".to_string(),
+        reason: "Server-authoritative issue.".to_string(),
+        severity: LintSeverity::Error,
+    };
+
+    workflow.set_babel_lint_snapshot_metadata(std::slice::from_ref(&issue));
+    let exported: serde_json::Value = serde_json::from_str(
+        &workflow
+            .export_babel_json()
+            .expect("review action with current lint should export"),
+    )
+    .expect("export should remain valid JSON");
+    assert_eq!(
+        exported.pointer("/0/result/data/json/lintErrors/0"),
+        Some(&serde_json::json!({
+            "annotationId": issue.annotation_id,
+            "reason": issue.reason,
+            "severity": "error",
+        }))
+    );
+
+    workflow.clear_babel_lint_snapshot_metadata();
+    let exported: serde_json::Value = serde_json::from_str(
+        &workflow
+            .export_babel_json()
+            .expect("review action without stale lint should export"),
+    )
+    .expect("export should remain valid JSON");
+    assert!(
+        exported.pointer("/0/result/data/json/lintErrors").is_none(),
+        "invalidated server lint must not be resurrected by the preserved Babel envelope"
+    );
 }
 
 #[test]

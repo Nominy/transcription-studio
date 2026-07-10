@@ -8,6 +8,7 @@ use std::{
 use iced::Task;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
+use studio_app::{LintSeverity, ServerLintIssue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::Message;
@@ -16,9 +17,9 @@ use super::native_auth::{
 };
 use super::service_callbacks::{
     AdminRateReviewActionRequest, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
-    ClaimNextFromQueueRequest, DropWorkerActionRequest, LoadLatestReviewActionRequest,
-    LoadReviewActionRequest, SaveAnnotationsRequest, SkipReviewActionRequest,
-    SubmitReviewActionRequest,
+    ClaimNextFromQueueRequest, DropWorkerActionRequest, LintAnnotationsRequest,
+    LoadLatestReviewActionRequest, LoadReviewActionRequest, SaveAnnotationsRequest,
+    SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
 };
 use super::subaccounts::{subaccount_relay_payload_for_request, subaccount_session_is_active};
 
@@ -50,6 +51,7 @@ pub(super) fn is_dispatchable_babel_service_request(request: &BabelServiceReques
         request,
         BabelServiceRequest::LoadWorkerProjects
             | BabelServiceRequest::SaveAnnotations(_)
+            | BabelServiceRequest::LintAnnotations(_)
             | BabelServiceRequest::ClaimNextFromQueue(_)
             | BabelServiceRequest::ClaimByProcessedTranscription(_)
             | BabelServiceRequest::LoadReviewAction(_)
@@ -117,6 +119,9 @@ pub(super) fn fixture_payload_message_for_request(
         BabelServiceRequest::SaveAnnotations(request) => Some(
             save_annotations_message_from_payload(&payload, request.token),
         ),
+        BabelServiceRequest::LintAnnotations(request) => Some(
+            lint_annotations_message_from_payload(&payload, request.token),
+        ),
         BabelServiceRequest::LoadReviewAction(_) => {
             Some(Message::LoadReviewActionSucceeded(payload))
         }
@@ -129,8 +134,8 @@ pub(super) fn fixture_payload_message_for_request(
         BabelServiceRequest::ClaimNextFromQueue(_) => {
             Some(Message::ClaimNextFromQueueSucceeded(payload))
         }
-        BabelServiceRequest::SubmitReviewAction(_) => {
-            Some(submit_review_message_from_payload(&payload))
+        BabelServiceRequest::SubmitReviewAction(request) => {
+            Some(submit_review_message_from_payload(&payload, request.token))
         }
         BabelServiceRequest::DropWorkerAction(_) => Some(simple_mutation_message_from_payload(
             &payload,
@@ -164,8 +169,15 @@ fn save_annotations_message_from_payload(
 ) -> Message {
     let value = match decode_service_payload(payload) {
         Ok(value) => value,
-        Err(error) => return Message::SaveProgressFailed { token, error },
+        Err(error) => {
+            return Message::SaveProgressFailed {
+                token,
+                error,
+                issues: None,
+            };
+        }
     };
+    let issues = server_lint_issues_from_value(&value).unwrap_or(None);
 
     if response_success(&value) {
         return Message::SaveProgressSucceeded {
@@ -175,34 +187,94 @@ fn save_annotations_message_from_payload(
                 &["updatedAt", "updated_at", "lastSaved", "last_saved"],
             )
             .unwrap_or_else(current_timestamp),
+            issues,
         };
     }
 
     Message::SaveProgressFailed {
         token,
         error: response_error(&value, "Failed to save progress. Please try again."),
+        issues,
     }
 }
 
-fn submit_review_message_from_payload(payload: &str) -> Message {
+fn lint_annotations_message_from_payload(payload: &str, token: SubmitRequestToken) -> Message {
+    let value = match decode_lint_service_payload(payload) {
+        Ok(value) => value,
+        Err(error) => {
+            return Message::LintAnnotationsFailed {
+                token,
+                error,
+                issues: None,
+            };
+        }
+    };
+    let issues = match server_lint_issues_from_value(&value) {
+        Ok(Some(issues)) => issues,
+        Ok(None) => {
+            return Message::LintAnnotationsFailed {
+                token,
+                error: "Babel lint response did not include a lint issue array.".to_string(),
+                issues: None,
+            };
+        }
+        Err(error) => {
+            return Message::LintAnnotationsFailed {
+                token,
+                error,
+                issues: None,
+            };
+        }
+    };
+    if first_bool_by_key(&value, &["success", "ok"]) == Some(false) {
+        return Message::LintAnnotationsFailed {
+            token,
+            error: response_error(&value, "Babel lint check failed. Please try again."),
+            issues: Some(issues),
+        };
+    }
+
+    Message::LintAnnotationsSucceeded { token, issues }
+}
+
+fn submit_review_message_from_payload(payload: &str, token: SubmitRequestToken) -> Message {
     let value = match decode_service_payload(payload) {
         Ok(value) => value,
-        Err(error) => return Message::SubmitReviewFailed(error),
+        Err(error) => {
+            return Message::SubmitReviewFailed {
+                token,
+                error,
+                issues: None,
+            };
+        }
+    };
+    let issues = match server_lint_issues_from_value(&value) {
+        Ok(issues) => issues,
+        Err(error) => {
+            return Message::SubmitReviewFailed {
+                token,
+                error,
+                issues: None,
+            };
+        }
     };
 
-    if linter_error_count(&value) > 0 {
-        return Message::SubmitReviewFailed(
-            "Failed to pass linting. Please fix the errors and try again.".to_string(),
-        );
+    if let Some(nonempty) = issues.as_ref().filter(|issues| !issues.is_empty()) {
+        return Message::SubmitReviewFailed {
+            token,
+            error: server_lint_failure_message(nonempty),
+            issues,
+        };
     }
 
     if response_success(&value) {
-        Message::SubmitReviewSucceeded
+        Message::SubmitReviewSucceeded { token }
     } else {
-        Message::SubmitReviewFailed(response_error(
-            &value,
-            "Failed to submit annotations. Please try again.",
-        ))
+        Message::SubmitReviewFailed {
+            token,
+            error: response_error(&value, "Failed to submit annotations. Please try again."),
+            issues,
+        }
     }
 }
 
@@ -254,6 +326,40 @@ fn decode_service_payload(payload: &str) -> Result<Value, String> {
         .map_err(|error| format!("failed to decode native Babel service response: {error}"))
 }
 
+fn decode_lint_service_payload(payload: &str) -> Result<Value, String> {
+    match decode_service_payload(payload) {
+        Ok(value) => Ok(value),
+        Err(json_error) => {
+            let mut frames = Vec::new();
+            for line in payload
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                let frame = serde_json::from_str::<Value>(line).map_err(|_| json_error.clone())?;
+                frames.push(frame);
+            }
+            for frame in frames.iter().rev() {
+                if let Some(issues) = frame.get("json").and_then(find_embedded_lint_issue_array) {
+                    return Ok(Value::Array(issues.clone()));
+                }
+            }
+            Err(json_error)
+        }
+    }
+}
+
+fn find_embedded_lint_issue_array(value: &Value) -> Option<&Vec<Value>> {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .find_map(find_embedded_lint_issue_array)
+            .or_else(|| is_standalone_lint_array(items).then_some(items)),
+        Value::Object(map) => map.values().find_map(find_embedded_lint_issue_array),
+        _ => None,
+    }
+}
+
 fn response_success(value: &Value) -> bool {
     first_bool_by_key(value, &["success", "ok"]).unwrap_or(false)
 }
@@ -264,17 +370,125 @@ fn response_error(value: &Value, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn linter_error_count(value: &Value) -> usize {
+fn server_lint_failure_message(issues: &[ServerLintIssue]) -> String {
+    if issues.is_empty() {
+        return "Failed to pass linting. Please fix the errors and try again.".to_string();
+    }
+    format!(
+        "Failed to pass linting: {}",
+        issues
+            .iter()
+            .map(|issue| issue.reason.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    )
+}
+
+fn server_lint_issues_from_value(value: &Value) -> Result<Option<Vec<ServerLintIssue>>, String> {
+    let mut found_named_array = false;
+    let mut issue_values = Vec::new();
+    collect_named_lint_issue_values(value, &mut found_named_array, &mut issue_values);
+    if found_named_array {
+        return issue_values
+            .into_iter()
+            .map(parse_server_lint_issue)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some);
+    }
+
+    if let Some(items) = value
+        .as_array()
+        .filter(|items| is_standalone_lint_array(items))
+    {
+        return parse_server_lint_issue_array(items).map(Some);
+    }
+    if let Some(Value::Array(items)) = normalize_trpc_response_value(value)
+        && is_standalone_lint_array(&items)
+    {
+        return parse_server_lint_issue_array(&items).map(Some);
+    }
+    Ok(None)
+}
+
+fn collect_named_lint_issue_values<'a>(
+    value: &'a Value,
+    found_array: &mut bool,
+    issues: &mut Vec<&'a Value>,
+) {
     match value {
         Value::Object(map) => {
-            if let Some(errors) = map.get("linterErrors").and_then(Value::as_array) {
-                return errors.len();
+            for key in ["lintErrors", "linterErrors"] {
+                if let Some(found) = map.get(key).and_then(Value::as_array) {
+                    *found_array = true;
+                    issues.extend(found);
+                }
             }
-            map.values().map(linter_error_count).sum()
+            for (key, child) in map {
+                if key != "lintErrors" && key != "linterErrors" {
+                    collect_named_lint_issue_values(child, found_array, issues);
+                }
+            }
         }
-        Value::Array(items) => items.iter().map(linter_error_count).sum(),
-        _ => 0,
+        Value::Array(items) => {
+            for child in items {
+                collect_named_lint_issue_values(child, found_array, issues);
+            }
+        }
+        _ => {}
     }
+}
+
+fn is_standalone_lint_array(items: &[Value]) -> bool {
+    items.is_empty()
+        || items.iter().all(|item| {
+            item.as_object().is_some_and(|issue| {
+                issue.contains_key("annotationId")
+                    && issue.contains_key("reason")
+                    && issue.contains_key("severity")
+            })
+        })
+}
+
+fn parse_server_lint_issue_array(items: &[Value]) -> Result<Vec<ServerLintIssue>, String> {
+    items.iter().map(parse_server_lint_issue).collect()
+}
+
+fn parse_server_lint_issue(value: &Value) -> Result<ServerLintIssue, String> {
+    let Some(issue) = value.as_object() else {
+        return Err("Babel lint issue was not an object.".to_string());
+    };
+    let annotation_id = required_lint_issue_string(issue, "annotationId")?;
+    let reason = required_lint_issue_string(issue, "reason")?;
+    let severity = match required_lint_issue_string(issue, "severity")?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "error" => LintSeverity::Error,
+        "warning" => LintSeverity::Warning,
+        "pass" => LintSeverity::Pass,
+        severity => {
+            return Err(format!(
+                "Babel lint issue had unsupported severity `{severity}`."
+            ));
+        }
+    };
+    Ok(ServerLintIssue {
+        annotation_id,
+        reason,
+        severity,
+    })
+}
+
+fn required_lint_issue_string(
+    issue: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, String> {
+    issue
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("Babel lint issue was missing `{key}`."))
 }
 
 fn first_bool_by_key(value: &Value, keys: &[&str]) -> Option<bool> {
@@ -815,6 +1029,19 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
                 "annotations": annotations,
             },
         }),
+        BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+            annotations,
+            project_id,
+            consensus_data,
+            ..
+        }) => json!({
+            "operation": "transcriptions.lintAnnotations",
+            "payload": {
+                "annotations": annotations,
+                "projectId": project_id,
+                "consensusData": consensus_data,
+            },
+        }),
         BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id }) => json!({
             "operation": "transcriptions.claimNextReviewActionFromReviewQueue",
             "payload": { "queueId": queue_id },
@@ -851,6 +1078,7 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
             review_action_id,
             annotations,
             is_stitched_queue,
+            ..
         }) => json!({
             "operation": "transcriptions.submitTranscriptReviewAction",
             "payload": {
@@ -944,6 +1172,7 @@ fn normalize_service_response_payload_for_request(
         BabelServiceRequest::LoadWorkerProjects => {
             normalize_dashboard_projects_response_payload(response)
         }
+        BabelServiceRequest::LintAnnotations(_) => normalize_lint_response_payload(response),
         BabelServiceRequest::LoadReviewAction(_)
         | BabelServiceRequest::LoadLatestReviewAction(_)
         | BabelServiceRequest::ClaimByProcessedTranscription(_)
@@ -952,6 +1181,12 @@ fn normalize_service_response_payload_for_request(
         }
         _ => normalize_service_response_payload(response),
     }
+}
+
+fn normalize_lint_response_payload(response: &str) -> String {
+    decode_lint_service_payload(response)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| response.trim_start_matches('\u{feff}').trim().to_string())
 }
 
 fn normalize_dashboard_projects_response_payload(response: &str) -> String {
@@ -1346,6 +1581,12 @@ fn failure_message_for_request(request: BabelServiceRequest, error: &str) -> Mes
         BabelServiceRequest::SaveAnnotations(request) => Message::SaveProgressFailed {
             token: request.token,
             error: error.to_string(),
+            issues: None,
+        },
+        BabelServiceRequest::LintAnnotations(request) => Message::LintAnnotationsFailed {
+            token: request.token,
+            error: error.to_string(),
+            issues: None,
         },
         BabelServiceRequest::LoadReviewAction(_) => {
             Message::LoadReviewActionFailed(error.to_string())
@@ -1359,9 +1600,11 @@ fn failure_message_for_request(request: BabelServiceRequest, error: &str) -> Mes
         BabelServiceRequest::ClaimNextFromQueue(_) => {
             Message::ClaimNextFromQueueFailed(error.to_string())
         }
-        BabelServiceRequest::SubmitReviewAction(_) => {
-            Message::SubmitReviewFailed(error.to_string())
-        }
+        BabelServiceRequest::SubmitReviewAction(request) => Message::SubmitReviewFailed {
+            token: request.token,
+            error: error.to_string(),
+            issues: None,
+        },
         BabelServiceRequest::DropWorkerAction(_) => Message::DropClaimFailed(error.to_string()),
         BabelServiceRequest::SkipReviewAction(_) => Message::SkipChunkFailed(error.to_string()),
         BabelServiceRequest::AdminRateReviewAction(_) => {
@@ -1498,8 +1741,8 @@ mod tests {
             Message::SaveProgressSucceeded { .. }
         ));
         assert!(matches!(
-            submit_review_message_from_payload(&normalized),
-            Message::SubmitReviewSucceeded
+            submit_review_message_from_payload(&normalized, Default::default()),
+            Message::SubmitReviewSucceeded { .. }
         ));
         assert!(matches!(
             simple_mutation_message_from_payload(
@@ -1604,10 +1847,21 @@ mod tests {
                 "transcriptions.saveAnnotationsByReviewActionId",
             ),
             (
+                BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+                    annotations: annotations.clone(),
+                    project_id: "project-1".to_string(),
+                    consensus_data: Value::Null,
+                    token: Default::default(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptions.lintAnnotations",
+            ),
+            (
                 BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
                     review_action_id: "review-action-1".to_string(),
                     annotations: annotations.clone(),
                     is_stitched_queue: false,
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Post,
                 "transcriptions.submitTranscriptReviewAction",

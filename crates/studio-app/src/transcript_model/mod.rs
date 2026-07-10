@@ -12,7 +12,10 @@ mod words;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::babel_metadata::project_is_read_only;
-use crate::linter::{LintKind, LintStatus, lint_segment_issues, warning_key};
+use crate::linter::{
+    LintKind, LintStatus, ServerLintSnapshot, lint_segment_issues, server_lint_issues_for_segment,
+    warning_key,
+};
 use crate::track_filter::TrackFilter;
 use diff::{
     annotation_diff_state, annotation_removed_ghost_rows, diff_state, modified_segment_diff_rows,
@@ -165,6 +168,7 @@ pub(crate) fn build_transcript_rows(
     active_region_by_track: &BTreeMap<String, String>,
     diff_view: bool,
     asserted_warning_keys: &BTreeSet<String>,
+    server_lint_snapshot: Option<&ServerLintSnapshot>,
 ) -> Vec<TranscriptRowView> {
     let mut segments: Vec<_> = project.segments.iter().collect();
     segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
@@ -181,11 +185,12 @@ pub(crate) fn build_transcript_rows(
         .map(|segment| {
             let annotation_kind = TranscriptAnnotationKind::from_segment(segment);
             let annotation_type_label = annotation_kind.label();
-            let raw_lint_issues = if annotation_kind.is_transcription() {
+            let mut raw_lint_issues = server_lint_issues_for_segment(server_lint_snapshot, segment);
+            raw_lint_issues.extend(if annotation_kind.is_transcription() {
                 lint_segment_issues(project, segment)
             } else {
                 crate::linter::lint_region_issues(project, segment)
-            };
+            });
             let has_asserted_warning = raw_lint_issues.iter().any(|issue| {
                 warning_key(segment, issue).is_some_and(|key| asserted_warning_keys.contains(&key))
             });

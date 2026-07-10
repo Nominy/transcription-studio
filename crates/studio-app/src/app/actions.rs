@@ -206,11 +206,31 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::SubmitReview => {
             state.begin_submit_review_request();
         }
-        Message::SubmitReviewSucceeded => state.complete_submit_review_success(),
-        Message::SubmitReviewFailed(error) => state.complete_submit_review_failure(error),
+        Message::LintAnnotationsSucceeded { token, issues } => {
+            state.complete_lint_annotations_success(token, issues);
+        }
+        Message::LintAnnotationsFailed {
+            token,
+            error,
+            issues,
+        } => {
+            state.complete_lint_annotations_failure(token, error, issues);
+        }
+        Message::SubmitReviewSucceeded { token } => {
+            state.complete_submit_review_success(token);
+        }
+        Message::SubmitReviewFailed {
+            token,
+            error,
+            issues,
+        } => state.complete_submit_review_failure(token, error, issues),
         Message::SaveProgress => state.save_progress(),
-        Message::SaveProgressSucceeded { token, last_saved } => {
-            if state.complete_save_progress_success(token, last_saved)
+        Message::SaveProgressSucceeded {
+            token,
+            last_saved,
+            issues,
+        } => {
+            if state.complete_save_progress_success(token, last_saved, issues)
                 && state.pending_leave_waits_for_save()
             {
                 if state.editor.as_ref().is_some_and(|editor| editor.is_dirty) {
@@ -221,8 +241,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 }
             }
         }
-        Message::SaveProgressFailed { token, error } => {
-            state.complete_save_progress_failure(token, error);
+        Message::SaveProgressFailed {
+            token,
+            error,
+            issues,
+        } => {
+            state.complete_save_progress_failure(token, error, issues);
         }
         Message::AutoSaveTick => state.auto_save_progress(),
         Message::DropClaim => {
@@ -1475,7 +1499,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                     toggled = editor.toggle_warning_assertion(&project);
                 });
                 if toggled {
-                    state.status = "Warning assertion updated.".to_string();
+                    state.invalidate_lint_view_caches();
+                    if state.submit_is_pending {
+                        state.cancel_pending_submit_for_edit();
+                    } else {
+                        state.status = "Warning assertion updated.".to_string();
+                    }
                 }
             }
         }
@@ -1489,7 +1518,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                     toggled = editor.toggle_warning_assertion(&project);
                 });
                 if toggled {
-                    state.status = "Warning assertion updated.".to_string();
+                    state.invalidate_lint_view_caches();
+                    if state.submit_is_pending {
+                        state.cancel_pending_submit_for_edit();
+                    } else {
+                        state.status = "Warning assertion updated.".to_string();
+                    }
                 }
             }
         }

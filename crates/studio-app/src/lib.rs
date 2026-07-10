@@ -70,7 +70,7 @@ pub use editor_model::{
 };
 pub use linter::{
     LintKind, LintSeverity, LintStatus, LinterRule, LinterRuleType, RUSSIAN_SQUARE_BRACKET_TAGS,
-    RUSSIAN_STYLE_TAGS, recovered_linter_registry,
+    RUSSIAN_STYLE_TAGS, ServerLintIssue, ServerLintSnapshot, recovered_linter_registry,
 };
 pub use project_lint_tag_config::{
     BabelProjectLintTagConfig, BabelProjectLintTagProfile, META_BABEL_PROJECT_ID,

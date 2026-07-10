@@ -87,6 +87,25 @@ pub enum LintSeverity {
     Error,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerLintIssue {
+    pub annotation_id: String,
+    pub reason: String,
+    pub severity: LintSeverity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerLintSnapshot {
+    pub revision: u64,
+    pub issues: Vec<ServerLintIssue>,
+}
+
+impl ServerLintSnapshot {
+    pub fn new(revision: u64, issues: Vec<ServerLintIssue>) -> Self {
+        Self { revision, issues }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinterRuleType {
     PerAnnotation,
@@ -276,6 +295,7 @@ pub fn recovered_linter_registry() -> &'static [LinterRule] {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LintKind {
     Pass,
+    BabelServer,
     InvalidTimeRange,
     UnknownTrack,
     EmptyText,
@@ -330,6 +350,37 @@ pub(crate) fn lint_segment(project: &Project, segment: &Segment) -> LintStatus {
 pub(crate) fn lint_segment_issues(project: &Project, segment: &Segment) -> Vec<LintStatus> {
     let config = resolve_babel_project_lint_tag_config(project);
     lint_segment_issues_with_config(project, segment, config)
+}
+
+pub(crate) fn server_lint_issues_for_segment(
+    snapshot: Option<&ServerLintSnapshot>,
+    segment: &Segment,
+) -> Vec<LintStatus> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+
+    snapshot
+        .issues
+        .iter()
+        .filter(|issue| server_lint_issue_matches_segment(issue, segment))
+        .map(|issue| LintStatus {
+            severity: issue.severity,
+            message: issue.reason.clone(),
+            kind: LintKind::BabelServer,
+        })
+        .collect()
+}
+
+pub(crate) fn server_lint_issue_matches_segment(
+    issue: &ServerLintIssue,
+    segment: &Segment,
+) -> bool {
+    issue.annotation_id == segment.id
+        || segment
+            .source_annotation_id
+            .as_deref()
+            .is_some_and(|source_id| issue.annotation_id == source_id)
 }
 
 fn lint_segment_issues_with_config(
@@ -869,9 +920,20 @@ mod tests {
 
     #[test]
     fn linter_accepts_known_babel_style_tag_pairs() {
-        let lint = lint_text("<речь-нараспев>да</речь-нараспев>");
+        let lint = lint_text("<смех-в-речи> М-да, </смех-в-речи> на самом деле.");
 
         assert_eq!(lint.kind, LintKind::Pass);
+    }
+
+    #[test]
+    fn linter_rejects_style_tags_without_surrounding_spaces() {
+        let lint = lint_text("<смех-в-речи>М-да</смех-в-речи>, на самом деле.");
+
+        assert_eq!(lint.kind, LintKind::StyleTagValidation);
+        assert_eq!(
+            lint.message,
+            "Style tags must have spaces around them: 'word <tag> content </tag> word'"
+        );
     }
 
     #[test]
@@ -954,7 +1016,7 @@ mod tests {
 
     #[test]
     fn russian_gold_allows_gold_only_tags_that_russian_transcription_rejects() {
-        let text = "[музыка] <подражание>да</подражание>";
+        let text = "[музыка] <подражание> да </подражание>";
         let gold_issues = lint_issues_with_project_metadata(
             text,
             &[(

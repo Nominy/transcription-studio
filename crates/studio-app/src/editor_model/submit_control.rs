@@ -10,7 +10,8 @@ const ADMIN_FLAG_REASON_PLACEHOLDER: &str =
 const SKIP_DISABLED_TOOLTIP: &str = "Listen to this chunk for a bit longer before skipping.";
 const SKIP_CHUNK_DESCRIPTION: &str = "The chunk will be archived and you'll be returned to the project page. This counts against your daily skip cap (20% of your task limit). It will not count toward your task limits or quality metrics.";
 
-const SUBMIT_ERROR_DESCRIPTION: &str = "Failed to submit annotations. Please try again.";
+const SUBMIT_ERROR_DESCRIPTION: &str =
+    "Submission was rejected. See the status bar below for the exact reason.";
 const SUBMIT_PENDING_OVERLAY_TEXT: &str = "Submitting your review...";
 
 const META_ASSESSMENT_PHASE: &str = "studio.babel.diff.assessmentPhase";
@@ -259,7 +260,7 @@ impl EditorSession {
             };
         }
 
-        if self.blocking_lint_count(project) > 0 {
+        if self.submission_blocking_lint_count(project) > 0 {
             return SubmitBlockState {
                 variant: SubmitTooltipVariant::Destructive,
                 content: "Please fix linter errors",
@@ -267,7 +268,7 @@ impl EditorSession {
             };
         }
 
-        if self.unacknowledged_warning_count(project) > 0 {
+        if self.submission_unacknowledged_warning_count(project) > 0 {
             return SubmitBlockState {
                 variant: SubmitTooltipVariant::Destructive,
                 content: "Please acknowledge all warnings",
@@ -275,7 +276,7 @@ impl EditorSession {
             };
         }
 
-        if self.unresolved_low_confidence_count(project) > 0 {
+        if self.submission_unresolved_low_confidence_count(project) > 0 {
             return SubmitBlockState {
                 variant: SubmitTooltipVariant::Destructive,
                 content: "Please review all low-confidence words",

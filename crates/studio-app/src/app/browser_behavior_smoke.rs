@@ -288,7 +288,7 @@ fn run_default_action_smoke(state: &mut StudioState) -> (bool, bool, bool, bool,
         && state.babel_service_requests.iter().any(|request| {
             matches!(
                 request,
-                super::service_callbacks::BabelServiceRequest::SubmitReviewAction(_)
+                super::service_callbacks::BabelServiceRequest::LintAnnotations(_)
             )
         });
 

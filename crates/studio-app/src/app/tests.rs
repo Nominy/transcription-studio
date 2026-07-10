@@ -14,10 +14,10 @@ use iced::widget::text_editor::{
 use iced::{Point, event::Status};
 use studio_app::{
     FEEDBACK_MAX_COMMENT_LENGTH, FeedbackDraftSaveRequest, FeedbackInputResponse, LaneWaveform,
-    LoopStripHit, LoopStripHitTarget, NoWorkModalInput, ORIGINAL_SCRIPT_STORAGE_KEY, ReviewState,
-    SCRIPT_CONTEXT_STORAGE_KEY, ScriptContextPanelInput, StudioWorkflow, TaskLookupEffect,
-    TimeRange, TranscriptActionMenuEntryView, WaveformPeakSource, build_no_work_modal_model,
-    build_original_script_panel_model, build_script_context_panel_model,
+    LintSeverity, LoopStripHit, LoopStripHitTarget, NoWorkModalInput, ORIGINAL_SCRIPT_STORAGE_KEY,
+    ReviewState, SCRIPT_CONTEXT_STORAGE_KEY, ScriptContextPanelInput, ServerLintIssue,
+    StudioWorkflow, TaskLookupEffect, TimeRange, TranscriptActionMenuEntryView, WaveformPeakSource,
+    build_no_work_modal_model, build_original_script_panel_model, build_script_context_panel_model,
     reduce_collapsible_panel_toggle,
 };
 use studio_babel::BabelTaskPackage;
@@ -56,9 +56,12 @@ use super::panel_persistence::PanelCollapseStorage;
 use super::review_backend_client::ReviewBackendRequest;
 use super::service_callbacks::{
     AdminRateReviewActionRequest, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
-    ClaimNextFromQueueRequest, DropWorkerActionRequest, LoadLatestReviewActionRequest,
-    LoadReviewActionRequest, SkipReviewActionRequest, SubmitReviewActionRequest,
-    build_save_annotations_request,
+    ClaimNextFromQueueRequest, DropWorkerActionRequest, LintAnnotationsRequest,
+    LoadLatestReviewActionRequest, LoadReviewActionRequest, SaveAnnotationsRequest,
+    SaveRequestToken, SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
+    build_lint_annotations_request, build_save_annotations_request,
+    build_save_annotations_request_with_asserted_warnings,
+    build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
     fixture_payload_message_for_request, is_dispatchable_babel_service_request,
@@ -71,7 +74,7 @@ use super::state::{
     AppSurface, DashboardProject, DashboardSection, HelperFocusRestore, NativeCapabilityModalTab,
     PendingLeaveIntent, TimelineAutoscrollMode,
 };
-use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest};
+use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest, relay_request_kind};
 use super::tag_suggestions::{
     TagSuggestionKeyboardAction, TagSuggestionKind, tag_suggestions_for_draft,
     tag_suggestions_for_text,
@@ -9295,6 +9298,44 @@ fn submit_review_marks_clean_project_submitted_and_blocks_linted_project() {
 }
 
 #[test]
+fn submit_review_blocks_babel_style_tags_without_surrounding_spaces() {
+    let mut state = stable_sample_state();
+    acknowledge_all_assertable_warnings(&mut state);
+    state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("<смех-в-речи>М-да</смех-в-речи>, на самом деле.".to_string());
+    state.apply_segment("annotation-1");
+
+    let project = state.project().unwrap();
+    let lint = state
+        .editor
+        .as_ref()
+        .unwrap()
+        .transcript_rows(project)
+        .into_iter()
+        .find(|row| row.segment_id == "annotation-1")
+        .unwrap()
+        .lint;
+    assert_eq!(
+        lint.message,
+        "Style tags must have spaces around them: 'word <tag> content </tag> word'"
+    );
+
+    let _ = update(&mut state, Message::RequestSubmitReview);
+
+    assert!(!state.show_submit_dialog);
+    assert_eq!(state.status, "Please fix linter errors");
+    assert!(
+        state
+            .babel_service_requests
+            .iter()
+            .all(|request| !matches!(request, BabelServiceRequest::SubmitReviewAction(_)))
+    );
+}
+
+#[test]
 fn request_submit_review_opens_babel_confirmation_without_submitting() {
     let mut state = stable_sample_state();
     acknowledge_all_assertable_warnings(&mut state);
@@ -9378,7 +9419,15 @@ fn default_action_submits_babel_confirmation_and_respects_pending_guard() {
         ReviewState::Draft
     );
 
-    let _ = update(&mut state, Message::SubmitReviewSucceeded);
+    let token = state.current_submit_request_token().unwrap();
+    let _ = update(
+        &mut state,
+        Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        },
+    );
+    let _ = update(&mut state, Message::SubmitReviewSucceeded { token });
 
     assert!(!state.show_submit_dialog);
     assert!(!state.submit_is_pending);
@@ -9430,7 +9479,15 @@ fn default_action_uses_top_surface_before_underlying_confirmation() {
         ReviewState::Draft
     );
 
-    let _ = update(&mut state, Message::SubmitReviewSucceeded);
+    let token = state.current_submit_request_token().unwrap();
+    let _ = update(
+        &mut state,
+        Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        },
+    );
+    let _ = update(&mut state, Message::SubmitReviewSucceeded { token });
 
     assert!(!state.show_submit_dialog);
     assert!(
@@ -9988,7 +10045,11 @@ fn save_progress_failure_surfaces_backend_error_on_retry_tooltip() {
     state.editor.as_mut().unwrap().begin_save();
     let token = state.current_save_request_token().unwrap();
 
-    state.complete_save_progress_failure(token, "Babel HTTP 400: invalid annotation".to_string());
+    state.complete_save_progress_failure(
+        token,
+        "Babel HTTP 400: invalid annotation".to_string(),
+        None,
+    );
 
     let strip = state
         .editor
@@ -10011,7 +10072,7 @@ fn save_acknowledgement_keeps_edits_made_after_the_sent_revision_dirty() {
     let token = state.current_save_request_token().unwrap();
     state.mark_dirty();
 
-    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string()));
+    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string(), None,));
 
     let editor = state.editor.as_ref().unwrap();
     assert!(editor.is_dirty);
@@ -10034,9 +10095,93 @@ fn save_acknowledgement_from_replaced_workspace_is_ignored() {
     state.replace_workflow(replacement, "replacement loaded".to_string());
     state.mark_dirty();
 
-    assert!(!state.complete_save_progress_success(stale_token, "stale save".to_string()));
+    assert!(!state.complete_save_progress_success(stale_token, "stale save".to_string(), None,));
     assert!(state.editor.as_ref().unwrap().is_dirty);
     assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
+}
+
+#[test]
+fn workflow_replacement_drains_save_preflight_and_submit_requests() {
+    let mut state = stable_sample_state();
+    let token = SubmitRequestToken {
+        workspace_generation: state.workspace_generation,
+        revision: state.editor.as_ref().unwrap().current_edit_revision(),
+    };
+    state.babel_service_requests = vec![
+        BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
+            review_action_id: "review-action-1".to_string(),
+            annotations: Vec::new(),
+            token: SaveRequestToken {
+                workspace_generation: token.workspace_generation,
+                revision: token.revision,
+            },
+        }),
+        BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+            annotations: Vec::new(),
+            project_id: "project-1".to_string(),
+            consensus_data: serde_json::Value::Null,
+            token,
+        }),
+        BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
+            review_action_id: "review-action-1".to_string(),
+            annotations: Vec::new(),
+            is_stitched_queue: false,
+            token,
+        }),
+    ];
+    state.dispatched_babel_service_requests = state.babel_service_requests.clone();
+    let replacement = StudioWorkflow::from_project(state.project().unwrap().clone());
+
+    state.replace_workflow(replacement, "replacement loaded".to_string());
+
+    assert!(state.babel_service_requests.is_empty());
+    assert!(state.dispatched_babel_service_requests.is_empty());
+}
+
+#[test]
+fn save_lint_snapshot_applies_only_to_the_exact_current_revision() {
+    let issue = ServerLintIssue {
+        annotation_id: "annotation-1".to_string(),
+        reason: "Exact save lint reason.".to_string(),
+        severity: LintSeverity::Error,
+    };
+    let mut current = stable_sample_state();
+    current.mark_dirty();
+    current.editor.as_mut().unwrap().begin_save();
+    let current_token = current.current_save_request_token().unwrap();
+
+    assert!(current.complete_save_progress_success(
+        current_token,
+        "2026-07-10T10:00:00Z".to_string(),
+        Some(vec![issue.clone()]),
+    ));
+    assert_eq!(
+        current.editor.as_ref().unwrap().server_lint_snapshot(),
+        Some(&studio_app::ServerLintSnapshot::new(
+            current_token.revision,
+            vec![issue.clone()],
+        ))
+    );
+
+    let mut newer = stable_sample_state();
+    newer.mark_dirty();
+    newer.editor.as_mut().unwrap().begin_save();
+    let stale_token = newer.current_save_request_token().unwrap();
+    newer.mark_dirty();
+
+    assert!(newer.complete_save_progress_success(
+        stale_token,
+        "2026-07-10T10:00:00Z".to_string(),
+        Some(vec![issue]),
+    ));
+    assert!(
+        newer
+            .editor
+            .as_ref()
+            .unwrap()
+            .server_lint_snapshot()
+            .is_none()
+    );
 }
 
 #[test]
@@ -10107,6 +10252,92 @@ fn save_progress_builds_recovered_babel_annotation_save_request() {
                             == Some("saved remotely")
                 })
             })
+    );
+}
+
+#[test]
+fn outbound_annotations_merge_exact_asserted_warning_reasons_without_losing_metadata() {
+    let workflow = StudioWorkflow::from_babel_json(include_str!(
+        "../../../studio-babel/tests/fixtures/review-action-final.json"
+    ))
+    .expect("recovered review action fixture should import");
+    let segment = &workflow.project().segments[0];
+    let annotation_id = segment
+        .source_annotation_id
+        .as_deref()
+        .unwrap_or(segment.id.as_str());
+    let baseline = build_save_annotations_request(&workflow).expect("baseline request");
+    let baseline_metadata = baseline
+        .annotations
+        .iter()
+        .find(|annotation| annotation["id"] == annotation_id)
+        .and_then(|annotation| annotation.get("metadata"))
+        .cloned();
+    let exact_reason = "Keep  internal  spacing & punctuation!";
+    let asserted_warning_keys = BTreeSet::from([format!("{}::{exact_reason}", segment.id)]);
+
+    let token = SubmitRequestToken {
+        workspace_generation: 6,
+        revision: 14,
+    };
+    let save =
+        build_save_annotations_request_with_asserted_warnings(&workflow, &asserted_warning_keys)
+            .expect("save request with asserted warning");
+    let lint = build_lint_annotations_request(&workflow, &asserted_warning_keys, token)
+        .expect("lint request with asserted warning");
+    let submit = build_submit_review_action_request_with_asserted_warnings(
+        &workflow,
+        &asserted_warning_keys,
+        token,
+    )
+    .expect("submit request with asserted warning");
+    for annotations in [&save.annotations, &lint.annotations, &submit.annotations] {
+        let annotation = annotations
+            .iter()
+            .find(|annotation| annotation["id"] == annotation_id)
+            .expect("matching annotation");
+        assert_eq!(
+            annotation["metadata"]["assertedWarnings"],
+            serde_json::json!([exact_reason])
+        );
+    }
+    let annotation = save
+        .annotations
+        .iter()
+        .find(|annotation| annotation["id"] == annotation_id)
+        .expect("matching save annotation");
+
+    assert_eq!(
+        annotation["metadata"]["assertedWarnings"],
+        serde_json::json!([exact_reason])
+    );
+    if let Some(serde_json::Value::Object(baseline_metadata)) = baseline_metadata {
+        for (key, value) in baseline_metadata {
+            if key != "assertedWarnings" {
+                assert_eq!(annotation["metadata"][&key], value);
+            }
+        }
+    }
+
+    let mut persisted_project = workflow.project().clone();
+    persisted_project.segments[0].metadata.insert(
+        "assertedWarnings".to_string(),
+        serde_json::json!([exact_reason]),
+    );
+    let persisted_workflow = StudioWorkflow::from_project(persisted_project);
+    let cleared = build_save_annotations_request_with_asserted_warnings(
+        &persisted_workflow,
+        &BTreeSet::new(),
+    )
+    .expect("request after warning was unasserted");
+    let cleared_annotation = cleared
+        .annotations
+        .iter()
+        .find(|annotation| annotation["id"] == annotation_id)
+        .expect("matching cleared annotation");
+    assert_eq!(
+        cleared_annotation["metadata"]["assertedWarnings"],
+        serde_json::json!([])
     );
 }
 
@@ -13064,11 +13295,16 @@ fn fixture_service_executor_maps_recovered_load_and_claim_requests_to_callbacks(
 
 #[test]
 fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_callbacks() {
+    let token = SubmitRequestToken {
+        workspace_generation: 7,
+        revision: 11,
+    };
     let mutation_requests = [
         BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
             review_action_id: "review-action-42".to_string(),
             annotations: vec![serde_json::json!({ "id": "annotation-1" })],
             is_stitched_queue: false,
+            token,
         }),
         BabelServiceRequest::DropWorkerAction(DropWorkerActionRequest {
             queue_id: "chunked-queue-url".to_string(),
@@ -13101,16 +13337,22 @@ fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_c
             submit_request.clone(),
             r#"{"success":true,"linterErrors":[]}"#.to_string()
         ),
-        Some(Message::SubmitReviewSucceeded)
+        Some(Message::SubmitReviewSucceeded { token })
     );
     assert_eq!(
         fixture_payload_message_for_request(
             submit_request,
-            r#"{"success":true,"linterErrors":[{"id":"empty-content"}]}"#.to_string()
+            r#"{"success":true,"linterErrors":[{"annotationId":"annotation-1","reason":"Segment cannot have empty text.","severity":"error"}]}"#.to_string()
         ),
-        Some(Message::SubmitReviewFailed(
-            "Failed to pass linting. Please fix the errors and try again.".to_string()
-        ))
+        Some(Message::SubmitReviewFailed {
+            token,
+            error: "Failed to pass linting: Segment cannot have empty text.".to_string(),
+            issues: Some(vec![ServerLintIssue {
+                annotation_id: "annotation-1".to_string(),
+                reason: "Segment cannot have empty text.".to_string(),
+                severity: LintSeverity::Error,
+            }]),
+        })
     );
     assert_eq!(
         fixture_payload_message_for_request(
@@ -13161,6 +13403,7 @@ fn fixture_payload_message_maps_batched_submit_linter_errors_to_failure() {
         review_action_id: "review-action-42".to_string(),
         annotations: vec![serde_json::json!({ "id": "annotation-1" })],
         is_stitched_queue: false,
+        token: Default::default(),
     });
     let payload = serde_json::json!([
         {
@@ -13168,7 +13411,11 @@ fn fixture_payload_message_maps_batched_submit_linter_errors_to_failure() {
                 "data": {
                     "json": {
                         "success": true,
-                        "linterErrors": [{ "id": "empty-content" }]
+                        "linterErrors": [{
+                            "annotationId": "annotation-1",
+                            "reason": "Segment cannot have empty text.",
+                            "severity": "error"
+                        }]
                     }
                 }
             }
@@ -13178,9 +13425,15 @@ fn fixture_payload_message_maps_batched_submit_linter_errors_to_failure() {
 
     assert_eq!(
         fixture_payload_message_for_request(submit_request, payload),
-        Some(Message::SubmitReviewFailed(
-            "Failed to pass linting. Please fix the errors and try again.".to_string()
-        ))
+        Some(Message::SubmitReviewFailed {
+            token: Default::default(),
+            error: "Failed to pass linting: Segment cannot have empty text.".to_string(),
+            issues: Some(vec![ServerLintIssue {
+                annotation_id: "annotation-1".to_string(),
+                reason: "Segment cannot have empty text.".to_string(),
+                severity: LintSeverity::Error,
+            }]),
+        })
     );
 }
 
@@ -13190,6 +13443,7 @@ fn fixture_payload_message_maps_batched_submit_success_to_submit_succeeded() {
         review_action_id: "review-action-42".to_string(),
         annotations: vec![serde_json::json!({ "id": "annotation-1" })],
         is_stitched_queue: false,
+        token: Default::default(),
     });
     let payload = serde_json::json!([
         {
@@ -13207,7 +13461,9 @@ fn fixture_payload_message_maps_batched_submit_success_to_submit_succeeded() {
 
     assert_eq!(
         fixture_payload_message_for_request(submit_request, payload),
-        Some(Message::SubmitReviewSucceeded)
+        Some(Message::SubmitReviewSucceeded {
+            token: Default::default(),
+        })
     );
 }
 
@@ -13217,6 +13473,7 @@ fn fixture_payload_message_rejects_submit_response_without_success_flag() {
         review_action_id: "review-action-42".to_string(),
         annotations: vec![serde_json::json!({ "id": "annotation-1" })],
         is_stitched_queue: false,
+        token: Default::default(),
     });
     let payload = serde_json::json!([
         {
@@ -13233,10 +13490,198 @@ fn fixture_payload_message_rejects_submit_response_without_success_flag() {
 
     assert_eq!(
         fixture_payload_message_for_request(submit_request, payload),
-        Some(Message::SubmitReviewFailed(
-            "Failed to submit annotations. Please try again.".to_string()
-        ))
+        Some(Message::SubmitReviewFailed {
+            token: Default::default(),
+            error: "Failed to submit annotations. Please try again.".to_string(),
+            issues: Some(Vec::new()),
+        })
     );
+}
+
+#[test]
+fn save_payload_messages_preserve_optional_structured_lint_issues() {
+    let token = SaveRequestToken {
+        workspace_generation: 2,
+        revision: 5,
+    };
+    let request = BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
+        review_action_id: "review-action-1".to_string(),
+        annotations: Vec::new(),
+        token,
+    });
+    let issue = ServerLintIssue {
+        annotation_id: "annotation-1".to_string(),
+        reason: "Exact save warning.".to_string(),
+        severity: LintSeverity::Warning,
+    };
+
+    assert_eq!(
+        fixture_payload_message_for_request(
+            request.clone(),
+            r#"{"success":true,"updatedAt":"2026-07-10T10:00:00Z","linterErrors":[{"annotationId":"annotation-1","reason":"Exact save warning.","severity":"warning"}]}"#.to_string(),
+        ),
+        Some(Message::SaveProgressSucceeded {
+            token,
+            last_saved: "2026-07-10T10:00:00Z".to_string(),
+            issues: Some(vec![issue]),
+        })
+    );
+    assert_eq!(
+        fixture_payload_message_for_request(
+            request,
+            r#"{"success":false,"error":"save rejected"}"#.to_string(),
+        ),
+        Some(Message::SaveProgressFailed {
+            token,
+            error: "save rejected".to_string(),
+            issues: None,
+        })
+    );
+}
+
+#[test]
+fn lint_payload_parser_preserves_direct_and_dual_key_issue_arrays() {
+    let token = SubmitRequestToken {
+        workspace_generation: 3,
+        revision: 9,
+    };
+    let request = BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+        annotations: vec![serde_json::json!({ "id": "annotation-1" })],
+        project_id: "project-1".to_string(),
+        consensus_data: serde_json::Value::Null,
+        token,
+    });
+    let direct_issues = vec![
+        ServerLintIssue {
+            annotation_id: "annotation-1".to_string(),
+            reason: "Exact warning reason.".to_string(),
+            severity: LintSeverity::Warning,
+        },
+        ServerLintIssue {
+            annotation_id: "annotation-2".to_string(),
+            reason: "Exact error reason.".to_string(),
+            severity: LintSeverity::Error,
+        },
+    ];
+
+    assert_eq!(
+        fixture_payload_message_for_request(
+            request.clone(),
+            serde_json::json!([
+                {
+                    "annotationId": "annotation-1",
+                    "reason": "Exact warning reason.",
+                    "severity": "warning"
+                },
+                {
+                    "annotationId": "annotation-2",
+                    "reason": "Exact error reason.",
+                    "severity": "error"
+                }
+            ])
+            .to_string(),
+        ),
+        Some(Message::LintAnnotationsSucceeded {
+            token,
+            issues: direct_issues.clone(),
+        })
+    );
+    assert_eq!(
+        fixture_payload_message_for_request(
+            request.clone(),
+            serde_json::json!({
+                "lintErrors": [{
+                    "annotationId": "annotation-1",
+                    "reason": "Exact warning reason.",
+                    "severity": "warning"
+                }],
+                "linterErrors": [{
+                    "annotationId": "annotation-2",
+                    "reason": "Exact error reason.",
+                    "severity": "error"
+                }]
+            })
+            .to_string(),
+        ),
+        Some(Message::LintAnnotationsSucceeded {
+            token,
+            issues: direct_issues.clone(),
+        })
+    );
+    assert_eq!(
+        fixture_payload_message_for_request(request, "[]".to_string()),
+        Some(Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn lint_payload_parser_decodes_live_four_frame_jsonl_devalue_response() {
+    let token = SubmitRequestToken {
+        workspace_generation: 5,
+        revision: 17,
+    };
+    let request = BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+        annotations: vec![serde_json::json!({ "id": "annotation-1" })],
+        project_id: "project-1".to_string(),
+        consensus_data: serde_json::Value::Null,
+        token,
+    });
+    let payload = concat!(
+        "{\"json\":{\"0\":[[0],[null,0,0]]}}\n",
+        "{\"json\":[0,0,[[{\"result\":0}],[\"result\",0,1]]]}\n",
+        "{\"json\":[1,0,[[{\"data\":0}],[\"data\",0,2]]]}\n",
+        "{\"json\":[2,0,[[[{\"annotationId\":\"annotation-1\",\"reason\":\"Invalid bracket tag found.\",\"severity\":\"error\"}]]]]}\n",
+    );
+
+    assert_eq!(
+        fixture_payload_message_for_request(request, payload.to_string()),
+        Some(Message::LintAnnotationsSucceeded {
+            token,
+            issues: vec![ServerLintIssue {
+                annotation_id: "annotation-1".to_string(),
+                reason: "Invalid bracket tag found.".to_string(),
+                severity: LintSeverity::Error,
+            }],
+        })
+    );
+}
+
+#[test]
+fn lint_payload_parse_failure_fails_closed_without_claiming_a_clean_snapshot() {
+    let token = SubmitRequestToken {
+        workspace_generation: 4,
+        revision: 12,
+    };
+    let request = BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+        annotations: Vec::new(),
+        project_id: "project-1".to_string(),
+        consensus_data: serde_json::Value::Null,
+        token,
+    });
+
+    assert_eq!(
+        fixture_payload_message_for_request(request, r#"{"success":true}"#.to_string()),
+        Some(Message::LintAnnotationsFailed {
+            token,
+            error: "Babel lint response did not include a lint issue array.".to_string(),
+            issues: None,
+        })
+    );
+}
+
+#[test]
+fn subaccount_relay_uses_lint_annotations_request_kind() {
+    let request = BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+        annotations: Vec::new(),
+        project_id: "project-1".to_string(),
+        consensus_data: serde_json::Value::Null,
+        token: Default::default(),
+    });
+
+    assert_eq!(relay_request_kind(&request), "lintAnnotations");
 }
 
 #[test]
@@ -13268,11 +13713,41 @@ fn service_command_envelopes_use_recovered_trpc_operation_names_and_payload_keys
         })
     );
     assert_eq!(
+        request_envelope_for_service_command(&BabelServiceRequest::LintAnnotations(
+            LintAnnotationsRequest {
+                annotations: vec![serde_json::json!({
+                    "id": "annotation-1",
+                    "content": "Full annotation",
+                    "metadata": { "assertedWarnings": ["Exact warning."] }
+                })],
+                project_id: "project-42".to_string(),
+                consensus_data: serde_json::Value::Null,
+                token: SubmitRequestToken {
+                    workspace_generation: 8,
+                    revision: 13,
+                },
+            },
+        )),
+        serde_json::json!({
+            "operation": "transcriptions.lintAnnotations",
+            "payload": {
+                "annotations": [{
+                    "id": "annotation-1",
+                    "content": "Full annotation",
+                    "metadata": { "assertedWarnings": ["Exact warning."] }
+                }],
+                "projectId": "project-42",
+                "consensusData": null,
+            },
+        })
+    );
+    assert_eq!(
         request_envelope_for_service_command(&BabelServiceRequest::SubmitReviewAction(
             SubmitReviewActionRequest {
                 review_action_id: "review-action-42".to_string(),
                 annotations: vec![serde_json::json!({ "id": "annotation-1" })],
                 is_stitched_queue: true,
+                token: Default::default(),
             },
         )),
         serde_json::json!({
@@ -13899,7 +14374,7 @@ fn submit_review_emits_recovered_babel_service_payload_without_auto_success() {
 
     assert!(state.show_submit_dialog);
     assert!(state.submit_is_pending);
-    assert_eq!(state.status, "Submitting review...");
+    assert_eq!(state.status, "Checking Babel lint...");
     assert_eq!(
         state
             .workflow
@@ -13910,18 +14385,228 @@ fn submit_review_emits_recovered_babel_service_payload_without_auto_success() {
             .get("babel.review_action.actionDecision"),
         None
     );
+    let token = match state.babel_service_requests.last() {
+        Some(BabelServiceRequest::LintAnnotations(LintAnnotationsRequest {
+            annotations,
+            project_id,
+            consensus_data,
+            token,
+        })) => {
+            assert!(!annotations.is_empty());
+            assert_eq!(project_id, &state.project().unwrap().id);
+            assert_eq!(consensus_data, &serde_json::Value::Null);
+            *token
+        }
+        other => panic!("expected lint annotations request, got {other:?}"),
+    };
+
+    let _ = update(
+        &mut state,
+        Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        },
+    );
+    assert_eq!(state.status, "Submitting review...");
     match state.babel_service_requests.last() {
         Some(BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
             review_action_id,
             annotations,
             is_stitched_queue,
+            token: submit_token,
         })) => {
             assert_eq!(review_action_id, "review-action-42");
             assert!(!annotations.is_empty());
             assert!(!is_stitched_queue);
+            assert_eq!(*submit_token, token);
         }
         other => panic!("expected submit review action request, got {other:?}"),
     }
+}
+
+#[test]
+fn lint_preflight_blocks_on_exact_issues_and_keeps_submit_retryable() {
+    let mut state = stable_sample_state();
+    install_babel_route_metadata(&mut state);
+    acknowledge_all_assertable_warnings(&mut state);
+    assert!(state.begin_submit_review_request());
+    let token = state.current_submit_request_token().unwrap();
+    let segment = state.project().unwrap().segments[0].clone();
+    let annotation_id = segment
+        .source_annotation_id
+        .clone()
+        .unwrap_or_else(|| segment.id.clone());
+    let issues = vec![ServerLintIssue {
+        annotation_id,
+        reason: "Exact Babel blocker reason.".to_string(),
+        severity: LintSeverity::Error,
+    }];
+
+    assert!(!state.complete_lint_annotations_success(token, issues.clone()));
+
+    assert!(state.show_submit_dialog);
+    assert!(!state.submit_is_pending);
+    assert!(state.submit_has_error);
+    assert_eq!(
+        state.status,
+        "Submit blocked by Babel lint: Exact Babel blocker reason."
+    );
+    assert_eq!(
+        state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref(),
+        Some(segment.id.as_str())
+    );
+    assert_eq!(
+        state.editor.as_ref().unwrap().server_lint_snapshot(),
+        Some(&studio_app::ServerLintSnapshot::new(token.revision, issues,))
+    );
+    assert!(
+        !state
+            .babel_service_requests
+            .iter()
+            .any(|request| matches!(request, BabelServiceRequest::SubmitReviewAction(_)))
+    );
+}
+
+#[test]
+fn lint_preflight_transport_failure_fails_closed_and_can_be_retried() {
+    let mut state = stable_sample_state();
+    install_babel_route_metadata(&mut state);
+    acknowledge_all_assertable_warnings(&mut state);
+    assert!(state.begin_submit_review_request());
+    let token = state.current_submit_request_token().unwrap();
+
+    assert!(!state.complete_lint_annotations_failure(
+        token,
+        "network unavailable".to_string(),
+        None,
+    ));
+    assert!(state.show_submit_dialog);
+    assert!(!state.submit_is_pending);
+    assert!(state.submit_has_error);
+    assert_eq!(
+        state.status,
+        "Submit lint check failed: network unavailable"
+    );
+    assert!(
+        state
+            .editor
+            .as_ref()
+            .unwrap()
+            .server_lint_snapshot()
+            .is_none()
+    );
+    assert!(state.begin_submit_review_request());
+}
+
+#[test]
+fn missing_standalone_lint_procedure_falls_back_to_authoritative_submit() {
+    let mut state = stable_sample_state();
+    install_babel_route_metadata(&mut state);
+    acknowledge_all_assertable_warnings(&mut state);
+    assert!(state.begin_submit_review_request());
+    let token = state.current_submit_request_token().unwrap();
+
+    assert!(state.complete_lint_annotations_failure(
+        token,
+        "Babel HTTP 404: No procedure found on path \"transcriptions.lintAnnotations\"".to_string(),
+        None,
+    ));
+    assert!(state.submit_is_pending);
+    assert!(!state.submit_has_error);
+    assert_eq!(
+        state.status,
+        "Babel lint endpoint unavailable; submitting for authoritative validation..."
+    );
+    assert!(state.babel_service_requests.iter().any(
+        |request| matches!(request, BabelServiceRequest::SubmitReviewAction(request) if request.token == token)
+    ));
+}
+
+#[test]
+fn stale_submit_success_cannot_finalize_a_newer_revision() {
+    let mut state = stable_sample_state();
+    install_babel_route_metadata(&mut state);
+    acknowledge_all_assertable_warnings(&mut state);
+    assert!(state.begin_submit_review_request());
+    let token = state.current_submit_request_token().unwrap();
+    assert!(state.complete_lint_annotations_success(token, Vec::new()));
+
+    state.mark_dirty();
+    state.complete_submit_review_success(token);
+
+    assert_eq!(
+        state.editor.as_ref().unwrap().review_state,
+        ReviewState::Draft
+    );
+    assert!(!state.show_dashboard());
+    assert_eq!(
+        state.status,
+        "Transcript changed; submit again to recheck Babel lint."
+    );
+}
+
+#[test]
+fn submit_success_finalizes_directly_while_structured_submit_lint_never_does() {
+    let mut success = stable_sample_state();
+    install_babel_route_metadata(&mut success);
+    acknowledge_all_assertable_warnings(&mut success);
+    assert!(success.begin_submit_review_request());
+    let success_token = success.current_submit_request_token().unwrap();
+    assert!(success.complete_lint_annotations_success(success_token, Vec::new()));
+    let late_local_issue = ServerLintIssue {
+        annotation_id: success.project().unwrap().segments[0].id.clone(),
+        reason: "Would block a native lint rerun.".to_string(),
+        severity: LintSeverity::Error,
+    };
+    assert!(success.install_server_lint_snapshot(success_token.revision, vec![late_local_issue],));
+
+    success.complete_submit_review_success(success_token);
+
+    assert_eq!(
+        success.editor.as_ref().unwrap().review_state,
+        ReviewState::Submitted
+    );
+    assert!(success.show_dashboard());
+
+    let mut rejected = stable_sample_state();
+    install_babel_route_metadata(&mut rejected);
+    acknowledge_all_assertable_warnings(&mut rejected);
+    assert!(rejected.begin_submit_review_request());
+    let rejected_token = rejected.current_submit_request_token().unwrap();
+    assert!(rejected.complete_lint_annotations_success(rejected_token, Vec::new()));
+    let submit_issue = ServerLintIssue {
+        annotation_id: rejected.project().unwrap().segments[0].id.clone(),
+        reason: "Exact final-submit lint reason.".to_string(),
+        severity: LintSeverity::Error,
+    };
+
+    rejected.complete_submit_review_failure(
+        rejected_token,
+        "server rejected lint".to_string(),
+        Some(vec![submit_issue.clone()]),
+    );
+
+    assert_eq!(
+        rejected.editor.as_ref().unwrap().review_state,
+        ReviewState::Draft
+    );
+    assert!(!rejected.show_dashboard());
+    assert_eq!(
+        rejected.editor.as_ref().unwrap().server_lint_snapshot(),
+        Some(&studio_app::ServerLintSnapshot::new(
+            rejected_token.revision,
+            vec![submit_issue],
+        ))
+    );
+    assert_eq!(
+        rejected.status,
+        "Submit blocked by Babel lint: Exact final-submit lint reason."
+    );
 }
 
 #[test]
@@ -13940,12 +14625,17 @@ fn begin_submit_review_request_refuses_project_without_recoverable_review_action
     );
     acknowledge_all_assertable_warnings(&mut state);
 
-    assert!(!state.begin_submit_review_request());
+    assert!(state.begin_submit_review_request());
+    let token = state.current_submit_request_token().unwrap();
+    assert!(!state.complete_lint_annotations_success(token, Vec::new()));
 
     assert!(state.show_submit_dialog);
     assert!(!state.submit_is_pending);
     assert!(state.submit_has_error);
-    assert_eq!(state.status, "Submit unavailable: missing review action id");
+    assert_eq!(
+        state.status,
+        "Submit lint check failed: could not build submit request: missing review action id"
+    );
     assert!(
         !state
             .babel_service_requests
@@ -14016,9 +14706,21 @@ fn review_action_failures_keep_babel_dialog_state_for_retry() {
     let _ = update(&mut submit_state, Message::RequestSubmitReview);
     let _ = update(&mut submit_state, Message::SubmitReview);
 
+    let token = submit_state.current_submit_request_token().unwrap();
     let _ = update(
         &mut submit_state,
-        Message::SubmitReviewFailed("network unavailable".to_string()),
+        Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        },
+    );
+    let _ = update(
+        &mut submit_state,
+        Message::SubmitReviewFailed {
+            token,
+            error: "network unavailable".to_string(),
+            issues: None,
+        },
     );
 
     assert!(submit_state.show_submit_dialog);
@@ -14033,7 +14735,7 @@ fn review_action_failures_keep_babel_dialog_state_for_retry() {
     );
     assert_eq!(
         submit.dialog_description,
-        "Failed to submit annotations. Please try again."
+        "Submission was rejected. See the status bar below for the exact reason."
     );
 
     let mut skip_state = stable_sample_state();
@@ -19105,6 +19807,7 @@ fn back_to_projects_continues_after_the_requested_save_acknowledges() {
         Message::SaveProgressSucceeded {
             token,
             last_saved: "2026-07-09T10:00:00Z".to_string(),
+            issues: None,
         },
     );
 
@@ -19124,7 +19827,7 @@ fn edit_during_pending_leave_save_prevents_navigation_on_the_old_ack() {
     let token = state.current_save_request_token().unwrap();
     state.mark_dirty();
 
-    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string()));
+    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string(), None,));
     assert!(state.take_ready_pending_leave().is_none());
     assert_eq!(state.app_surface, AppSurface::Editor);
     assert!(state.show_exit_confirm_dialog);
@@ -19145,7 +19848,7 @@ fn discarding_pending_back_navigation_invalidates_late_save_ack() {
     assert_eq!(state.app_surface, AppSurface::Dashboard);
     assert!(state.workspace_generation > previous_generation);
     assert!(!state.editor.as_ref().unwrap().is_dirty);
-    assert!(!state.complete_save_progress_success(stale_token, "late ack".to_string()));
+    assert!(!state.complete_save_progress_success(stale_token, "late ack".to_string(), None,));
     assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
 }
 

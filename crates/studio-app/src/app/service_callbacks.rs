@@ -1,5 +1,7 @@
-use serde_json::Value;
-use studio_core::Project;
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{Map, Value};
+use studio_core::{Project, Segment};
 
 use studio_app::{
     AdminFlagPayload, FeedbackDraftSaveRequest, StudioWorkflow, TaskLookupEffect, TaskLookupState,
@@ -11,12 +13,14 @@ pub(super) const META_QUEUE_ID: &str = "studio.babel.queueId";
 pub(super) const META_CHUNKED_QUEUE_ID: &str = "studio.babel.chunkedQueueId";
 pub(super) const META_STITCHED_QUEUE_ID: &str = "studio.babel.stitchedQueueId";
 pub(super) const META_IS_STITCHED_QUEUE: &str = "studio.babel.isStitchedQueue";
+const META_PROJECT_ID: &str = "studio.babel.projectId";
 const META_REVIEW_ACTION_ENVELOPE: &str = "babel.review_action.envelope";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BabelServiceRequest {
     LoadWorkerProjects,
     SaveAnnotations(SaveAnnotationsRequest),
+    LintAnnotations(LintAnnotationsRequest),
     SubmitReviewAction(SubmitReviewActionRequest),
     DropWorkerAction(DropWorkerActionRequest),
     SkipReviewAction(SkipReviewActionRequest),
@@ -41,11 +45,26 @@ pub(super) struct SaveRequestToken {
     pub(super) revision: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct SubmitRequestToken {
+    pub(super) workspace_generation: u64,
+    pub(super) revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LintAnnotationsRequest {
+    pub(super) annotations: Vec<Value>,
+    pub(super) project_id: String,
+    pub(super) consensus_data: Value,
+    pub(super) token: SubmitRequestToken,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubmitReviewActionRequest {
     pub(super) review_action_id: String,
     pub(super) annotations: Vec<Value>,
     pub(super) is_stitched_queue: bool,
+    pub(super) token: SubmitRequestToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,17 +106,13 @@ pub(super) struct LoadLatestReviewActionRequest {
     pub(super) queue_id: String,
 }
 
-pub(super) fn build_save_annotations_request(
+pub(super) fn build_save_annotations_request_with_asserted_warnings(
     workflow: &StudioWorkflow,
+    asserted_warning_keys: &BTreeSet<String>,
 ) -> Result<SaveAnnotationsRequest, String> {
     let project = workflow.project();
     let review_action_id = review_action_id(project);
-    let exported = workflow
-        .export_babel_json()
-        .map_err(|error| format!("could not build Babel save payload: {error}"))?;
-    let value: Value = serde_json::from_str(&exported)
-        .map_err(|error| format!("could not decode Babel save payload: {error}"))?;
-    let annotations = annotations_from_babel_export(&value)?;
+    let annotations = exported_annotations(workflow, "save", Some(asserted_warning_keys))?;
     if review_action_id.is_empty() {
         return Err("missing review action id".to_string());
     }
@@ -109,17 +124,32 @@ pub(super) fn build_save_annotations_request(
     })
 }
 
-pub(super) fn build_submit_review_action_request(
+#[cfg(test)]
+pub(super) fn build_save_annotations_request(
     workflow: &StudioWorkflow,
+) -> Result<SaveAnnotationsRequest, String> {
+    let project = workflow.project();
+    let review_action_id = review_action_id(project);
+    let annotations = exported_annotations(workflow, "save", None)?;
+    if review_action_id.is_empty() {
+        return Err("missing review action id".to_string());
+    }
+
+    Ok(SaveAnnotationsRequest {
+        review_action_id,
+        annotations,
+        token: SaveRequestToken::default(),
+    })
+}
+
+pub(super) fn build_submit_review_action_request_with_asserted_warnings(
+    workflow: &StudioWorkflow,
+    asserted_warning_keys: &BTreeSet<String>,
+    token: SubmitRequestToken,
 ) -> Result<SubmitReviewActionRequest, String> {
     let project = workflow.project();
     let review_action_id = review_action_id(project);
-    let exported = workflow
-        .export_babel_json()
-        .map_err(|error| format!("could not build Babel submit payload: {error}"))?;
-    let value: Value = serde_json::from_str(&exported)
-        .map_err(|error| format!("could not decode Babel submit payload: {error}"))?;
-    let annotations = annotations_from_babel_export(&value)?;
+    let annotations = exported_annotations(workflow, "submit", Some(asserted_warning_keys))?;
 
     if review_action_id.is_empty() {
         return Err("missing review action id".to_string());
@@ -128,6 +158,30 @@ pub(super) fn build_submit_review_action_request(
         review_action_id,
         annotations,
         is_stitched_queue: metadata_bool(project, META_IS_STITCHED_QUEUE),
+        token,
+    })
+}
+
+pub(super) fn build_lint_annotations_request(
+    workflow: &StudioWorkflow,
+    asserted_warning_keys: &BTreeSet<String>,
+    token: SubmitRequestToken,
+) -> Result<LintAnnotationsRequest, String> {
+    let project = workflow.project();
+    let project_id = first_nonempty_string([
+        trimmed_project_metadata(project, META_PROJECT_ID),
+        Some(project.id.trim().to_string()).filter(|id| !id.is_empty()),
+    ])
+    .unwrap_or_default();
+    if project_id.is_empty() {
+        return Err("missing Babel project id".to_string());
+    }
+
+    Ok(LintAnnotationsRequest {
+        annotations: exported_annotations(workflow, "lint", Some(asserted_warning_keys))?,
+        project_id,
+        consensus_data: Value::Null,
+        token,
     })
 }
 
@@ -254,6 +308,96 @@ fn metadata_bool(project: &Project, key: &str) -> bool {
             "true" | "1" | "yes" | "on" | "True" | "TRUE" | "Yes" | "YES" | "On" | "ON"
         )
     })
+}
+
+fn exported_annotations(
+    workflow: &StudioWorkflow,
+    operation: &str,
+    asserted_warning_keys: Option<&BTreeSet<String>>,
+) -> Result<Vec<Value>, String> {
+    let exported = workflow
+        .export_babel_json()
+        .map_err(|error| format!("could not build Babel {operation} payload: {error}"))?;
+    let value: Value = serde_json::from_str(&exported)
+        .map_err(|error| format!("could not decode Babel {operation} payload: {error}"))?;
+    let mut annotations = annotations_from_babel_export(&value)?;
+    if let Some(asserted_warning_keys) = asserted_warning_keys {
+        merge_asserted_warnings(&mut annotations, workflow.project(), asserted_warning_keys);
+    }
+    Ok(annotations)
+}
+
+fn merge_asserted_warnings(
+    annotations: &mut [Value],
+    project: &Project,
+    asserted_warning_keys: &BTreeSet<String>,
+) {
+    let warnings_by_annotation = asserted_warnings_by_annotation(project, asserted_warning_keys);
+    for annotation in annotations {
+        let Some(annotation_object) = annotation.as_object_mut() else {
+            continue;
+        };
+        let Some(annotation_id) = annotation_object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let Some(asserted_warnings) = warnings_by_annotation.get(&annotation_id) else {
+            continue;
+        };
+        let metadata = annotation_object
+            .entry("metadata")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(metadata) = metadata.as_object_mut() else {
+            continue;
+        };
+        metadata.insert(
+            "assertedWarnings".to_string(),
+            Value::Array(
+                asserted_warnings
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+}
+
+fn asserted_warnings_by_annotation(
+    project: &Project,
+    asserted_warning_keys: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut warnings = BTreeMap::<String, Vec<String>>::new();
+    for segment in &project.segments {
+        let prefix = format!("{}::", segment.id);
+        let reasons = asserted_warning_keys
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        for annotation_id in segment_annotation_ids(segment) {
+            let entry = warnings.entry(annotation_id).or_default();
+            for reason in &reasons {
+                if !entry.contains(reason) {
+                    entry.push(reason.clone());
+                }
+            }
+        }
+    }
+    warnings
+}
+
+fn segment_annotation_ids(segment: &Segment) -> impl Iterator<Item = String> + '_ {
+    std::iter::once(segment.id.clone()).chain(
+        segment
+            .source_annotation_id
+            .iter()
+            .filter(|source_id| *source_id != &segment.id)
+            .cloned(),
+    )
 }
 
 fn annotations_from_babel_export(value: &Value) -> Result<Vec<Value>, String> {

@@ -473,10 +473,11 @@ fn relay_headers(authorization: &str) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-fn relay_request_kind(request: &BabelServiceRequest) -> &'static str {
+pub(super) fn relay_request_kind(request: &BabelServiceRequest) -> &'static str {
     match request {
         BabelServiceRequest::LoadWorkerProjects => "loadWorkerProjects",
         BabelServiceRequest::SaveAnnotations(_) => "saveAnnotations",
+        BabelServiceRequest::LintAnnotations(_) => "lintAnnotations",
         BabelServiceRequest::SubmitReviewAction(_) => "submitReviewAction",
         BabelServiceRequest::DropWorkerAction(_) => "dropWorkerAction",
         BabelServiceRequest::SkipReviewAction(_) => "skipReviewAction",

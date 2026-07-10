@@ -16,7 +16,8 @@ mod view_data;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::linter::LintSeverity;
+use crate::babel_metadata::server_lint_snapshot_from_project;
+use crate::linter::{LintSeverity, ServerLintSnapshot};
 use crate::timeline_model::{LaneWaveform, TimeRange};
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{TranscriptRowView, build_transcript_rows};
@@ -131,6 +132,7 @@ pub struct EditorSession {
     pub lane_waveforms: BTreeMap<String, LaneWaveform>,
     pub open_actions_segment_id: Option<String>,
     pub asserted_warning_keys: BTreeSet<String>,
+    server_lint_snapshot: Option<ServerLintSnapshot>,
     pub problem_row_index: usize,
     pub is_dirty: bool,
     pub is_saving: bool,
@@ -168,6 +170,7 @@ impl EditorSession {
             lane_waveforms: BTreeMap::new(),
             open_actions_segment_id: None,
             asserted_warning_keys: BTreeSet::new(),
+            server_lint_snapshot: server_lint_snapshot_from_project(project, 0),
             problem_row_index: 0,
             is_dirty: false,
             is_saving: false,
@@ -184,6 +187,7 @@ impl EditorSession {
 
     pub fn mark_dirty(&mut self) {
         self.edit_revision = self.edit_revision.saturating_add(1);
+        self.invalidate_server_lint_snapshot();
         self.is_dirty = true;
         if self.review_state == ReviewState::Submitted {
             self.review_state = ReviewState::Draft;
@@ -213,6 +217,28 @@ impl EditorSession {
 
     pub fn edit_revision(&self) -> u64 {
         self.edit_revision
+    }
+
+    pub fn current_edit_revision(&self) -> u64 {
+        self.edit_revision
+    }
+
+    pub fn server_lint_snapshot(&self) -> Option<&ServerLintSnapshot> {
+        self.server_lint_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.revision == self.edit_revision)
+    }
+
+    pub fn set_server_lint_snapshot(&mut self, snapshot: ServerLintSnapshot) -> bool {
+        if snapshot.revision != self.edit_revision {
+            return false;
+        }
+        self.server_lint_snapshot = Some(snapshot);
+        true
+    }
+
+    pub fn invalidate_server_lint_snapshot(&mut self) {
+        self.server_lint_snapshot = None;
     }
 
     pub fn saving_revision(&self) -> Option<u64> {
@@ -272,6 +298,7 @@ impl EditorSession {
             &self.active_region_by_track,
             self.diff_view,
             &self.asserted_warning_keys,
+            self.server_lint_snapshot(),
         )
     }
 

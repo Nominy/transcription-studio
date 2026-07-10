@@ -4,6 +4,8 @@ const UNCLOSED_BRACKET_REASON: &str = "Brackets must be properly closed.";
 const UNCLOSED_STYLE_TAG_REASON: &str = "Style tags must be properly closed.";
 const EMPTY_STYLE_TAG_REASON: &str = "Empty style tags <> are not allowed.";
 const STYLE_TAG_SPACING_REASON: &str = "Spaces are not allowed within style tags.";
+const STYLE_TAG_BOUNDARY_SPACING_REASON: &str =
+    "Style tags must have spaces around them: 'word <tag> content </tag> word'";
 const MISMATCHED_STYLE_TAG_REASON: &str =
     "Style tags must be closed with the same tag they opened.";
 const EMPTY_BRACKET_REASON: &str = "Empty brackets [] are not allowed.";
@@ -85,6 +87,15 @@ pub(super) fn validate_style_tags_with_tags(
                 return Some(INVALID_STYLE_TAG_REASON);
             }
             stack.push(trimmed);
+        }
+
+        let tag_end = close + '>'.len_utf8();
+        let previous = text[..open].chars().next_back();
+        let next = text[tag_end..].chars().next();
+        if previous.is_some_and(|character| !character.is_whitespace())
+            || next.is_some_and(|character| !character.is_whitespace())
+        {
+            return Some(STYLE_TAG_BOUNDARY_SPACING_REASON);
         }
 
         search_start = close + '>'.len_utf8();

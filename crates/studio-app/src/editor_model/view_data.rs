@@ -219,6 +219,7 @@ impl EditorSession {
             &self.active_region_by_track,
             self.diff_view,
             &self.asserted_warning_keys,
+            self.server_lint_snapshot(),
         )
     }
 
