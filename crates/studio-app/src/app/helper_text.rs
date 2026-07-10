@@ -90,6 +90,18 @@ enum TextMoveDirection {
     Next,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CrossRowTextEdit {
+    source_segment_id: String,
+    target_segment_id: String,
+    source_before: String,
+    source_after: String,
+    target_before: String,
+    target_after: String,
+    source_before_cursor_chars: usize,
+    source_after_cursor_chars: usize,
+}
+
 impl StudioState {
     pub(super) fn move_text_before_caret_to_previous_segment(&mut self) -> bool {
         self.move_text_to_adjacent_same_lane(TextMoveDirection::Previous)
@@ -97,6 +109,129 @@ impl StudioState {
 
     pub(super) fn move_text_after_caret_to_next_segment(&mut self) -> bool {
         self.move_text_to_adjacent_same_lane(TextMoveDirection::Next)
+    }
+
+    pub(super) fn undo_cross_row_text_move(&mut self, segment_id: &str) -> bool {
+        self.apply_cross_row_text_history(segment_id, true)
+    }
+
+    pub(super) fn redo_cross_row_text_move(&mut self, segment_id: &str) -> bool {
+        self.apply_cross_row_text_history(segment_id, false)
+    }
+
+    fn apply_cross_row_text_history(&mut self, segment_id: &str, undo: bool) -> bool {
+        let history = if undo {
+            self.cross_row_text_undo_stack.last()
+        } else {
+            self.cross_row_text_redo_stack.last()
+        }
+        .filter(|history| {
+            history.source_segment_id == segment_id || history.target_segment_id == segment_id
+        })
+        .cloned();
+        let Some(history) = history else {
+            return false;
+        };
+
+        let (source_current, source_next, target_current, target_next, source_cursor_chars) =
+            if undo {
+                (
+                    history.source_after.as_str(),
+                    history.source_before.as_str(),
+                    history.target_after.as_str(),
+                    history.target_before.as_str(),
+                    history.source_before_cursor_chars,
+                )
+            } else {
+                (
+                    history.source_before.as_str(),
+                    history.source_after.as_str(),
+                    history.target_before.as_str(),
+                    history.target_after.as_str(),
+                    history.source_after_cursor_chars,
+                )
+            };
+        let source_ready = self
+            .segment_drafts
+            .get(&history.source_segment_id)
+            .is_some_and(|draft| {
+                draft.text == source_current
+                    && if undo {
+                        draft.can_undo_text_edit_to(source_next)
+                    } else {
+                        draft.can_redo_text_edit_to(source_next)
+                    }
+            });
+        let target_ready = self
+            .segment_drafts
+            .get(&history.target_segment_id)
+            .is_some_and(|draft| {
+                draft.text == target_current
+                    && if undo {
+                        draft.can_undo_text_edit_to(target_next)
+                    } else {
+                        draft.can_redo_text_edit_to(target_next)
+                    }
+            });
+        if !source_ready || !target_ready {
+            return false;
+        }
+
+        let source_before_height = self
+            .segment_drafts
+            .get(&history.source_segment_id)
+            .map_or(0.0, SegmentDraft::text_editor_content_height);
+        let target_before_height = self
+            .segment_drafts
+            .get(&history.target_segment_id)
+            .map_or(0.0, SegmentDraft::text_editor_content_height);
+        if let Some(source) = self.segment_drafts.get_mut(&history.source_segment_id) {
+            if undo {
+                source.undo_text_edit();
+            } else {
+                source.redo_text_edit();
+            }
+            source.set_cursor_to_char_offset(source_cursor_chars);
+        }
+        if let Some(target) = self.segment_drafts.get_mut(&history.target_segment_id) {
+            if undo {
+                target.undo_text_edit();
+            } else {
+                target.redo_text_edit();
+            }
+        }
+
+        if undo {
+            self.cross_row_text_undo_stack.pop();
+            self.cross_row_text_redo_stack.push(history.clone());
+        } else {
+            self.cross_row_text_redo_stack.pop();
+            self.cross_row_text_undo_stack.push(history.clone());
+        }
+        self.mark_dirty();
+        self.clear_tag_suggestion_state_for_segment(&history.source_segment_id);
+        self.clear_tag_suggestion_state_for_segment(&history.target_segment_id);
+        let layout_height_changed = self
+            .segment_drafts
+            .get(&history.source_segment_id)
+            .is_some_and(|draft| {
+                draft.text_editor_content_height().to_bits() != source_before_height.to_bits()
+            })
+            || self
+                .segment_drafts
+                .get(&history.target_segment_id)
+                .is_some_and(|draft| {
+                    draft.text_editor_content_height().to_bits() != target_before_height.to_bits()
+                });
+        if layout_height_changed {
+            self.invalidate_transcript_layout_cache();
+        }
+        self.status = if undo {
+            "Undid cross-row text move.".to_string()
+        } else {
+            "Redid cross-row text move.".to_string()
+        };
+        true
     }
 
     pub(super) fn convert_active_selection_to_skaz(&mut self) -> bool {
@@ -216,6 +351,18 @@ impl StudioState {
             }
         };
 
+        let source_before_cursor_chars = source_text[..split_index].chars().count();
+        let history = CrossRowTextEdit {
+            source_segment_id: source_segment_id.clone(),
+            target_segment_id: target_segment_id.clone(),
+            source_before: source_text,
+            source_after: next_source_text.clone(),
+            target_before: target_text,
+            target_after: next_target_text.clone(),
+            source_before_cursor_chars,
+            source_after_cursor_chars: source_cursor_chars,
+        };
+
         let mut layout_height_changed = false;
         if let Some(target_draft) = self.segment_drafts.get_mut(&target_segment_id) {
             layout_height_changed |=
@@ -228,6 +375,8 @@ impl StudioState {
                 Some(source_cursor_chars),
             );
         }
+        self.cross_row_text_undo_stack.push(history);
+        self.cross_row_text_redo_stack.clear();
 
         self.mark_dirty();
         self.clear_tag_suggestion_state_for_segment(&source_segment_id);

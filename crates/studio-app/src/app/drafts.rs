@@ -104,6 +104,18 @@ impl SegmentDraft {
         }
     }
 
+    pub(super) fn can_undo_text_edit_to(&self, previous: &str) -> bool {
+        self.text_undo_stack
+            .last()
+            .is_some_and(|candidate| candidate == previous)
+    }
+
+    pub(super) fn can_redo_text_edit_to(&self, next: &str) -> bool {
+        self.text_redo_stack
+            .last()
+            .is_some_and(|candidate| candidate == next)
+    }
+
     pub(super) fn undo_text_edit(&mut self) -> bool {
         let Some(previous) = self.text_undo_stack.pop() else {
             return false;

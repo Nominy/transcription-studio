@@ -26,6 +26,7 @@ use super::babel_audio::{
     BabelPayloadLoadKind, PreparedBabelAudioPayload, babel_payload_needs_audio_preparation,
     prepare_babel_audio_payload,
 };
+use super::helper_text::CrossRowTextEdit;
 use super::hotkeys::TRANSPORT_TICK_SECONDS;
 use super::keybinds::{HOTKEY_STORAGE_KEY, HotkeyAction, HotkeyBindings, KeyBinding};
 use super::large_project_smoke::{
@@ -491,6 +492,8 @@ pub(super) struct StudioState {
     pub(super) workflow: Result<StudioWorkflow, String>,
     pub(super) editor: Option<EditorSession>,
     pub(super) segment_drafts: BTreeMap<String, SegmentDraft>,
+    pub(super) cross_row_text_undo_stack: Vec<CrossRowTextEdit>,
+    pub(super) cross_row_text_redo_stack: Vec<CrossRowTextEdit>,
     pub(super) keyboard_modifiers: Modifiers,
     pub(super) right_shift_pressed: bool,
     pub(super) held_audition_keys: BTreeSet<AuditionKey>,
@@ -659,6 +662,8 @@ impl Default for StudioState {
             workflow,
             editor,
             segment_drafts: BTreeMap::new(),
+            cross_row_text_undo_stack: Vec::new(),
+            cross_row_text_redo_stack: Vec::new(),
             keyboard_modifiers: Modifiers::empty(),
             right_shift_pressed: false,
             held_audition_keys: BTreeSet::new(),
@@ -1457,6 +1462,8 @@ impl StudioState {
     pub(super) fn reset_segment_drafts(&mut self) {
         self.segment_drafts.clear();
         self.tag_suggestion_state = None;
+        self.cross_row_text_undo_stack.clear();
+        self.cross_row_text_redo_stack.clear();
         if let Some(project) = self.project() {
             self.segment_drafts = project
                 .segments
@@ -1468,6 +1475,8 @@ impl StudioState {
     }
 
     pub(super) fn sync_segment_drafts_preserving_existing(&mut self) {
+        self.cross_row_text_undo_stack.clear();
+        self.cross_row_text_redo_stack.clear();
         let Some(project) = self.project() else {
             self.segment_drafts.clear();
             self.tag_suggestion_state = None;

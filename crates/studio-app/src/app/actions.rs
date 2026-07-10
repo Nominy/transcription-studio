@@ -1231,6 +1231,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             let mut text_changed = false;
             let mut clear_tag_suggestions = false;
             if !state.block_read_only_edit("Text edit")
+                && !state.undo_cross_row_text_move(&segment_id)
                 && let Some(draft) = state.segment_drafts.get_mut(&segment_id)
             {
                 let before_height = draft.text_editor_content_height();
@@ -1256,6 +1257,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             let mut text_changed = false;
             let mut clear_tag_suggestions = false;
             if !state.block_read_only_edit("Text edit")
+                && !state.redo_cross_row_text_move(&segment_id)
                 && let Some(draft) = state.segment_drafts.get_mut(&segment_id)
             {
                 let before_height = draft.text_editor_content_height();
