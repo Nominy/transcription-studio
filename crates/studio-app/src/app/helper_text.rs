@@ -185,6 +185,11 @@ impl StudioState {
                     return false;
                 }
                 let next_source_text = source_text[split_index..].trim_start().to_string();
+                if next_source_text.is_empty() {
+                    self.status = "Text move cancelled: the current segment cannot be left empty."
+                        .to_string();
+                    return false;
+                }
                 let next_target_text = join_segment_text(&target_text, &moved_text);
                 (moved_text, next_source_text, next_target_text, 0)
             }
@@ -195,6 +200,11 @@ impl StudioState {
                     return false;
                 }
                 let next_source_text = source_text[..split_index].trim_end().to_string();
+                if next_source_text.is_empty() {
+                    self.status = "Text move cancelled: the current segment cannot be left empty."
+                        .to_string();
+                    return false;
+                }
                 let next_target_text = join_segment_text(&moved_text, &target_text);
                 let source_cursor_chars = next_source_text.chars().count();
                 (
