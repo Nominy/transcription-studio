@@ -99,6 +99,32 @@ impl EditorSession {
             return;
         }
 
+        let selected_index = self.selected_segment_id.as_deref().and_then(|segment_id| {
+            visible_segments
+                .iter()
+                .position(|segment| segment.id == segment_id)
+        });
+        if let Some(current_index) = selected_index.filter(|index| {
+            (visible_segments[*index].start_seconds - self.playhead_seconds).abs() <= 0.05
+        }) {
+            let next_index = if direction < 0 {
+                current_index.checked_sub(1)
+            } else {
+                (current_index + 1 < visible_segments.len()).then_some(current_index + 1)
+            };
+            if let Some(next_index) = next_index {
+                self.select_segment(project, &visible_segments[next_index].id);
+            } else {
+                let target = if direction < 0 {
+                    bounds.start_seconds
+                } else {
+                    bounds.end_seconds
+                };
+                self.seek_without_active_segment(bounds, target);
+            }
+            return;
+        }
+
         if direction < 0 {
             let threshold = self.playhead_seconds - 0.05;
             if let Some(segment) = visible_segments
