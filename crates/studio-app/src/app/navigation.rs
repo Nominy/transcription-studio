@@ -167,17 +167,29 @@ impl StudioState {
                     .iter()
                     .position(|(row_segment_id, _)| row_segment_id == segment_id)
             });
-        let base_index = current_index.unwrap_or(0);
-        let step = if direction < 0 { -1 } else { 1 };
-        let next_index =
-            (base_index as i32 + step).clamp(0, visible_rows.len() as i32 - 1) as usize;
-        if current_index.is_some() && next_index == base_index {
-            self.status = "Helper focus navigation reached transcript edge.".to_string();
-            return None;
-        }
+        let playhead_seconds = editor.playhead_seconds;
+        let next_index = if let Some(base_index) = current_index {
+            let step = if direction < 0 { -1 } else { 1 };
+            let next_index =
+                (base_index as i32 + step).clamp(0, visible_rows.len() as i32 - 1) as usize;
+            if next_index == base_index {
+                self.status = "Helper focus navigation reached transcript edge.".to_string();
+                return None;
+            }
+            next_index
+        } else if direction < 0 {
+            visible_rows
+                .iter()
+                .rposition(|(_, start_seconds)| *start_seconds <= playhead_seconds)
+                .unwrap_or(0)
+        } else {
+            visible_rows
+                .iter()
+                .position(|(_, start_seconds)| *start_seconds >= playhead_seconds)
+                .unwrap_or(visible_rows.len() - 1)
+        };
 
         let segment_id = visible_rows[next_index].0.clone();
-        let playhead_seconds = editor.playhead_seconds;
         self.with_editor_mut(|editor| editor.select_segment_without_seek(&project, &segment_id));
 
         let restore = HelperFocusRestore {
