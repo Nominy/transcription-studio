@@ -1068,7 +1068,13 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::SubmitLaneVerticalZoomInput => state.submit_lane_vertical_zoom_input(),
         Message::TrackFilterChanged(filter) => {
-            state.with_editor_mut(|editor| editor.track_filter = filter);
+            let project = state.project().cloned();
+            state.with_editor_mut(|editor| {
+                editor.track_filter = filter;
+                if let Some(project) = project.as_ref() {
+                    editor.reconcile_selection_to_visible(project);
+                }
+            });
             state.persist_timeline_defaults();
         }
         Message::TranscriptScrolled {

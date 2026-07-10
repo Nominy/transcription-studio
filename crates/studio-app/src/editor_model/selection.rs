@@ -18,6 +18,17 @@ impl EditorSession {
         }
     }
 
+    pub fn reconcile_selection_to_visible(&mut self, project: &Project) {
+        if self
+            .selected_segment_id
+            .as_deref()
+            .and_then(|segment_id| project.segment(segment_id))
+            .is_some_and(|segment| !self.is_transcription_segment_visible(segment))
+        {
+            self.selected_segment_id = None;
+        }
+    }
+
     pub(super) fn select_segment_at_playhead(&mut self, project: &Project) {
         if self
             .selected_segment_id
@@ -73,9 +84,7 @@ impl EditorSession {
         let mut visible_segments = project
             .segments
             .iter()
-            .filter(|segment| self.track_filter.matches_lane(&segment.lane_id))
-            .filter(|segment| !self.collapsed_lane_ids.contains(&segment.lane_id))
-            .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
+            .filter(|segment| self.is_transcription_segment_visible(segment))
             .collect::<Vec<_>>();
         visible_segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
 
@@ -158,6 +167,12 @@ impl EditorSession {
         self.selected_segment_id = None;
         self.playhead_seconds = time_seconds.clamp(bounds.start_seconds, bounds.end_seconds);
         self.recenter_viewport(bounds);
+    }
+
+    fn is_transcription_segment_visible(&self, segment: &Segment) -> bool {
+        self.track_filter.matches_lane(&segment.lane_id)
+            && !self.collapsed_lane_ids.contains(&segment.lane_id)
+            && TranscriptAnnotationKind::from_segment(segment).is_transcription()
     }
 }
 
