@@ -444,9 +444,11 @@ impl StudioState {
     }
 
     fn selected_segment_id(&self) -> Option<String> {
-        self.editor
-            .as_ref()
-            .and_then(|editor| editor.selected_segment_id.clone())
+        self.helper_focused_segment_id.clone().or_else(|| {
+            self.editor
+                .as_ref()
+                .and_then(|editor| editor.selected_segment_id.clone())
+        })
     }
 
     fn adjacent_same_lane_segment_id(
