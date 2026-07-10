@@ -2551,6 +2551,7 @@ impl StudioState {
                 editor.muted_lane_ids.insert(lane_id.clone());
             }
         });
+        self.reconcile_transcript_ownership_to_visible();
         self.persist_timeline_defaults();
         self.status = format!("Speaker workflow switched to {target_label}.");
     }
@@ -5182,41 +5183,48 @@ impl StudioState {
         self.with_editor_mut(EditorSession::mark_saved);
     }
 
-    fn reconcile_helper_focus_with_project(&mut self, project: &Project) {
+    fn reconcile_helper_focus_to_visible(&mut self) {
         if self
             .helper_focused_segment_id
             .as_deref()
-            .is_some_and(|segment_id| project.segment(segment_id).is_none())
+            .is_some_and(|segment_id| !self.helper_segment_is_visible(segment_id))
         {
             self.helper_focused_segment_id = None;
         }
         if self
             .helper_focus_restore_pending
             .as_ref()
-            .is_some_and(|restore| project.segment(&restore.segment_id).is_none())
+            .is_some_and(|restore| !self.helper_segment_is_visible(&restore.segment_id))
         {
             self.helper_focus_restore_pending = None;
         }
         if self
             .helper_last_focus_restore
             .as_ref()
-            .is_some_and(|restore| project.segment(&restore.segment_id).is_none())
+            .is_some_and(|restore| !self.helper_segment_is_visible(&restore.segment_id))
         {
             self.helper_last_focus_restore = None;
+        }
+    }
+
+    pub(super) fn reconcile_transcript_ownership_to_visible(&mut self) {
+        if let Some(project) = self.project().cloned() {
+            self.with_editor_mut(|editor| editor.reconcile_selection_to_visible(&project));
+            self.reconcile_helper_focus_to_visible();
         }
     }
 
     pub(super) fn reconcile_editor_with_project(&mut self) {
         if let Some(project) = self.project().cloned() {
             self.with_editor_mut(|editor| editor.reconcile_project(&project));
-            self.reconcile_helper_focus_with_project(&project);
+            self.reconcile_helper_focus_to_visible();
         }
     }
 
     pub(super) fn reconcile_editor_with_project_preserving_viewport(&mut self) {
         if let Some(project) = self.project().cloned() {
             self.with_editor_mut(|editor| editor.reconcile_project_preserving_viewport(&project));
-            self.reconcile_helper_focus_with_project(&project);
+            self.reconcile_helper_focus_to_visible();
         }
     }
 
