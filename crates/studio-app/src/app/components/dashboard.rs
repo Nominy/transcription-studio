@@ -616,11 +616,12 @@ fn view_subaccount_owner_controls(state: &StudioState) -> Element<'_, Message> {
         }
     }
 
-    content = content.push(rows);
+    content = content.push(scrollable(rows).height(Fill));
 
     container(content)
         .padding(10)
         .width(Fill)
+        .height(Fill)
         .style(subtle_panel_style)
         .into()
 }

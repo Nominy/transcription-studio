@@ -18351,6 +18351,45 @@ fn dashboard_subaccount_project_access_uses_loaded_project_checkboxes() {
 }
 
 #[test]
+fn dashboard_subaccount_owner_scrolls_only_account_cards_below_fixed_controls() {
+    let dashboard_source = include_str!("components/dashboard.rs");
+    let owner_controls = dashboard_source
+        .split("fn view_subaccount_owner_controls")
+        .nth(1)
+        .expect("dashboard should render Sub-account owner controls")
+        .split("fn view_project_access_controls")
+        .next()
+        .expect("owner controls should precede project access controls");
+    let rows_start = owner_controls
+        .find("let mut rows = column![]")
+        .expect("owner controls should build a dedicated account-card column");
+    let fixed_controls = &owner_controls[..rows_start];
+    let account_rows = &owner_controls[rows_start..];
+
+    for fixed_content in [
+        "refresh_row",
+        "create_row",
+        "if let Some(error)",
+        "if pending",
+    ] {
+        assert!(
+            fixed_controls.contains(fixed_content),
+            "`{fixed_content}` should remain above the scrolling account list"
+        );
+    }
+    assert!(
+        account_rows.contains("No Sub-accounts loaded. Create one above.")
+            && account_rows.contains("content = content.push(scrollable(rows).height(Fill));"),
+        "the empty state and account cards should render in the independently scrolling rows column"
+    );
+    assert!(
+        !owner_controls.contains("scrollable(content)")
+            && owner_controls.matches(".height(Fill)").count() == 2,
+        "only account rows should scroll, while the owner-controls container fills available height"
+    );
+}
+
+#[test]
 fn subaccount_project_access_toggle_saves_selected_loaded_project_ids() {
     let mut state = StudioState::default();
     state.dashboard.projects = vec![

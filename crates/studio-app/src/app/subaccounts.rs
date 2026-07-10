@@ -571,7 +571,11 @@ pub(super) fn parse_owner_dashboard(body: &str) -> Result<SubaccountOwnerDashboa
         return Ok(SubaccountOwnerDashboard::default());
     };
     Ok(SubaccountOwnerDashboard {
-        subaccounts: items.iter().filter_map(parse_managed_subaccount).collect(),
+        subaccounts: items
+            .iter()
+            .filter_map(parse_managed_subaccount)
+            .filter(|subaccount| !subaccount.revoked)
+            .collect(),
     })
 }
 
@@ -742,5 +746,22 @@ mod tests {
         assert_eq!(dashboard.subaccounts[0].completed_tasks, 3);
         assert_eq!(dashboard.subaccounts[0].worked_seconds, 4500);
         assert_eq!(dashboard.subaccounts[0].earnings_cents, 1234);
+    }
+    #[test]
+    fn owner_dashboard_drops_legacy_revoked_rows() {
+        let dashboard = parse_owner_dashboard(
+            r#"{"subaccounts":[
+                {"id":"sub-active","label":"Active","code":"ACTIVE","revoked":false},
+                {"id":"sub-revoked","label":"Revoked","code":"OLD-SECRET","revoked":true},
+                {"id":"sub-is-revoked","label":"Legacy revoked","code":"OLD-SECRET-2","isRevoked":true},
+                {"id":"sub-disabled","label":"Legacy disabled","code":"OLD-SECRET-3","disabled":true}
+            ]}"#,
+        )
+        .expect("dashboard");
+
+        assert_eq!(dashboard.subaccounts.len(), 1);
+        assert_eq!(dashboard.subaccounts[0].id, "sub-active");
+        assert_eq!(dashboard.subaccounts[0].code.as_deref(), Some("ACTIVE"));
+        assert!(!dashboard.subaccounts[0].revoked);
     }
 }

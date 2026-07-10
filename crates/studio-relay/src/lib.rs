@@ -361,14 +361,14 @@ async fn owner_revoke(
 ) -> Result<Json<Value>, RelayError> {
     require_owner(&headers, &state.config)?;
     let mut store = state.store.lock().await;
-    let Some(subaccount) = store
+    if let Some(subaccount) = store
         .subaccounts
         .iter_mut()
         .find(|subaccount| subaccount.id == subaccount_id)
-    else {
-        return Err(RelayError::not_found("Sub-account was not found."));
-    };
-    subaccount.revoked = true;
+    {
+        subaccount.revoked = true;
+        subaccount.code.clear();
+    }
     store
         .sessions
         .retain(|session| session.subaccount_id != subaccount_id);
@@ -387,7 +387,7 @@ async fn owner_assign_projects(
     let Some(subaccount) = store
         .subaccounts
         .iter_mut()
-        .find(|subaccount| subaccount.id == subaccount_id)
+        .find(|subaccount| subaccount.id == subaccount_id && !subaccount.revoked)
     else {
         return Err(RelayError::not_found("Sub-account was not found."));
     };
@@ -760,7 +760,9 @@ fn response_looks_successful(payload: &str) -> bool {
 
 fn dashboard_payload(store: &RelayStore) -> Value {
     json!({
-        "subaccounts": store.subaccounts.iter().map(|subaccount| {
+        "subaccounts": store.subaccounts.iter()
+            .filter(|subaccount| !subaccount.revoked)
+            .map(|subaccount| {
             json!({
                 "id": subaccount.id,
                 "label": subaccount.label,
@@ -1255,6 +1257,198 @@ mod tests {
             .await
             .expect("blocked response");
         assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn revoke_archives_credentials_and_returns_only_active_subaccounts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("store.json");
+        let mut active_claims = BTreeMap::new();
+        active_claims.insert("review-action-pending".to_string(), 1_783_425_600_000);
+        RelayStore {
+            version: 1,
+            subaccounts: vec![
+                SubaccountRecord {
+                    id: "sub-revoked".to_string(),
+                    label: "Revoked laptop".to_string(),
+                    code: "REVOKE-CODE".to_string(),
+                    revoked: false,
+                    allowed_project_ids: vec!["project-original".to_string()],
+                    analytics: AnalyticsRecord {
+                        completed_tasks: 7,
+                        worked_seconds: 3_600,
+                        earnings_cents: 875,
+                    },
+                    active_claims,
+                },
+                SubaccountRecord {
+                    id: "sub-active".to_string(),
+                    label: "Active phone".to_string(),
+                    code: "ACTIVE-CODE".to_string(),
+                    revoked: false,
+                    allowed_project_ids: vec!["project-active".to_string()],
+                    analytics: AnalyticsRecord::default(),
+                    active_claims: BTreeMap::new(),
+                },
+            ],
+            sessions: vec![
+                SessionRecord {
+                    token: "revoked-session-1".to_string(),
+                    subaccount_id: "sub-revoked".to_string(),
+                    created_at: 1,
+                    last_seen_at: 2,
+                },
+                SessionRecord {
+                    token: "active-session".to_string(),
+                    subaccount_id: "sub-active".to_string(),
+                    created_at: 3,
+                    last_seen_at: 4,
+                },
+                SessionRecord {
+                    token: "revoked-session-2".to_string(),
+                    subaccount_id: "sub-revoked".to_string(),
+                    created_at: 5,
+                    last_seen_at: 6,
+                },
+            ],
+            known_project_queues: BTreeMap::new(),
+        }
+        .save(&store_path)
+        .await
+        .expect("seed store");
+        let state = test_state(
+            store_path.clone(),
+            Arc::new(AtomicI64::new(1_783_425_600_000)),
+            Arc::new(|_| Box::pin(async { Ok(json!({ "success": true }).to_string()) })),
+            0,
+        )
+        .await;
+        let (base_url, handle) = spawn_server(state).await;
+        let client = Client::new();
+
+        let revoke_response = client
+            .delete(format!(
+                "{base_url}/api/subaccounts/owner/subaccounts/sub-revoked"
+            ))
+            .bearer_auth("owner-token")
+            .send()
+            .await
+            .expect("revoke response");
+        assert_eq!(revoke_response.status(), StatusCode::OK);
+        let revoke_dashboard: Value = revoke_response.json().await.expect("revoke dashboard");
+        assert_eq!(
+            revoke_dashboard["subaccounts"],
+            json!([{
+                "id": "sub-active",
+                "label": "Active phone",
+                "code": "ACTIVE-CODE",
+                "revoked": false,
+                "allowedProjectIds": ["project-active"],
+                "analytics": {
+                    "completedTasks": 0,
+                    "workedSeconds": 0,
+                    "earningsCents": 0,
+                }
+            }])
+        );
+        assert!(!revoke_dashboard.to_string().contains("REVOKE-CODE"));
+
+        let dashboard: Value = client
+            .get(format!("{base_url}/api/subaccounts/owner/dashboard"))
+            .bearer_auth("owner-token")
+            .send()
+            .await
+            .expect("dashboard response")
+            .json()
+            .await
+            .expect("dashboard json");
+        assert_eq!(dashboard, revoke_dashboard);
+
+        let revoked_login = client
+            .post(format!("{base_url}/api/subaccounts/login"))
+            .json(&json!({ "code": "REVOKE-CODE" }))
+            .send()
+            .await
+            .expect("revoked login response");
+        assert_eq!(revoked_login.status(), StatusCode::UNAUTHORIZED);
+
+        let revoked_session = client
+            .post(format!("{base_url}/api/subaccounts/babel-service"))
+            .bearer_auth("revoked-session-1")
+            .json(&json!({
+                "requestKind": "loadWorkerProjects",
+                "envelope": { "operation": "worker.getProjects" }
+            }))
+            .send()
+            .await
+            .expect("revoked session response");
+        assert_eq!(revoked_session.status(), StatusCode::UNAUTHORIZED);
+
+        let assign_revoked = client
+            .put(format!(
+                "{base_url}/api/subaccounts/owner/subaccounts/sub-revoked/projects"
+            ))
+            .bearer_auth("owner-token")
+            .json(&json!({ "projectIds": ["project-replacement"] }))
+            .send()
+            .await
+            .expect("assign revoked response");
+        assert_eq!(assign_revoked.status(), StatusCode::NOT_FOUND);
+
+        let retry_response = client
+            .delete(format!(
+                "{base_url}/api/subaccounts/owner/subaccounts/sub-revoked"
+            ))
+            .bearer_auth("owner-token")
+            .send()
+            .await
+            .expect("retry revoke response");
+        assert_eq!(retry_response.status(), StatusCode::OK);
+        let retry_dashboard: Value = retry_response.json().await.expect("retry dashboard");
+        assert_eq!(retry_dashboard, revoke_dashboard);
+
+        let active_login = client
+            .post(format!("{base_url}/api/subaccounts/login"))
+            .json(&json!({ "code": "ACTIVE-CODE" }))
+            .send()
+            .await
+            .expect("active login response");
+        assert_eq!(active_login.status(), StatusCode::OK);
+
+        let persisted = RelayStore::load(&store_path)
+            .await
+            .expect("persisted store");
+        let tombstone = persisted
+            .subaccounts
+            .iter()
+            .find(|subaccount| subaccount.id == "sub-revoked")
+            .expect("revoked tombstone");
+        assert!(tombstone.revoked);
+        assert!(tombstone.code.is_empty());
+        assert_eq!(
+            tombstone.allowed_project_ids,
+            vec!["project-original".to_string()]
+        );
+        assert_eq!(tombstone.analytics.completed_tasks, 7);
+        assert_eq!(tombstone.analytics.worked_seconds, 3_600);
+        assert_eq!(tombstone.analytics.earnings_cents, 875);
+        assert_eq!(
+            tombstone.active_claims.get("review-action-pending"),
+            Some(&1_783_425_600_000)
+        );
+        assert!(
+            persisted
+                .sessions
+                .iter()
+                .all(|session| session.subaccount_id != "sub-revoked")
+        );
+        assert!(
+            persisted
+                .sessions
+                .iter()
+                .any(|session| session.subaccount_id == "sub-active")
+        );
         handle.abort();
     }
 
