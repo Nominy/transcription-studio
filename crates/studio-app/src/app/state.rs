@@ -2573,12 +2573,40 @@ impl StudioState {
             "Speaker workflow reset: showing all tracks and unmuting speakers.".to_string();
     }
 
+    fn helper_segment_is_visible(&self, segment_id: &str) -> bool {
+        let Some(project) = self.project() else {
+            return false;
+        };
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        let Some(segment) = project.segment(segment_id) else {
+            return false;
+        };
+        let matches_filter = match &editor.track_filter {
+            TrackFilter::All => true,
+            TrackFilter::Lane { id, .. } => id == &segment.lane_id,
+        };
+        matches_filter
+            && !editor.collapsed_lane_ids.contains(&segment.lane_id)
+            && TranscriptAnnotationKind::from_segment(segment).is_transcription()
+    }
+
     fn restore_helper_focus_for_current_playhead(&mut self) {
         let pending = self.helper_focus_restore_pending.clone();
+        let pending_segment_id = pending
+            .as_ref()
+            .map(|restore| restore.segment_id.clone())
+            .filter(|segment_id| self.helper_segment_is_visible(segment_id));
+        let selected_segment_id = self
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.selected_segment_id.clone())
+            .filter(|segment_id| self.helper_segment_is_visible(segment_id));
         let segment_id = self
             .helper_segment_id_at_playhead()
-            .or_else(|| pending.as_ref().map(|restore| restore.segment_id.clone()))
-            .or_else(|| self.editor.as_ref()?.selected_segment_id.clone());
+            .or(pending_segment_id)
+            .or(selected_segment_id);
         let Some(segment_id) = segment_id else {
             self.status =
                 "Helper focus restore failed: no segment at playback position.".to_string();
