@@ -143,19 +143,14 @@ fn set_cli_value(
     value: &str,
 ) -> Result<(), String> {
     match normalize_key(key).as_str() {
-        "babelauthstartlogin" => {
-            if start_identifier.replace(value.to_string()).is_some() {
-                return Err("--babel-auth-start-login was provided more than once".to_string());
-            }
+        "babelauthstartlogin" if start_identifier.replace(value.to_string()).is_some() => {
+            Err("--babel-auth-start-login was provided more than once".to_string())
         }
-        "babelauthverifylogin" => {
-            if verify_code.replace(value.to_string()).is_some() {
-                return Err("--babel-auth-verify-login was provided more than once".to_string());
-            }
+        "babelauthverifylogin" if verify_code.replace(value.to_string()).is_some() => {
+            Err("--babel-auth-verify-login was provided more than once".to_string())
         }
-        _ => {}
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub(super) fn native_babel_url() -> String {

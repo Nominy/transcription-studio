@@ -36,7 +36,7 @@ fn transcript_caret_hotkey_target(
     }
     if hotkey_bindings.matches(
         HotkeyAction::MoveTextBeforeCaretToPreviousSegment,
-        physical_key.clone(),
+        physical_key,
         modifiers,
     ) {
         return Some((segment_id.to_string(), -1));
@@ -159,7 +159,7 @@ impl<'a> Widget<Message, Theme, Renderer> for FocusableTextEditor<'a> {
                 physical_key,
                 modifiers,
                 ..
-            }) => Some((physical_key.clone(), *modifiers)),
+            }) => Some((*physical_key, *modifiers)),
             _ => None,
         };
         let child_status = self.content.as_widget_mut().on_event(

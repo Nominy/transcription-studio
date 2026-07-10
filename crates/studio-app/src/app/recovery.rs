@@ -31,7 +31,7 @@ pub(super) fn discover_recovery_drafts() -> Vec<RecoveryDraft> {
         .filter_map(Result::ok)
         .filter_map(|entry| recovery_draft_from_path(entry.path()))
         .collect::<Vec<_>>();
-    drafts.sort_by(|left, right| right.modified_millis.cmp(&left.modified_millis));
+    drafts.sort_by_key(|draft| std::cmp::Reverse(draft.modified_millis));
     drafts
 }
 

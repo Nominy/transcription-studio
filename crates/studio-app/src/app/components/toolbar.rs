@@ -96,7 +96,7 @@ pub(super) fn view_top_toolbar<'a>(
             babel_slider_from_zoom_factor(editor.zoom),
             |value| Message::ZoomChanged(zoom_factor_from_babel_slider(value)),
         )
-        .step(0.001)
+        .step(0.001_f32)
         .width(Length::Fixed(260.0))
         .style(zoom_slider_style),
         zoom_svg_icon(ZOOM_IN_ICON_HANDLE.clone()),
