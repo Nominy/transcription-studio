@@ -1,4 +1,4 @@
-use super::{EditorSession, first_segment_id};
+use super::EditorSession;
 use crate::timeline_model::TimeRange;
 use crate::transcript_model::TranscriptAnnotationKind;
 use studio_core::{Project, Segment};
@@ -157,7 +157,11 @@ impl EditorSession {
             .as_deref()
             .is_some_and(|segment_id| project.segment(segment_id).is_none())
         {
-            self.selected_segment_id = first_segment_id(project);
+            self.selected_segment_id = project
+                .segments
+                .iter()
+                .find(|segment| self.is_transcription_segment_visible(segment))
+                .map(|segment| segment.id.clone());
         }
         if self
             .open_actions_segment_id
