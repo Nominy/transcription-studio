@@ -3024,7 +3024,10 @@ fn helper_text_move_before_caret_targets_previous_same_lane_segment() {
         .replace_text("previous".to_string());
     set_draft_text_with_cursor_after_chars(&mut state, "annotation-3", "move me stay", 7);
 
-    let _ = update(&mut state, Message::MoveTextBeforeCaretToPreviousSegment);
+    let _ = update(
+        &mut state,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
+    );
 
     assert_eq!(
         state.segment_drafts.get("annotation-1").unwrap().text,
@@ -3047,7 +3050,10 @@ fn helper_text_move_after_caret_targets_next_same_lane_segment() {
         .replace_text("next".to_string());
     set_draft_text_with_cursor_after_chars(&mut state, "annotation-1", "keep move me", 4);
 
-    let _ = update(&mut state, Message::MoveTextAfterCaretToNextSegment);
+    let _ = update(
+        &mut state,
+        Message::MoveTextAfterCaretToNextSegment("annotation-1".to_string()),
+    );
 
     let current = state.segment_drafts.get("annotation-1").unwrap();
     assert_eq!(current.text, "keep");
@@ -3086,7 +3092,10 @@ fn helper_text_move_uses_timeline_order_for_visual_first_row() {
         .unwrap()
         .replace_text("later row".to_string());
 
-    let _ = update(&mut state, Message::MoveTextBeforeCaretToPreviousSegment);
+    let _ = update(
+        &mut state,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-1".to_string()),
+    );
 
     assert_eq!(
         state.segment_drafts.get("annotation-1").unwrap().text,
@@ -3116,7 +3125,7 @@ fn helper_text_move_refuses_to_empty_source_in_either_direction() {
 
     let _ = update(
         &mut before_state,
-        Message::MoveTextBeforeCaretToPreviousSegment,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
     );
 
     assert_eq!(
@@ -3146,7 +3155,10 @@ fn helper_text_move_refuses_to_empty_source_in_either_direction() {
         .replace_text("next".to_string());
     set_draft_text_with_cursor_after_chars(&mut after_state, "annotation-1", "whole row", 0);
 
-    let _ = update(&mut after_state, Message::MoveTextAfterCaretToNextSegment);
+    let _ = update(
+        &mut after_state,
+        Message::MoveTextAfterCaretToNextSegment("annotation-1".to_string()),
+    );
 
     assert_eq!(
         after_state.segment_drafts.get("annotation-1").unwrap().text,
@@ -3170,7 +3182,10 @@ fn helper_text_move_undo_redo_restores_both_rows_atomically() {
         .replace_text("previous".to_string());
     set_draft_text_with_cursor_after_chars(&mut state, "annotation-3", "move me stay", 7);
 
-    let _ = update(&mut state, Message::MoveTextBeforeCaretToPreviousSegment);
+    let _ = update(
+        &mut state,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
+    );
     let _ = update(
         &mut state,
         Message::SegmentTextUndo("annotation-3".to_string()),
@@ -3236,11 +3251,11 @@ fn helper_digit_over_selection_preserves_babel_skaz_cursor_offset() {
 fn helper_hotkeys_route_inside_captured_transcript_inputs() {
     assert_eq!(
         hotkey_message_for_status(Key::Character("[".into()), Modifiers::ALT, Status::Captured,),
-        Some(Message::MoveTextBeforeCaretToPreviousSegment)
+        None
     );
     assert_eq!(
         hotkey_message_for_status(Key::Character("]".into()), Modifiers::ALT, Status::Captured,),
-        Some(Message::MoveTextAfterCaretToNextSegment)
+        None
     );
     assert_eq!(
         hotkey_message_for_status(Key::Character("a".into()), Modifiers::ALT, Status::Captured,),
@@ -19359,7 +19374,7 @@ fn autoresearch_polish_score() {
         "editing",
         "editing.alt_left_captured_route",
         20,
-        alt_left_message == Some(Message::MoveTextBeforeCaretToPreviousSegment)
+        alt_left_message.is_none()
     );
     if let Some(message) = alt_left_message {
         let _ = update(&mut first_visible_state, message);
@@ -19414,7 +19429,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut whole_before_state,
-        Message::MoveTextBeforeCaretToPreviousSegment,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
     );
     polish_check!(
         "editing",
@@ -19450,7 +19465,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut whole_after_state,
-        Message::MoveTextAfterCaretToNextSegment,
+        Message::MoveTextAfterCaretToNextSegment("annotation-1".to_string()),
     );
     polish_check!(
         "editing",
@@ -19485,7 +19500,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut partial_before_state,
-        Message::MoveTextBeforeCaretToPreviousSegment,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
     );
     polish_check!(
         "editing",
@@ -19520,7 +19535,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut partial_after_state,
-        Message::MoveTextAfterCaretToNextSegment,
+        Message::MoveTextAfterCaretToNextSegment("annotation-1".to_string()),
     );
     polish_check!(
         "editing",
@@ -19555,7 +19570,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut atomic_undo_state,
-        Message::MoveTextBeforeCaretToPreviousSegment,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-3".to_string()),
     );
     let _ = update(
         &mut atomic_undo_state,
@@ -19802,7 +19817,7 @@ fn autoresearch_polish_score() {
     );
     let _ = update(
         &mut focused_move_state,
-        Message::MoveTextBeforeCaretToPreviousSegment,
+        Message::MoveTextBeforeCaretToPreviousSegment("annotation-1".to_string()),
     );
     let focused_move_focused = focused_move_state
         .segment_drafts

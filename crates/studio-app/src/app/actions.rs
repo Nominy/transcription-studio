@@ -1311,14 +1311,14 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 state.invalidate_transcript_layout_cache();
             }
         }
-        Message::MoveTextBeforeCaretToPreviousSegment => {
+        Message::MoveTextBeforeCaretToPreviousSegment(segment_id) => {
             if !state.block_read_only_edit("Text move") {
-                state.move_text_before_caret_to_previous_segment();
+                state.move_text_before_caret_to_previous_segment(&segment_id);
             }
         }
-        Message::MoveTextAfterCaretToNextSegment => {
+        Message::MoveTextAfterCaretToNextSegment(segment_id) => {
             if !state.block_read_only_edit("Text move") {
-                state.move_text_after_caret_to_next_segment();
+                state.move_text_after_caret_to_next_segment(&segment_id);
             }
         }
         Message::ConvertSelectedNumberToSkaz => {

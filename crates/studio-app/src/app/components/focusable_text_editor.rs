@@ -4,9 +4,10 @@ use iced::advanced::widget::operation::{Focusable, Scrollable, TextInput};
 use iced::advanced::widget::{self, Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, mouse, overlay, renderer};
 use iced::widget::text_input;
-use iced::{Element, Length, Rectangle, Renderer, Size, Task, Theme, Vector};
+use iced::{Element, Length, Rectangle, Renderer, Size, Task, Theme, Vector, keyboard};
 
 use super::super::Message;
+use super::super::keybinds::{HotkeyAction, HotkeyBindings};
 
 const TRANSCRIPT_TEXT_EDITOR_ID_PREFIX: &str = "transcript-editor:";
 const TRANSCRIPT_TEXT_EDITOR_BLUR_ID: &str = "transcript-editor:__blur__";
@@ -23,29 +24,68 @@ pub(in crate::app) fn blur_transcript_text_editors() -> Task<Message> {
     text_input::focus(text_input::Id::new(TRANSCRIPT_TEXT_EDITOR_BLUR_ID))
 }
 
+fn transcript_caret_hotkey_target(
+    segment_id: &str,
+    physical_key: Option<keyboard::key::Physical>,
+    modifiers: keyboard::Modifiers,
+    child_status: iced::event::Status,
+    hotkey_bindings: &HotkeyBindings,
+) -> Option<(String, i32)> {
+    if child_status != iced::event::Status::Captured {
+        return None;
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MoveTextBeforeCaretToPreviousSegment,
+        physical_key.clone(),
+        modifiers,
+    ) {
+        return Some((segment_id.to_string(), -1));
+    }
+    if hotkey_bindings.matches(
+        HotkeyAction::MoveTextAfterCaretToNextSegment,
+        physical_key,
+        modifiers,
+    ) {
+        return Some((segment_id.to_string(), 1));
+    }
+    None
+}
+
 #[cfg(test)]
 pub(in crate::app) fn transcript_caret_hotkey_target_for_test(
-    _segment_id: &str,
-    _physical_key: Option<iced::keyboard::key::Physical>,
-    _modifiers: iced::keyboard::Modifiers,
-    _child_status: iced::event::Status,
-    _hotkey_bindings: &crate::app::keybinds::HotkeyBindings,
+    segment_id: &str,
+    physical_key: Option<keyboard::key::Physical>,
+    modifiers: keyboard::Modifiers,
+    child_status: iced::event::Status,
+    hotkey_bindings: &HotkeyBindings,
 ) -> Option<(String, i32)> {
-    None
+    transcript_caret_hotkey_target(
+        segment_id,
+        physical_key,
+        modifiers,
+        child_status,
+        hotkey_bindings,
+    )
 }
 
 pub(super) fn view_focusable_text_editor<'a>(
     id: text_input::Id,
+    segment_id: String,
+    hotkey_bindings: &'a HotkeyBindings,
     content: Element<'a, Message>,
 ) -> Element<'a, Message> {
     Element::new(FocusableTextEditor {
         id: id.into(),
+        segment_id,
+        hotkey_bindings,
         content,
     })
 }
 
 struct FocusableTextEditor<'a> {
     id: widget::Id,
+    segment_id: String,
+    hotkey_bindings: &'a HotkeyBindings,
     content: Element<'a, Message>,
 }
 
@@ -114,7 +154,15 @@ impl<'a> Widget<Message, Theme, Renderer> for FocusableTextEditor<'a> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) -> iced::event::Status {
-        self.content.as_widget_mut().on_event(
+        let caret_key = match &event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                physical_key,
+                modifiers,
+                ..
+            }) => Some((physical_key.clone(), *modifiers)),
+            _ => None,
+        };
+        let child_status = self.content.as_widget_mut().on_event(
             tree.children
                 .get_mut(0)
                 .expect("focusable text editor should have one child tree"),
@@ -125,7 +173,23 @@ impl<'a> Widget<Message, Theme, Renderer> for FocusableTextEditor<'a> {
             clipboard,
             shell,
             viewport,
-        )
+        );
+        if let Some((physical_key, modifiers)) = caret_key
+            && let Some((segment_id, direction)) = transcript_caret_hotkey_target(
+                &self.segment_id,
+                Some(physical_key),
+                modifiers,
+                child_status,
+                self.hotkey_bindings,
+            )
+        {
+            shell.publish(if direction < 0 {
+                Message::MoveTextBeforeCaretToPreviousSegment(segment_id)
+            } else {
+                Message::MoveTextAfterCaretToNextSegment(segment_id)
+            });
+        }
+        child_status
     }
 
     fn mouse_interaction(

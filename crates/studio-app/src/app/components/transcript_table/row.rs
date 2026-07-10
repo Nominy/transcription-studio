@@ -134,6 +134,8 @@ pub(super) fn view_transcript_row<'a>(
             .height(Length::Shrink);
         let transcript_text_input = focusable_text_editor::view_focusable_text_editor(
             focusable_text_editor::transcript_text_editor_id(&row_view.segment_id),
+            row_view.segment_id.clone(),
+            &state.hotkey_bindings,
             transcript_text_input.into(),
         );
         let helper_focus_restore_pending = state.helper_focus_restore_pending.as_ref();

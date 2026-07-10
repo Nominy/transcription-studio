@@ -955,20 +955,6 @@ fn helper_text_hotkey_message(
         return Some(Message::RewindPlaybackOneSecond);
     }
     if hotkey_bindings.matches(
-        HotkeyAction::MoveTextBeforeCaretToPreviousSegment,
-        physical_key,
-        modifiers,
-    ) {
-        return Some(Message::MoveTextBeforeCaretToPreviousSegment);
-    }
-    if hotkey_bindings.matches(
-        HotkeyAction::MoveTextAfterCaretToNextSegment,
-        physical_key,
-        modifiers,
-    ) {
-        return Some(Message::MoveTextAfterCaretToNextSegment);
-    }
-    if hotkey_bindings.matches(
         HotkeyAction::ConvertSelectedNumberToSkaz,
         physical_key,
         modifiers,

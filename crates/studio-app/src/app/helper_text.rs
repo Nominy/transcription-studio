@@ -103,12 +103,12 @@ pub(super) struct CrossRowTextEdit {
 }
 
 impl StudioState {
-    pub(super) fn move_text_before_caret_to_previous_segment(&mut self) -> bool {
-        self.move_text_to_adjacent_same_lane(TextMoveDirection::Previous)
+    pub(super) fn move_text_before_caret_to_previous_segment(&mut self, segment_id: &str) -> bool {
+        self.move_text_to_adjacent_same_lane(segment_id, TextMoveDirection::Previous)
     }
 
-    pub(super) fn move_text_after_caret_to_next_segment(&mut self) -> bool {
-        self.move_text_to_adjacent_same_lane(TextMoveDirection::Next)
+    pub(super) fn move_text_after_caret_to_next_segment(&mut self, segment_id: &str) -> bool {
+        self.move_text_to_adjacent_same_lane(segment_id, TextMoveDirection::Next)
     }
 
     pub(super) fn undo_cross_row_text_move(&mut self, segment_id: &str) -> bool {
@@ -283,11 +283,12 @@ impl StudioState {
         self.replace_segment_selection_with_text(segment_id, replacement, Some(1))
     }
 
-    fn move_text_to_adjacent_same_lane(&mut self, direction: TextMoveDirection) -> bool {
-        let Some(source_segment_id) = self.selected_segment_id() else {
-            self.status = "Select a transcript segment before moving text.".to_string();
-            return false;
-        };
+    fn move_text_to_adjacent_same_lane(
+        &mut self,
+        segment_id: &str,
+        direction: TextMoveDirection,
+    ) -> bool {
+        let source_segment_id = segment_id.to_string();
         let Some(target_segment_id) =
             self.adjacent_same_lane_segment_id(&source_segment_id, direction)
         else {
