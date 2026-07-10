@@ -1020,6 +1020,7 @@ impl StudioState {
         }) {
             self.refresh_segment_draft(&segment_id);
             self.mark_dirty();
+            self.reconcile_transcript_ownership_to_visible();
         }
     }
 
