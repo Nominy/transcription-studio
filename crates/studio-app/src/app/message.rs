@@ -9,6 +9,7 @@ use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_input::OutsideInteractionContext;
 use super::keybinds::{HotkeyAction, KeyBinding};
 use super::review_backend_client::ReviewBackendRequest;
+use super::service_callbacks::SaveRequestToken;
 use super::state::{DashboardSection, NativeCapabilityModalTab};
 use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
 use super::tag_suggestions::{TagSuggestion, TagSuggestionKeyboardAction};
@@ -62,9 +63,15 @@ pub(super) enum Message {
     SubmitReviewFailed(String),
     SaveProgress,
     #[allow(dead_code)]
-    SaveProgressSucceeded(String),
+    SaveProgressSucceeded {
+        token: SaveRequestToken,
+        last_saved: String,
+    },
     #[allow(dead_code)]
-    SaveProgressFailed(String),
+    SaveProgressFailed {
+        token: SaveRequestToken,
+        error: String,
+    },
     AutoSaveTick,
     DropClaim,
     #[allow(dead_code)]
@@ -109,6 +116,7 @@ pub(super) enum Message {
     SubaccountOwnerDashboardLoaded(SubaccountOwnerDashboard),
     SubaccountOwnerRequestFailed(String),
     DashboardRefreshProjects,
+    DashboardRecoverLatestDraft,
     DashboardProjectsLoaded(String),
     DashboardProjectsLoadFailed(String),
     #[allow(dead_code)]
@@ -160,8 +168,9 @@ pub(super) enum Message {
     TaskLookupClickReadOnly,
     CloseTaskLookup,
     WindowCloseRequested,
-    CancelExit,
-    ConfirmExitDiscardingChanges,
+    CancelPendingLeave,
+    SaveAndContinuePendingLeave,
+    DiscardAndContinuePendingLeave,
     #[allow(dead_code)]
     LoadReviewActionSucceeded(String),
     #[allow(dead_code)]

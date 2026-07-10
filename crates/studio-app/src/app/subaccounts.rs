@@ -14,11 +14,13 @@ use super::native_auth::{
     default_native_auth_store_path, mint_native_babel_authorization_from_store, native_clerk_url,
 };
 use super::native_auth_cli::native_babel_url;
+#[cfg(not(test))]
 use super::platform_paths::application_support_dir_named;
 use super::service_callbacks::BabelServiceRequest;
 
 const SUBACCOUNT_SESSION_STORE_ENV: &str = "STUDIO_SUBACCOUNT_SESSION_STORE";
 pub(super) const SUBACCOUNT_RELAY_URL_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_URL";
+#[cfg(not(test))]
 const DEFAULT_SESSION_FILE_NAME: &str = "subaccount-session.json";
 const LOGIN_PATH: &str = "/api/subaccounts/login";
 const BABEL_SERVICE_PATH: &str = "/api/subaccounts/babel-service";
@@ -86,10 +88,10 @@ pub(super) fn default_subaccount_session_store_path() -> PathBuf {
 fn default_subaccount_session_store_path_without_env() -> PathBuf {
     #[cfg(test)]
     {
-        return env::temp_dir().join(format!(
+        env::temp_dir().join(format!(
             "transcription-studio-test-subaccount-session-{}.json",
             std::process::id()
-        ));
+        ))
     }
 
     #[cfg(not(test))]

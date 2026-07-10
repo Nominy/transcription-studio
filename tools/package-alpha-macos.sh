@@ -77,7 +77,7 @@ if [[ -n "${STUDIO_DEFAULT_UPDATE_FEED_URL:-}" ]]; then
 fi
 
 if [[ "$skip_build" != "1" && "$skip_build" != "true" ]]; then
-  cargo build -p studio-app --release
+  cargo build -p studio-app --release --locked
 fi
 
 rm -rf "$stage_dir" "$bundle_dir"

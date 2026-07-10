@@ -5,7 +5,10 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::StudioState;
 use super::formatting::write_text_file;
-use super::service_callbacks::{BabelServiceRequest, build_save_annotations_request};
+use super::recovery::{discover_recovery_drafts, recovery_snapshot_path, remove_recovery_snapshot};
+use super::service_callbacks::{
+    BabelServiceRequest, SaveRequestToken, build_save_annotations_request,
+};
 use super::service_executor::babel_remote_mutations_configured;
 
 const EDITOR_AUTOSAVE_TRACE_ENV: &str = "STUDIO_TRACE_EDITOR_AUTOSAVE";
@@ -33,6 +36,40 @@ fn save_failure_detail(status: &str) -> String {
 }
 
 impl StudioState {
+    pub(super) fn refresh_recovery_drafts(&mut self) {
+        self.dashboard.recovery_drafts = discover_recovery_drafts();
+    }
+
+    pub(super) fn recover_latest_draft(&mut self) {
+        self.refresh_recovery_drafts();
+        let Some(draft) = self.dashboard.recovery_drafts.first().cloned() else {
+            self.dashboard.error = Some("No local recovery draft is available.".to_string());
+            return;
+        };
+        let base = draft
+            .path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let result = fs::read_to_string(&draft.path)
+            .map_err(|error| format!("failed to read recovery draft: {error}"))
+            .and_then(|source| {
+                StudioWorkflow::from_babel_json(&source).map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(workflow) => {
+                self.replace_workflow(workflow, format!("Recovered local draft {}.", draft.label));
+                let loaded = self.load_lane_waveforms_from_base(base);
+                self.append_waveform_status(loaded);
+                self.mark_dirty();
+                self.dashboard.error = None;
+            }
+            Err(error) => {
+                self.dashboard.error = Some(format!("Recovery failed: {error}"));
+            }
+        }
+    }
+
     pub(super) fn load_bundled_demo(&mut self) {
         match load_sample_project()
             .map(StudioWorkflow::from_project)
@@ -106,29 +143,48 @@ impl StudioState {
             return;
         }
 
-        self.with_editor_mut(EditorSession::begin_save);
         if !self.apply_pending_drafts("Save") {
             let error = save_failure_detail(&self.status);
-            self.with_editor_mut(|editor| editor.complete_save(false, error));
+            self.with_editor_mut(|editor| {
+                editor.begin_save();
+                editor.complete_save(false, error);
+            });
             return;
         }
+        self.with_editor_mut(EditorSession::begin_save);
+        let Some(token) = self.current_save_request_token() else {
+            self.status = "Save unavailable: could not start a save operation.".to_string();
+            return;
+        };
 
         let path = self.export_path.clone();
+        let remote_save = babel_remote_mutations_configured();
+        let recovery_path = remote_save
+            .then(|| self.project().map(recovery_snapshot_path))
+            .flatten();
         let save_result = self.with_workflow_mut("Save", |workflow| {
             let json = workflow
                 .export_babel_json()
                 .map_err(|error| error.to_string())?;
             write_text_file(&path, &json)?;
+            if let Some(recovery_path) = recovery_path.as_ref() {
+                write_text_file(&recovery_path.to_string_lossy(), &json)?;
+            }
             Ok("Progress saved.".to_string())
         });
         if !save_result {
             let error = save_failure_detail(&self.status);
-            self.with_editor_mut(|editor| editor.complete_save(false, error));
+            self.with_editor_mut(|editor| {
+                editor.complete_save_for_revision(token.revision, false, error);
+            });
             return;
         }
+        if recovery_path.is_some() {
+            self.refresh_recovery_drafts();
+        }
 
-        if babel_remote_mutations_configured() {
-            let request = match self
+        if remote_save {
+            let mut request = match self
                 .workflow
                 .as_ref()
                 .map_err(|error| format!("no workflow loaded: {error}"))
@@ -136,11 +192,14 @@ impl StudioState {
             {
                 Ok(request) => request,
                 Err(error) => {
-                    self.with_editor_mut(|editor| editor.complete_save(false, error.clone()));
+                    self.with_editor_mut(|editor| {
+                        editor.complete_save_for_revision(token.revision, false, error.clone());
+                    });
                     self.status = format!("Save failed: {error}");
                     return;
                 }
             };
+            request.token = token;
             self.babel_service_requests
                 .push(BabelServiceRequest::SaveAnnotations(request));
             self.status = "Saving progress...".to_string();
@@ -150,24 +209,59 @@ impl StudioState {
         let last_saved_at = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-        self.with_editor_mut(|editor| editor.complete_save(true, last_saved_at));
-        self.status = "Progress saved.".to_string();
+        self.complete_save_progress_success(token, last_saved_at);
     }
 
-    pub(super) fn complete_save_progress_success(&mut self, last_saved: String) {
+    pub(super) fn complete_save_progress_success(
+        &mut self,
+        token: SaveRequestToken,
+        last_saved: String,
+    ) -> bool {
+        if token.workspace_generation != self.workspace_generation {
+            return false;
+        }
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+            matches!(request, BabelServiceRequest::SaveAnnotations(request) if request.token == token)
         });
-        self.with_editor_mut(|editor| editor.complete_save(true, last_saved));
-        self.status = "Progress saved.".to_string();
+        let mut completed = false;
+        self.with_editor_mut(|editor| {
+            completed = editor.complete_save_for_revision(token.revision, true, last_saved);
+        });
+        if !completed {
+            return false;
+        }
+        if let Some(project) = self.project().cloned() {
+            remove_recovery_snapshot(&project);
+            self.refresh_recovery_drafts();
+        }
+        self.status = if self.editor.as_ref().is_some_and(|editor| editor.is_dirty) {
+            "Earlier changes saved; newer edits are still pending.".to_string()
+        } else {
+            "Progress saved.".to_string()
+        };
+        true
     }
 
-    pub(super) fn complete_save_progress_failure(&mut self, error: String) {
+    pub(super) fn complete_save_progress_failure(
+        &mut self,
+        token: SaveRequestToken,
+        error: String,
+    ) -> bool {
+        if token.workspace_generation != self.workspace_generation {
+            return false;
+        }
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+            matches!(request, BabelServiceRequest::SaveAnnotations(request) if request.token == token)
         });
-        self.with_editor_mut(|editor| editor.complete_save(false, error.clone()));
+        let mut completed = false;
+        self.with_editor_mut(|editor| {
+            completed = editor.complete_save_for_revision(token.revision, false, error.clone());
+        });
+        if !completed {
+            return false;
+        }
         self.status = format!("Save failed: {error}");
+        true
     }
 
     pub(super) fn should_run_editor_auto_save_tick(&self) -> bool {

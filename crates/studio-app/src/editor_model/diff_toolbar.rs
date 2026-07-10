@@ -594,12 +594,11 @@ fn review_action_options(
         .filter_map(|action| {
             let id = action.get("id")?.as_str()?.to_string();
             let mut label = action.get("label")?.as_str()?.to_string();
-            if include_worker_name {
-                if let Some(worker_name) = action.get("workerName").and_then(Value::as_str) {
-                    if !worker_name.is_empty() {
-                        label.push_str(&format!(" \u{00b7} {worker_name}"));
-                    }
-                }
+            if include_worker_name
+                && let Some(worker_name) = action.get("workerName").and_then(Value::as_str)
+                && !worker_name.is_empty()
+            {
+                label.push_str(&format!(" \u{00b7} {worker_name}"));
             }
             Some(DiffCompareOptionView { value: id, label })
         })

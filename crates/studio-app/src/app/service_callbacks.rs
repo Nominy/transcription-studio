@@ -32,6 +32,13 @@ pub(super) enum BabelServiceRequest {
 pub(super) struct SaveAnnotationsRequest {
     pub(super) review_action_id: String,
     pub(super) annotations: Vec<Value>,
+    pub(super) token: SaveRequestToken,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct SaveRequestToken {
+    pub(super) workspace_generation: u64,
+    pub(super) revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +105,7 @@ pub(super) fn build_save_annotations_request(
     Ok(SaveAnnotationsRequest {
         review_action_id,
         annotations,
+        token: SaveRequestToken::default(),
     })
 }
 

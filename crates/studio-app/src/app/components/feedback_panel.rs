@@ -27,7 +27,6 @@ pub(super) fn view_feedback_panel<'a>(panel: &'a FeedbackPanelState) -> Element<
                     entry.rating,
                     &entry.comment,
                     panel.read_only,
-                    panel.is_tts_project,
                 ));
             }
         }
@@ -93,14 +92,11 @@ fn view_rubric_card<'a>(
     rating: u8,
     comment: &'a str,
     read_only: bool,
-    is_tts_project: bool,
 ) -> Element<'a, Message> {
     let mut rating_row = row![].spacing(6);
     for option in 1..=3 {
         let label = if option == rating {
             format!("{option} selected")
-        } else if is_tts_project {
-            format!("{option}")
         } else {
             format!("{option}")
         };

@@ -5,7 +5,7 @@ use studio_waveform::DecodedAudio;
 
 use super::StudioState;
 
-const AUDIO_TRIM_THRESHOLD: f32 = 0.000_794_328_24;
+const AUDIO_TRIM_THRESHOLD: f32 = 0.000_794_328_2;
 const AUDIO_TRIM_OUTWARD_STEP_SECONDS: f64 = 0.05;
 const AUDIO_TRIM_PADDING_SECONDS: f64 = 0.005;
 const AUDIO_TRIM_EPSILON_SECONDS: f64 = 0.0015;
@@ -750,40 +750,34 @@ fn outward_audio_trim_pass(
     let mut end_seconds = current_end_seconds;
     let mut changed = false;
 
-    if extend_right {
-        if let Some(target_end_seconds) = decoded_audio_next_silence(audio, current_end_seconds)
+    if extend_right
+        && let Some(target_end_seconds) = decoded_audio_next_silence(audio, current_end_seconds)
             .map(|seconds| {
                 seconds
                     .max(current_end_seconds)
                     .min(audio.duration())
                     .min(max_end_seconds)
             })
-        {
-            if target_end_seconds > end_seconds + AUDIO_TRIM_EPSILON_SECONDS
-                && target_end_seconds > start_seconds + AUDIO_TRIM_EPSILON_SECONDS
-            {
-                end_seconds = target_end_seconds;
-                changed = true;
-            }
-        }
+        && target_end_seconds > end_seconds + AUDIO_TRIM_EPSILON_SECONDS
+        && target_end_seconds > start_seconds + AUDIO_TRIM_EPSILON_SECONDS
+    {
+        end_seconds = target_end_seconds;
+        changed = true;
     }
 
-    if extend_left {
-        if let Some(target_start_seconds) =
+    if extend_left
+        && let Some(target_start_seconds) =
             decoded_audio_previous_silence(audio, current_start_seconds).map(|seconds| {
                 seconds
                     .min(current_start_seconds)
                     .max(0.0)
                     .max(min_start_seconds)
             })
-        {
-            if target_start_seconds < start_seconds - AUDIO_TRIM_EPSILON_SECONDS
-                && target_start_seconds < end_seconds - AUDIO_TRIM_EPSILON_SECONDS
-            {
-                start_seconds = target_start_seconds;
-                changed = true;
-            }
-        }
+        && target_start_seconds < start_seconds - AUDIO_TRIM_EPSILON_SECONDS
+        && target_start_seconds < end_seconds - AUDIO_TRIM_EPSILON_SECONDS
+    {
+        start_seconds = target_start_seconds;
+        changed = true;
     }
 
     OutwardAudioTrimPass {

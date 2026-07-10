@@ -343,6 +343,43 @@ fn save_state_matches_recovered_babel_completion_and_autosave_rules() {
 }
 
 #[test]
+fn save_completion_only_clears_the_revision_that_was_sent() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+
+    session.mark_dirty();
+    session.begin_save();
+    let saved_revision = session.saving_revision().expect("save revision");
+    session.mark_dirty();
+
+    assert!(session.complete_save_for_revision(saved_revision, true, "2026-07-09T10:00:00Z"));
+    assert!(session.is_dirty);
+    assert!(!session.is_saving);
+    assert!(session.should_run_auto_save_tick(false));
+    assert_eq!(session.edit_revision(), saved_revision + 1);
+    assert_eq!(
+        session.last_saved_at.as_deref(),
+        Some("2026-07-09T10:00:00Z")
+    );
+}
+
+#[test]
+fn mismatched_save_completion_cannot_finish_the_active_save() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+
+    session.mark_dirty();
+    session.begin_save();
+    let active_revision = session.saving_revision().expect("save revision");
+
+    assert!(!session.complete_save_for_revision(active_revision + 1, true, "stale callback"));
+    assert!(session.is_dirty);
+    assert!(session.is_saving);
+    assert_eq!(session.saving_revision(), Some(active_revision));
+    assert!(session.last_saved_at.is_none());
+}
+
+#[test]
 fn save_retry_tooltip_reports_save_failure_reason() {
     let project = sample_project();
     let mut session = EditorSession::for_project(&project);
@@ -1782,7 +1819,7 @@ fn timeline_lanes_include_deterministic_waveform_blocks_and_colors() {
         .unwrap();
     assert!(speaker_one.blocks[0].left_percent > 0.0);
     assert!(speaker_one.blocks[0].width_percent > 0.0);
-    assert_eq!(speaker_one.blocks[0].peaks.len(), 96);
+    assert_eq!(speaker_one.blocks[0].peaks.len(), 256);
     assert_eq!(
         speaker_one.blocks[0].peak_source,
         WaveformPeakSource::Synthetic
@@ -2017,7 +2054,7 @@ fn timeline_lanes_expose_wavesurfer_render_model_with_segment_blocks() {
     assert_eq!(model.visible_start_seconds, 0.0);
     assert_eq!(model.visible_end_seconds, 1.0);
     assert!(model.regions.is_empty());
-    assert_eq!(model.channels[0].peaks.len(), 1024);
+    assert_eq!(model.channels[0].peaks.len(), 2_048);
     let lane = lanes.iter().find(|lane| lane.lane_id == "track-1").unwrap();
     assert_eq!(lane.blocks.len(), 1);
     assert_eq!(lane.blocks[0].segment_id, "audio-backed");
@@ -2165,7 +2202,7 @@ fn lane_waveform_can_use_precomputed_peaks_without_decoded_audio() {
     assert_eq!(lane.blocks[0].peak_source, WaveformPeakSource::Audio);
     assert!(model.regions.is_empty());
     assert_eq!(lane.blocks[0].segment_id, "peak-backed");
-    assert_eq!(model.channels[0].peaks.len(), 1024);
+    assert_eq!(model.channels[0].peaks.len(), 2_048);
 }
 
 #[test]
@@ -3153,6 +3190,66 @@ fn transport_advances_playhead_with_speed_and_respects_loop_range() {
     assert!(session.loop_enabled);
     assert!((session.playhead_seconds - 3.7).abs() < f64::EPSILON * 8.0);
     assert!(session.is_playing);
+}
+
+#[test]
+fn playback_start_preserves_viewport_through_its_midpoint() {
+    let project = project_with_segments(vec![segment("long", 0.0, 60.0, "long")]);
+    let mut session = EditorSession::for_project(&project);
+    let viewport = TimeRange {
+        start_seconds: 10.0,
+        end_seconds: 15.0,
+    };
+
+    session.viewport = viewport;
+    session.playhead_seconds = 11.0;
+    session.prepare_viewport_for_playback(&project);
+    assert_eq!(session.viewport, viewport);
+
+    session.playhead_seconds = 12.5;
+    session.prepare_viewport_for_playback(&project);
+    assert_eq!(session.viewport, viewport);
+}
+
+#[test]
+fn playback_start_centers_playhead_when_outside_or_past_viewport_midpoint() {
+    let project = project_with_segments(vec![segment("long", 0.0, 60.0, "long")]);
+    let mut session = EditorSession::for_project(&project);
+
+    for (playhead_seconds, expected_start_seconds) in [(4.0, 1.5), (13.0, 10.5), (30.0, 27.5)] {
+        session.viewport = TimeRange {
+            start_seconds: 10.0,
+            end_seconds: 15.0,
+        };
+        session.playhead_seconds = playhead_seconds;
+
+        session.prepare_viewport_for_playback(&project);
+
+        assert!((session.viewport.start_seconds - expected_start_seconds).abs() < 0.000_001);
+        assert!((session.viewport.duration_seconds() - 5.0).abs() < 0.000_001);
+    }
+}
+
+#[test]
+fn transport_follow_waits_until_playhead_crosses_viewport_midpoint() {
+    let project = project_with_segments(vec![segment("long", 0.0, 60.0, "long")]);
+    let mut session = EditorSession::for_project(&project);
+    let viewport = TimeRange {
+        start_seconds: 10.0,
+        end_seconds: 15.0,
+    };
+    session.viewport = viewport;
+    session.playhead_seconds = 11.0;
+    session.is_playing = true;
+
+    session.advance_transport(&project, 1.0);
+    assert_eq!(session.playhead_seconds, 12.0);
+    assert_eq!(session.viewport, viewport);
+
+    session.advance_transport(&project, 1.0);
+    assert_eq!(session.playhead_seconds, 13.0);
+    assert!((session.viewport.start_seconds - 10.5).abs() < 0.000_001);
+    assert!((session.viewport.end_seconds - 15.5).abs() < 0.000_001);
 }
 
 #[test]

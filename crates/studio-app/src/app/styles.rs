@@ -1,7 +1,34 @@
 use iced::widget::{button, container, slider, text_editor, text_input};
-use iced::{Background, Color, Theme, border};
+use std::sync::LazyLock;
+
+use iced::{Background, Color, Shadow, Theme, Vector, border, theme::Palette};
 use studio_app::LintSeverity;
 const PERCENT_PORTION_SCALE: f32 = 100.0;
+
+static STUDIO_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    Theme::custom(
+        "Transcription Studio".to_string(),
+        Palette {
+            background: Color::from_rgb8(248, 250, 252),
+            text: Color::from_rgb8(15, 23, 42),
+            primary: Color::from_rgb8(15, 23, 42),
+            success: Color::from_rgb8(5, 150, 105),
+            danger: Color::from_rgb8(220, 38, 38),
+        },
+    )
+});
+
+pub(crate) fn studio_theme() -> Theme {
+    STUDIO_THEME.clone()
+}
+
+fn surface_shadow() -> Shadow {
+    Shadow {
+        color: Color::from_rgba8(15, 23, 42, 0.07),
+        offset: Vector::new(0.0, 1.0),
+        blur_radius: 8.0,
+    }
+}
 
 pub(crate) fn portion(percent: f32) -> u16 {
     if !percent.is_finite() || percent <= 0.0 {
@@ -51,15 +78,20 @@ pub(crate) fn lint_color(severity: &LintSeverity) -> Color {
 }
 
 pub(crate) fn app_background_style(_theme: &Theme) -> container::Style {
-    container::Style::default().background(Color::WHITE)
+    container::Style::default()
+        .background(Color::from_rgb8(248, 250, 252))
+        .color(Color::from_rgb8(15, 23, 42))
 }
 
 pub(crate) fn panel_style(_theme: &Theme) -> container::Style {
-    container::Style::default().background(Color::WHITE).border(
-        border::rounded(6)
-            .width(1)
-            .color(Color::from_rgb8(210, 216, 226)),
-    )
+    container::Style::default()
+        .background(Color::WHITE)
+        .border(
+            border::rounded(12)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+        .shadow(surface_shadow())
 }
 
 pub(crate) fn editor_band_style(_theme: &Theme) -> container::Style {
@@ -68,43 +100,222 @@ pub(crate) fn editor_band_style(_theme: &Theme) -> container::Style {
 
 pub(crate) fn babel_editor_card_style(_theme: &Theme) -> container::Style {
     container::Style::default().background(Color::WHITE).border(
-        border::rounded(6)
+        border::rounded(8)
             .width(1)
-            .color(Color::from_rgb8(209, 213, 219)),
+            .color(Color::from_rgb8(226, 232, 240)),
     )
 }
 
 pub(crate) fn babel_transcript_card_style(_theme: &Theme) -> container::Style {
     container::Style::default().background(Color::WHITE).border(
-        border::rounded(6)
+        border::rounded(8)
             .width(1)
-            .color(Color::from_rgb8(209, 213, 219)),
+            .color(Color::from_rgb8(226, 232, 240)),
     )
 }
 
 pub(crate) fn subtle_panel_style(_theme: &Theme) -> container::Style {
-    container::Style::default()
-        .background(Color::from_rgb8(250, 251, 253))
-        .border(
-            border::rounded(4)
-                .width(1)
-                .color(Color::from_rgb8(224, 229, 236)),
-        )
+    container::Style::default().background(Color::WHITE).border(
+        border::rounded(8)
+            .width(1)
+            .color(Color::from_rgb8(226, 232, 240)),
+    )
 }
 
 pub(crate) fn modal_scrim_style(_theme: &Theme) -> container::Style {
     container::Style::default().background(Color {
-        a: 0.34,
-        ..Color::BLACK
+        a: 0.48,
+        ..Color::from_rgb8(15, 23, 42)
     })
 }
 
 pub(crate) fn modal_surface_style(_theme: &Theme) -> container::Style {
-    container::Style::default().background(Color::WHITE).border(
-        border::rounded(8)
-            .width(1)
-            .color(Color::from_rgb8(206, 213, 224)),
-    )
+    container::Style::default()
+        .background(Color::WHITE)
+        .border(
+            border::rounded(12)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+        .shadow(Shadow {
+            color: Color::from_rgba8(15, 23, 42, 0.18),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 28.0,
+        })
+}
+
+pub(crate) fn dashboard_sidebar_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(15, 23, 42))
+        .color(Color::from_rgb8(248, 250, 252))
+}
+
+pub(crate) fn brand_mark_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(51, 65, 85))
+        .color(Color::WHITE)
+        .border(border::rounded(9))
+}
+
+pub(crate) fn dashboard_header_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgba8(255, 255, 255, 0.96))
+        .border(
+            border::rounded(0)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+}
+
+pub(crate) fn project_card_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::WHITE)
+        .border(
+            border::rounded(10)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+        .shadow(Shadow {
+            color: Color::from_rgba8(15, 23, 42, 0.05),
+            offset: Vector::new(0.0, 1.0),
+            blur_radius: 5.0,
+        })
+}
+
+pub(crate) fn status_bar_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(248, 250, 252))
+        .color(Color::from_rgb8(71, 85, 105))
+        .border(
+            border::rounded(0)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+}
+
+pub(crate) fn success_pill_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(236, 253, 245))
+        .color(Color::from_rgb8(6, 95, 70))
+        .border(
+            border::rounded(999)
+                .width(1)
+                .color(Color::from_rgb8(167, 243, 208)),
+        )
+}
+
+pub(crate) fn success_banner_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(236, 253, 245))
+        .color(Color::from_rgb8(6, 95, 70))
+        .border(
+            border::rounded(8)
+                .width(1)
+                .color(Color::from_rgb8(167, 243, 208)),
+        )
+}
+
+pub(crate) fn warning_pill_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(255, 251, 235))
+        .color(Color::from_rgb8(146, 64, 14))
+        .border(
+            border::rounded(999)
+                .width(1)
+                .color(Color::from_rgb8(253, 230, 138)),
+        )
+}
+
+pub(crate) fn warning_banner_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(255, 251, 235))
+        .color(Color::from_rgb8(120, 53, 15))
+        .border(
+            border::rounded(8)
+                .width(1)
+                .color(Color::from_rgb8(253, 230, 138)),
+        )
+}
+
+pub(crate) fn error_pill_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(254, 242, 242))
+        .color(Color::from_rgb8(153, 27, 27))
+        .border(
+            border::rounded(999)
+                .width(1)
+                .color(Color::from_rgb8(254, 202, 202)),
+        )
+}
+
+pub(crate) fn primary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Active => Color::from_rgb8(15, 23, 42),
+        button::Status::Hovered => Color::from_rgb8(30, 41, 59),
+        button::Status::Pressed => Color::from_rgb8(51, 65, 85),
+        button::Status::Disabled => Color::from_rgb8(226, 232, 240),
+    };
+    let text_color = match status {
+        button::Status::Disabled => Color::from_rgb8(148, 163, 184),
+        _ => Color::WHITE,
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: border::rounded(7).width(1).color(background),
+        shadow: Default::default(),
+    }
+}
+
+pub(crate) fn secondary_button_style(_theme: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered => Color::from_rgb8(248, 250, 252),
+        button::Status::Pressed => Color::from_rgb8(241, 245, 249),
+        button::Status::Disabled => Color::from_rgb8(248, 250, 252),
+        button::Status::Active => Color::WHITE,
+    };
+    let text_color = match status {
+        button::Status::Disabled => Color::from_rgb8(148, 163, 184),
+        _ => Color::from_rgb8(51, 65, 85),
+    };
+    let border_color = match status {
+        button::Status::Disabled => Color::from_rgb8(226, 232, 240),
+        _ => Color::from_rgb8(203, 213, 225),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: border::rounded(7).width(1).color(border_color),
+        shadow: Default::default(),
+    }
+}
+
+pub(crate) fn dashboard_nav_button_style(
+    selected: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style + Copy {
+    move |_theme, status| {
+        let background = match (selected, status) {
+            (true, _) => Some(Color::from_rgb8(30, 41, 59)),
+            (false, button::Status::Hovered | button::Status::Pressed) => {
+                Some(Color::from_rgb8(30, 41, 59))
+            }
+            _ => None,
+        };
+        let text_color = if selected {
+            Color::WHITE
+        } else {
+            Color::from_rgb8(203, 213, 225)
+        };
+
+        button::Style {
+            background: background.map(Background::Color),
+            text_color,
+            border: border::rounded(7).width(0).color(Color::TRANSPARENT),
+            shadow: Default::default(),
+        }
+    }
 }
 
 pub(crate) fn diff_switch_style(is_checked: bool) -> container::Style {

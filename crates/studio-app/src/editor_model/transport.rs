@@ -49,7 +49,38 @@ impl EditorSession {
 
         self.playhead_seconds = next_playhead.clamp(bounds.start_seconds, bounds.end_seconds);
         self.select_segment_at_playhead(project);
-        self.recenter_viewport(bounds);
+        self.follow_playback_viewport(bounds);
+    }
+
+    /// Align the timeline before playback using the recovered Wavesurfer
+    /// follow rule. A playhead in the left half of the visible window keeps
+    /// the user's current context; an off-screen playhead or one past the
+    /// midpoint is centered so playback has room to advance.
+    pub fn prepare_viewport_for_playback(&mut self, project: &Project) {
+        self.prepare_viewport_for_playback_with_bounds(TimeRange::for_project(project));
+    }
+
+    pub fn prepare_viewport_for_playback_with_bounds(&mut self, bounds: TimeRange) {
+        self.follow_playback_viewport(bounds);
+    }
+
+    fn follow_playback_viewport(&mut self, bounds: TimeRange) {
+        let viewport_start = self.viewport.start_seconds;
+        let viewport_end = self.viewport.end_seconds;
+        let viewport_midpoint = viewport_start + (viewport_end - viewport_start) / 2.0;
+        let viewport_is_invalid = !viewport_start.is_finite()
+            || !viewport_end.is_finite()
+            || viewport_end <= viewport_start;
+        let playhead_is_outside =
+            self.playhead_seconds < viewport_start || self.playhead_seconds > viewport_end;
+
+        if viewport_is_invalid
+            || !self.playhead_seconds.is_finite()
+            || playhead_is_outside
+            || self.playhead_seconds > viewport_midpoint
+        {
+            self.recenter_viewport(bounds);
+        }
     }
 
     pub fn set_speed(&mut self, speed: f32) {

@@ -21,7 +21,7 @@ use super::native_auth::{
     native_clerk_url, save_native_auth_store, start_phone_code_login, verify_phone_code_login,
 };
 use super::native_auth_cli::native_babel_url;
-use super::state::HelperFocusRestore;
+use super::state::{HelperFocusRestore, PendingLeaveIntent};
 use super::subaccounts::login_with_subaccount_code;
 use super::tag_suggestions;
 use super::updater::{check_for_updates, install_available_update};
@@ -209,10 +209,21 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::SubmitReviewSucceeded => state.complete_submit_review_success(),
         Message::SubmitReviewFailed(error) => state.complete_submit_review_failure(error),
         Message::SaveProgress => state.save_progress(),
-        Message::SaveProgressSucceeded(last_saved) => {
-            state.complete_save_progress_success(last_saved)
+        Message::SaveProgressSucceeded { token, last_saved } => {
+            if state.complete_save_progress_success(token, last_saved)
+                && state.pending_leave_waits_for_save()
+            {
+                if state.editor.as_ref().is_some_and(|editor| editor.is_dirty) {
+                    state.save_progress();
+                }
+                if let Some(intent) = state.take_ready_pending_leave() {
+                    return execute_leave_intent(state, intent);
+                }
+            }
         }
-        Message::SaveProgressFailed(error) => state.complete_save_progress_failure(error),
+        Message::SaveProgressFailed { token, error } => {
+            state.complete_save_progress_failure(token, error);
+        }
         Message::AutoSaveTick => state.auto_save_progress(),
         Message::DropClaim => {
             state.begin_drop_claim_request();
@@ -482,6 +493,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             state.fail_subaccount_owner_request(error);
         }
         Message::DashboardRefreshProjects => state.queue_dashboard_projects_refresh(),
+        Message::DashboardRecoverLatestDraft => state.recover_latest_draft(),
         Message::DashboardProjectsLoaded(source) => {
             state.complete_dashboard_projects_loaded(source)
         }
@@ -595,9 +607,9 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             }
         },
         Message::BackToProjects => {
-            state.no_work_modal = None;
-            state.enter_dashboard();
-            state.status = "Back to projects requested.".to_string();
+            if let Some(intent) = state.request_leave(PendingLeaveIntent::BackToProjects) {
+                return execute_leave_intent(state, intent);
+            }
         }
         Message::OpenFeedbackPanel => state.open_feedback_panel(),
         Message::CloseFeedbackPanel => state.close_feedback_panel(),
@@ -633,15 +645,23 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::CloseTaskLookup => state.task_lookup = None,
         Message::WindowCloseRequested => {
-            let dirty = state.editor.as_ref().is_some_and(|editor| editor.is_dirty);
-            if dirty && !state.show_exit_confirm_dialog {
-                state.show_exit_confirm_dialog = true;
-            } else {
-                return iced::exit();
+            if let Some(intent) = state.request_leave(PendingLeaveIntent::ExitApplication) {
+                return execute_leave_intent(state, intent);
             }
         }
-        Message::CancelExit => state.show_exit_confirm_dialog = false,
-        Message::ConfirmExitDiscardingChanges => return iced::exit(),
+        Message::CancelPendingLeave => state.cancel_pending_leave(),
+        Message::SaveAndContinuePendingLeave => {
+            state.begin_pending_leave_save();
+            state.save_progress();
+            if let Some(intent) = state.take_ready_pending_leave() {
+                return execute_leave_intent(state, intent);
+            }
+        }
+        Message::DiscardAndContinuePendingLeave => {
+            if let Some(intent) = state.discard_pending_leave() {
+                return execute_leave_intent(state, intent);
+            }
+        }
         Message::LoadReviewActionSucceeded(source) => {
             let task = state.complete_load_review_action_success(source);
             return dispatch_pending_services(state, task);
@@ -1491,6 +1511,18 @@ fn dispatch_pending_services(state: &mut StudioState, task: Task<Message>) -> Ta
         state.dispatch_new_review_backend_requests(),
         state.dispatch_new_subaccount_owner_requests(),
     ])
+}
+
+fn execute_leave_intent(state: &mut StudioState, intent: PendingLeaveIntent) -> Task<Message> {
+    match intent {
+        PendingLeaveIntent::ExitApplication => iced::exit(),
+        PendingLeaveIntent::BackToProjects => {
+            state.no_work_modal = None;
+            state.enter_dashboard();
+            state.status = "Back to projects requested.".to_string();
+            Task::none()
+        }
+    }
 }
 
 async fn start_native_auth_login(identifier: String) -> Result<(String, Option<String>), String> {

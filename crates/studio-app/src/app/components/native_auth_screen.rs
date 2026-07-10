@@ -1,22 +1,57 @@
 use iced::widget::{Space, button, column, container, row, text, text_input};
-use iced::{Color, Element, Fill, Length};
+use iced::{Color, Element, Fill, Font, Length, font};
 
-use super::super::styles::{app_background_style, panel_style};
+use super::super::styles::{
+    app_background_style, brand_mark_style, panel_style, primary_button_style,
+    secondary_button_style, success_pill_style,
+};
 use super::super::{Message, NativeAuthFlowState};
 
+const SEMIBOLD: Font = Font {
+    weight: font::Weight::Semibold,
+    ..Font::DEFAULT
+};
+
 pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Element<'a, Message> {
-    let title = text("Transcription Studio").size(28);
-    let subtitle = if flow.is_subaccount_mode() {
-        text("Sub-account mode uses your relay host and special login code.").size(13)
+    let heading = if flow.is_subaccount_mode() {
+        "Sign in to a sub-account"
     } else if flow.is_code_step() {
-        text("Enter the code Babel sent to your phone.").size(13)
+        "Check your phone"
     } else {
-        text("Sign in with your Babel phone or email.").size(13)
+        "Welcome back"
+    };
+    let subtitle = if flow.is_subaccount_mode() {
+        "Use the relay address and one-time code provided by the account owner."
+    } else if flow.is_code_step() {
+        "Enter the verification code Babel sent to your phone."
+    } else {
+        "Sign in with the phone number or email attached to your Babel account."
     };
 
-    let mut form = column![title, subtitle]
+    let mut form = column![
+        row![
+            container(text("TS").size(14).font(SEMIBOLD))
+                .width(Length::Fixed(38.0))
+                .height(Length::Fixed(38.0))
+                .center_x(Length::Fixed(38.0))
+                .center_y(Length::Fixed(38.0))
+                .style(brand_mark_style),
+            column![
+                text("Transcription Studio").size(15).font(SEMIBOLD),
+                text("Secure Babel workspace")
+                    .size(11)
+                    .color(Color::from_rgb8(100, 116, 139)),
+            ]
+            .spacing(2),
+        ]
         .spacing(10)
-        .width(Length::Fixed(420.0));
+        .align_y(iced::Alignment::Center),
+        Space::with_height(Length::Fixed(12.0)),
+        text(heading).size(24).font(SEMIBOLD),
+        text(subtitle).size(13).color(Color::from_rgb8(71, 85, 105)),
+    ]
+    .spacing(10)
+    .width(Length::Fixed(440.0));
 
     if flow.is_subaccount_mode() {
         form = form
@@ -26,7 +61,8 @@ pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Elem
                         (!flow.is_pending).then_some(Message::NativeAuthSubaccountHostChanged),
                     )
                     .on_submit(Message::NativeAuthSubaccountLogin)
-                    .padding(10)
+                    .padding(12)
+                    .size(14)
                     .width(Fill),
             )
             .push(
@@ -35,19 +71,26 @@ pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Elem
                         (!flow.is_pending).then_some(Message::NativeAuthSubaccountCodeChanged),
                     )
                     .on_submit(Message::NativeAuthSubaccountLogin)
-                    .padding(10)
+                    .padding(12)
+                    .size(14)
                     .width(Fill),
             )
             .push(
                 row![
-                    button(text("Use Babel account")).on_press_maybe(
-                        (!flow.is_pending).then_some(Message::NativeAuthUseBabelMode)
-                    ),
+                    button(text("Use Babel account").size(13))
+                        .style(secondary_button_style)
+                        .on_press_maybe(
+                            (!flow.is_pending).then_some(Message::NativeAuthUseBabelMode)
+                        )
+                        .padding([10, 14]),
                     Space::with_width(Fill),
-                    button(text("Sign in")).on_press_maybe(
-                        flow.can_submit_subaccount_login()
-                            .then_some(Message::NativeAuthSubaccountLogin)
-                    ),
+                    button(text("Sign in").size(13))
+                        .style(primary_button_style)
+                        .on_press_maybe(
+                            flow.can_submit_subaccount_login()
+                                .then_some(Message::NativeAuthSubaccountLogin)
+                        )
+                        .padding([10, 18]),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -58,19 +101,26 @@ pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Elem
                 text_input("Phone code", &flow.code)
                     .on_input_maybe((!flow.is_pending).then_some(Message::NativeAuthCodeChanged))
                     .on_submit(Message::NativeAuthVerifyLogin)
-                    .padding(10)
+                    .padding(12)
+                    .size(15)
                     .width(Fill),
             )
             .push(
                 row![
-                    button(text("Use different number")).on_press_maybe(
-                        (!flow.is_pending).then_some(Message::NativeAuthBackToLogin)
-                    ),
+                    button(text("Use different number").size(13))
+                        .style(secondary_button_style)
+                        .on_press_maybe(
+                            (!flow.is_pending).then_some(Message::NativeAuthBackToLogin)
+                        )
+                        .padding([10, 14]),
                     Space::with_width(Fill),
-                    button(text("Verify")).on_press_maybe(
-                        flow.can_submit_code()
-                            .then_some(Message::NativeAuthVerifyLogin)
-                    ),
+                    button(text("Verify code").size(13))
+                        .style(primary_button_style)
+                        .on_press_maybe(
+                            flow.can_submit_code()
+                                .then_some(Message::NativeAuthVerifyLogin)
+                        )
+                        .padding([10, 18]),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -83,19 +133,26 @@ pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Elem
                         (!flow.is_pending).then_some(Message::NativeAuthIdentifierChanged),
                     )
                     .on_submit(Message::NativeAuthStartLogin)
-                    .padding(10)
+                    .padding(12)
+                    .size(14)
                     .width(Fill),
             )
             .push(
                 row![
-                    button(text("Use sub-account code")).on_press_maybe(
-                        (!flow.is_pending).then_some(Message::NativeAuthUseSubaccountMode)
-                    ),
+                    button(text("Use sub-account code").size(13))
+                        .style(secondary_button_style)
+                        .on_press_maybe(
+                            (!flow.is_pending).then_some(Message::NativeAuthUseSubaccountMode)
+                        )
+                        .padding([10, 14]),
                     Space::with_width(Fill),
-                    button(text("Send code")).on_press_maybe(
-                        flow.can_start_login()
-                            .then_some(Message::NativeAuthStartLogin)
-                    ),
+                    button(text("Continue").size(13))
+                        .style(primary_button_style)
+                        .on_press_maybe(
+                            flow.can_start_login()
+                                .then_some(Message::NativeAuthStartLogin)
+                        )
+                        .padding([10, 18]),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center),
@@ -111,12 +168,22 @@ pub(super) fn view_native_auth_screen<'a>(flow: &'a NativeAuthFlowState) -> Elem
     }
 
     if flow.is_pending {
-        form = form.push(text("Working...").size(12));
+        form = form.push(
+            container(text("Signing you in...").size(12))
+                .padding([5, 10])
+                .style(success_pill_style),
+        );
     }
+
+    form = form.push(
+        text("Your credentials stay on this device and are used only to connect to Babel.")
+            .size(11)
+            .color(Color::from_rgb8(100, 116, 139)),
+    );
 
     container(
         container(form)
-            .padding(24)
+            .padding(32)
             .style(panel_style)
             .center_x(Length::Shrink),
     )

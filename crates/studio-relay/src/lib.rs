@@ -433,25 +433,25 @@ async fn babel_service(
         remember_known_project_queues(&mut store, &payload);
         should_save = true;
     }
-    if request.request_kind.starts_with("claim") && response_looks_successful(&payload) {
-        if let Some(subaccount) = store
+    if request.request_kind.starts_with("claim")
+        && response_looks_successful(&payload)
+        && let Some(subaccount) = store
             .subaccounts
             .iter_mut()
             .find(|subaccount| subaccount.id == subaccount_id)
-        {
-            remember_claim_start(subaccount, &payload, now);
-            should_save = true;
-        }
+    {
+        remember_claim_start(subaccount, &payload, now);
+        should_save = true;
     }
-    if request.request_kind == "submitReviewAction" && response_looks_successful(&payload) {
-        if let Some(subaccount) = store
+    if request.request_kind == "submitReviewAction"
+        && response_looks_successful(&payload)
+        && let Some(subaccount) = store
             .subaccounts
             .iter_mut()
             .find(|subaccount| subaccount.id == subaccount_id)
-        {
-            record_completed_task(subaccount, &request.envelope, now, state.config.task_cents);
-            should_save = true;
-        }
+    {
+        record_completed_task(subaccount, &request.envelope, now, state.config.task_cents);
+        should_save = true;
     }
     if let Some(session) = store
         .sessions

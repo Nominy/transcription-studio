@@ -42,6 +42,13 @@ pub struct WaveformRenderModel {
     handle_width_px: f64,
 }
 
+struct SharedPeakWindow {
+    channels: Vec<Arc<[f64]>>,
+    start_seconds: f64,
+    end_seconds: f64,
+    visible_peak_count: usize,
+}
+
 impl WaveformRenderModel {
     pub fn from_source(
         source: &WaveformSource,
@@ -115,10 +122,12 @@ impl WaveformRenderModel {
         Self::from_arc_render_parts(
             viewport.layout(),
             scroll_window,
-            peaks,
-            0.0,
-            duration_seconds,
-            options.peak_count,
+            SharedPeakWindow {
+                channels: peaks,
+                start_seconds: 0.0,
+                end_seconds: duration_seconds,
+                visible_peak_count: options.peak_count,
+            },
             regions,
             current_seconds,
             options,
@@ -139,10 +148,12 @@ impl WaveformRenderModel {
         Self::from_arc_render_parts(
             layout,
             scroll_window,
-            peaks.into_iter().map(Arc::<[f64]>::from).collect(),
-            visible_start_seconds,
-            visible_end_seconds,
-            visible_peak_count,
+            SharedPeakWindow {
+                channels: peaks.into_iter().map(Arc::<[f64]>::from).collect(),
+                start_seconds: visible_start_seconds,
+                end_seconds: visible_end_seconds,
+                visible_peak_count,
+            },
             regions,
             current_seconds,
             options,
@@ -152,10 +163,7 @@ impl WaveformRenderModel {
     fn from_arc_render_parts(
         layout: RendererLayout,
         scroll_window: ScrollWindow,
-        peaks: Vec<Arc<[f64]>>,
-        peak_start_seconds: f64,
-        peak_end_seconds: f64,
-        visible_peak_count: usize,
+        peak_window: SharedPeakWindow,
         regions: &[Region],
         current_seconds: f64,
         options: WaveformRenderOptions,
@@ -177,18 +185,19 @@ impl WaveformRenderModel {
             visible_end_seconds,
             viewport_width_px,
             cursor,
-            channels: peaks
+            channels: peak_window
+                .channels
                 .into_iter()
                 .enumerate()
                 .map(|(channel_index, peaks)| {
                     WaveformChannelRender::from_window(
                         channel_index,
                         peaks,
-                        peak_start_seconds,
-                        peak_end_seconds,
+                        peak_window.start_seconds,
+                        peak_window.end_seconds,
                         visible_start_seconds,
                         visible_end_seconds,
-                        visible_peak_count,
+                        peak_window.visible_peak_count,
                     )
                 })
                 .collect::<Vec<_>>()

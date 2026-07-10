@@ -1,9 +1,11 @@
 use std::{
     cell::Cell,
+    ops::Range,
     sync::{Arc, LazyLock},
 };
 
 use iced::advanced::renderer::Renderer as _;
+use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Layout, Widget, layout, mouse as advanced_mouse, renderer};
 use iced::mouse;
 use iced::widget::canvas;
@@ -41,20 +43,53 @@ pub(super) fn view_wavesurfer_line_waveform_window_canvas<'a>(
     color_token: &str,
     height: f32,
     vertical_scale: f32,
-    source_start_seconds: f64,
-    source_end_seconds: f64,
-    visible_start_seconds: f64,
-    visible_end_seconds: f64,
+    source_window: Range<f64>,
+    visible_window: Range<f64>,
+) -> Element<'a, Message> {
+    view_wavesurfer_line_waveform_window_canvas_with_color(
+        peaks,
+        waveform_color(color_token),
+        height,
+        vertical_scale,
+        source_window,
+        visible_window,
+    )
+}
+
+pub(super) fn view_wavesurfer_unplayed_line_waveform_window_canvas<'a>(
+    peaks: Arc<[f32]>,
+    height: f32,
+    vertical_scale: f32,
+    source_window: Range<f64>,
+    visible_window: Range<f64>,
+) -> Element<'a, Message> {
+    view_wavesurfer_line_waveform_window_canvas_with_color(
+        peaks,
+        waveform_unplayed_color(),
+        height,
+        vertical_scale,
+        source_window,
+        visible_window,
+    )
+}
+
+fn view_wavesurfer_line_waveform_window_canvas_with_color<'a>(
+    peaks: Arc<[f32]>,
+    color: Color,
+    height: f32,
+    vertical_scale: f32,
+    source_window: Range<f64>,
+    visible_window: Range<f64>,
 ) -> Element<'a, Message> {
     canvas(WaveformWindowCanvas {
         peaks,
-        color: continuous_waveform_color(color_token),
+        color,
         vertical_scale,
         time_window: PeakTimeWindow {
-            source_start_seconds,
-            source_end_seconds,
-            visible_start_seconds,
-            visible_end_seconds,
+            source_start_seconds: source_window.start,
+            source_end_seconds: source_window.end,
+            visible_start_seconds: visible_window.start,
+            visible_end_seconds: visible_window.end,
         },
     })
     .height(Length::Fixed(height))
@@ -83,24 +118,63 @@ pub(super) fn view_wavesurfer_region_fill_window_canvas<'a>(
     .into()
 }
 
-pub(super) fn view_wavesurfer_segment_waveforms_with_region_fill_canvas<'a>(
+pub(super) fn view_wavesurfer_segment_waveforms_canvas<'a>(
     blocks: Arc<[WaveformBlock]>,
     peak_scale: f64,
     color_token: &str,
     height: f32,
     vertical_scale: f32,
 ) -> Element<'a, Message> {
-    canvas(SegmentWaveformsWithRegionFillCanvas {
+    view_wavesurfer_segment_waveforms_canvas_with_color(
         blocks,
         peak_scale,
-        waveform_color: synthetic_waveform_color(color_token),
-        fill_color: waveform_region_fill_color(color_token),
-        border_color: waveform_region_border_color(color_token),
+        waveform_color(color_token),
+        height,
+        vertical_scale,
+    )
+}
+
+pub(super) fn view_wavesurfer_unplayed_segment_waveforms_canvas<'a>(
+    blocks: Arc<[WaveformBlock]>,
+    peak_scale: f64,
+    height: f32,
+    vertical_scale: f32,
+) -> Element<'a, Message> {
+    view_wavesurfer_segment_waveforms_canvas_with_color(
+        blocks,
+        peak_scale,
+        waveform_unplayed_color(),
+        height,
+        vertical_scale,
+    )
+}
+
+fn view_wavesurfer_segment_waveforms_canvas_with_color<'a>(
+    blocks: Arc<[WaveformBlock]>,
+    peak_scale: f64,
+    waveform_color: Color,
+    height: f32,
+    vertical_scale: f32,
+) -> Element<'a, Message> {
+    canvas(SegmentWaveformsCanvas {
+        blocks,
+        peak_scale,
+        waveform_color,
         vertical_scale,
     })
     .height(Length::Fixed(height))
     .width(Fill)
     .into()
+}
+
+pub(super) fn view_waveform_progress_clip<'a>(
+    content: Element<'a, Message>,
+    playhead_percent: f32,
+) -> Element<'a, Message> {
+    Element::new(WaveformProgressClip {
+        content,
+        progress_fraction: (playhead_percent / 100.0).clamp(0.0, 1.0),
+    })
 }
 
 pub(super) fn view_waveform_selected_region_border_canvas<'a>(
@@ -140,14 +214,16 @@ pub(super) fn view_overview_window_quad<'a>(
 }
 
 pub(super) fn view_overview_playhead_canvas<'a>(playhead_percent: f32) -> Element<'a, Message> {
-    view_playhead_line(playhead_percent, 30.0, 2.0, Color::from_rgb8(49, 160, 252))
+    let (width, color) = overview_playhead_style();
+    view_playhead_line(playhead_percent, 30.0, width, color)
 }
 
 pub(super) fn view_waveform_playhead_canvas<'a>(
     playhead_percent: f32,
     height: f32,
 ) -> Element<'a, Message> {
-    view_playhead_line(playhead_percent, height, 1.0, Color::from_rgb8(20, 20, 20))
+    let (width, color) = waveform_playhead_style();
+    view_playhead_line(playhead_percent, height, width, color)
 }
 
 pub(super) fn view_waveform_scrollbar_canvas<'a>(
@@ -164,27 +240,25 @@ pub(super) fn view_waveform_scrollbar_canvas<'a>(
     .into()
 }
 
-pub(super) fn continuous_waveform_color(color_token: &str) -> Color {
-    Color {
-        a: 0.28,
-        ..color_for_token(color_token)
-    }
+pub(super) fn waveform_color(color_token: &str) -> Color {
+    color_for_token(color_token)
 }
 
-pub(super) fn overview_waveform_color(color_token: &str) -> Color {
-    color_for_token(color_token)
+fn waveform_unplayed_color() -> Color {
+    Color::from_rgb8(112, 112, 112)
+}
+
+fn waveform_playhead_style() -> (f32, Color) {
+    (1.0, Color::from_rgb8(0, 0, 0))
+}
+
+fn overview_playhead_style() -> (f32, Color) {
+    (2.0, Color::from_rgb8(49, 160, 252))
 }
 
 fn overview_block_color(color_token: &str) -> Color {
     Color {
         a: 0.25,
-        ..color_for_token(color_token)
-    }
-}
-
-pub(super) fn synthetic_waveform_color(color_token: &str) -> Color {
-    Color {
-        a: 0.64,
         ..color_for_token(color_token)
     }
 }
@@ -233,13 +307,94 @@ struct RegionFillCanvas {
 }
 
 #[derive(Clone, Debug)]
-struct SegmentWaveformsWithRegionFillCanvas {
+struct SegmentWaveformsCanvas {
     blocks: Arc<[WaveformBlock]>,
     peak_scale: f64,
     waveform_color: Color,
-    fill_color: Color,
-    border_color: Color,
     vertical_scale: f32,
+}
+
+struct WaveformProgressClip<'a> {
+    content: Element<'a, Message>,
+    progress_fraction: f32,
+}
+
+impl Widget<Message, Theme, Renderer> for WaveformProgressClip<'_> {
+    fn tag(&self) -> tree::Tag {
+        self.content.as_widget().tag()
+    }
+
+    fn state(&self) -> tree::State {
+        self.content.as_widget().state()
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        self.content.as_widget().children()
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        self.content.as_widget().diff(tree);
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.content.as_widget().size_hint()
+    }
+
+    fn layout(
+        &self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content.as_widget().layout(tree, renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: advanced_mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let clip_bounds = waveform_progress_clip_bounds(layout.bounds(), self.progress_fraction);
+        let Some(clip_bounds) = clip_bounds.intersection(viewport) else {
+            return;
+        };
+        if clip_bounds.width <= 0.0 || clip_bounds.height <= 0.0 {
+            return;
+        }
+
+        renderer.with_layer(clip_bounds, |renderer| {
+            self.content.as_widget().draw(
+                tree,
+                renderer,
+                theme,
+                style,
+                layout,
+                cursor,
+                &clip_bounds,
+            );
+        });
+    }
+}
+
+fn waveform_progress_clip_bounds(bounds: Rectangle, progress_fraction: f32) -> Rectangle {
+    let progress_fraction = if progress_fraction.is_finite() {
+        progress_fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    Rectangle {
+        width: bounds.width * progress_fraction,
+        ..bounds
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -447,7 +602,7 @@ impl RegionFillCanvas {
     }
 }
 
-impl canvas::Program<Message> for SegmentWaveformsWithRegionFillCanvas {
+impl canvas::Program<Message> for SegmentWaveformsCanvas {
     type State = WaveformCanvasState;
 
     fn draw(
@@ -471,21 +626,13 @@ impl canvas::Program<Message> for SegmentWaveformsWithRegionFillCanvas {
                 );
             });
             frame.fill(&waveform_path, self.waveform_color);
-            draw_region_fills(
-                frame,
-                &self.blocks,
-                bounds.width,
-                bounds.height,
-                self.fill_color,
-                self.border_color,
-            );
         });
 
         vec![geometry]
     }
 }
 
-impl SegmentWaveformsWithRegionFillCanvas {
+impl SegmentWaveformsCanvas {
     fn cache_key(&self) -> u64 {
         let mut key = hash_u64(0xcdf2_9ce4_8422_2325, self.blocks.len() as u64);
         for block in self.blocks.iter() {
@@ -498,8 +645,6 @@ impl SegmentWaveformsWithRegionFillCanvas {
         }
         key = hash_u64(key, self.peak_scale.to_bits());
         key = hash_color(key, &self.waveform_color);
-        key = hash_color(key, &self.fill_color);
-        key = hash_color(key, &self.border_color);
         hash_u32(key, self.vertical_scale.to_bits())
     }
 }
@@ -738,31 +883,6 @@ fn hash_color(mut key: u64, color: &Color) -> u64 {
     key = hash_u32(key, color.g.to_bits());
     key = hash_u32(key, color.b.to_bits());
     hash_u32(key, color.a.to_bits())
-}
-
-fn draw_region_fills(
-    frame: &mut canvas::Frame<Renderer>,
-    blocks: &[WaveformBlock],
-    width: f32,
-    height: f32,
-    fill_color: Color,
-    border_color: Color,
-) {
-    let radius = border::Radius::from(1.0);
-    for block_width in synthetic_waveform_block_widths(blocks, width) {
-        let region_path = canvas::Path::rounded_rectangle(
-            Point::new(block_width.left_px, 0.0),
-            Size::new(block_width.width_px, height),
-            radius,
-        );
-        frame.fill(&region_path, fill_color);
-        frame.stroke(
-            &region_path,
-            canvas::Stroke::default()
-                .with_width(WAVEFORM_REGION_BORDER_WIDTH)
-                .with_color(border_color),
-        );
-    }
 }
 
 fn draw_region_fills_for_time_window(
@@ -1162,9 +1282,9 @@ fn append_wavesurfer_line_points_with(
         let mut x = 0.0_f32;
         let mut max_peak = 0.0_f32;
         for index in 0..=sample_count {
-            let next_x = (index as f32 * x_scale).round();
+            let next_x = index as f32 * x_scale;
             if next_x > x {
-                let y_offset = (max_peak * half_height * vertical_scale).round().max(1.0);
+                let y_offset = (max_peak * half_height * vertical_scale).max(1.0);
                 builder.line_to(Point::new(x_origin + x, half_height + y_offset * polarity));
                 x = next_x;
                 max_peak = 0.0;
@@ -1184,13 +1304,47 @@ fn append_wavesurfer_line_points_with(
 mod tests {
     use std::sync::Arc;
 
+    use iced::{Color, Rectangle};
+
     use studio_app::{OverviewWaveformBlock, WaveformBlock, WaveformPeakSource};
 
     use super::{
-        RegionFillTimeWindow, overview_block_widths, overview_window_rect,
-        synthetic_waveform_block_widths, time_window_waveform_block_widths,
-        waveform_scrollbar_thumb_rect,
+        RegionFillTimeWindow, overview_block_widths, overview_playhead_style, overview_window_rect,
+        synthetic_waveform_block_widths, time_window_waveform_block_widths, waveform_color,
+        waveform_playhead_style, waveform_progress_clip_bounds, waveform_scrollbar_thumb_rect,
+        waveform_unplayed_color,
     };
+
+    #[test]
+    fn playback_uses_babel_progress_palette_and_distinct_playheads() {
+        assert_eq!(waveform_color("blue"), Color::from_rgb8(100, 181, 246));
+        assert_eq!(waveform_color("purple"), Color::from_rgb8(176, 131, 255));
+        assert_eq!(waveform_unplayed_color(), Color::from_rgb8(112, 112, 112));
+
+        let (playhead_width, playhead_color) = waveform_playhead_style();
+        assert_eq!(playhead_width, 1.0);
+        assert_eq!(playhead_color, Color::BLACK);
+
+        let (overview_width, overview_color) = overview_playhead_style();
+        assert_eq!(overview_width, 2.0);
+        assert_eq!(overview_color, Color::from_rgb8(49, 160, 252));
+    }
+
+    #[test]
+    fn progress_clip_tracks_playhead_without_changing_waveform_geometry() {
+        let bounds = Rectangle {
+            x: 10.0,
+            y: 20.0,
+            width: 800.0,
+            height: 150.0,
+        };
+
+        assert_eq!(waveform_progress_clip_bounds(bounds, -1.0).width, 0.0);
+        assert_eq!(waveform_progress_clip_bounds(bounds, 0.125).width, 100.0);
+        assert_eq!(waveform_progress_clip_bounds(bounds, 0.5).width, 400.0);
+        assert_eq!(waveform_progress_clip_bounds(bounds, 2.0).width, 800.0);
+        assert_eq!(waveform_progress_clip_bounds(bounds, f32::NAN).width, 0.0);
+    }
 
     fn overview_block(
         color_token: &str,

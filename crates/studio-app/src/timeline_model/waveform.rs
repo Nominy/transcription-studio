@@ -8,9 +8,9 @@ use studio_waveform::{
     WaveformSource,
 };
 
-const WAVEFORM_PEAK_COUNT: usize = 96;
-const TIMELINE_RENDER_PEAK_COUNT: usize = 1024;
-const TIMELINE_RENDER_WIDTH_PX: f64 = 1_000.0;
+const WAVEFORM_PEAK_COUNT: usize = 256;
+const TIMELINE_RENDER_PEAK_COUNT: usize = 2_048;
+const TIMELINE_RENDER_WIDTH_PX: f64 = 2_000.0;
 const TIMELINE_RENDER_MODEL_CACHE_CAPACITY: usize = 8;
 const OVERVIEW_RENDER_PEAK_COUNT: usize = 1_024;
 const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;

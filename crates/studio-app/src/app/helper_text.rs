@@ -614,7 +614,7 @@ fn format_grouped_integer_text(number_text: &str) -> String {
 
     let mut grouped = String::new();
     for (index, character) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(' ');
         }
         grouped.push(character);

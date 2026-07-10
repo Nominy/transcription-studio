@@ -61,10 +61,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
+
+      - name: Install Node.js
+        if: runner.os == 'Windows'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Check formatting
         run: cargo fmt --all --check
 
-      - name: Test workspace
-        run: cargo test --workspace --locked
+      - name: Run strict Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test all workspace targets
+        run: cargo test --workspace --all-targets --locked
+
+      - name: Test native Babel authentication
+        if: runner.os == 'Windows'
+        run: node --test tools/babel-native-auth.test.mjs

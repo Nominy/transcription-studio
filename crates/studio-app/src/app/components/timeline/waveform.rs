@@ -24,12 +24,14 @@ use super::super::super::styles::{
     waveform_magnifier_style, waveform_region_label_edit_tooltip_style,
     waveform_region_timestamp_label_style,
 };
+use super::super::drag_capture::view_horizontal_drag_capture_with_cursor;
 use super::super::timed_widget::view_timed;
 use super::super::wavesurfer_canvas::{
-    view_waveform_playhead_canvas, view_waveform_scrollbar_canvas,
+    view_waveform_playhead_canvas, view_waveform_progress_clip, view_waveform_scrollbar_canvas,
     view_waveform_selected_region_border_canvas, view_wavesurfer_line_waveform_window_canvas,
-    view_wavesurfer_region_fill_window_canvas,
-    view_wavesurfer_segment_waveforms_with_region_fill_canvas,
+    view_wavesurfer_region_fill_window_canvas, view_wavesurfer_segment_waveforms_canvas,
+    view_wavesurfer_unplayed_line_waveform_window_canvas,
+    view_wavesurfer_unplayed_segment_waveforms_canvas,
 };
 use super::ruler;
 
@@ -43,7 +45,7 @@ const REGION_TIMESTAMP_TOOLTIP_HEIGHT: f32 = REGION_TIMESTAMP_TOOLTIP_TOP_OFFSET
 const REGION_LABEL_TOOLTIP_WIDTH: f32 = 300.0;
 const REGION_LABEL_TOOLTIP_GAP: f32 = 12.0;
 const REGION_EDIT_PENCIL_ICON_SIZE: f32 = 14.0;
-const TIMELINE_WAVEFORM_LAYER_CAPACITY: usize = 11;
+const TIMELINE_WAVEFORM_LAYER_CAPACITY: usize = 13;
 const ATTACHED_CREATE_REGION_POPUP_WIDTH: f32 = 384.0;
 const ATTACHED_CREATE_REGION_POPUP_TOP_OFFSET: f32 = 18.0;
 const WAVEFORM_MAGNIFIER_INSET_PX: f32 = 6.0;
@@ -362,6 +364,23 @@ fn view_synthetic_waveform_body<'a>(
                 metrics: data.metrics,
             },
         ));
+        layers.push(view_waveform_progress_clip(
+            view_lazy_synthetic_progress_waveform(SyntheticBaseWaveformDependency {
+                blocks: Arc::clone(&data.blocks),
+                color_token: data.color_token.clone(),
+                metrics: data.metrics,
+            }),
+            data.playhead_percent,
+        ));
+        layers.push(view_lazy_engine_region_fill_strip(
+            EngineRegionFillDependency {
+                blocks: Arc::clone(&data.blocks),
+                color_token: data.color_token.clone(),
+                metrics: data.metrics,
+                visible_start_seconds: viewport.start_seconds,
+                visible_end_seconds: viewport.end_seconds,
+            },
+        ));
         if let Some(selected_segment_id) = selected_segment_id.clone() {
             layers.push(view_lazy_selected_region_border_overlay(
                 SelectedRegionBorderDependency {
@@ -431,28 +450,32 @@ fn view_synthetic_waveform_body<'a>(
             .into();
         let interaction = waveform_interaction(
             data.timeline_autoscroll_anchor_fraction.is_some(),
+            data.magnifier.is_some(),
             data.hover.as_ref(),
         );
 
-        mouse_area(
+        let middle_button_surface: Element<'a, Message> = mouse_area(
             container(content)
                 .width(Fill)
                 .height(Length::Fixed(data.metrics.body_height)),
         )
-        .on_move(move |point| {
-            let fraction = (point.x / width).clamp(0.0, 1.0);
-            Message::WaveformHitHovered(
-                hover_lane_id.clone(),
-                synthetic_hit_test(&hit_blocks, viewport, fraction, width),
-            )
-        })
-        .on_exit(Message::WaveformHitExited(release_lane_id.clone()))
-        .on_press(Message::WaveformHitPressed(press_lane_id))
-        .on_release(Message::WaveformHitReleased(release_lane_id))
         .on_middle_press(Message::TimelineAutoscrollPressed(middle_press_lane_id))
         .on_middle_release(Message::TimelineAutoscrollReleased)
         .interaction(interaction)
-        .into()
+        .into();
+        view_horizontal_drag_capture_with_cursor(
+            middle_button_surface,
+            mouse::Interaction::None,
+            move |fraction, width| {
+                Message::WaveformHitHovered(
+                    hover_lane_id.clone(),
+                    synthetic_hit_test(&hit_blocks, viewport, fraction, width),
+                )
+            },
+            Message::WaveformHitPressed(press_lane_id),
+            Message::WaveformHitReleased(release_lane_id.clone()),
+            Some(Message::WaveformHitExited(release_lane_id)),
+        )
     });
 
     container(hit_area)
@@ -586,7 +609,7 @@ fn view_lazy_region_affordance_overlay(
     .into()
 }
 
-fn view_timeline_overlay<'a>(
+fn view_timeline_overlay(
     overlay: TimelineOverlayView,
     body_height: f32,
 ) -> Element<'static, Message> {
@@ -676,8 +699,8 @@ fn view_engine_waveform_body<'a>(
         let mut layers: Vec<Element<'a, Message>> =
             Vec::with_capacity(TIMELINE_WAVEFORM_LAYER_CAPACITY);
         layers.push(view_timed(
-            "engine-waveform-strip",
-            view_lazy_engine_waveform_strip(EngineWaveformStripDependency {
+            "engine-waveform-base-strip",
+            view_lazy_engine_waveform_base_strip(EngineWaveformStripDependency {
                 scroll_strip_peaks: Arc::clone(&engine.scroll_strip_peaks),
                 color_token: data.color_token.clone(),
                 metrics: data.metrics,
@@ -686,6 +709,21 @@ fn view_engine_waveform_body<'a>(
                 visible_start_seconds: engine.visible_start_seconds,
                 visible_end_seconds: engine.visible_end_seconds,
             }),
+        ));
+        layers.push(view_timed(
+            "engine-waveform-progress-strip",
+            view_waveform_progress_clip(
+                view_lazy_engine_waveform_progress_strip(EngineWaveformStripDependency {
+                    scroll_strip_peaks: Arc::clone(&engine.scroll_strip_peaks),
+                    color_token: data.color_token.clone(),
+                    metrics: data.metrics,
+                    source_start_seconds: engine.scroll_strip_start_seconds,
+                    source_end_seconds: engine.scroll_strip_end_seconds,
+                    visible_start_seconds: engine.visible_start_seconds,
+                    visible_end_seconds: engine.visible_end_seconds,
+                }),
+                data.playhead_percent,
+            ),
         ));
         layers.push(view_timed(
             "engine-region-fill-strip",
@@ -790,28 +828,32 @@ fn view_engine_waveform_body<'a>(
             .into();
         let interaction = waveform_interaction(
             data.timeline_autoscroll_anchor_fraction.is_some(),
+            data.magnifier.is_some(),
             data.hover.as_ref(),
         );
 
-        mouse_area(
+        let middle_button_surface: Element<'a, Message> = mouse_area(
             container(content)
                 .width(Fill)
                 .height(Length::Fixed(data.metrics.body_height)),
         )
-        .on_move(move |point| {
-            let fraction = (point.x / hit_width).clamp(0.0, 1.0);
-            Message::WaveformHitHovered(
-                hover_lane_id.clone(),
-                synthetic_hit_test(&hit_blocks, viewport, fraction, hit_width),
-            )
-        })
-        .on_exit(Message::WaveformHitExited(release_lane_id.clone()))
-        .on_press(Message::WaveformHitPressed(press_lane_id))
-        .on_release(Message::WaveformHitReleased(release_lane_id))
         .on_middle_press(Message::TimelineAutoscrollPressed(middle_press_lane_id))
         .on_middle_release(Message::TimelineAutoscrollReleased)
         .interaction(interaction)
-        .into()
+        .into();
+        view_horizontal_drag_capture_with_cursor(
+            middle_button_surface,
+            mouse::Interaction::None,
+            move |fraction, hit_width| {
+                Message::WaveformHitHovered(
+                    hover_lane_id.clone(),
+                    synthetic_hit_test(&hit_blocks, viewport, fraction, hit_width),
+                )
+            },
+            Message::WaveformHitPressed(press_lane_id),
+            Message::WaveformHitReleased(release_lane_id.clone()),
+            Some(Message::WaveformHitExited(release_lane_id)),
+        )
     });
 
     container(hit_area)
@@ -869,20 +911,19 @@ fn view_waveform_scrollbar(
 
 fn waveform_interaction(
     autoscroll_active: bool,
-    _hover: Option<&WaveformHoverOverlay>,
+    endpoint_drag_active: bool,
+    hover: Option<&WaveformHoverOverlay>,
 ) -> mouse::Interaction {
-    if autoscroll_active {
-        return autoscroll_interaction(true);
-    }
-
-    autoscroll_interaction(false)
-}
-
-fn autoscroll_interaction(active: bool) -> mouse::Interaction {
-    if active {
+    let endpoint_hovered = hover.is_some_and(|hover| {
+        matches!(
+            hover.target,
+            WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle
+        )
+    });
+    if autoscroll_active || endpoint_drag_active || endpoint_hovered {
         mouse::Interaction::Grabbing
     } else {
-        mouse::Interaction::Pointer
+        mouse::Interaction::None
     }
 }
 
@@ -1065,11 +1106,7 @@ fn view_waveform_magnifier(
 
     row![
         Space::with_width(Length::Fixed(layout.left_px)),
-        column![
-            Space::with_height(Length::Fixed(layout.top_px)),
-            opaque(panel)
-        ]
-        .spacing(0),
+        column![Space::with_height(Length::Fixed(layout.top_px)), panel].spacing(0),
         Space::with_width(Fill),
     ]
     .width(Fill)
@@ -1091,7 +1128,7 @@ fn view_waveform_magnifier_center_line(height: f32) -> Element<'static, Message>
     .into()
 }
 
-fn view_hover_cursor<'a>(
+fn view_hover_cursor(
     viewport: TimeRange,
     hover: Option<&WaveformHoverOverlay>,
     body_height: f32,
@@ -1293,7 +1330,21 @@ fn view_lazy_synthetic_base_waveform(
     dependency: SyntheticBaseWaveformDependency,
 ) -> Element<'static, Message> {
     lazy(dependency, |dependency| {
-        view_wavesurfer_segment_waveforms_with_region_fill_canvas(
+        view_wavesurfer_unplayed_segment_waveforms_canvas(
+            Arc::clone(&dependency.blocks),
+            SYNTHETIC_REGION_PEAK_SCALE,
+            dependency.metrics.body_height,
+            dependency.metrics.vertical_scale,
+        )
+    })
+    .into()
+}
+
+fn view_lazy_synthetic_progress_waveform(
+    dependency: SyntheticBaseWaveformDependency,
+) -> Element<'static, Message> {
+    lazy(dependency, |dependency| {
+        view_wavesurfer_segment_waveforms_canvas(
             Arc::clone(&dependency.blocks),
             SYNTHETIC_REGION_PEAK_SCALE,
             &dependency.color_token,
@@ -1304,7 +1355,22 @@ fn view_lazy_synthetic_base_waveform(
     .into()
 }
 
-fn view_lazy_engine_waveform_strip(
+fn view_lazy_engine_waveform_base_strip(
+    dependency: EngineWaveformStripDependency,
+) -> Element<'static, Message> {
+    lazy(dependency, |dependency| {
+        view_wavesurfer_unplayed_line_waveform_window_canvas(
+            Arc::clone(&dependency.scroll_strip_peaks),
+            dependency.metrics.body_height,
+            dependency.metrics.vertical_scale,
+            dependency.source_start_seconds..dependency.source_end_seconds,
+            dependency.visible_start_seconds..dependency.visible_end_seconds,
+        )
+    })
+    .into()
+}
+
+fn view_lazy_engine_waveform_progress_strip(
     dependency: EngineWaveformStripDependency,
 ) -> Element<'static, Message> {
     lazy(dependency, |dependency| {
@@ -1313,10 +1379,8 @@ fn view_lazy_engine_waveform_strip(
             &dependency.color_token,
             dependency.metrics.body_height,
             dependency.metrics.vertical_scale,
-            dependency.source_start_seconds,
-            dependency.source_end_seconds,
-            dependency.visible_start_seconds,
-            dependency.visible_end_seconds,
+            dependency.source_start_seconds..dependency.source_end_seconds,
+            dependency.visible_start_seconds..dependency.visible_end_seconds,
         )
     })
     .into()
@@ -1331,10 +1395,8 @@ fn view_lazy_engine_waveform_magnifier(
             &dependency.color_token,
             dependency.body_height,
             dependency.vertical_scale,
-            dependency.source_start_seconds,
-            dependency.source_end_seconds,
-            dependency.visible_start_seconds,
-            dependency.visible_end_seconds,
+            dependency.source_start_seconds..dependency.source_end_seconds,
+            dependency.visible_start_seconds..dependency.visible_end_seconds,
         )
     })
     .into()
@@ -1353,4 +1415,64 @@ fn view_lazy_engine_region_fill_strip(
         )
     })
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::mouse;
+    use studio_waveform::WaveformHitTarget;
+
+    use super::{WaveformHoverOverlay, waveform_interaction};
+
+    fn hover(target: WaveformHitTarget) -> WaveformHoverOverlay {
+        WaveformHoverOverlay {
+            time_seconds: 1.0,
+            region_id: None,
+            region_label: None,
+            region_tooltip: None,
+            target,
+        }
+    }
+
+    #[test]
+    fn waveform_grabbing_cursor_is_limited_to_endpoint_hover_or_active_drag() {
+        assert_eq!(
+            waveform_interaction(false, false, None),
+            mouse::Interaction::None
+        );
+        assert_eq!(
+            waveform_interaction(false, false, Some(&hover(WaveformHitTarget::Waveform))),
+            mouse::Interaction::None
+        );
+        assert_eq!(
+            waveform_interaction(false, false, Some(&hover(WaveformHitTarget::RegionBody))),
+            mouse::Interaction::None
+        );
+        assert_eq!(
+            waveform_interaction(
+                false,
+                false,
+                Some(&hover(WaveformHitTarget::RegionStartHandle))
+            ),
+            mouse::Interaction::Grabbing
+        );
+        assert_eq!(
+            waveform_interaction(
+                false,
+                false,
+                Some(&hover(WaveformHitTarget::RegionEndHandle))
+            ),
+            mouse::Interaction::Grabbing
+        );
+        assert_eq!(
+            waveform_interaction(false, true, Some(&hover(WaveformHitTarget::RegionBody))),
+            mouse::Interaction::Grabbing,
+            "a drag that began on an endpoint should retain its cursor after leaving the hit zone"
+        );
+        assert_eq!(
+            waveform_interaction(true, false, None),
+            mouse::Interaction::Grabbing,
+            "middle-button timeline autoscroll remains a separate active grab gesture"
+        );
+    }
 }

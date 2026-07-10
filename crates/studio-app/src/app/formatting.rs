@@ -1,4 +1,8 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use studio_app::format_mm_ss;
 use studio_core::Segment;
@@ -140,21 +144,29 @@ pub(crate) fn write_text_file(path: &str, contents: &str) -> Result<(), String> 
         return Err("path is empty".to_string());
     }
 
-    if let Some(parent) = path
+    let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
-    }
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent)
+        .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
 
-    fs::write(path, contents)
-        .map_err(|error| format!("failed to write `{}`: {error}", path.display()))
+    let mut temporary = tempfile::NamedTempFile::new_in(&parent)
+        .map_err(|error| format!("failed to stage `{}`: {error}", path.display()))?;
+    temporary
+        .write_all(contents.as_bytes())
+        .and_then(|()| temporary.as_file_mut().sync_all())
+        .map_err(|error| format!("failed to stage `{}`: {error}", path.display()))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("failed to replace `{}`: {}", path.display(), error.error))?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::zoom_factor_after_timeline_wheel_pixels;
+    use super::{write_text_file, zoom_factor_after_timeline_wheel_pixels};
 
     #[test]
     fn timeline_wheel_zoom_uses_pixel_octaves_and_clamps_invalid_input() {
@@ -175,5 +187,18 @@ mod tests {
             zoom_factor_after_timeline_wheel_pixels(1.25, f32::NAN),
             1.25
         );
+    }
+
+    #[test]
+    fn text_files_are_replaced_without_exposing_partial_contents() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("progress.json");
+        let path_text = path.to_string_lossy();
+
+        write_text_file(&path_text, "first").expect("first write");
+        write_text_file(&path_text, "second payload").expect("replacement write");
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "second payload");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

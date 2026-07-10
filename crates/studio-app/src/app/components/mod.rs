@@ -15,6 +15,7 @@ mod native_capability_panel;
 mod no_work_dialog;
 mod playhead_line;
 mod skip_chunk_dialog;
+mod status_bar;
 mod submit_dialog;
 mod task_lookup_dialog;
 mod timed_widget;
@@ -40,11 +41,16 @@ const WORKBENCH_PADDING: u16 = 24;
 pub(crate) fn view(state: &StudioState) -> Element<'_, Message> {
     let base = view_surface(state);
     if state.show_exit_confirm_dialog {
+        let (is_saving, save_error) = state
+            .editor
+            .as_ref()
+            .map(|editor| (editor.is_saving, editor.save_error_message.as_deref()))
+            .unwrap_or((false, None));
         return stack![
             base,
             view_modal_layer(
-                exit_confirm_dialog::view_exit_confirm_dialog(),
-                Some(Message::CancelExit),
+                exit_confirm_dialog::view_exit_confirm_dialog(is_saving, save_error),
+                Some(Message::CancelPendingLeave),
             ),
         ]
         .into();
@@ -100,6 +106,8 @@ fn view_editor<'a>(
             view_transcript_card(state, project, editor),
         ),
     ));
+
+    layout = layout.push(status_bar::view_editor_status_bar(state, project, editor));
 
     let mut content: Element<'a, Message> = layout.into();
     if let Some(dialog) = state

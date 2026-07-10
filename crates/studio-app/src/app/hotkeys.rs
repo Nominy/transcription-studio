@@ -410,15 +410,6 @@ fn hotkey_event_message(
 }
 
 #[cfg(test)]
-fn hotkey_event_message_cut_preview(
-    event: Event,
-    status: event::Status,
-    window: window::Id,
-) -> Option<Message> {
-    hotkey_event_message_with_cut_preview(event, status, window, true)
-}
-
-#[cfg(test)]
 fn hotkey_event_message_with_cut_preview(
     event: Event,
     status: event::Status,

@@ -3,81 +3,224 @@ use std::collections::BTreeSet;
 use iced::widget::{
     Space, button, checkbox, column, container, horizontal_rule, row, scrollable, text, text_input,
 };
-use iced::{Color, Element, Fill, Length};
+use iced::{Color, Element, Fill, Font, Length, font};
 
 use super::super::native_auth::{
     default_native_auth_store_path, executable_native_auth_store_path,
 };
 use super::super::state::DashboardSection;
-use super::super::styles::{panel_style, subtle_panel_style};
+use super::super::styles::{
+    app_background_style, brand_mark_style, dashboard_header_style, dashboard_nav_button_style,
+    dashboard_sidebar_style, panel_style, primary_button_style, project_card_style,
+    secondary_button_style, subtle_panel_style, success_banner_style, success_pill_style,
+    warning_banner_style, warning_pill_style,
+};
 use super::super::{DEFAULT_EXPORT_PATH, DEFAULT_IMPORT_PATH, Message, StudioState};
 
-pub(super) fn view_dashboard(state: &StudioState) -> Element<'_, Message> {
-    let mut content = column![
-        view_dashboard_header(state),
-        text(state.status.clone()).size(12),
-        view_dashboard_tabs(state),
-    ]
-    .spacing(12);
+const DASHBOARD_SIDEBAR_WIDTH: f32 = 244.0;
+const SEMIBOLD: Font = Font {
+    weight: font::Weight::Semibold,
+    ..Font::DEFAULT
+};
 
-    if let Some(error) = state.dashboard.error.as_ref() {
-        content = content.push(
-            text(error.clone())
-                .size(12)
-                .color(Color::from_rgb8(185, 28, 28)),
+pub(super) fn view_dashboard(state: &StudioState) -> Element<'_, Message> {
+    let mut section = column![].spacing(16).width(Fill).height(Fill);
+
+    if let Some(notice) = state.dashboard.notice.as_ref() {
+        section = section.push(
+            container(
+                row![
+                    text("✓").size(14).font(SEMIBOLD),
+                    text(notice.clone()).size(13),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([11, 14])
+            .width(Fill)
+            .style(success_banner_style),
         );
     }
 
-    content = content.push(match state.dashboard.section {
+    if let Some(error) = state.dashboard.error.as_ref() {
+        section = section.push(
+            container(
+                column![
+                    text("We couldn't refresh this workspace")
+                        .size(14)
+                        .font(SEMIBOLD),
+                    text(error.clone()).size(12),
+                ]
+                .spacing(4),
+            )
+            .padding([12, 14])
+            .width(Fill)
+            .style(|_| {
+                iced::widget::container::Style::default()
+                    .background(Color::from_rgb8(254, 242, 242))
+                    .color(Color::from_rgb8(153, 27, 27))
+                    .border(
+                        iced::border::rounded(8)
+                            .width(1)
+                            .color(Color::from_rgb8(254, 202, 202)),
+                    )
+            }),
+        );
+    }
+
+    section = section.push(match state.dashboard.section {
         DashboardSection::Projects => view_projects_screen(state),
         DashboardSection::Subaccounts => view_subaccounts_screen(state),
         DashboardSection::Settings => view_settings_screen(state),
     });
 
-    container(content)
-        .padding(18)
+    let main = column![
+        view_dashboard_header(state),
+        container(section)
+            .padding([24, 28])
+            .width(Fill)
+            .height(Fill),
+    ]
+    .spacing(0)
+    .width(Fill)
+    .height(Fill);
+
+    container(row![view_dashboard_sidebar(state), main].spacing(0))
         .width(Fill)
         .height(Fill)
-        .style(panel_style)
+        .style(app_background_style)
         .into()
 }
 
 fn view_dashboard_header(state: &StudioState) -> Element<'_, Message> {
-    row![
-        column![
-            text("Transcription Studio").size(24),
-            text(if state.subaccount_session.is_some() {
-                "Assigned projects"
+    let (title, subtitle) = match state.dashboard.section {
+        DashboardSection::Projects => (
+            "Projects",
+            if state.subaccount_session.is_some() {
+                "Choose an assigned project and continue where you left off."
             } else {
-                "Babel projects"
-            })
-            .size(13),
-        ]
-        .spacing(4),
-        Space::with_width(Fill),
-        button(text("Open demo")).on_press(Message::LoadBundledDemo),
-        button(text("Refresh projects")).on_press_maybe(
-            (!state.dashboard.is_pending).then_some(Message::DashboardRefreshProjects)
+                "Choose a Babel project and claim the next available task."
+            },
         ),
-    ]
-    .spacing(12)
-    .align_y(iced::Alignment::Center)
+        DashboardSection::Subaccounts => (
+            "Sub-accounts",
+            "Create focused workspaces and control which projects they can access.",
+        ),
+        DashboardSection::Settings => (
+            "Settings",
+            "Manage this installation, integrations, updates, and local paths.",
+        ),
+    };
+
+    let mut actions = row![].spacing(10).align_y(iced::Alignment::Center);
+    if state.dashboard.section == DashboardSection::Projects {
+        let readiness = if state.dashboard.is_pending {
+            let pending_label = if state.status.to_ascii_lowercase().contains("audio") {
+                "Preparing audio"
+            } else {
+                "Syncing projects"
+            };
+            container(text(pending_label).size(12))
+                .padding([5, 10])
+                .style(warning_pill_style)
+        } else {
+            container(text(format!("{} available", state.dashboard.projects.len())).size(12))
+                .padding([5, 10])
+                .style(success_pill_style)
+        };
+        actions = actions.push(readiness);
+        if cfg!(debug_assertions) {
+            actions = actions.push(
+                button(text("Open demo").size(13))
+                    .style(secondary_button_style)
+                    .on_press(Message::LoadBundledDemo)
+                    .padding([9, 14]),
+            );
+        }
+        actions = actions.push(
+            button(
+                text(if state.dashboard.is_pending {
+                    "Refreshing..."
+                } else {
+                    "Refresh projects"
+                })
+                .size(13),
+            )
+            .style(primary_button_style)
+            .on_press_maybe(
+                (!state.dashboard.is_pending).then_some(Message::DashboardRefreshProjects),
+            )
+            .padding([9, 14]),
+        );
+    }
+
+    container(
+        row![
+            column![
+                text(title).size(22).font(SEMIBOLD),
+                text(subtitle)
+                    .size(13)
+                    .color(Color::from_rgb8(100, 116, 139)),
+            ]
+            .spacing(4),
+            Space::with_width(Fill),
+            actions,
+        ]
+        .spacing(16)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding([18, 28])
+    .width(Fill)
+    .style(dashboard_header_style)
     .into()
 }
 
-fn view_dashboard_tabs(state: &StudioState) -> Element<'_, Message> {
+fn view_dashboard_sidebar(state: &StudioState) -> Element<'_, Message> {
     let current = state.dashboard.section;
-    let mut tabs = row![
+    let navigation = column![
+        text("WORKSPACE")
+            .size(10)
+            .color(Color::from_rgb8(148, 163, 184)),
         dashboard_tab_button("Projects", DashboardSection::Projects, current),
         dashboard_tab_button("Sub-accounts", DashboardSection::Subaccounts, current),
         dashboard_tab_button("Settings", DashboardSection::Settings, current),
     ]
-    .spacing(8)
-    .align_y(iced::Alignment::Center);
-    if state.subaccount_session.is_some() {
-        tabs = tabs.push(text("Sub-account mode").size(12));
-    }
-    tabs.into()
+    .spacing(6);
+
+    container(
+        column![
+            row![
+                container(text("TS").size(14).font(SEMIBOLD))
+                    .width(Length::Fixed(38.0))
+                    .height(Length::Fixed(38.0))
+                    .center_x(Length::Fixed(38.0))
+                    .center_y(Length::Fixed(38.0))
+                    .style(brand_mark_style),
+                column![
+                    text("Transcription Studio").size(15).font(SEMIBOLD),
+                    text("Babel workspace")
+                        .size(11)
+                        .color(Color::from_rgb8(148, 163, 184)),
+                ]
+                .spacing(2),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+            Space::with_height(Length::Fixed(24.0)),
+            navigation,
+            Space::with_height(Fill),
+            view_subaccount_section(state),
+            text(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                .size(10)
+                .color(Color::from_rgb8(100, 116, 139)),
+        ]
+        .spacing(14),
+    )
+    .padding([22, 16])
+    .width(Length::Fixed(DASHBOARD_SIDEBAR_WIDTH))
+    .height(Fill)
+    .style(dashboard_sidebar_style)
+    .into()
 }
 
 fn dashboard_tab_button(
@@ -85,56 +228,143 @@ fn dashboard_tab_button(
     section: DashboardSection,
     current: DashboardSection,
 ) -> Element<'static, Message> {
-    let label = if section == current {
-        format!("{label} ✓")
+    button(text(label).size(13).font(if section == current {
+        SEMIBOLD
     } else {
-        label.to_string()
-    };
-    button(text(label))
-        .on_press_maybe((section != current).then_some(Message::DashboardSectionChanged(section)))
-        .into()
+        Font::DEFAULT
+    }))
+    .style(dashboard_nav_button_style(section == current))
+    .on_press_maybe((section != current).then_some(Message::DashboardSectionChanged(section)))
+    .padding([10, 12])
+    .width(Fill)
+    .into()
 }
 
 fn view_projects_screen(state: &StudioState) -> Element<'_, Message> {
-    let mut project_list = column![].spacing(8);
+    let mut project_list = column![].spacing(10);
     if state.dashboard.projects.is_empty() {
-        project_list = project_list.push(text("No active Babel projects loaded.").size(13));
+        project_list = project_list.push(
+            container(
+                column![
+                    text(if state.dashboard.is_pending {
+                        "Loading your projects..."
+                    } else {
+                        "No active projects"
+                    })
+                    .size(17)
+                    .font(SEMIBOLD),
+                    text(if state.dashboard.is_pending {
+                        "This usually takes only a moment."
+                    } else {
+                        "Refresh the workspace after Babel grants access to a project."
+                    })
+                    .size(13)
+                    .color(Color::from_rgb8(100, 116, 139)),
+                ]
+                .spacing(6)
+                .align_x(iced::Alignment::Center),
+            )
+            .padding(48)
+            .width(Fill)
+            .style(project_card_style),
+        );
     } else {
         for project in &state.dashboard.projects {
             project_list = project_list.push(
                 container(
                     row![
                         column![
-                            text(project.name.clone()).size(15),
-                            text(dashboard_project_status(project)).size(12),
+                            text(project.name.clone()).size(15).font(SEMIBOLD),
+                            row![
+                                text("●").size(10).color(
+                                    if project.chunked_queue_id.trim().is_empty() {
+                                        Color::from_rgb8(148, 163, 184)
+                                    } else {
+                                        Color::from_rgb8(16, 185, 129)
+                                    }
+                                ),
+                                text(dashboard_project_status(project))
+                                    .size(12)
+                                    .color(Color::from_rgb8(100, 116, 139)),
+                            ]
+                            .spacing(6)
+                            .align_y(iced::Alignment::Center),
                         ]
-                        .spacing(3),
+                        .spacing(6),
                         Space::with_width(Fill),
-                        button(text("Start task")).on_press_maybe(
-                            (!state.dashboard.is_pending
-                                && !project.chunked_queue_id.trim().is_empty())
-                            .then_some(Message::DashboardStartProject(project.id.clone()))
-                        ),
+                        button(text("Start task").size(13))
+                            .style(primary_button_style)
+                            .on_press_maybe(
+                                (!state.dashboard.is_pending
+                                    && !project.chunked_queue_id.trim().is_empty())
+                                .then_some(Message::DashboardStartProject(project.id.clone())),
+                            )
+                            .padding([9, 16]),
                     ]
-                    .spacing(12)
+                    .spacing(16)
                     .align_y(iced::Alignment::Center),
                 )
-                .padding(10)
+                .padding([15, 16])
                 .width(Fill)
-                .style(subtle_panel_style),
+                .style(project_card_style),
             );
         }
     }
 
-    column![
-        container(scrollable(project_list).height(Length::FillPortion(2)))
-            .padding(10)
-            .width(Fill)
-            .style(subtle_panel_style),
-        view_subaccount_section(state),
+    let mut content = column![
+        row![
+            text("Available projects").size(14).font(SEMIBOLD),
+            Space::with_width(Fill),
+            text(format!("{} total", state.dashboard.projects.len()))
+                .size(12)
+                .color(Color::from_rgb8(100, 116, 139)),
+        ]
+        .align_y(iced::Alignment::Center),
     ]
     .spacing(12)
-    .into()
+    .height(Fill);
+
+    if let Some(draft) = state.dashboard.recovery_drafts.first() {
+        let count = state.dashboard.recovery_drafts.len();
+        content = content.push(
+            container(
+                row![
+                    column![
+                        text(if count == 1 {
+                            "A local recovery draft is available"
+                        } else {
+                            "Local recovery drafts are available"
+                        })
+                        .size(13)
+                        .font(SEMIBOLD),
+                        text(format!(
+                            "Restore {}{} before starting another task.",
+                            draft.label,
+                            if count > 1 {
+                                format!(" or one of {} other drafts", count - 1)
+                            } else {
+                                String::new()
+                            }
+                        ))
+                        .size(12),
+                    ]
+                    .spacing(3),
+                    Space::with_width(Fill),
+                    button(text("Recover latest").size(13))
+                        .style(primary_button_style)
+                        .on_press(Message::DashboardRecoverLatestDraft)
+                        .padding([9, 14]),
+                ]
+                .spacing(16)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([12, 14])
+            .width(Fill)
+            .style(warning_banner_style),
+        );
+    }
+
+    content.push(scrollable(project_list).height(Fill)).into()
 }
 
 fn view_subaccounts_screen(state: &StudioState) -> Element<'_, Message> {
@@ -195,50 +425,50 @@ fn dashboard_project_status(project: &super::super::state::DashboardProject) -> 
 }
 
 fn view_subaccount_section(state: &StudioState) -> Element<'_, Message> {
-    let mut content = column![text("Account mode").size(15)].spacing(8);
+    let mut content = column![
+        text("ACCOUNT")
+            .size(10)
+            .color(Color::from_rgb8(148, 163, 184))
+    ]
+    .spacing(6);
     if let Some(session) = state.subaccount_session.as_ref() {
         let name = if session.display_name.trim().is_empty() {
             session.subaccount_id.as_str()
         } else {
             session.display_name.as_str()
         };
-        content = content.push(
-            row![
-                column![
-                    text("Sub-account relay").size(12),
-                    text(format!("{} · {}", name, session.host_url)).size(12),
-                ]
-                .spacing(3),
-                Space::with_width(Fill),
-                button(text("Use Babel account")).on_press(Message::SubaccountSignOut),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-        );
+        content = content
+            .push(text(name).size(13).font(SEMIBOLD))
+            .push(
+                text("Sub-account workspace")
+                    .size(11)
+                    .color(Color::from_rgb8(148, 163, 184)),
+            )
+            .push(
+                button(text("Use Babel account").size(12))
+                    .style(dashboard_nav_button_style(false))
+                    .on_press(Message::SubaccountSignOut)
+                    .padding([8, 10])
+                    .width(Fill),
+            );
     } else {
-        content = content.push(
-            row![
-                column![
-                    text("Main Babel account").size(12),
-                    text("Use Sub-accounts from the dedicated screen; keep this dashboard focused on work.").size(12),
-                ]
-                .spacing(3),
-                Space::with_width(Fill),
-                button(text("Manage Sub-accounts")).on_press(Message::DashboardSectionChanged(
-                    DashboardSection::Subaccounts
-                )),
-                button(text("Use sub-account mode")).on_press(Message::NativeAuthUseSubaccountMode),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-        );
+        content = content
+            .push(text("Main Babel account").size(13).font(SEMIBOLD))
+            .push(
+                text("Full project access")
+                    .size(11)
+                    .color(Color::from_rgb8(148, 163, 184)),
+            )
+            .push(
+                button(text("Use sub-account code").size(12))
+                    .style(dashboard_nav_button_style(false))
+                    .on_press(Message::NativeAuthUseSubaccountMode)
+                    .padding([8, 10])
+                    .width(Fill),
+            );
     }
 
-    container(content)
-        .padding(10)
-        .width(Fill)
-        .style(subtle_panel_style)
-        .into()
+    content.into()
 }
 fn view_auth_store_settings() -> Element<'static, Message> {
     let current_path = default_native_auth_store_path();
@@ -246,22 +476,29 @@ fn view_auth_store_settings() -> Element<'static, Message> {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|error| format!("Unavailable: {error}"));
 
+    let mut details = column![].spacing(3);
+    if cfg!(debug_assertions) {
+        details = details
+            .push(text(format!("Current: {}", current_path.display())).size(12))
+            .push(text(format!("Portable target: {target_label}")).size(12));
+    }
+
     container(
         column![
             column![
-                text("Babel auth store").size(15),
-                text("Detach copies the current Babel auth store next to the executable and future launches prefer that local copy.").size(12),
+                text("Session & portability").size(15).font(SEMIBOLD),
+                text("Keep your Babel session with this installation when you move it to another device.")
+                    .size(12)
+                    .color(Color::from_rgb8(100, 116, 139)),
             ]
             .spacing(3),
             horizontal_rule(1),
-            column![
-                text(format!("Current: {}", current_path.display())).size(12),
-                text(format!("Detached target: {target_label}")).size(12),
-            ]
-            .spacing(3),
+            details,
             row![
                 Space::with_width(Fill),
-                button(text("Detach auth store")).on_press(Message::NativeAuthDetachStore),
+                button(text("Make installation portable").size(13))
+                    .style(secondary_button_style)
+                    .on_press(Message::NativeAuthDetachStore),
             ]
             .align_y(iced::Alignment::Center),
         ]
@@ -568,23 +805,62 @@ fn view_update_section(state: &StudioState) -> Element<'_, Message> {
     } else {
         Color::from_rgb8(75, 85, 99)
     };
-    let check_button = button(text("Check for updates")).on_press_maybe(
-        state
-            .updater
-            .can_check()
-            .then_some(Message::CheckForUpdates),
-    );
-    let install_button = button(text("Install update")).on_press_maybe(
-        state
-            .updater
-            .can_install()
-            .then_some(Message::InstallAvailableUpdate),
-    );
+    let check_button = button(text("Check for updates").size(13))
+        .style(secondary_button_style)
+        .on_press_maybe(
+            state
+                .updater
+                .can_check()
+                .then_some(Message::CheckForUpdates),
+        );
+    let install_button = button(text("Install update").size(13))
+        .style(primary_button_style)
+        .on_press_maybe(
+            state
+                .updater
+                .can_install()
+                .then_some(Message::InstallAvailableUpdate),
+        );
+
+    let mut details = column![
+        row![
+            text("Current version").width(Length::Fixed(104.0)),
+            text(state.updater.current_version.clone()).size(12),
+        ]
+        .spacing(8),
+        text(state.updater.status_label())
+            .size(12)
+            .color(status_color),
+    ]
+    .spacing(8);
+    if cfg!(debug_assertions) {
+        details = details
+            .push(
+                row![
+                    text("Build commit").width(Length::Fixed(104.0)),
+                    text(state.updater.build_commit.clone()).size(12),
+                ]
+                .spacing(8),
+            )
+            .push(
+                row![
+                    text("Update feed").width(Length::Fixed(104.0)),
+                    text(state.updater.feed_url.clone()).size(12),
+                ]
+                .spacing(8),
+            );
+    }
 
     container(
         column![
             row![
-                column![text("Updates").size(15), text("Alpha channel").size(12),].spacing(3),
+                column![
+                    text("Updates").size(15).font(SEMIBOLD),
+                    text("Early Access channel")
+                        .size(12)
+                        .color(Color::from_rgb8(100, 116, 139)),
+                ]
+                .spacing(3),
                 Space::with_width(Fill),
                 check_button,
                 install_button,
@@ -592,24 +868,7 @@ fn view_update_section(state: &StudioState) -> Element<'_, Message> {
             .spacing(8)
             .align_y(iced::Alignment::Center),
             horizontal_rule(1),
-            row![
-                text("Current version").width(Length::Fixed(104.0)),
-                text(state.updater.current_version.clone()).size(12),
-            ]
-            .spacing(8),
-            row![
-                text("Build commit").width(Length::Fixed(104.0)),
-                text(state.updater.build_commit.clone()).size(12),
-            ]
-            .spacing(8),
-            row![
-                text("Update feed").width(Length::Fixed(104.0)),
-                text(state.updater.feed_url.clone()).size(12),
-            ]
-            .spacing(8),
-            text(state.updater.status_label())
-                .size(12)
-                .color(status_color),
+            details,
         ]
         .spacing(8),
     )
@@ -642,9 +901,23 @@ fn view_path_toolbar(state: &StudioState) -> Element<'_, Message> {
     ]
     .spacing(8);
 
-    container(column![import_row, export_row].spacing(6))
-        .padding(10)
-        .width(Fill)
-        .style(subtle_panel_style)
-        .into()
+    container(
+        column![
+            column![
+                text("Local task files").size(15).font(SEMIBOLD),
+                text("Import or export Babel-compatible JSON for offline work and recovery.")
+                    .size(12)
+                    .color(Color::from_rgb8(100, 116, 139)),
+            ]
+            .spacing(3),
+            horizontal_rule(1),
+            import_row,
+            export_row,
+        ]
+        .spacing(8),
+    )
+    .padding(10)
+    .width(Fill)
+    .style(subtle_panel_style)
+    .into()
 }

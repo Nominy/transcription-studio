@@ -23,9 +23,28 @@ pub(super) fn view_horizontal_drag_capture<'a>(
     on_release: Message,
     on_exit: Option<Message>,
 ) -> Element<'a, Message> {
+    view_horizontal_drag_capture_with_cursor(
+        content,
+        mouse::Interaction::Pointer,
+        on_move,
+        on_press,
+        on_release,
+        on_exit,
+    )
+}
+
+pub(super) fn view_horizontal_drag_capture_with_cursor<'a>(
+    content: Element<'a, Message>,
+    fallback_interaction: mouse::Interaction,
+    on_move: impl Fn(f32, f32) -> Message + 'a,
+    on_press: Message,
+    on_release: Message,
+    on_exit: Option<Message>,
+) -> Element<'a, Message> {
     Element::new(CapturedDragSurface {
         content,
         axis: DragAxis::Horizontal,
+        fallback_interaction,
         on_move: Box::new(on_move),
         on_press,
         on_release,
@@ -43,6 +62,7 @@ pub(super) fn view_vertical_drag_capture<'a>(
     Element::new(CapturedDragSurface {
         content,
         axis: DragAxis::Vertical,
+        fallback_interaction: mouse::Interaction::Pointer,
         on_move: Box::new(on_move),
         on_press,
         on_release,
@@ -53,6 +73,7 @@ pub(super) fn view_vertical_drag_capture<'a>(
 struct CapturedDragSurface<'a> {
     content: Element<'a, Message>,
     axis: DragAxis,
+    fallback_interaction: mouse::Interaction,
     on_move: Box<dyn Fn(f32, f32) -> Message + 'a>,
     on_press: Message,
     on_release: Message,
@@ -204,7 +225,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CapturedDragSurface<'a> {
         if content_interaction == mouse::Interaction::None
             && (state.dragging || cursor.is_over(layout.bounds()))
         {
-            mouse::Interaction::Pointer
+            self.fallback_interaction
         } else {
             content_interaction
         }

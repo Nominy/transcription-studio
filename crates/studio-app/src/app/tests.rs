@@ -69,7 +69,7 @@ use super::startup_route::{
 };
 use super::state::{
     AppSurface, DashboardProject, DashboardSection, HelperFocusRestore, NativeCapabilityModalTab,
-    TimelineAutoscrollMode,
+    PendingLeaveIntent, TimelineAutoscrollMode,
 };
 use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest};
 use super::tag_suggestions::{
@@ -2136,7 +2136,7 @@ fn transcript_linter_cell_matches_recovered_babel_dot_tooltip_column() {
     let header_source = include_str!("components/transcript_table/header.rs");
     let lint_source = include_str!("components/transcript_table/lint.rs");
 
-    assert!(mod_source.contains("const LINTER_COLUMN_WIDTH: f32 = 40.0;"));
+    assert!(mod_source.contains("const LINTER_COLUMN_WIDTH: f32 = 56.0;"));
     assert!(header_source.contains("super::LINTER_COLUMN_WIDTH"));
     assert!(lint_source.contains("view_lint_dot"));
     assert!(lint_source.contains("tooltip("));
@@ -4678,7 +4678,7 @@ fn waveform_hover_exposes_babel_region_label_and_tooltip_text() {
         .unwrap();
     let block = lane
         .blocks
-        .into_iter()
+        .iter()
         .find(|block| block.segment_id == "annotation-1")
         .unwrap();
 
@@ -4736,7 +4736,7 @@ fn identical_waveform_hover_without_drag_keeps_cached_hover_state() {
 }
 
 #[test]
-fn waveform_segment_handle_press_does_not_trim_or_start_drag() {
+fn waveform_start_handle_drag_previews_and_commits_segment_boundary() {
     let mut state = stable_sample_state();
     let original = state
         .workflow
@@ -4747,9 +4747,7 @@ fn waveform_segment_handle_press_does_not_trim_or_start_drag() {
         .unwrap()
         .clone();
     let lane_id = original.lane_id.clone();
-    state.with_editor_mut(|editor| {
-        editor.playhead_seconds = 8.75;
-    });
+    let moved_start = original.start_seconds + 0.25;
     let before_viewport = state.editor.as_ref().unwrap().viewport;
 
     let _ = update(
@@ -4764,28 +4762,67 @@ fn waveform_segment_handle_press_does_not_trim_or_start_drag() {
         ),
     );
     let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
+
+    let drag = state
+        .active_waveform_drag
+        .as_ref()
+        .expect("pressing a segment start handle should activate a drag");
+    assert_eq!(drag.target, WaveformHitTarget::RegionStartHandle);
+    assert_eq!(drag.preview_start_seconds, original.start_seconds);
+    assert_eq!(drag.preview_end_seconds, original.end_seconds);
+    assert!(
+        state
+            .waveform_magnifier_overlay_for_lane(&lane_id)
+            .is_some()
+    );
+
     let _ = update(
         &mut state,
         Message::WaveformHitHovered(
             lane_id.clone(),
             WaveformHit {
-                target: WaveformHitTarget::RegionStartHandle,
+                target: WaveformHitTarget::RegionBody,
                 region_id: Some(original.id.clone()),
-                time_seconds: original.start_seconds + 0.25,
+                time_seconds: moved_start,
             },
         ),
     );
+
+    let drag = state.active_waveform_drag.as_ref().unwrap();
+    assert_eq!(drag.preview_start_seconds, moved_start);
+    assert_eq!(drag.preview_end_seconds, original.end_seconds);
+    assert!(drag.has_moved);
+    let project = state.project().unwrap().clone();
+    let lanes = {
+        let editor = state.editor.as_ref().unwrap();
+        state.timeline_lanes_snapshot_for_render(&project, editor)
+    };
+    let preview = lanes
+        .iter()
+        .find(|lane| lane.lane_id == lane_id)
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.segment_id == original.id)
+        .unwrap();
+    assert_eq!(preview.start_seconds, moved_start);
+    assert_eq!(preview.end_seconds, original.end_seconds);
+    assert_eq!(
+        state
+            .project()
+            .unwrap()
+            .segment(&original.id)
+            .unwrap()
+            .start_seconds,
+        original.start_seconds,
+        "dragging should preview before release instead of mutating the project on every pointer move"
+    );
+
     let _ = update(&mut state, Message::WaveformHitReleased(lane_id.clone()));
 
-    let segment = state
-        .workflow
-        .as_ref()
-        .unwrap()
-        .project()
-        .segment(&original.id)
-        .unwrap();
+    let segment = state.project().unwrap().segment(&original.id).unwrap();
     let editor = state.editor.as_ref().unwrap();
-    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.start_seconds, moved_start);
     assert_eq!(segment.end_seconds, original.end_seconds);
     assert_eq!(
         editor.selected_segment_id.as_deref(),
@@ -4793,13 +4830,62 @@ fn waveform_segment_handle_press_does_not_trim_or_start_drag() {
     );
     assert_eq!(editor.playhead_seconds, original.start_seconds);
     assert_eq!(editor.viewport, before_viewport);
-    assert!(!editor.is_dirty);
+    assert!(editor.is_dirty);
     assert!(state.active_waveform_drag.is_none());
     assert!(
         state
             .waveform_magnifier_overlay_for_lane(&lane_id)
             .is_none()
     );
+}
+
+#[test]
+fn waveform_end_handle_drag_commits_segment_boundary() {
+    let mut state = stable_sample_state();
+    let original = state
+        .project()
+        .unwrap()
+        .segment("annotation-1")
+        .unwrap()
+        .clone();
+    let lane_id = original.lane_id.clone();
+    let moved_end = original.end_seconds + 0.25;
+
+    let _ = update(
+        &mut state,
+        Message::WaveformHitHovered(
+            lane_id.clone(),
+            WaveformHit {
+                target: WaveformHitTarget::RegionEndHandle,
+                region_id: Some(original.id.clone()),
+                time_seconds: original.end_seconds,
+            },
+        ),
+    );
+    let _ = update(&mut state, Message::WaveformHitPressed(lane_id.clone()));
+    assert_eq!(
+        state.active_waveform_drag.as_ref().map(|drag| drag.target),
+        Some(WaveformHitTarget::RegionEndHandle)
+    );
+
+    let _ = update(
+        &mut state,
+        Message::WaveformHitHovered(
+            lane_id.clone(),
+            WaveformHit {
+                target: WaveformHitTarget::Waveform,
+                region_id: None,
+                time_seconds: moved_end,
+            },
+        ),
+    );
+    let _ = update(&mut state, Message::WaveformHitReleased(lane_id));
+
+    let segment = state.project().unwrap().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, moved_end);
+    assert!(state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.active_waveform_drag.is_none());
 }
 
 #[test]
@@ -6944,6 +7030,34 @@ fn playback_tick_advances_the_open_editor_transport() {
     let after_play = state.editor.as_ref().unwrap().playhead_seconds;
     assert_eq!(before_play, 3.5);
     assert!((after_play - 3.532).abs() < f64::EPSILON * 16.0);
+}
+
+#[test]
+fn playback_start_only_recenters_when_playhead_is_outside_or_past_midpoint() {
+    let mut state = stable_sample_state();
+    let viewport = TimeRange {
+        start_seconds: 20.0,
+        end_seconds: 25.0,
+    };
+
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.viewport = viewport;
+        editor.playhead_seconds = 21.0;
+    }
+    let _ = update(&mut state, Message::TogglePlayback);
+    assert_eq!(state.editor.as_ref().unwrap().viewport, viewport);
+
+    let _ = update(&mut state, Message::TogglePlayback);
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.viewport = viewport;
+        editor.playhead_seconds = 24.0;
+    }
+    let _ = update(&mut state, Message::TogglePlayback);
+    let editor = state.editor.as_ref().unwrap();
+    assert!((editor.viewport.start_seconds - 21.5).abs() < 0.000_001);
+    assert!((editor.viewport.end_seconds - 26.5).abs() < 0.000_001);
 }
 
 #[test]
@@ -9116,6 +9230,8 @@ fn default_action_submits_babel_confirmation_and_respects_pending_guard() {
         state.editor.as_ref().unwrap().review_state,
         ReviewState::Submitted
     );
+    assert!(state.show_dashboard());
+    assert!(state.dashboard.notice.is_some());
 
     let mut pending_state = stable_sample_state();
     acknowledge_all_assertable_warnings(&mut pending_state);
@@ -9713,8 +9829,10 @@ fn save_progress_flushes_pending_draft_writes_babel_json_and_marks_saved() {
 fn save_progress_failure_surfaces_backend_error_on_retry_tooltip() {
     let mut state = stable_sample_state();
     state.mark_dirty();
+    state.editor.as_mut().unwrap().begin_save();
+    let token = state.current_save_request_token().unwrap();
 
-    state.complete_save_progress_failure("Babel HTTP 400: invalid annotation".to_string());
+    state.complete_save_progress_failure(token, "Babel HTTP 400: invalid annotation".to_string());
 
     let strip = state
         .editor
@@ -9727,6 +9845,42 @@ fn save_progress_failure_surfaces_backend_error_on_retry_tooltip() {
         strip.save_tooltip_content,
         "Save failed: Babel HTTP 400: invalid annotation"
     );
+}
+
+#[test]
+fn save_acknowledgement_keeps_edits_made_after_the_sent_revision_dirty() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+    state.editor.as_mut().unwrap().begin_save();
+    let token = state.current_save_request_token().unwrap();
+    state.mark_dirty();
+
+    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string()));
+
+    let editor = state.editor.as_ref().unwrap();
+    assert!(editor.is_dirty);
+    assert!(!editor.is_saving);
+    assert!(state.should_run_editor_auto_save_tick());
+    assert_eq!(
+        state.status,
+        "Earlier changes saved; newer edits are still pending."
+    );
+}
+
+#[test]
+fn save_acknowledgement_from_replaced_workspace_is_ignored() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+    state.editor.as_mut().unwrap().begin_save();
+    let stale_token = state.current_save_request_token().unwrap();
+    let replacement = StudioWorkflow::from_project(state.project().unwrap().clone());
+
+    state.replace_workflow(replacement, "replacement loaded".to_string());
+    state.mark_dirty();
+
+    assert!(!state.complete_save_progress_success(stale_token, "stale save".to_string()));
+    assert!(state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
 }
 
 #[test]
@@ -9750,8 +9904,10 @@ fn save_progress_builds_recovered_babel_annotation_save_request() {
     state.mark_dirty();
 
     assert!(state.apply_pending_drafts("Save"));
-    let request = build_save_annotations_request(state.workflow.as_ref().unwrap())
+    let mut request = build_save_annotations_request(state.workflow.as_ref().unwrap())
         .expect("save annotations request");
+    request.token.workspace_generation = 7;
+    request.token.revision = 11;
 
     assert_eq!(
         request.review_action_id,
@@ -9779,6 +9935,9 @@ fn save_progress_builds_recovered_babel_annotation_save_request() {
         envelope["payload"]["reviewActionId"],
         "9edb22ab-0993-41f3-926e-90779da4c624"
     );
+    assert!(envelope.get("token").is_none());
+    assert!(envelope["payload"].get("workspaceGeneration").is_none());
+    assert!(envelope["payload"].get("revision").is_none());
     assert!(
         envelope["payload"]["annotations"]
             .as_array()
@@ -13320,6 +13479,8 @@ fn drop_claim_message_records_recovered_action_intent_without_dirtying_editor() 
             .any(|request| matches!(request, BabelServiceRequest::DropWorkerAction(_)))
     );
     assert_eq!(state.status, "Claim dropped.");
+    assert!(state.show_dashboard());
+    assert_eq!(state.dashboard.notice.as_deref(), Some("Claim dropped."));
     assert_eq!(
         state
             .workflow
@@ -13378,6 +13539,8 @@ fn skip_chunk_dialog_records_recovered_babel_skip_intent_without_dirtying_editor
             .any(|request| matches!(request, BabelServiceRequest::SkipReviewAction(_)))
     );
     assert_eq!(state.status, "Skip requested.");
+    assert!(state.show_dashboard());
+    assert_eq!(state.dashboard.notice.as_deref(), Some("Skip requested."));
     assert_eq!(
         state
             .workflow
@@ -13442,6 +13605,11 @@ fn admin_flag_dialog_records_recovered_babel_flag_payload() {
             .any(|request| matches!(request, BabelServiceRequest::AdminRateReviewAction(_)))
     );
     assert_eq!(state.status, "Recording flagged.");
+    assert!(state.show_dashboard());
+    assert_eq!(
+        state.dashboard.notice.as_deref(),
+        Some("Recording flagged.")
+    );
     let metadata = &state.workflow.as_ref().unwrap().project().metadata;
     assert_eq!(
         metadata
@@ -13647,24 +13815,28 @@ fn default_action_confirms_skip_and_admin_dialogs_with_pending_guards() {
     assert!(!state.show_skip_chunk_dialog);
     assert!(!state.skip_is_pending);
     assert_eq!(state.status, "Skip requested.");
+    assert!(state.show_dashboard());
 
-    let _ = update(&mut state, Message::RequestAdminFlag);
+    let mut admin_state = stable_sample_state();
+    enable_optional_babel_review_controls(&mut admin_state);
+    let _ = update(&mut admin_state, Message::RequestAdminFlag);
     let _ = update(
-        &mut state,
+        &mut admin_state,
         Message::AdminFlagReasonChanged("  wrong emotion  ".to_string()),
     );
 
-    let _ = update(&mut state, Message::ActivateDefaultSurfaceAction);
+    let _ = update(&mut admin_state, Message::ActivateDefaultSurfaceAction);
 
-    assert!(state.show_admin_flag_dialog);
-    assert!(state.admin_flag_is_pending);
-    assert_eq!(state.status, "Flagging recording...");
+    assert!(admin_state.show_admin_flag_dialog);
+    assert!(admin_state.admin_flag_is_pending);
+    assert_eq!(admin_state.status, "Flagging recording...");
 
-    let _ = update(&mut state, Message::AdminFlagSucceeded);
+    let _ = update(&mut admin_state, Message::AdminFlagSucceeded);
 
-    assert!(!state.show_admin_flag_dialog);
-    assert!(!state.admin_flag_is_pending);
-    assert_eq!(state.status, "Recording flagged.");
+    assert!(!admin_state.show_admin_flag_dialog);
+    assert!(!admin_state.admin_flag_is_pending);
+    assert_eq!(admin_state.status, "Recording flagged.");
+    assert!(admin_state.show_dashboard());
 
     let mut pending_state = stable_sample_state();
     enable_optional_babel_review_controls(&mut pending_state);
@@ -14563,6 +14735,7 @@ fn timeline_lane_vertical_zoom_slider_thumb_tracks_recovered_babel_value() {
 fn timeline_drag_controls_use_captured_drag_surface_after_pointer_leaves_bounds() {
     let toolbar_source = include_str!("components/toolbar.rs");
     let lane_source = include_str!("components/timeline/lane.rs");
+    let waveform_source = include_str!("components/timeline/waveform.rs");
     let drag_source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/app/components/drag_capture.rs"
@@ -14571,6 +14744,15 @@ fn timeline_drag_controls_use_captured_drag_surface_after_pointer_leaves_bounds(
 
     assert!(toolbar_source.contains("view_horizontal_drag_capture"));
     assert!(lane_source.contains("view_vertical_drag_capture"));
+    assert_eq!(
+        waveform_source
+            .matches("view_horizontal_drag_capture_with_cursor(")
+            .count(),
+        2,
+        "synthetic and decoded waveform bodies must retain endpoint drags outside their bounds"
+    );
+    assert!(!waveform_source.contains("opaque(panel)"));
+    assert!(drag_source.contains("fallback_interaction"));
     assert!(drag_source.contains("state.dragging || hovered"));
     assert!(drag_source.contains("ButtonReleased(mouse::Button::Left)"));
     assert!(!toolbar_source.contains("mouse_area(container(content).width(Fill).height"));
@@ -14616,9 +14798,9 @@ fn timeline_waveform_draws_flat_wavesurfer_region_overlays() {
     assert!(source.contains("view_waveform_region_affordance_block"));
     assert!(source.contains("view_wavesurfer_line_waveform_window_canvas"));
     assert!(source.contains("view_wavesurfer_region_fill_window_canvas"));
-    assert!(source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas"));
+    assert!(source.contains("view_wavesurfer_segment_waveforms_canvas"));
     assert!(source.contains("view_waveform_selected_region_border_canvas"));
-    assert!(canvas_source.contains("fn draw_region_fills("));
+    assert!(canvas_source.contains("fn draw_region_fills_for_time_window("));
     assert!(canvas_source.contains("struct SelectedRegionBorderCanvas"));
     assert!(canvas_source.contains("a: 0.25"));
     assert!(canvas_source.contains("region_border_color_for_token"));
@@ -14681,8 +14863,8 @@ fn timeline_waveform_uses_dense_wavesurfer_canvas_without_widget_gutters() {
     let canvas_source = include_str!("components/wavesurfer_canvas.rs");
     let model_source = include_str!("../timeline_model/waveform.rs");
 
-    assert!(model_source.contains("const WAVEFORM_PEAK_COUNT: usize = 96;"));
-    assert!(model_source.contains("const TIMELINE_RENDER_PEAK_COUNT: usize = 1024;"));
+    assert!(model_source.contains("const WAVEFORM_PEAK_COUNT: usize = 256;"));
+    assert!(model_source.contains("const TIMELINE_RENDER_PEAK_COUNT: usize = 2_048;"));
     assert!(view_source.contains("view_wavesurfer_line_waveform"));
     assert!(canvas_source.contains("canvas::Path::new"));
     assert!(canvas_source.contains("frame.fill(&waveform_path"));
@@ -14698,12 +14880,12 @@ fn timeline_synthetic_lanes_render_recovered_wavesurfer_segment_canvases() {
 
     assert!(source.contains("const SYNTHETIC_REGION_PEAK_SCALE: f64 = 0.045;"));
     assert!(source.contains("view_lazy_synthetic_base_waveform"));
-    assert!(source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas("));
-    assert!(canvas_source.contains("struct SegmentWaveformsWithRegionFillCanvas"));
+    assert!(source.contains("view_wavesurfer_segment_waveforms_canvas("));
+    assert!(canvas_source.contains("struct SegmentWaveformsCanvas"));
     assert!(canvas_source.contains("append_wavesurfer_segment_waveforms_f32("));
     assert!(canvas_source.contains("synthetic_waveform_block_widths("));
     assert!(source.contains("SYNTHETIC_REGION_PEAK_SCALE"));
-    assert!(canvas_source.contains("synthetic_waveform_color(color_token)"));
+    assert!(canvas_source.contains("waveform_color(color_token)"));
     assert!(source.contains("view_lazy_region_affordance_overlay("));
     assert!(!source.contains("view_lazy_region_base_overlay("));
     assert!(!source.contains("view_synthetic_segment_waveform_block"));
@@ -14736,21 +14918,19 @@ fn timeline_region_base_overlay_uses_cached_canvas_instead_of_per_segment_widget
     assert!(waveform_source.contains("struct EngineWaveformStripDependency"));
     assert!(waveform_source.contains("struct EngineRegionFillDependency"));
     assert!(waveform_source.contains("view_lazy_synthetic_base_waveform("));
-    assert!(waveform_source.contains("view_lazy_engine_waveform_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_base_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_progress_strip("));
     assert!(waveform_source.contains("view_lazy_engine_region_fill_strip("));
     assert!(waveform_source.contains("view_lazy_selected_region_border_overlay("));
     assert!(waveform_source.contains("view_lazy_region_affordance_overlay("));
     assert!(waveform_source.contains("view_wavesurfer_line_waveform_window_canvas("));
     assert!(waveform_source.contains("view_wavesurfer_region_fill_window_canvas("));
-    assert!(waveform_source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas("));
+    assert!(waveform_source.contains("view_wavesurfer_segment_waveforms_canvas("));
     assert!(waveform_source.contains("view_waveform_selected_region_border_canvas("));
     assert!(canvas_source.contains("struct RegionFillCanvas"));
     assert!(canvas_source.contains("impl canvas::Program<Message> for RegionFillCanvas"));
-    assert!(canvas_source.contains("struct SegmentWaveformsWithRegionFillCanvas"));
-    assert!(
-        canvas_source
-            .contains("impl canvas::Program<Message> for SegmentWaveformsWithRegionFillCanvas")
-    );
+    assert!(canvas_source.contains("struct SegmentWaveformsCanvas"));
+    assert!(canvas_source.contains("impl canvas::Program<Message> for SegmentWaveformsCanvas"));
     assert!(canvas_source.contains("struct SelectedRegionBorderCanvas"));
     assert!(canvas_source.contains("impl canvas::Program<Message> for SelectedRegionBorderCanvas"));
     assert!(canvas_source.contains("frame.fill(&region_path"));
@@ -14878,7 +15058,7 @@ fn transcript_grid_uses_recovered_babel_cell_metrics_and_density() {
     assert!(table_source.contains("const ID_COLUMN_WIDTH: f32 = 48.0;"));
     assert!(table_source.contains("const SPEAKER_COLUMN_WIDTH: f32 = 96.0;"));
     assert!(table_source.contains("const TIME_COLUMN_WIDTH: f32 = 96.0;"));
-    assert!(table_source.contains("const LINTER_COLUMN_WIDTH: f32 = 40.0;"));
+    assert!(table_source.contains("const LINTER_COLUMN_WIDTH: f32 = 56.0;"));
     assert!(table_source.contains("const ACTION_COLUMN_WIDTH: f32 = 64.0;"));
     assert!(table_source.contains("const REVIEWER_COLUMN_WIDTH: f32 = 144.0;"));
     assert!(header_source.contains("Row::new().spacing(0).padding([4, 0])"));
@@ -15059,7 +15239,7 @@ fn top_toolbar_renders_recovered_babel_overview_waveform() {
     assert!(canvas_source.contains("struct OverviewWindowQuad"));
     assert!(!canvas_source.contains("struct OverviewWindowCanvas"));
     assert!(!canvas_source.contains("struct OverviewPlayheadCanvas"));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, 30.0, 2.0"));
+    assert!(canvas_source.contains("view_playhead_line(playhead_percent, 30.0, width, color)"));
     assert!(canvas_source.contains("renderer.fill_quad("));
     assert!(playhead_source.contains("renderer.fill_quad("));
     assert!(canvas_source.contains("Color {"));
@@ -15253,11 +15433,8 @@ fn editor_shell_uses_recovered_babel_page_chrome_and_panel_order() {
     assert!(style_source.contains("pub(crate) fn babel_transcript_card_style"));
     assert!(shell_source.contains(".style(babel_editor_card_style)"));
     assert!(shell_source.contains(".style(app_background_style)"));
-    assert!(style_source.contains("app_background_style(_theme: &Theme) -> container::Style {\n    container::Style::default().background(Color::WHITE)"));
-    assert!(
-        !style_source
-            .contains("container::Style::default().background(Color::from_rgb8(246, 248, 251))")
-    );
+    assert!(style_source.contains("pub(crate) fn app_background_style"));
+    assert!(style_source.contains(".background(Color::from_rgb8(248, 250, 252))"));
     assert!(!shell_source.contains(".style(panel_style)"));
     assert!(
         !shell_source.contains("transport_strip::view_transport_strip(state, project, editor)")
@@ -15498,9 +15675,9 @@ fn timeline_waveform_uses_recovered_wavesurfer_flat_cursor_surface() {
     assert!(waveform_source.contains("view_waveform_playhead_canvas"));
     assert!(waveform_source.contains("data.playhead_percent"));
     assert!(!canvas_source.contains("struct WaveformPlayheadCanvas"));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, height, 1.0"));
+    assert!(canvas_source.contains("waveform_playhead_style()"));
     assert!(playhead_source.contains("renderer.fill_quad("));
-    assert!(canvas_source.contains("Color::from_rgb8(20, 20, 20)"));
+    assert!(canvas_source.contains("Color::from_rgb8(0, 0, 0)"));
     assert!(!waveform_source.contains("model.cursor.cursor_left_percent"));
     assert!(!waveform_source.contains("body_height: (track_height - 31.0)"));
     assert!(
@@ -15541,12 +15718,9 @@ fn timeline_waveform_hot_path_borrows_peak_data_without_render_model_clones() {
     assert!(canvas_source.contains("enum WaveformPeaks"));
     assert!(canvas_source.contains("peaks: WaveformPeaks"));
     assert!(canvas_source.contains("F64(Arc<[f64]>)"));
-    assert!(canvas_source.contains("struct SegmentWaveformsWithRegionFillCanvas"));
+    assert!(canvas_source.contains("struct SegmentWaveformsCanvas"));
     assert!(canvas_source.contains("blocks: Arc<[WaveformBlock]>"));
-    assert!(
-        canvas_source
-            .contains("pub(super) fn view_wavesurfer_segment_waveforms_with_region_fill_canvas")
-    );
+    assert!(canvas_source.contains("pub(super) fn view_wavesurfer_segment_waveforms_canvas"));
     assert!(canvas_source.contains("struct WaveformCanvasState"));
     assert!(canvas_source.contains("cache: canvas::Cache"));
     assert!(canvas_source.contains("state.cache.draw("));
@@ -15556,7 +15730,7 @@ fn timeline_waveform_hot_path_borrows_peak_data_without_render_model_clones() {
     assert!(
         waveform_source.contains("synthetic_hit_test(&hit_blocks, viewport, fraction, hit_width)")
     );
-    assert!(waveform_source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas("));
+    assert!(waveform_source.contains("view_wavesurfer_segment_waveforms_canvas("));
     assert!(waveform_source.contains("view_wavesurfer_line_waveform_window_canvas("));
     assert!(waveform_source.contains("view_wavesurfer_region_fill_window_canvas("));
     assert!(waveform_source.contains("Arc::clone(&channel.scroll_strip_peaks)"));
@@ -16049,7 +16223,8 @@ fn decoded_timeline_waveform_draws_bounded_viewport_from_full_strip_cache() {
     assert!(waveform_source.contains("struct EngineRegionFillDependency"));
     assert!(waveform_source.contains("view_wavesurfer_line_waveform_window_canvas("));
     assert!(waveform_source.contains("view_wavesurfer_region_fill_window_canvas("));
-    assert!(waveform_source.contains("view_lazy_engine_waveform_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_base_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_progress_strip("));
     assert!(waveform_source.contains("view_lazy_engine_region_fill_strip("));
     assert!(canvas_source.contains("struct WaveformWindowCanvas"));
     assert!(canvas_source.contains("struct PeakTimeWindow"));
@@ -16097,7 +16272,8 @@ fn timeline_waveform_static_layers_are_lazy_cached_across_playhead_ticks() {
     assert!(waveform_source.contains("impl std::hash::Hash for EngineRegionFillDependency"));
     assert!(waveform_source.contains("impl std::hash::Hash for RegionAffordanceOverlayDependency"));
     assert!(waveform_source.contains("view_lazy_synthetic_base_waveform("));
-    assert!(waveform_source.contains("view_lazy_engine_waveform_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_base_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_progress_strip("));
     assert!(waveform_source.contains("view_lazy_engine_region_fill_strip("));
     assert!(waveform_source.contains("view_lazy_region_affordance_overlay("));
     assert!(waveform_source.contains("Arc::as_ptr(&self.scroll_strip_peaks)"));
@@ -16166,7 +16342,7 @@ fn timeline_region_fill_layer_stays_cached_when_playback_selection_changes() {
     assert!(waveform_source.contains("view_lazy_selected_region_border_overlay("));
     assert!(canvas_source.contains("view_wavesurfer_line_waveform_window_canvas"));
     assert!(canvas_source.contains("view_wavesurfer_region_fill_window_canvas"));
-    assert!(canvas_source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas"));
+    assert!(canvas_source.contains("view_wavesurfer_segment_waveforms_canvas"));
     assert!(canvas_source.contains("view_waveform_selected_region_border_canvas"));
 }
 
@@ -16213,7 +16389,7 @@ fn synthetic_waveform_base_cache_ignores_rebuilt_block_arc_when_geometry_and_pea
         .next()
         .expect("synthetic base hash should precede engine base hash");
     let segment_canvas_cache = canvas_source
-        .split("impl SegmentWaveformsWithRegionFillCanvas")
+        .split("impl SegmentWaveformsCanvas")
         .nth(1)
         .expect("segment waveform canvas should define cache key")
         .split("impl canvas::Program<Message> for SelectedRegionBorderCanvas")
@@ -16288,13 +16464,15 @@ fn timeline_waveform_skips_invisible_selection_and_affordance_layers_per_lane() 
 fn timeline_waveform_preallocates_layer_stack_for_moving_playback() {
     let waveform_source = include_str!("components/timeline/waveform.rs");
 
-    assert!(waveform_source.contains("const TIMELINE_WAVEFORM_LAYER_CAPACITY: usize = 11;"));
+    assert!(waveform_source.contains("const TIMELINE_WAVEFORM_LAYER_CAPACITY: usize = 13;"));
     assert!(
         waveform_source.contains("Vec::with_capacity(TIMELINE_WAVEFORM_LAYER_CAPACITY)"),
         "moving playback should not grow the timeline waveform layer Vec by repeated reallocations"
     );
     assert!(!waveform_source.contains("let mut layers = vec![view_lazy_synthetic_base_waveform"));
-    assert!(!waveform_source.contains("let mut layers = vec![view_lazy_engine_waveform_strip"));
+    assert!(
+        !waveform_source.contains("let mut layers = vec![view_lazy_engine_waveform_base_strip")
+    );
 }
 
 #[test]
@@ -16309,14 +16487,18 @@ fn timeline_waveform_moving_viewport_splits_cached_strip_from_region_fill() {
     assert!(waveform_source.contains("view_wavesurfer_region_fill_window_canvas("));
     assert!(!waveform_source.contains("view_offset_clipped_waveform_strip("));
     assert!(!waveform_source.contains("view_offset_clipped_region_fill_strip("));
-    assert!(waveform_source.contains("view_lazy_engine_waveform_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_base_strip("));
+    assert!(waveform_source.contains("view_lazy_engine_waveform_progress_strip("));
     assert!(waveform_source.contains("view_lazy_engine_region_fill_strip("));
     assert!(waveform_source.contains("view_lazy_synthetic_base_waveform("));
     assert!(canvas_source.contains("view_wavesurfer_line_waveform_window_canvas"));
     assert!(canvas_source.contains("view_wavesurfer_region_fill_window_canvas"));
-    assert!(canvas_source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas"));
+    assert!(canvas_source.contains("view_wavesurfer_segment_waveforms_canvas"));
     assert!(canvas_source.contains("struct RegionFillCanvas"));
-    assert!(canvas_source.contains("struct SegmentWaveformsWithRegionFillCanvas"));
+    assert!(canvas_source.contains("struct SegmentWaveformsCanvas"));
+    assert!(canvas_source.contains("struct WaveformProgressClip"));
+    assert!(canvas_source.contains("renderer.with_layer(clip_bounds"));
+    assert!(canvas_source.contains("waveform_unplayed_color()"));
     assert!(!waveform_source.contains("view_lazy_continuous_waveform("));
     assert!(!waveform_source.contains("view_lazy_synthetic_segment_waveforms("));
 }
@@ -16334,12 +16516,12 @@ fn timeline_waveform_playhead_uses_direct_quad_without_fillportion_row() {
 
     assert!(waveform_source.contains("view_waveform_playhead_canvas("));
     assert!(canvas_source.contains("pub(super) fn view_waveform_playhead_canvas"));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, height, 1.0"));
+    assert!(canvas_source.contains("waveform_playhead_style()"));
     assert!(!canvas_source.contains("struct WaveformPlayheadCanvas"));
     assert!(!canvas_source.contains("impl canvas::Program<Message> for WaveformPlayheadCanvas"));
     assert!(playhead_source.contains("renderer.fill_quad("));
     assert!(playhead_source.contains("fn playhead_pixel_x("));
-    assert!(canvas_source.contains("Color::from_rgb8(20, 20, 20)"));
+    assert!(canvas_source.contains("Color::from_rgb8(0, 0, 0)"));
     assert!(!waveform_source.contains("fn view_playhead_cursor("));
     assert!(!waveform_source.contains("playhead_style"));
     assert!(!style_source.contains("pub(crate) fn playhead_style"));
@@ -16375,8 +16557,7 @@ fn moving_playhead_uses_absolute_pixel_fraction_without_fillportion_quantization
     .expect("playhead line widget should exist");
 
     assert!(playhead_source.contains("fn playhead_pixel_x("));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, 30.0, 2.0"));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, height, 1.0"));
+    assert!(canvas_source.contains("view_playhead_line(playhead_percent, height, width, color)"));
     assert!(
         !playhead_source.contains("portion(playhead_percent"),
         "moving playheads must use absolute pixel fractions; FillPortion-style rounding makes native playback look like a low-FPS jump"
@@ -16516,11 +16697,11 @@ fn timeline_waveform_regions_are_flat_wavesurfer_overlays_not_peak_bars() {
 
     assert!(source.contains("view_wavesurfer_line_waveform_window_canvas"));
     assert!(source.contains("view_wavesurfer_region_fill_window_canvas"));
-    assert!(source.contains("view_wavesurfer_segment_waveforms_with_region_fill_canvas"));
+    assert!(source.contains("view_wavesurfer_segment_waveforms_canvas"));
     assert!(source.contains("view_waveform_selected_region_border_canvas"));
     assert!(source.contains("view_waveform_region_affordance_block"));
     assert!(canvas_source.contains("struct RegionFillCanvas"));
-    assert!(canvas_source.contains("struct SegmentWaveformsWithRegionFillCanvas"));
+    assert!(canvas_source.contains("struct SegmentWaveformsCanvas"));
     assert!(canvas_source.contains("struct SelectedRegionBorderCanvas"));
     assert!(!source.contains("let peak_values = block.peaks"));
     assert!(!source.contains("fn scaled_peak_height"));
@@ -16533,7 +16714,6 @@ fn timeline_waveform_region_base_canvas_draws_recovered_babel_edges() {
 
     assert!(canvas_source.contains("border_color: waveform_region_border_color(color_token)"));
     assert!(canvas_source.contains("fn waveform_region_border_color(color_token: &str) -> Color"));
-    assert!(canvas_source.contains("draw_region_fills("));
     assert!(canvas_source.contains("draw_region_fills_for_time_window("));
     assert!(
         canvas_source.contains("frame.stroke(\n            &region_path,"),
@@ -16570,7 +16750,7 @@ fn top_toolbar_overview_uses_recovered_wavesurfer_filled_line_canvas() {
     let source = include_str!("components/toolbar.rs");
 
     assert!(source.contains("view_wavesurfer_line_waveform"));
-    assert!(source.contains("overview_waveform_color"));
+    assert!(source.contains("waveform_color"));
     assert!(!source.contains("Row::new()\n            .spacing(1)\n            .width(Fill)\n            .height(Length::Fixed(26.0));\n        for peak in peaks"));
 }
 
@@ -16629,7 +16809,7 @@ fn top_toolbar_overview_window_and_playhead_use_separate_layers_without_fillport
     assert!(!canvas_source.contains("impl canvas::Program<Message> for OverviewWindowCanvas"));
     assert!(!canvas_source.contains("impl canvas::Program<Message> for OverviewPlayheadCanvas"));
     assert!(canvas_source.contains("overview_window_rect("));
-    assert!(canvas_source.contains("view_playhead_line(playhead_percent, 30.0, 2.0"));
+    assert!(canvas_source.contains("view_playhead_line(playhead_percent, 30.0, width, color)"));
     assert!(playhead_source.contains("renderer.fill_quad("));
     assert!(playhead_source.contains("fn playhead_pixel_x("));
     assert!(canvas_source.contains("renderer.fill_quad("));
@@ -16731,7 +16911,7 @@ fn timeline_waveform_wires_browser_style_middle_mouse_autoscroll_handlers() {
     );
     assert!(timeline_source.contains("timeline_autoscroll_active_for_lane"));
     assert!(lane_source.contains("timeline_autoscroll_active"));
-    assert!(waveform_source.contains("autoscroll_interaction"));
+    assert!(waveform_source.contains("waveform_interaction"));
     assert!(waveform_source.contains("mouse::Interaction::Grabbing"));
     assert!(waveform_source.contains("view_timeline_autoscroll_marker"));
     assert!(!message_source.contains("TimelineMiddleDragReleased"));
@@ -17156,7 +17336,7 @@ fn dashboard_uses_section_navigation_for_projects_subaccounts_and_settings() {
         );
     }
     assert!(
-        dashboard_source.contains("Detach auth store")
+        dashboard_source.contains("Make installation portable")
             && message_source.contains("NativeAuthDetachStore")
             && actions_source.contains("Message::NativeAuthDetachStore")
             && actions_source.contains("detach_native_auth_store_to_executable"),
@@ -17731,6 +17911,99 @@ fn helper_focus_ghost_cursor_tracks_playhead_while_playing() {
         "playing ghost cursor should move with the live playhead"
     );
     assert!(second.before_cursor.chars().count() > first.before_cursor.chars().count());
+}
+
+#[test]
+fn helper_focus_ghost_cursor_advances_to_the_active_transcript_row_during_playback() {
+    let mut state = stable_sample_state();
+    let project = state.project().unwrap().clone();
+    let first = project.segment("annotation-1").unwrap();
+    state.helper_focus_restore_pending = Some(HelperFocusRestore {
+        segment_id: first.id.clone(),
+        blur_playhead_seconds: first.start_seconds,
+        restore_playhead_seconds: first.start_seconds,
+        restore_offset: 0,
+        synthetic: false,
+    });
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.is_playing = true;
+        editor.playhead_seconds = 4.0;
+    }
+
+    state.advance_transport_tick(Instant::now());
+
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-2"),
+        "the ghost cursor must switch rows when playback exits its original row"
+    );
+    assert_eq!(
+        state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref(),
+        Some("annotation-2")
+    );
+    assert!(
+        state
+            .helper_ghost_cursor_for_segment("annotation-1")
+            .is_none()
+    );
+    assert!(
+        state
+            .helper_ghost_cursor_for_segment("annotation-2")
+            .is_some()
+    );
+}
+
+#[test]
+fn helper_focus_ghost_cursor_uses_latest_row_in_its_lane_during_playback_gaps() {
+    let mut state = stable_sample_state();
+    let project = state.project().unwrap().clone();
+    let first = project.segment("annotation-1").unwrap();
+    state.helper_focus_restore_pending = Some(HelperFocusRestore {
+        segment_id: first.id.clone(),
+        blur_playhead_seconds: first.start_seconds,
+        restore_playhead_seconds: first.start_seconds,
+        restore_offset: 0,
+        synthetic: false,
+    });
+    {
+        let editor = state.editor.as_mut().unwrap();
+        editor.is_playing = true;
+        editor.playhead_seconds = 7.5;
+    }
+
+    state.advance_transport_tick(Instant::now());
+
+    assert_eq!(
+        state
+            .helper_focus_restore_pending
+            .as_ref()
+            .map(|restore| restore.segment_id.as_str()),
+        Some("annotation-3"),
+        "a gap after speech should leave the ghost at the latest row in its tracked lane"
+    );
+    let ghost = state
+        .helper_ghost_cursor_for_segment("annotation-3")
+        .expect("the latest same-lane row should render the ghost cursor");
+    assert_eq!(
+        ghost.char_offset,
+        state
+            .segment_drafts
+            .get("annotation-3")
+            .unwrap()
+            .text
+            .chars()
+            .count(),
+        "the cursor should clamp to the completed row's end while playback is in the gap"
+    );
 }
 
 #[test]
@@ -18628,7 +18901,7 @@ fn window_close_request_with_dirty_editor_opens_exit_confirm_dialog() {
     let _ = update(&mut state, Message::WindowCloseRequested);
     assert!(state.show_exit_confirm_dialog);
 
-    let _ = update(&mut state, Message::CancelExit);
+    let _ = update(&mut state, Message::CancelPendingLeave);
     assert!(!state.show_exit_confirm_dialog);
 }
 
@@ -18640,6 +18913,84 @@ fn window_close_request_with_clean_editor_skips_exit_confirm_dialog() {
     let _ = update(&mut state, Message::WindowCloseRequested);
 
     assert!(!state.show_exit_confirm_dialog);
+}
+
+#[test]
+fn back_to_projects_with_dirty_editor_waits_for_an_explicit_leave_choice() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+
+    let _ = update(&mut state, Message::BackToProjects);
+
+    assert_eq!(state.app_surface, AppSurface::Editor);
+    assert!(state.show_exit_confirm_dialog);
+    assert_eq!(
+        state.pending_leave.map(|pending| pending.intent),
+        Some(PendingLeaveIntent::BackToProjects)
+    );
+
+    let _ = update(&mut state, Message::CancelPendingLeave);
+    assert_eq!(state.app_surface, AppSurface::Editor);
+    assert!(!state.show_exit_confirm_dialog);
+    assert!(state.pending_leave.is_none());
+}
+
+#[test]
+fn back_to_projects_continues_after_the_requested_save_acknowledges() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+    let _ = update(&mut state, Message::BackToProjects);
+    state.begin_pending_leave_save();
+    state.editor.as_mut().unwrap().begin_save();
+    let token = state.current_save_request_token().unwrap();
+
+    let _ = update(
+        &mut state,
+        Message::SaveProgressSucceeded {
+            token,
+            last_saved: "2026-07-09T10:00:00Z".to_string(),
+        },
+    );
+
+    assert_eq!(state.app_surface, AppSurface::Dashboard);
+    assert!(!state.show_exit_confirm_dialog);
+    assert!(state.pending_leave.is_none());
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+}
+
+#[test]
+fn edit_during_pending_leave_save_prevents_navigation_on_the_old_ack() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+    let _ = update(&mut state, Message::BackToProjects);
+    state.begin_pending_leave_save();
+    state.editor.as_mut().unwrap().begin_save();
+    let token = state.current_save_request_token().unwrap();
+    state.mark_dirty();
+
+    assert!(state.complete_save_progress_success(token, "2026-07-09T10:00:00Z".to_string()));
+    assert!(state.take_ready_pending_leave().is_none());
+    assert_eq!(state.app_surface, AppSurface::Editor);
+    assert!(state.show_exit_confirm_dialog);
+    assert!(state.editor.as_ref().unwrap().is_dirty);
+}
+
+#[test]
+fn discarding_pending_back_navigation_invalidates_late_save_ack() {
+    let mut state = stable_sample_state();
+    state.mark_dirty();
+    state.editor.as_mut().unwrap().begin_save();
+    let stale_token = state.current_save_request_token().unwrap();
+    let previous_generation = state.workspace_generation;
+    let _ = update(&mut state, Message::BackToProjects);
+
+    let _ = update(&mut state, Message::DiscardAndContinuePendingLeave);
+
+    assert_eq!(state.app_surface, AppSurface::Dashboard);
+    assert!(state.workspace_generation > previous_generation);
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(!state.complete_save_progress_success(stale_token, "late ack".to_string()));
+    assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
 }
 
 #[test]

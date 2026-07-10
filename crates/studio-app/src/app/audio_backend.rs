@@ -9,6 +9,26 @@ use studio_waveform::DecodedAudio;
 #[cfg(not(test))]
 const AUDIO_STARTUP_TRACE_ENV: &str = "STUDIO_TRACE_AUDIO_STARTUP";
 const AUDIO_PREWARMED_PLAYER_POOL_SIZE: usize = 4;
+const AUDIO_PLAYBACK_CONTROL_INTERVAL_MILLIS: usize = 20;
+
+fn playback_control_span_samples(
+    samples_remaining: usize,
+    sample_rate: u32,
+    channel_count: usize,
+) -> usize {
+    if samples_remaining == 0 {
+        return 0;
+    }
+
+    let frames_per_span = (sample_rate as usize)
+        .saturating_mul(AUDIO_PLAYBACK_CONTROL_INTERVAL_MILLIS)
+        .div_ceil(1_000)
+        .max(1);
+    let samples_per_span = frames_per_span
+        .saturating_mul(channel_count)
+        .max(channel_count);
+    samples_remaining.min(samples_per_span)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PlaybackTrack {
@@ -123,7 +143,11 @@ impl Iterator for DecodedAudioPlaybackSource {
 
 impl Source for DecodedAudioPlaybackSource {
     fn current_span_len(&self) -> Option<usize> {
-        self.is_empty().then_some(0)
+        Some(playback_control_span_samples(
+            self.size_hint().0,
+            self.sample_rate,
+            self.channel_count,
+        ))
     }
 
     fn channels(&self) -> ChannelCount {
@@ -173,10 +197,6 @@ impl MixedDecodedAudioPlaybackSource {
             duration,
         })
     }
-
-    fn is_empty(&self) -> bool {
-        self.active_source_count == 0
-    }
 }
 
 impl Iterator for MixedDecodedAudioPlaybackSource {
@@ -222,7 +242,11 @@ impl Iterator for MixedDecodedAudioPlaybackSource {
 
 impl Source for MixedDecodedAudioPlaybackSource {
     fn current_span_len(&self) -> Option<usize> {
-        self.is_empty().then_some(0)
+        Some(playback_control_span_samples(
+            self.size_hint().0,
+            self.sample_rate,
+            self.channel_count,
+        ))
     }
 
     fn channels(&self) -> ChannelCount {
@@ -643,6 +667,7 @@ impl AudioPlaybackBackend {
 
 #[cfg(test)]
 mod tests {
+    use rodio::{ChannelCount, Player, SampleRate, Source};
     use std::{sync::Arc, time::Duration};
 
     use studio_waveform::DecodedAudio;
@@ -650,6 +675,7 @@ mod tests {
     use super::{
         DecodedAudioPlaybackSource, MixedDecodedAudioPlaybackSource,
         audio_backend_prepare_runtime_trace_line, audio_backend_startup_runtime_trace_line,
+        playback_control_span_samples,
     };
 
     #[test]
@@ -758,5 +784,146 @@ mod tests {
             .expect("valid stereo source");
 
         assert!(MixedDecodedAudioPlaybackSource::new(vec![mono, stereo]).is_none());
+    }
+    const RATE_TEST_SAMPLE_RATE: u32 = 1_000;
+    const RATE_TEST_SOURCE_SAMPLES: usize = 4_000;
+    const RATE_CHANGE_AFTER_SAMPLES: usize = 1_000;
+    const MAX_RATE_TEST_RENDERED_SAMPLES: usize = 10_000;
+
+    fn decoded_rate_test_source() -> Box<dyn Source + Send> {
+        let audio = DecodedAudio::new(
+            RATE_TEST_SAMPLE_RATE,
+            vec![vec![0.5; RATE_TEST_SOURCE_SAMPLES]],
+        )
+        .expect("valid decoded audio");
+        Box::new(
+            DecodedAudioPlaybackSource::new(Arc::new(audio), 0.0, None)
+                .expect("valid playback source"),
+        )
+    }
+
+    fn mixed_rate_test_source() -> Box<dyn Source + Send> {
+        let first = DecodedAudio::new(
+            RATE_TEST_SAMPLE_RATE,
+            vec![vec![0.25; RATE_TEST_SOURCE_SAMPLES]],
+        )
+        .expect("valid first audio");
+        let second = DecodedAudio::new(
+            RATE_TEST_SAMPLE_RATE,
+            vec![vec![0.25; RATE_TEST_SOURCE_SAMPLES]],
+        )
+        .expect("valid second audio");
+        let first = DecodedAudioPlaybackSource::new(Arc::new(first), 0.0, None)
+            .expect("valid first source");
+        let second = DecodedAudioPlaybackSource::new(Arc::new(second), 0.0, None)
+            .expect("valid second source");
+        Box::new(
+            MixedDecodedAudioPlaybackSource::new(vec![first, second])
+                .expect("compatible tracks should mix"),
+        )
+    }
+
+    fn rendered_samples_after_active_speed_change(
+        source: Box<dyn Source + Send>,
+        next_speed: f32,
+    ) -> usize {
+        let (mixer, mut output) = rodio::mixer::mixer(
+            ChannelCount::new(1).expect("one channel"),
+            SampleRate::new(RATE_TEST_SAMPLE_RATE).expect("positive sample rate"),
+        );
+        let player = Player::connect_new(&mixer);
+        player.append(source);
+
+        for _ in 0..RATE_CHANGE_AFTER_SAMPLES {
+            assert!(output.next().is_some());
+        }
+        player.set_speed(next_speed);
+
+        let mut rendered_samples = RATE_CHANGE_AFTER_SAMPLES;
+        while !player.empty() && rendered_samples < MAX_RATE_TEST_RENDERED_SAMPLES {
+            assert!(output.next().is_some());
+            rendered_samples += 1;
+        }
+        assert!(player.empty(), "playback source should finish");
+        rendered_samples
+    }
+
+    fn rendered_samples_at_initial_speed(source: Box<dyn Source + Send>, speed: f32) -> usize {
+        let (mixer, mut output) = rodio::mixer::mixer(
+            ChannelCount::new(1).expect("one channel"),
+            SampleRate::new(RATE_TEST_SAMPLE_RATE).expect("positive sample rate"),
+        );
+        let player = Player::connect_new(&mixer);
+        player.set_speed(speed);
+        player.append(source);
+
+        let mut rendered_samples = 0;
+        while !player.empty() && rendered_samples < MAX_RATE_TEST_RENDERED_SAMPLES {
+            assert!(output.next().is_some());
+            rendered_samples += 1;
+        }
+        assert!(player.empty(), "playback source should finish");
+        rendered_samples
+    }
+
+    fn assert_initial_player_speed_resamples(source: impl Fn() -> Box<dyn Source + Send>) {
+        let normal_samples = rendered_samples_at_initial_speed(source(), 1.0);
+        let sped_up_samples = rendered_samples_at_initial_speed(source(), 2.0);
+        let slowed_samples = rendered_samples_at_initial_speed(source(), 0.5);
+
+        assert!(
+            sped_up_samples < normal_samples * 3 / 4,
+            "initial 2x playback should render materially fewer output samples: normal={normal_samples}, fast={sped_up_samples}"
+        );
+        assert!(
+            slowed_samples > normal_samples * 3 / 2,
+            "initial 0.5x playback should render materially more output samples: normal={normal_samples}, slow={slowed_samples}"
+        );
+    }
+
+    fn assert_active_player_speed_change_resamples(source: impl Fn() -> Box<dyn Source + Send>) {
+        let normal_samples = rendered_samples_after_active_speed_change(source(), 1.0);
+        let sped_up_samples = rendered_samples_after_active_speed_change(source(), 2.0);
+        let slowed_samples = rendered_samples_after_active_speed_change(source(), 0.5);
+
+        assert!(
+            sped_up_samples < normal_samples * 3 / 4,
+            "2x playback should render materially fewer output samples: normal={normal_samples}, fast={sped_up_samples}"
+        );
+        assert!(
+            slowed_samples > normal_samples * 3 / 2,
+            "0.5x playback should render materially more output samples: normal={normal_samples}, slow={slowed_samples}"
+        );
+    }
+
+    #[test]
+    fn active_player_speed_changes_resample_decoded_audio() {
+        assert_active_player_speed_change_resamples(decoded_rate_test_source);
+    }
+
+    #[test]
+    fn active_player_speed_changes_resample_mixed_audio() {
+        assert_active_player_speed_change_resamples(mixed_rate_test_source);
+    }
+
+    #[test]
+    fn initial_player_speed_resamples_decoded_and_mixed_audio() {
+        assert_initial_player_speed_resamples(decoded_rate_test_source);
+        assert_initial_player_speed_resamples(mixed_rate_test_source);
+    }
+
+    #[test]
+    fn playback_control_spans_are_finite_and_frame_aligned() {
+        for sample_rate in [1, 8_000, 48_000, 192_000] {
+            for channel_count in [1, 2, 6] {
+                let samples_remaining = 1_001 * channel_count;
+                let span =
+                    playback_control_span_samples(samples_remaining, sample_rate, channel_count);
+                assert!(span > 0);
+                assert!(span <= samples_remaining);
+                assert_eq!(span % channel_count, 0);
+            }
+        }
+        assert_eq!(playback_control_span_samples(0, 48_000, 2), 0);
     }
 }

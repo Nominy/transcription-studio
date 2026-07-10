@@ -114,9 +114,9 @@ pub(super) fn fixture_payload_message_for_request(
 ) -> Option<Message> {
     match request {
         BabelServiceRequest::LoadWorkerProjects => Some(Message::DashboardProjectsLoaded(payload)),
-        BabelServiceRequest::SaveAnnotations(_) => {
-            Some(save_annotations_message_from_payload(&payload))
-        }
+        BabelServiceRequest::SaveAnnotations(request) => Some(
+            save_annotations_message_from_payload(&payload, request.token),
+        ),
         BabelServiceRequest::LoadReviewAction(_) => {
             Some(Message::LoadReviewActionSucceeded(payload))
         }
@@ -158,26 +158,30 @@ pub(super) fn fixture_payload_message_for_request(
     }
 }
 
-fn save_annotations_message_from_payload(payload: &str) -> Message {
+fn save_annotations_message_from_payload(
+    payload: &str,
+    token: super::service_callbacks::SaveRequestToken,
+) -> Message {
     let value = match decode_service_payload(payload) {
         Ok(value) => value,
-        Err(error) => return Message::SaveProgressFailed(error),
+        Err(error) => return Message::SaveProgressFailed { token, error },
     };
 
     if response_success(&value) {
-        return Message::SaveProgressSucceeded(
-            first_string_by_key(
+        return Message::SaveProgressSucceeded {
+            token,
+            last_saved: first_string_by_key(
                 &value,
                 &["updatedAt", "updated_at", "lastSaved", "last_saved"],
             )
             .unwrap_or_else(current_timestamp),
-        );
+        };
     }
 
-    Message::SaveProgressFailed(response_error(
-        &value,
-        "Failed to save progress. Please try again.",
-    ))
+    Message::SaveProgressFailed {
+        token,
+        error: response_error(&value, "Failed to save progress. Please try again."),
+    }
 }
 
 fn submit_review_message_from_payload(payload: &str) -> Message {
@@ -803,6 +807,7 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
         BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
             review_action_id,
             annotations,
+            ..
         }) => json!({
             "operation": "transcriptions.saveAnnotationsByReviewActionId",
             "payload": {
@@ -1338,7 +1343,10 @@ fn failure_message_for_request(request: BabelServiceRequest, error: &str) -> Mes
         BabelServiceRequest::LoadWorkerProjects => {
             Message::DashboardProjectsLoadFailed(error.to_string())
         }
-        BabelServiceRequest::SaveAnnotations(_) => Message::SaveProgressFailed(error.to_string()),
+        BabelServiceRequest::SaveAnnotations(request) => Message::SaveProgressFailed {
+            token: request.token,
+            error: error.to_string(),
+        },
         BabelServiceRequest::LoadReviewAction(_) => {
             Message::LoadReviewActionFailed(error.to_string())
         }
@@ -1486,8 +1494,8 @@ mod tests {
         let normalized = normalize_service_response_payload(payload);
 
         assert!(matches!(
-            save_annotations_message_from_payload(&normalized),
-            Message::SaveProgressSucceeded(_)
+            save_annotations_message_from_payload(&normalized, Default::default()),
+            Message::SaveProgressSucceeded { .. }
         ));
         assert!(matches!(
             submit_review_message_from_payload(&normalized),
@@ -1590,6 +1598,7 @@ mod tests {
                 BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
                     review_action_id: "review-action-1".to_string(),
                     annotations: annotations.clone(),
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Post,
                 "transcriptions.saveAnnotationsByReviewActionId",
@@ -1851,6 +1860,7 @@ mod tests {
         let request = BabelServiceRequest::SaveAnnotations(SaveAnnotationsRequest {
             review_action_id: "review-action-1".to_string(),
             annotations: vec![json!({ "id": "annotation-1" })],
+            token: Default::default(),
         });
 
         let payload = service_payload_for_request(&request)

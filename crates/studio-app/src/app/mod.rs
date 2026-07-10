@@ -28,6 +28,7 @@ mod native_capabilities;
 mod navigation;
 mod panel_persistence;
 mod platform_paths;
+mod recovery;
 mod renderer_capture;
 mod review_backend_client;
 mod segment_actions;
@@ -44,7 +45,7 @@ mod transcript_virtualization;
 mod updater;
 mod workbench_shell_smoke;
 
-use iced::{Size, Theme, window};
+use iced::{Size, window};
 
 use actions::update;
 use annotation_smoke::{annotation_mutation_smoke_enabled, run_annotation_mutation_smoke};
@@ -79,7 +80,7 @@ pub fn run() -> iced::Result {
     iced::application(window_title, update, view)
         .antialiasing(true)
         .subscription(hotkeys::subscription)
-        .theme(|_| Theme::Light)
+        .theme(|_| styles::studio_theme())
         .window(window::Settings {
             size: Size::new(1440.0, 900.0),
             min_size: Some(Size::new(1200.0, 760.0)),

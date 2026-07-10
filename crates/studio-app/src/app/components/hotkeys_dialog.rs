@@ -11,8 +11,10 @@ const HOTKEYS_DIALOG_WIDTH: f32 = 760.0;
 const HOTKEYS_DIALOG_HEIGHT: f32 = 620.0;
 
 #[cfg(test)]
-pub(crate) fn recovered_hotkey_registry()
--> Vec<(&'static str, Vec<(Vec<&'static str>, &'static str)>)> {
+type RecoveredHotkeyRegistry = Vec<(&'static str, Vec<(Vec<&'static str>, &'static str)>)>;
+
+#[cfg(test)]
+pub(crate) fn recovered_hotkey_registry() -> RecoveredHotkeyRegistry {
     CapabilityRegistry::default().hotkey_sections()
 }
 

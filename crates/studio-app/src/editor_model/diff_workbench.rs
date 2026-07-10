@@ -90,16 +90,16 @@ pub struct DiffAnnotationStatusEntry {
 pub fn build_transcription_diff_actions(
     input: DiffTranscriptionDiffActionsInput<'_>,
 ) -> Vec<DiffReviewActionSummary> {
-    if input.is_assessment_mode {
-        if let Some(answer_review_action_id) = input.assessment_answer_review_action_id {
-            return vec![DiffReviewActionSummary {
-                id: answer_review_action_id.to_string(),
-                level: 0,
-                label: Some("Answer".to_string()),
-                created_at: Some(input.now_iso.to_string()),
-                worker_id: None,
-            }];
-        }
+    if input.is_assessment_mode
+        && let Some(answer_review_action_id) = input.assessment_answer_review_action_id
+    {
+        return vec![DiffReviewActionSummary {
+            id: answer_review_action_id.to_string(),
+            level: 0,
+            label: Some("Answer".to_string()),
+            created_at: Some(input.now_iso.to_string()),
+            worker_id: None,
+        }];
     }
 
     label_review_actions(input.review_actions)

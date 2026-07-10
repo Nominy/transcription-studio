@@ -79,7 +79,7 @@ if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
 }
 
 if (-not $SkipBuild) {
-    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "--release")
+    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "--release", "--locked")
 }
 
 if (Test-Path -LiteralPath $stagePath) {

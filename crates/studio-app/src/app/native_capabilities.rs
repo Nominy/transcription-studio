@@ -1605,8 +1605,9 @@ impl StudioState {
             return;
         };
         match build_reviewer_payload(&project) {
-            Ok(payload) => self
-                .queue_review_backend_request(&format!("{action_name} queued..."), wrap(payload)),
+            Ok(payload) => {
+                self.queue_review_backend_request(format!("{action_name} queued..."), wrap(payload))
+            }
             Err(error) => self.fail_native_capability_request(action_name, error),
         }
     }

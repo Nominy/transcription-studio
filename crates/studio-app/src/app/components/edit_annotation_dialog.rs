@@ -1,14 +1,18 @@
 use iced::widget::{Space, button, column, container, pick_list, row, text, text_input};
-use iced::{Color, Element, Fill, Length};
+use iced::{Color, Element, Fill, Font, Length, font};
 
 use super::super::create_region::{
     create_region_intensity_options, create_region_primary_options,
     create_region_secondary_options, intensity_label,
 };
-use super::super::styles::modal_surface_style;
+use super::super::styles::{modal_surface_style, primary_button_style, secondary_button_style};
 use super::super::{EditAnnotationDialog, Message};
 
 const EDIT_ANNOTATION_DIALOG_WIDTH: f32 = 460.0;
+const SEMIBOLD: Font = Font {
+    weight: font::Weight::Semibold,
+    ..Font::DEFAULT
+};
 
 pub(super) fn view_edit_annotation_dialog<'a>(
     dialog: &'a EditAnnotationDialog,
@@ -20,7 +24,7 @@ pub(super) fn view_edit_annotation_dialog<'a>(
     let intensity_options = create_region_intensity_options();
     let selected_intensity = intensity_label(dialog.intensity);
 
-    let mut fields = column![text(dialog.title()).size(16)].spacing(8);
+    let mut fields = column![text(dialog.title()).size(18).font(SEMIBOLD)].spacing(12);
 
     if dialog.uses_hierarchical_labels {
         fields = fields.push(
@@ -72,7 +76,8 @@ pub(super) fn view_edit_annotation_dialog<'a>(
                 text("Description *").size(12),
                 text_input("Describe the noise...", &dialog.custom_description)
                     .on_input(Message::EditAnnotationCustomDescriptionChanged)
-                    .padding(6)
+                    .padding(10)
+                    .size(13)
                     .width(Fill),
             ]
             .spacing(4),
@@ -106,15 +111,19 @@ pub(super) fn view_edit_annotation_dialog<'a>(
     fields = fields.push(
         row![
             Space::with_width(Fill),
-            button(text("Cancel")).on_press(Message::CancelEditAnnotation),
-            button(text("Save")).on_press(Message::SubmitEditAnnotation),
+            button(text("Cancel").size(13))
+                .style(secondary_button_style)
+                .on_press(Message::CancelEditAnnotation),
+            button(text("Save changes").size(13))
+                .style(primary_button_style)
+                .on_press(Message::SubmitEditAnnotation),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
     );
 
     container(fields)
-        .padding(16)
+        .padding(22)
         .width(Length::Fixed(EDIT_ANNOTATION_DIALOG_WIDTH))
         .style(modal_surface_style)
         .into()

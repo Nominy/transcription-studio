@@ -13,17 +13,13 @@ pub(super) struct TranscriptRowPressOutcome {
 
 impl StudioState {
     pub(super) fn select_segment(&mut self, segment_id: &str) -> Option<f32> {
-        let Some(project) = self.project().cloned() else {
-            return None;
-        };
+        let project = self.project().cloned()?;
         self.with_editor_mut(|editor| editor.select_segment(&project, segment_id));
         self.scroll_transcript_to_segment_if_needed(&project, segment_id)
     }
 
     pub(super) fn select_segment_without_seek(&mut self, segment_id: &str) -> Option<f32> {
-        let Some(project) = self.project().cloned() else {
-            return None;
-        };
+        let project = self.project().cloned()?;
         self.with_editor_mut(|editor| editor.select_segment_without_seek(&project, segment_id));
         self.scroll_transcript_to_segment_if_needed(&project, segment_id)
     }
@@ -63,9 +59,7 @@ impl StudioState {
     }
 
     pub(super) fn select_adjacent_segment(&mut self, direction: i32) -> Option<f32> {
-        let Some(project) = self.project().cloned() else {
-            return None;
-        };
+        let project = self.project().cloned()?;
         self.with_editor_mut(|editor| editor.navigate_visible_segment(&project, direction));
         let selected_segment_id = self
             .editor

@@ -98,16 +98,28 @@ pub(crate) fn lane_vertical_zoom_input_id() -> text_input::Id {
     text_input::Id::new("lane-vertical-zoom-input")
 }
 
+pub(super) struct TimelineLanePresentation<'a> {
+    pub(super) hover: Option<super::waveform::WaveformHoverOverlay>,
+    pub(super) suppress_region_affordances: bool,
+    pub(super) timeline_autoscroll_active: Option<f32>,
+    pub(super) magnifier: Option<WaveformMagnifierOverlay>,
+    pub(super) attached_create_region_popup: Option<super::waveform::AttachedCreateRegionPopup<'a>>,
+    pub(super) vertical_zoom_input: Option<&'a str>,
+}
+
 pub(super) fn view_timeline_lane<'a>(
     editor: &'a EditorSession,
     lane: &TimelineLaneView,
-    hover: Option<super::waveform::WaveformHoverOverlay>,
-    suppress_region_affordances: bool,
-    timeline_autoscroll_active: Option<f32>,
-    magnifier: Option<WaveformMagnifierOverlay>,
-    attached_create_region_popup: Option<super::waveform::AttachedCreateRegionPopup<'a>>,
-    vertical_zoom_input: Option<&str>,
+    presentation: TimelineLanePresentation<'a>,
 ) -> Element<'a, Message> {
+    let TimelineLanePresentation {
+        hover,
+        suppress_region_affordances,
+        timeline_autoscroll_active,
+        magnifier,
+        attached_create_region_popup,
+        vertical_zoom_input,
+    } = presentation;
     let track_height = lane.track_height;
     let color_token = lane.color_token.clone();
     let control_rail = view_lane_control_rail(lane, vertical_zoom_input);
@@ -289,7 +301,6 @@ fn view_lane_vertical_zoom_slider(
             Message::LaneVerticalZoomSliderReleased,
             None,
         )
-        .into()
     });
 
     container(handle)

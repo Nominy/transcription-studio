@@ -50,10 +50,7 @@ impl StudioState {
             return (LintSeverity::Warning, "Draft pending".to_string());
         }
 
-        (
-            row_view.lint.severity.clone(),
-            row_view.lint.message.clone(),
-        )
+        (row_view.lint.severity, row_view.lint.message.clone())
     }
 
     pub(in crate::app) fn apply_pending_drafts(&mut self, action_name: &str) -> bool {

@@ -37,12 +37,13 @@ use super::native_capabilities::{
     ReviewerSessionPreview, ReviewerTemplatePreview,
 };
 use super::panel_persistence::PanelCollapseStorage;
+use super::recovery::RecoveryDraft;
 use super::review_backend_client::{ReviewBackendRequest, dispatch_review_backend_requests};
 use super::service_callbacks::{
     BabelServiceRequest, ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest,
     LoadLatestReviewActionRequest, LoadReviewActionRequest, META_ACTIVE_QUEUE_ID,
     META_CHUNKED_QUEUE_ID, META_QUEUE_ID, META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID,
-    build_admin_rate_review_action_request, build_drop_worker_action_request,
+    SaveRequestToken, build_admin_rate_review_action_request, build_drop_worker_action_request,
     build_skip_review_action_request, build_submit_review_action_request,
 };
 use super::service_executor::{
@@ -142,6 +143,18 @@ pub(super) enum AppSurface {
     Editor,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingLeaveIntent {
+    ExitApplication,
+    BackToProjects,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PendingLeave {
+    pub(super) intent: PendingLeaveIntent,
+    pub(super) continue_after_save: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum DashboardSection {
     #[default]
@@ -167,6 +180,8 @@ pub(super) struct DashboardState {
     pub(super) processed_transcription_id: String,
     pub(super) is_pending: bool,
     pub(super) error: Option<String>,
+    pub(super) notice: Option<String>,
+    pub(super) recovery_drafts: Vec<RecoveryDraft>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,9 +364,7 @@ impl FrameCadenceProbe {
             self.frames = 1;
             return None;
         };
-        let Some(interval) = now.checked_duration_since(previous) else {
-            return None;
-        };
+        let interval = now.checked_duration_since(previous)?;
 
         self.frames += 1;
         self.total_interval += interval;
@@ -469,6 +482,7 @@ pub(super) struct HelperGhostCursorView {
 
 pub(super) struct StudioState {
     pub(super) app_surface: AppSurface,
+    pub(super) workspace_generation: u64,
     pub(super) native_auth_flow: Option<NativeAuthFlowState>,
     pub(super) subaccount_session: Option<SubaccountSession>,
     pub(super) subaccount_owner: SubaccountOwnerPanelState,
@@ -585,6 +599,7 @@ pub(super) struct StudioState {
     pub(super) hotkey_bindings: HotkeyBindings,
     pub(super) hotkey_capture: Option<HotkeyAction>,
     pub(super) show_exit_confirm_dialog: bool,
+    pub(super) pending_leave: Option<PendingLeave>,
     pub(super) playback_followed_segment_id: Option<String>,
     pub(super) find_bar_open: bool,
     pub(super) find_query: String,
@@ -635,6 +650,7 @@ impl Default for StudioState {
             HotkeyBindings::from_storage(panel_collapse_storage.value(HOTKEY_STORAGE_KEY));
         let mut state = Self {
             app_surface: AppSurface::Dashboard,
+            workspace_generation: 0,
             native_auth_flow: None,
             subaccount_session: None,
             subaccount_owner: SubaccountOwnerPanelState::with_default_host(),
@@ -750,6 +766,7 @@ impl Default for StudioState {
             hotkey_capture: None,
             show_hotkeys_dialog: false,
             show_exit_confirm_dialog: false,
+            pending_leave: None,
             playback_followed_segment_id: None,
             find_bar_open: false,
             find_query: String::new(),
@@ -774,6 +791,7 @@ impl Default for StudioState {
         state.update_feedback_submit_metadata();
         state.reset_segment_drafts();
         state.refresh_dashboard_from_project_metadata();
+        state.refresh_recovery_drafts();
 
         state.hydrate_reviewer_selection_from_project_metadata();
         state.hydrate_timeline_defaults_from_project_metadata();
@@ -1500,10 +1518,15 @@ impl StudioState {
     }
 
     pub(super) fn replace_workflow(&mut self, workflow: StudioWorkflow, status: String) {
+        self.workspace_generation = self.workspace_generation.saturating_add(1);
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+        });
         self.audio_playback.stop();
         self.editor = Some(EditorSession::for_project(workflow.project()));
         self.workflow = Ok(workflow);
         self.app_surface = AppSurface::Editor;
+        self.dashboard.notice = None;
         self.status = status;
         self.show_submit_dialog = false;
         self.submit_is_pending = false;
@@ -1522,6 +1545,8 @@ impl StudioState {
         self.hydrate_reviewer_selection_from_project_metadata();
         self.hydrate_timeline_defaults_from_project_metadata();
         self.show_hotkeys_dialog = false;
+        self.show_exit_confirm_dialog = false;
+        self.pending_leave = None;
         self.create_region_dialog = None;
         self.edit_annotation_dialog = None;
         self.transcript_scroll_offset_y = 0.0;
@@ -2348,7 +2373,7 @@ impl StudioState {
         if self.native_auth_flow.is_some() {
             return true;
         } else if self.show_exit_confirm_dialog {
-            self.show_exit_confirm_dialog = false;
+            self.cancel_pending_leave();
             return true;
         } else if self.find_bar_open {
             self.close_find_bar();
@@ -2384,15 +2409,14 @@ impl StudioState {
                 self.show_submit_dialog = false;
             }
             return true;
-        } else if let Some(project) = self.project().cloned() {
-            if self
+        } else if let Some(project) = self.project().cloned()
+            && self
                 .editor
                 .as_ref()
                 .is_some_and(|editor| editor.stored_loop_range.is_some())
-            {
-                self.with_editor_mut(|editor| editor.clear_loop(&project));
-                return true;
-            }
+        {
+            self.with_editor_mut(|editor| editor.clear_loop(&project));
+            return true;
         }
         false
     }
@@ -2597,6 +2621,111 @@ impl StudioState {
         }
     }
 
+    fn sync_pending_helper_focus_restore_to_playback(&mut self) {
+        let Some(pending) = self.helper_focus_restore_pending.clone() else {
+            return;
+        };
+        if self.helper_focused_segment_id.is_some() {
+            return;
+        }
+
+        let Some(project) = self.project() else {
+            return;
+        };
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
+        if !editor.is_playing {
+            return;
+        }
+        let Some(pending_segment) = project.segment(&pending.segment_id) else {
+            return;
+        };
+        let playhead_seconds = editor.playhead_seconds;
+        if !playhead_seconds.is_finite()
+            || (pending_segment.start_seconds <= playhead_seconds
+                && playhead_seconds < pending_segment.end_seconds)
+        {
+            return;
+        }
+
+        let segment_is_visible = |segment: &Segment| {
+            let matches_filter = match &editor.track_filter {
+                TrackFilter::All => true,
+                TrackFilter::Lane { id, .. } => id == &segment.lane_id,
+            };
+            matches_filter
+                && !editor.collapsed_lane_ids.contains(&segment.lane_id)
+                && TranscriptAnnotationKind::from_segment(segment).is_transcription()
+        };
+
+        // Babel Helper keeps the tracked lane while it has active speech, follows
+        // another active lane when needed, and otherwise parks at the latest row.
+        let active_in_pending_lane = project
+            .segments
+            .iter()
+            .filter(|segment| segment_is_visible(segment))
+            .filter(|segment| segment.lane_id == pending_segment.lane_id)
+            .filter(|segment| {
+                segment.start_seconds <= playhead_seconds && playhead_seconds < segment.end_seconds
+            })
+            .min_by(|left, right| {
+                left.start_seconds
+                    .total_cmp(&right.start_seconds)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        let active_any_lane = project
+            .segments
+            .iter()
+            .filter(|segment| segment_is_visible(segment))
+            .filter(|segment| {
+                segment.start_seconds <= playhead_seconds && playhead_seconds < segment.end_seconds
+            })
+            .min_by(|left, right| {
+                left.start_seconds
+                    .total_cmp(&right.start_seconds)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        let latest_in_pending_lane = project
+            .segments
+            .iter()
+            .filter(|segment| segment_is_visible(segment))
+            .filter(|segment| segment.lane_id == pending_segment.lane_id)
+            .filter(|segment| segment.start_seconds <= playhead_seconds)
+            .max_by(|left, right| {
+                left.end_seconds
+                    .total_cmp(&right.end_seconds)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        let latest_any_lane = project
+            .segments
+            .iter()
+            .filter(|segment| segment_is_visible(segment))
+            .filter(|segment| segment.start_seconds <= playhead_seconds)
+            .max_by(|left, right| {
+                left.end_seconds
+                    .total_cmp(&right.end_seconds)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        let Some(target_segment_id) = active_in_pending_lane
+            .or(active_any_lane)
+            .or(latest_in_pending_lane)
+            .or(latest_any_lane)
+            .map(|segment| segment.id.clone())
+        else {
+            return;
+        };
+        if target_segment_id == pending.segment_id {
+            return;
+        }
+
+        let project = project.clone();
+        if let Some(editor) = self.editor.as_mut() {
+            editor.select_segment_without_seek(&project, &target_segment_id);
+        }
+        self.sync_pending_helper_focus_restore_to_segment(&target_segment_id);
+    }
+
     pub(super) fn helper_ghost_cursor_for_segment(
         &self,
         segment_id: &str,
@@ -2685,6 +2814,14 @@ impl StudioState {
     }
 
     fn set_playback_paused(&mut self, paused: bool) {
+        let playback_bounds = if paused {
+            None
+        } else {
+            self.workflow
+                .as_ref()
+                .ok()
+                .map(|workflow| self.timeline_project_bounds_for_render(workflow.project()))
+        };
         let Some(editor) = self.editor.as_mut() else {
             self.status = "Playback unavailable: no editor session.".to_string();
             return;
@@ -2699,6 +2836,9 @@ impl StudioState {
         }
         if editor.is_playing {
             return;
+        }
+        if let Some(bounds) = playback_bounds {
+            editor.prepare_viewport_for_playback_with_bounds(bounds);
         }
         editor.is_playing = true;
         self.last_transport_tick = None;
@@ -2781,6 +2921,11 @@ impl StudioState {
     }
 
     pub(super) fn enter_dashboard(&mut self) {
+        self.audio_playback.stop();
+        self.with_editor_mut(|editor| editor.is_playing = false);
+        self.held_audition_keys.clear();
+        self.audition_key_release_tokens.clear();
+        self.release_captured_pointer();
         self.app_surface = AppSurface::Dashboard;
         self.dashboard.is_pending = false;
         self.status = if self.subaccount_session.is_some() {
@@ -2788,6 +2933,80 @@ impl StudioState {
         } else {
             "Babel dashboard ready.".to_string()
         };
+    }
+
+    pub(super) fn request_leave(
+        &mut self,
+        intent: PendingLeaveIntent,
+    ) -> Option<PendingLeaveIntent> {
+        let (is_dirty, is_saving) = self
+            .editor
+            .as_ref()
+            .map(|editor| (editor.is_dirty, editor.is_saving))
+            .unwrap_or((false, false));
+        if !is_dirty && !is_saving {
+            return Some(intent);
+        }
+
+        self.pending_leave = Some(PendingLeave {
+            intent,
+            continue_after_save: is_saving,
+        });
+        self.show_exit_confirm_dialog = true;
+        None
+    }
+
+    pub(super) fn cancel_pending_leave(&mut self) {
+        self.pending_leave = None;
+        self.show_exit_confirm_dialog = false;
+    }
+
+    pub(super) fn begin_pending_leave_save(&mut self) {
+        if let Some(pending) = self.pending_leave.as_mut() {
+            pending.continue_after_save = true;
+        }
+    }
+
+    pub(super) fn pending_leave_waits_for_save(&self) -> bool {
+        self.pending_leave
+            .is_some_and(|pending| pending.continue_after_save)
+    }
+
+    pub(super) fn take_ready_pending_leave(&mut self) -> Option<PendingLeaveIntent> {
+        let pending = self.pending_leave?;
+        if !pending.continue_after_save
+            || self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.is_dirty || editor.is_saving)
+        {
+            return None;
+        }
+
+        self.pending_leave = None;
+        self.show_exit_confirm_dialog = false;
+        Some(pending.intent)
+    }
+
+    pub(super) fn discard_pending_leave(&mut self) -> Option<PendingLeaveIntent> {
+        let pending = self.pending_leave.take()?;
+        self.show_exit_confirm_dialog = false;
+        self.workspace_generation = self.workspace_generation.saturating_add(1);
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(request, BabelServiceRequest::SaveAnnotations(_))
+        });
+        self.mark_saved();
+        Some(pending.intent)
+    }
+
+    pub(super) fn current_save_request_token(&self) -> Option<SaveRequestToken> {
+        self.editor
+            .as_ref()
+            .and_then(EditorSession::saving_revision)
+            .map(|revision| SaveRequestToken {
+                workspace_generation: self.workspace_generation,
+                revision,
+            })
     }
 
     pub(super) fn queue_dashboard_projects_refresh(&mut self) {
@@ -2872,6 +3091,7 @@ impl StudioState {
     }
 
     pub(super) fn begin_dashboard_claim_next_task(&mut self) -> bool {
+        self.dashboard.notice = None;
         let queue_id = self.dashboard.chunked_queue_id.trim().to_string();
         if queue_id.is_empty() {
             self.dashboard.error = Some("Chunked queue ID is required.".to_string());
@@ -3256,11 +3476,19 @@ impl StudioState {
     }
 
     pub(super) fn toggle_playback(&mut self) {
+        let playback_bounds = self
+            .workflow
+            .as_ref()
+            .ok()
+            .map(|workflow| self.timeline_project_bounds_for_render(workflow.project()));
         let Some(editor) = &mut self.editor else {
             self.status = "Playback unavailable: no editor session.".to_string();
             return;
         };
         let was_playing = editor.is_playing;
+        if !was_playing && let Some(bounds) = playback_bounds {
+            editor.prepare_viewport_for_playback_with_bounds(bounds);
+        }
         editor.toggle_playback();
 
         if was_playing {
@@ -3304,6 +3532,7 @@ impl StudioState {
                 editor.advance_transport_with_bounds(project, bounds, elapsed_seconds);
             }
         }
+        self.sync_pending_helper_focus_restore_to_playback();
         if let Some(phase_start) = phase_start {
             phase_timings.advance_transport = phase_start.elapsed();
         }
@@ -3326,12 +3555,11 @@ impl StudioState {
 
         let is_playing = self.editor.as_ref().is_some_and(|editor| editor.is_playing);
         let phase_start = trace_update.then_some(Instant::now());
-        if is_playing {
-            if let Some(probe) = self.frame_cadence_probe.as_mut() {
-                if let Some(report) = probe.record(now) {
-                    eprintln!("{}", report.runtime_trace_line());
-                }
-            }
+        if is_playing
+            && let Some(probe) = self.frame_cadence_probe.as_mut()
+            && let Some(report) = probe.record(now)
+        {
+            eprintln!("{}", report.runtime_trace_line());
         }
         if let Some(phase_start) = phase_start {
             phase_timings.cadence_probe = phase_start.elapsed();
@@ -3782,9 +4010,9 @@ impl StudioState {
             fraction,
             height: height.max(1.0),
         });
-        if self.active_lane_vertical_zoom_slider_id.as_deref() != Some(lane_id.as_str()) {
-            self.refresh_lane_vertical_zoom_slider_drag_capture();
-        } else if self.lane_vertical_zoom_slider_drag_capture.is_none() {
+        if self.active_lane_vertical_zoom_slider_id.as_deref() != Some(lane_id.as_str())
+            || self.lane_vertical_zoom_slider_drag_capture.is_none()
+        {
             self.refresh_lane_vertical_zoom_slider_drag_capture();
         }
         self.hover_lane_vertical_zoom_slider(lane_id, fraction);
@@ -3968,9 +4196,7 @@ impl StudioState {
             fraction,
             width: width.max(1.0),
         });
-        if !self.overview_drag_active {
-            self.refresh_overview_drag_capture();
-        } else if self.overview_drag_capture.is_none() {
+        if !self.overview_drag_active || self.overview_drag_capture.is_none() {
             self.refresh_overview_drag_capture();
         }
         self.hover_overview(fraction);
@@ -4614,6 +4840,13 @@ impl StudioState {
             matches!(request, BabelServiceRequest::SubmitReviewAction(_))
         });
         self.submit_review();
+        if !self.submit_has_error {
+            let notice = self.status.clone();
+            self.enter_dashboard();
+            self.queue_dashboard_projects_refresh();
+            self.status = notice.clone();
+            self.dashboard.notice = Some(notice);
+        }
     }
 
     pub(super) fn complete_submit_review_failure(&mut self, error: String) {
@@ -4659,6 +4892,11 @@ impl StudioState {
             matches!(request, BabelServiceRequest::DropWorkerAction(_))
         });
         self.drop_claim();
+        let notice = self.status.clone();
+        self.enter_dashboard();
+        self.queue_dashboard_projects_refresh();
+        self.status = notice.clone();
+        self.dashboard.notice = Some(notice);
     }
 
     pub(super) fn complete_drop_claim_failure(&mut self, error: String) {
@@ -4776,6 +5014,11 @@ impl StudioState {
             Ok("Skip requested.".to_string())
         }) {
             self.show_skip_chunk_dialog = false;
+            let notice = self.status.clone();
+            self.enter_dashboard();
+            self.queue_dashboard_projects_refresh();
+            self.status = notice.clone();
+            self.dashboard.notice = Some(notice);
         }
     }
 
@@ -4873,6 +5116,11 @@ impl StudioState {
             Ok("Recording flagged.".to_string())
         }) {
             self.show_admin_flag_dialog = false;
+            let notice = self.status.clone();
+            self.enter_dashboard();
+            self.queue_dashboard_projects_refresh();
+            self.status = notice.clone();
+            self.dashboard.notice = Some(notice);
         }
     }
 

@@ -425,6 +425,23 @@ impl StudioState {
             editor.seek_to_time(&project, hit.time_seconds);
         });
         self.restart_audio_playback_if_playing();
+
+        if matches!(
+            hit.target,
+            WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle
+        ) {
+            self.active_waveform_drag = Some(WaveformDrag {
+                lane_id: lane_id.to_string(),
+                segment_id,
+                target: hit.target,
+                grab_time_seconds: hit.time_seconds,
+                original_start_seconds: segment.start_seconds,
+                original_end_seconds: segment.end_seconds,
+                preview_start_seconds: segment.start_seconds,
+                preview_end_seconds: segment.end_seconds,
+                has_moved: false,
+            });
+        }
     }
 
     pub(in crate::app) fn press_timeline_autoscroll(&mut self, lane_id: &str) {
@@ -658,17 +675,7 @@ impl StudioState {
         let (start_seconds, end_seconds) = match drag.target {
             WaveformHitTarget::RegionStartHandle => (hit.time_seconds, drag.original_end_seconds),
             WaveformHitTarget::RegionEndHandle => (drag.original_start_seconds, hit.time_seconds),
-            WaveformHitTarget::RegionBody => {
-                let delta = hit.time_seconds - drag.grab_time_seconds;
-                let mut start = drag.original_start_seconds + delta;
-                let mut end = drag.original_end_seconds + delta;
-                if start < 0.0 {
-                    end -= start;
-                    start = 0.0;
-                }
-                (start, end)
-            }
-            WaveformHitTarget::Waveform => return,
+            WaveformHitTarget::RegionBody | WaveformHitTarget::Waveform => return,
         };
 
         if !start_seconds.is_finite() || !end_seconds.is_finite() || start_seconds >= end_seconds {

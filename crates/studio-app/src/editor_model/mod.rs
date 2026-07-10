@@ -137,6 +137,9 @@ pub struct EditorSession {
     pub save_has_error: bool,
     pub save_error_message: Option<String>,
     pub last_saved_at: Option<String>,
+    edit_revision: u64,
+    saved_revision: u64,
+    saving_revision: Option<u64>,
     pub review_state: ReviewState,
     pub support_id: String,
 }
@@ -171,12 +174,16 @@ impl EditorSession {
             save_has_error: false,
             save_error_message: None,
             last_saved_at: None,
+            edit_revision: 0,
+            saved_revision: 0,
+            saving_revision: None,
             review_state: ReviewState::from_project(project),
             support_id: support_id_for_project(project),
         }
     }
 
     pub fn mark_dirty(&mut self) {
+        self.edit_revision = self.edit_revision.saturating_add(1);
         self.is_dirty = true;
         if self.review_state == ReviewState::Submitted {
             self.review_state = ReviewState::Draft;
@@ -184,6 +191,8 @@ impl EditorSession {
     }
 
     pub fn mark_saved(&mut self) {
+        self.saved_revision = self.edit_revision;
+        self.saving_revision = None;
         self.is_dirty = false;
         self.is_saving = false;
         self.save_has_error = false;
@@ -191,25 +200,52 @@ impl EditorSession {
     }
 
     pub fn begin_save(&mut self) {
+        self.saving_revision = Some(self.edit_revision);
         self.is_saving = true;
         self.save_has_error = false;
         self.save_error_message = None;
     }
 
     pub fn complete_save(&mut self, save_succeeded: bool, detail: impl Into<String>) {
+        let revision = self.saving_revision.unwrap_or(self.edit_revision);
+        let _ = self.complete_save_for_revision(revision, save_succeeded, detail);
+    }
+
+    pub fn edit_revision(&self) -> u64 {
+        self.edit_revision
+    }
+
+    pub fn saving_revision(&self) -> Option<u64> {
+        self.saving_revision
+    }
+
+    pub fn complete_save_for_revision(
+        &mut self,
+        revision: u64,
+        save_succeeded: bool,
+        detail: impl Into<String>,
+    ) -> bool {
+        if self.saving_revision != Some(revision) {
+            return false;
+        }
+
         self.is_saving = false;
+        self.saving_revision = None;
         let detail = detail.into();
         if save_succeeded {
-            self.is_dirty = false;
+            self.saved_revision = self.saved_revision.max(revision);
+            self.is_dirty = self.edit_revision != self.saved_revision;
             self.save_has_error = false;
             self.save_error_message = None;
             self.last_saved_at = Some(detail);
-            return;
+            return true;
         }
 
+        self.is_dirty = true;
         self.save_has_error = true;
         self.save_error_message = (!detail.trim().is_empty()).then_some(detail);
         self.last_saved_at = None;
+        true
     }
 
     pub fn should_run_auto_save_tick(&self, paused: bool) -> bool {

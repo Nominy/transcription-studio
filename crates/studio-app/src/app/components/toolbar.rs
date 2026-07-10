@@ -29,8 +29,8 @@ use super::super::styles::{
 use super::drag_capture::view_horizontal_drag_capture;
 use super::timed_widget::view_timed;
 use super::wavesurfer_canvas::{
-    overview_waveform_color, view_overview_blocks_canvas, view_overview_playhead_canvas,
-    view_overview_window_quad, view_wavesurfer_line_waveform,
+    view_overview_blocks_canvas, view_overview_playhead_canvas, view_overview_window_quad,
+    view_wavesurfer_line_waveform, waveform_color,
 };
 
 const DIFF_SWITCH_WIDTH: f32 = 44.0;
@@ -171,11 +171,13 @@ pub(super) fn view_top_toolbar<'a>(
         );
     }
 
-    toolbar = toolbar.push(toolbar_labeled_icon_button(
-        CAPABILITIES_ICON_HANDLE.clone(),
-        "Capabilities",
-        Message::ToggleNativeCapabilityPanel,
-    ));
+    if cfg!(debug_assertions) {
+        toolbar = toolbar.push(toolbar_labeled_icon_button(
+            CAPABILITIES_ICON_HANDLE.clone(),
+            "Capabilities",
+            Message::ToggleNativeCapabilityPanel,
+        ));
+    }
 
     let toolbar = toolbar.push(toolbar_labeled_icon_button(
         HOTKEYS_ICON_HANDLE.clone(),
@@ -238,39 +240,39 @@ fn toolbar_labeled_icon_button<'a>(
 
 fn toolbar_select_style(_theme: &Theme, status: PickListStatus) -> PickListStyle {
     let background = match status {
-        PickListStatus::Hovered | PickListStatus::Opened => Color::from_rgb8(229, 229, 229),
+        PickListStatus::Hovered | PickListStatus::Opened => Color::from_rgb8(248, 250, 252),
         PickListStatus::Active => Color::WHITE,
     };
 
     PickListStyle {
-        text_color: Color::from_rgb8(75, 85, 99),
-        placeholder_color: Color::from_rgb8(115, 115, 115),
-        handle_color: Color::from_rgb8(75, 85, 99),
+        text_color: Color::from_rgb8(71, 85, 105),
+        placeholder_color: Color::from_rgb8(100, 116, 139),
+        handle_color: Color::from_rgb8(71, 85, 105),
         background: Background::Color(background),
-        border: border::rounded(2)
+        border: border::rounded(6)
             .width(1)
-            .color(Color::from_rgb8(229, 229, 229)),
+            .color(Color::from_rgb8(226, 232, 240)),
     }
 }
 
 fn toolbar_outline_button_style(_theme: &Theme, status: button::Status) -> button::Style {
     let background = match status {
-        button::Status::Hovered => Color::from_rgb8(229, 229, 229),
-        button::Status::Pressed => Color::from_rgb8(212, 212, 212),
-        button::Status::Disabled => Color::from_rgb8(245, 245, 245),
+        button::Status::Hovered => Color::from_rgb8(248, 250, 252),
+        button::Status::Pressed => Color::from_rgb8(241, 245, 249),
+        button::Status::Disabled => Color::from_rgb8(248, 250, 252),
         button::Status::Active => Color::WHITE,
     };
     let text_color = match status {
-        button::Status::Disabled => Color::from_rgb8(163, 163, 163),
-        _ => Color::from_rgb8(75, 85, 99),
+        button::Status::Disabled => Color::from_rgb8(148, 163, 184),
+        _ => Color::from_rgb8(71, 85, 105),
     };
 
     button::Style {
         background: Some(Background::Color(background)),
         text_color,
-        border: border::rounded(2)
+        border: border::rounded(6)
             .width(1)
-            .color(Color::from_rgb8(229, 229, 229)),
+            .color(Color::from_rgb8(226, 232, 240)),
         shadow: Default::default(),
     }
 }
@@ -387,7 +389,7 @@ fn view_lazy_overview_waveform_peaks(
     lazy(dependency, |dependency| {
         view_wavesurfer_line_waveform(
             Arc::clone(&dependency.peaks),
-            overview_waveform_color(&dependency.color_token),
+            waveform_color(&dependency.color_token),
             dependency.height,
             dependency.vertical_scale,
             dependency.span_fraction,

@@ -73,12 +73,14 @@ pub(super) fn view_timeline<'a>(
             lane::view_timeline_lane(
                 editor,
                 lane_view,
-                hover,
-                suppress_region_affordances,
-                timeline_autoscroll_anchor_fraction,
-                magnifier,
-                attached_create_region_popup,
-                vertical_zoom_input,
+                lane::TimelineLanePresentation {
+                    hover,
+                    suppress_region_affordances,
+                    timeline_autoscroll_active: timeline_autoscroll_anchor_fraction,
+                    magnifier,
+                    attached_create_region_popup,
+                    vertical_zoom_input,
+                },
             ),
         ));
     }
