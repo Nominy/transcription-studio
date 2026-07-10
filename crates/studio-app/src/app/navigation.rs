@@ -60,7 +60,12 @@ impl StudioState {
 
     pub(super) fn select_adjacent_segment(&mut self, direction: i32) -> Option<f32> {
         let project = self.project().cloned()?;
+        let previous_playhead_seconds = self.editor.as_ref()?.playhead_seconds;
         self.with_editor_mut(|editor| editor.navigate_visible_segment(&project, direction));
+        let next_playhead_seconds = self.editor.as_ref()?.playhead_seconds;
+        if previous_playhead_seconds.to_bits() != next_playhead_seconds.to_bits() {
+            self.restart_audio_playback_if_playing();
+        }
         let selected_segment_id = self
             .editor
             .as_ref()
