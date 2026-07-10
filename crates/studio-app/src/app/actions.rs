@@ -1593,16 +1593,23 @@ fn scroll_to_transcript_offset(scroll_target: Option<f32>) -> Task<Message> {
     )
 }
 
+pub(super) fn restored_transcript_editor_id<'a>(
+    state: &'a StudioState,
+    previous_restore: Option<&HelperFocusRestore>,
+) -> Option<&'a str> {
+    state
+        .helper_last_focus_restore
+        .as_ref()
+        .filter(|restore| previous_restore != Some(*restore))
+        .map(|restore| restore.segment_id.as_str())
+}
+
 fn focus_restored_transcript_editor(
     state: &StudioState,
     previous_restore: Option<&HelperFocusRestore>,
 ) -> Task<Message> {
-    let Some(restore) = state
-        .helper_last_focus_restore
-        .as_ref()
-        .filter(|restore| previous_restore != Some(*restore))
-    else {
+    let Some(segment_id) = restored_transcript_editor_id(state, previous_restore) else {
         return Task::none();
     };
-    focusable_text_editor::focus_transcript_text_editor(&restore.segment_id)
+    focusable_text_editor::focus_transcript_text_editor(segment_id)
 }

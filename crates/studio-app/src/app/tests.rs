@@ -19837,6 +19837,234 @@ fn autoresearch_polish_score() {
         focused_move_focused.text_content.cursor_position() == (0, 3)
     );
 
+    let mut transition_score = 0_u32;
+    let mut transition_total_weight = 0_u32;
+    let mut transition_passed_checks = 0_u32;
+    let mut transition_total_checks = 0_u32;
+    let mut transition_group_scores = BTreeMap::<&'static str, u32>::new();
+    let mut transition_failed_ids = Vec::<&'static str>::new();
+
+    macro_rules! transition_check {
+        ($group:literal, $id:literal, $weight:literal, $condition:expr) => {{
+            let condition = $condition;
+            transition_total_weight += $weight;
+            transition_total_checks += 1;
+            let group_score = transition_group_scores.entry($group).or_default();
+            if condition {
+                transition_score += $weight;
+                *group_score += $weight;
+                transition_passed_checks += 1;
+            } else {
+                transition_failed_ids.push($id);
+            }
+        }};
+    }
+
+    let mut live_seek_state = imported_audio_state_for_audition(1.0, 3.0);
+    live_seek_state.with_editor_mut(|editor| editor.playhead_seconds = 0.25);
+    let _ = update(&mut live_seek_state, Message::TogglePlayback);
+    let _ = update(&mut live_seek_state, Message::NextSegment);
+    transition_check!(
+        "audio_navigation",
+        "audio.next_segment_seek_restarts_backend",
+        125,
+        live_seek_state.audio_playback.last_start_seconds
+            == live_seek_state.editor.as_ref().unwrap().playhead_seconds
+    );
+    let _ = update(&mut live_seek_state, Message::PreviousSegment);
+    transition_check!(
+        "audio_navigation",
+        "audio.previous_boundary_seek_restarts_backend",
+        125,
+        live_seek_state.audio_playback.last_start_seconds
+            == live_seek_state.editor.as_ref().unwrap().playhead_seconds
+    );
+
+    let mut hidden_restore_state = stable_sample_state();
+    let hidden_restore_project = hidden_restore_state.project().unwrap().clone();
+    hidden_restore_state.with_editor_mut(|editor| {
+        editor.track_filter = studio_app::TrackFilter::lane("track-speaker-1", "Speaker 1");
+        editor.select_segment_without_seek(&hidden_restore_project, "annotation-1");
+        editor.playhead_seconds = 4.0;
+        editor.toggle_playback();
+    });
+    hidden_restore_state.helper_focus_restore_pending = Some(HelperFocusRestore {
+        segment_id: "annotation-2".to_string(),
+        blur_playhead_seconds: 4.0,
+        restore_playhead_seconds: 4.0,
+        restore_offset: 2,
+        synthetic: false,
+    });
+    let _ = update(&mut hidden_restore_state, Message::HelperTogglePlayback);
+    let hidden_restore_rows = hidden_restore_state.visible_transcription_rows_sorted();
+    let hidden_restore_focused = hidden_restore_state.helper_focused_segment_id.as_deref();
+    let hidden_restore_selected = hidden_restore_state
+        .editor
+        .as_ref()
+        .unwrap()
+        .selected_segment_id
+        .as_deref();
+    transition_check!(
+        "focus_restore",
+        "focus.hidden_pending_restore_never_targets_unmounted_row",
+        100,
+        hidden_restore_focused.is_none()
+            || hidden_restore_rows
+                .iter()
+                .any(|(segment_id, _)| Some(segment_id.as_str()) == hidden_restore_focused)
+    );
+    transition_check!(
+        "focus_restore",
+        "focus.hidden_pending_restore_keeps_selection_visible",
+        75,
+        hidden_restore_selected.is_none()
+            || hidden_restore_rows
+                .iter()
+                .any(|(segment_id, _)| Some(segment_id.as_str()) == hidden_restore_selected)
+    );
+    transition_check!(
+        "focus_restore",
+        "focus.pause_consumes_hidden_pending_restore",
+        25,
+        hidden_restore_state.helper_focus_restore_pending.is_none()
+    );
+    transition_check!(
+        "focus_restore",
+        "focus.hidden_restore_pause_stops_playback",
+        50,
+        !hidden_restore_state.editor.as_ref().unwrap().is_playing
+    );
+
+    let mut boundary_focus_state = stable_sample_state();
+    let first_visible_segment_id = boundary_focus_state
+        .visible_transcription_rows_sorted()
+        .first()
+        .unwrap()
+        .0
+        .clone();
+    let boundary_playhead_before = boundary_focus_state
+        .project()
+        .unwrap()
+        .segments
+        .iter()
+        .map(|segment| segment.start_seconds)
+        .fold(f64::INFINITY, f64::min);
+    boundary_focus_state.with_editor_mut(|editor| {
+        editor.selected_segment_id = None;
+        editor.playhead_seconds = boundary_playhead_before;
+    });
+    boundary_focus_state.right_shift_pressed = true;
+    let _ = update(
+        &mut boundary_focus_state,
+        Message::RightShiftSegmentNavigation(1),
+    );
+    transition_check!(
+        "focused_navigation",
+        "focus.forward_entry_selects_first_visible_row",
+        100,
+        boundary_focus_state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref()
+            == Some(first_visible_segment_id.as_str())
+    );
+    transition_check!(
+        "focused_navigation",
+        "focus.forward_entry_focuses_first_visible_row",
+        50,
+        boundary_focus_state.helper_focused_segment_id.as_deref()
+            == Some(first_visible_segment_id.as_str())
+    );
+    transition_check!(
+        "focused_navigation",
+        "focus.forward_entry_preserves_playhead",
+        50,
+        boundary_focus_state
+            .editor
+            .as_ref()
+            .unwrap()
+            .playhead_seconds
+            == boundary_playhead_before
+    );
+
+    let mut equal_start_state = stable_sample_state();
+    let mut equal_start_project = equal_start_state.project().unwrap().clone();
+    let equal_start_seconds = equal_start_project
+        .segment("annotation-1")
+        .unwrap()
+        .start_seconds;
+    equal_start_project
+        .segment_mut("annotation-3")
+        .unwrap()
+        .start_seconds = equal_start_seconds;
+    equal_start_state.replace_workflow(
+        StudioWorkflow::from_project(equal_start_project),
+        "Loaded equal-start navigation benchmark fixture.".to_string(),
+    );
+    let equal_start_project = equal_start_state.project().unwrap().clone();
+    equal_start_state.with_editor_mut(|editor| {
+        editor.track_filter = studio_app::TrackFilter::lane("track-speaker-1", "Speaker 1");
+        editor.select_segment(&equal_start_project, "annotation-1");
+    });
+    let _ = update(&mut equal_start_state, Message::NextSegment);
+    transition_check!(
+        "equal_time_navigation",
+        "navigation.next_traverses_equal_start_row_identity",
+        100,
+        equal_start_state
+            .editor
+            .as_ref()
+            .unwrap()
+            .selected_segment_id
+            .as_deref()
+            == Some("annotation-3")
+    );
+    transition_check!(
+        "equal_time_navigation",
+        "navigation.equal_start_traversal_keeps_shared_time",
+        50,
+        equal_start_state.editor.as_ref().unwrap().playhead_seconds == equal_start_seconds
+    );
+
+    let mut repeated_restore_state = stable_sample_state();
+    let repeated_restore = HelperFocusRestore {
+        segment_id: "annotation-1".to_string(),
+        blur_playhead_seconds: 1.2,
+        restore_playhead_seconds: 1.2,
+        restore_offset: 2,
+        synthetic: false,
+    };
+    repeated_restore_state.helper_last_focus_restore = Some(repeated_restore.clone());
+    transition_check!(
+        "focus_restore",
+        "focus.identical_restore_value_still_plans_focus",
+        150,
+        super::actions::restored_transcript_editor_id(
+            &repeated_restore_state,
+            Some(&repeated_restore)
+        ) == Some("annotation-1")
+    );
+
+    transition_failed_ids.sort_unstable();
+    assert_eq!(
+        transition_total_weight, 1_000,
+        "transition polish weights must total 1000"
+    );
+    assert_eq!(
+        transition_total_checks, 12,
+        "transition polish check count must stay explicit"
+    );
+    let transition_metrics = serde_json::json!({
+        "schema": 1,
+        "score": transition_score,
+        "passed": transition_passed_checks,
+        "total": transition_total_checks,
+        "groups": transition_group_scores,
+        "failed": transition_failed_ids,
+    });
+
     navigation_failed_ids.sort_unstable();
     assert_eq!(
         navigation_total_weight, 1_000,
@@ -19884,5 +20112,12 @@ fn autoresearch_polish_score() {
     println!(
         "METRIC navigation_polish_checks_failed={}",
         navigation_total_checks - navigation_passed_checks
+    );
+    println!("TRANSITION_POLISH_METRICS_JSON={transition_metrics}");
+    println!("METRIC transition_polish_score={transition_score}");
+    println!("METRIC transition_polish_checks_passed={transition_passed_checks}");
+    println!(
+        "METRIC transition_polish_checks_failed={}",
+        transition_total_checks - transition_passed_checks
     );
 }
