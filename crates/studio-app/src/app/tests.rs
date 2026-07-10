@@ -3060,6 +3060,147 @@ fn helper_text_move_after_caret_targets_next_same_lane_segment() {
 }
 
 #[test]
+fn helper_text_move_uses_timeline_order_for_visual_first_row() {
+    let mut state = stable_sample_state();
+    let mut project = state.project().unwrap().clone();
+    let first_index = project
+        .segments
+        .iter()
+        .position(|segment| segment.id == "annotation-1")
+        .unwrap();
+    let later_index = project
+        .segments
+        .iter()
+        .position(|segment| segment.id == "annotation-3")
+        .unwrap();
+    project.segments.swap(first_index, later_index);
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "Loaded reordered text-move test fixture.".to_string(),
+    );
+    state.select_segment("annotation-1");
+    set_draft_text_with_cursor_after_chars(&mut state, "annotation-1", "first visible", 13);
+    state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text("later row".to_string());
+
+    let _ = update(&mut state, Message::MoveTextBeforeCaretToPreviousSegment);
+
+    assert_eq!(
+        state.segment_drafts.get("annotation-1").unwrap().text,
+        "first visible"
+    );
+    assert_eq!(
+        state.segment_drafts.get("annotation-3").unwrap().text,
+        "later row"
+    );
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert_eq!(
+        state.status,
+        "No adjacent same-speaker segment found for text move."
+    );
+}
+
+#[test]
+fn helper_text_move_refuses_to_empty_source_in_either_direction() {
+    let mut before_state = stable_sample_state();
+    before_state.select_segment("annotation-3");
+    before_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    set_draft_text_with_cursor_after_chars(&mut before_state, "annotation-3", "whole row", 9);
+
+    let _ = update(
+        &mut before_state,
+        Message::MoveTextBeforeCaretToPreviousSegment,
+    );
+
+    assert_eq!(
+        before_state
+            .segment_drafts
+            .get("annotation-3")
+            .unwrap()
+            .text,
+        "whole row"
+    );
+    assert_eq!(
+        before_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text,
+        "previous"
+    );
+    assert!(!before_state.editor.as_ref().unwrap().is_dirty);
+
+    let mut after_state = stable_sample_state();
+    after_state.select_segment("annotation-1");
+    after_state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text("next".to_string());
+    set_draft_text_with_cursor_after_chars(&mut after_state, "annotation-1", "whole row", 0);
+
+    let _ = update(&mut after_state, Message::MoveTextAfterCaretToNextSegment);
+
+    assert_eq!(
+        after_state.segment_drafts.get("annotation-1").unwrap().text,
+        "whole row"
+    );
+    assert_eq!(
+        after_state.segment_drafts.get("annotation-3").unwrap().text,
+        "next"
+    );
+    assert!(!after_state.editor.as_ref().unwrap().is_dirty);
+}
+
+#[test]
+fn helper_text_move_undo_redo_restores_both_rows_atomically() {
+    let mut state = stable_sample_state();
+    state.select_segment("annotation-3");
+    state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    set_draft_text_with_cursor_after_chars(&mut state, "annotation-3", "move me stay", 7);
+
+    let _ = update(&mut state, Message::MoveTextBeforeCaretToPreviousSegment);
+    let _ = update(
+        &mut state,
+        Message::SegmentTextUndo("annotation-3".to_string()),
+    );
+
+    assert_eq!(
+        state.segment_drafts.get("annotation-1").unwrap().text,
+        "previous"
+    );
+    let source = state.segment_drafts.get("annotation-3").unwrap();
+    assert_eq!(source.text, "move me stay");
+    assert_eq!(source.text_content.cursor_position(), (0, 7));
+    assert_eq!(state.status, "Undid cross-row text move.");
+
+    let _ = update(
+        &mut state,
+        Message::SegmentTextRedo("annotation-3".to_string()),
+    );
+
+    assert_eq!(
+        state.segment_drafts.get("annotation-1").unwrap().text,
+        "previous move me"
+    );
+    let source = state.segment_drafts.get("annotation-3").unwrap();
+    assert_eq!(source.text, "stay");
+    assert_eq!(source.text_content.cursor_position(), (0, 0));
+    assert_eq!(state.status, "Redid cross-row text move.");
+}
+
+#[test]
 fn helper_selected_number_to_skaz_converts_selected_digits_like_extension() {
     let mut state = stable_sample_state();
     set_draft_text_selected_all(&mut state, "annotation-1", "1234");
