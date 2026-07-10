@@ -19151,3 +19151,373 @@ fn playback_follow_scrolls_transcript_to_row_under_playhead() {
         "follow must not re-scroll while playback stays within the same row"
     );
 }
+
+#[test]
+fn autoresearch_polish_score() {
+    let mut score = 0_u32;
+    let mut total_weight = 0_u32;
+    let mut passed_checks = 0_u32;
+    let mut total_checks = 0_u32;
+    let mut group_scores = BTreeMap::<&'static str, u32>::new();
+    let mut failed_ids = Vec::<&'static str>::new();
+
+    macro_rules! polish_check {
+        ($group:literal, $id:literal, $weight:literal, $condition:expr) => {{
+            let condition = $condition;
+            total_weight += $weight;
+            total_checks += 1;
+            let group_score = group_scores.entry($group).or_default();
+            if condition {
+                score += $weight;
+                *group_score += $weight;
+                passed_checks += 1;
+            } else {
+                failed_ids.push($id);
+            }
+        }};
+    }
+
+    let mut first_visible_state = stable_sample_state();
+    let mut reordered_project = first_visible_state.project().unwrap().clone();
+    let first_index = reordered_project
+        .segments
+        .iter()
+        .position(|segment| segment.id == "annotation-1")
+        .unwrap();
+    let later_index = reordered_project
+        .segments
+        .iter()
+        .position(|segment| segment.id == "annotation-3")
+        .unwrap();
+    reordered_project.segments.swap(first_index, later_index);
+    first_visible_state.replace_workflow(
+        StudioWorkflow::from_project(reordered_project),
+        "Loaded reordered polish benchmark fixture.".to_string(),
+    );
+    first_visible_state.select_segment("annotation-1");
+    let first_visible_text = "first visible text";
+    let hidden_target_text = "later row";
+    set_draft_text_with_cursor_after_chars(
+        &mut first_visible_state,
+        "annotation-1",
+        first_visible_text,
+        first_visible_text.chars().count(),
+    );
+    first_visible_state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text(hidden_target_text.to_string());
+    let alt_left_message = hotkey_message_for_physical_status(
+        Key::Character("[".into()),
+        Physical::Code(Code::BracketLeft),
+        Modifiers::ALT,
+        Status::Captured,
+    );
+    polish_check!(
+        "editing",
+        "editing.alt_left_captured_route",
+        20,
+        alt_left_message == Some(Message::MoveTextBeforeCaretToPreviousSegment)
+    );
+    if let Some(message) = alt_left_message {
+        let _ = update(&mut first_visible_state, message);
+    }
+    let first_visible_after = first_visible_state
+        .segment_drafts
+        .get("annotation-1")
+        .unwrap()
+        .text
+        .clone();
+    let hidden_target_after = first_visible_state
+        .segment_drafts
+        .get("annotation-3")
+        .unwrap()
+        .text
+        .clone();
+    let text_loss_bytes = first_visible_text
+        .len()
+        .saturating_sub(first_visible_after.len());
+    polish_check!(
+        "editing",
+        "editing.first_visible_alt_left_preserves_source",
+        140,
+        first_visible_after == first_visible_text
+    );
+    polish_check!(
+        "editing",
+        "editing.first_visible_alt_left_preserves_hidden_target",
+        80,
+        hidden_target_after == hidden_target_text
+    );
+    polish_check!(
+        "editing",
+        "editing.rejected_alt_left_stays_clean",
+        50,
+        !first_visible_state.editor.as_ref().unwrap().is_dirty
+    );
+
+    let mut whole_before_state = stable_sample_state();
+    whole_before_state.select_segment("annotation-3");
+    whole_before_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    let whole_before_text = "whole row";
+    set_draft_text_with_cursor_after_chars(
+        &mut whole_before_state,
+        "annotation-3",
+        whole_before_text,
+        whole_before_text.chars().count(),
+    );
+    let _ = update(
+        &mut whole_before_state,
+        Message::MoveTextBeforeCaretToPreviousSegment,
+    );
+    polish_check!(
+        "editing",
+        "editing.alt_left_never_voids_source",
+        100,
+        whole_before_state
+            .segment_drafts
+            .get("annotation-3")
+            .unwrap()
+            .text
+            == whole_before_text
+            && whole_before_state
+                .segment_drafts
+                .get("annotation-1")
+                .unwrap()
+                .text
+                == "previous"
+    );
+
+    let mut whole_after_state = stable_sample_state();
+    whole_after_state.select_segment("annotation-1");
+    whole_after_state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text("next".to_string());
+    let whole_after_text = "whole row";
+    set_draft_text_with_cursor_after_chars(
+        &mut whole_after_state,
+        "annotation-1",
+        whole_after_text,
+        0,
+    );
+    let _ = update(
+        &mut whole_after_state,
+        Message::MoveTextAfterCaretToNextSegment,
+    );
+    polish_check!(
+        "editing",
+        "editing.alt_right_never_voids_source",
+        100,
+        whole_after_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text
+            == whole_after_text
+            && whole_after_state
+                .segment_drafts
+                .get("annotation-3")
+                .unwrap()
+                .text
+                == "next"
+    );
+
+    let mut partial_before_state = stable_sample_state();
+    partial_before_state.select_segment("annotation-3");
+    partial_before_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    set_draft_text_with_cursor_after_chars(
+        &mut partial_before_state,
+        "annotation-3",
+        "move me stay",
+        7,
+    );
+    let _ = update(
+        &mut partial_before_state,
+        Message::MoveTextBeforeCaretToPreviousSegment,
+    );
+    polish_check!(
+        "editing",
+        "editing.partial_alt_left_is_lossless",
+        70,
+        partial_before_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text
+            == "previous move me"
+            && partial_before_state
+                .segment_drafts
+                .get("annotation-3")
+                .unwrap()
+                .text
+                == "stay"
+    );
+
+    let mut partial_after_state = stable_sample_state();
+    partial_after_state.select_segment("annotation-1");
+    partial_after_state
+        .segment_drafts
+        .get_mut("annotation-3")
+        .unwrap()
+        .replace_text("next".to_string());
+    set_draft_text_with_cursor_after_chars(
+        &mut partial_after_state,
+        "annotation-1",
+        "keep move me",
+        4,
+    );
+    let _ = update(
+        &mut partial_after_state,
+        Message::MoveTextAfterCaretToNextSegment,
+    );
+    polish_check!(
+        "editing",
+        "editing.partial_alt_right_is_lossless",
+        70,
+        partial_after_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text
+            == "keep"
+            && partial_after_state
+                .segment_drafts
+                .get("annotation-3")
+                .unwrap()
+                .text
+                == "move me next"
+    );
+
+    let mut atomic_undo_state = stable_sample_state();
+    atomic_undo_state.select_segment("annotation-3");
+    atomic_undo_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("previous".to_string());
+    set_draft_text_with_cursor_after_chars(
+        &mut atomic_undo_state,
+        "annotation-3",
+        "move me stay",
+        7,
+    );
+    let _ = update(
+        &mut atomic_undo_state,
+        Message::MoveTextBeforeCaretToPreviousSegment,
+    );
+    let _ = update(
+        &mut atomic_undo_state,
+        Message::SegmentTextUndo("annotation-3".to_string()),
+    );
+    polish_check!(
+        "editing",
+        "editing.cross_row_move_undo_is_atomic",
+        120,
+        atomic_undo_state
+            .segment_drafts
+            .get("annotation-1")
+            .unwrap()
+            .text
+            == "previous"
+            && atomic_undo_state
+                .segment_drafts
+                .get("annotation-3")
+                .unwrap()
+                .text
+                == "move me stay"
+    );
+
+    let mut browser_state = stable_sample_state();
+    let browser_report = run_browser_behavior_smoke(&mut browser_state);
+    polish_check!(
+        "keyboard",
+        "keyboard.capture_and_repeat_contract",
+        50,
+        browser_report.hotkeys.all_passed()
+    );
+    polish_check!(
+        "keyboard",
+        "keyboard.focus_loss_releases_input_state",
+        40,
+        browser_report.release_token_unrelated_release_preserved
+            && browser_report.focus_loss_cleared_keys_and_modifiers
+    );
+    polish_check!(
+        "dialogs",
+        "dialogs.escape_priority_and_pending_guards",
+        50,
+        browser_report.escape_order.iter().map(String::as_str).eq([
+            "find", "edit", "create", "hotkeys", "admin", "skip", "submit", "loop",
+        ]) && browser_report.pending_escape_preserved_dialog
+            && browser_report.pending_escape_preserved_loop
+    );
+    polish_check!(
+        "dialogs",
+        "dialogs.default_action_priority",
+        40,
+        browser_report.default_hotkeys_before_submit
+            && browser_report.default_submit_started_pending_request
+            && browser_report.default_create_region_submitted
+            && browser_report.default_edit_annotation_submitted
+            && browser_report.default_find_routes_next
+            && browser_report.browser_back_action_status
+    );
+    polish_check!(
+        "dialogs",
+        "dialogs.outside_click_guards",
+        40,
+        browser_report.create_region_select_preserved
+            && browser_report.create_region_portal_preserved
+            && browser_report.create_region_plain_outside_closed
+            && browser_report.edit_annotation_select_preserved
+            && browser_report.edit_annotation_inside_preserved
+            && browser_report.edit_annotation_portal_preserved
+            && browser_report.edit_annotation_plain_outside_closed
+    );
+    polish_check!(
+        "affordances",
+        "affordances.disabled_controls_are_inert",
+        30,
+        browser_report.undo_redo_disabled
+            && browser_report.saved_button_not_clickable
+            && browser_report.submit_disabled
+            && browser_report.skip_disabled
+            && browser_report.admin_pending_controls_disabled
+            && browser_report.drop_claim_disabled
+    );
+
+    failed_ids.sort_unstable();
+    assert_eq!(total_weight, 1_000, "polish weights must total 1000");
+    assert_eq!(total_checks, 15, "polish check count must stay explicit");
+    let metrics = serde_json::json!({
+        "schema": 1,
+        "score": score,
+        "passed": passed_checks,
+        "total": total_checks,
+        "groups": group_scores,
+        "failed": failed_ids,
+        "text_loss_bytes": text_loss_bytes,
+        "unintended_dirty_transitions": u32::from(
+            first_visible_state.editor.as_ref().unwrap().is_dirty
+        ),
+    });
+    println!("POLISH_METRICS_JSON={metrics}");
+    println!("METRIC polish_score={score}");
+    println!("METRIC polish_checks_passed={passed_checks}");
+    println!(
+        "METRIC polish_checks_failed={}",
+        total_checks - passed_checks
+    );
+    println!("METRIC text_loss_bytes={text_loss_bytes}");
+}
