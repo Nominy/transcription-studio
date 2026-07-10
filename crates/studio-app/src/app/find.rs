@@ -92,7 +92,7 @@ impl StudioState {
         editor
             .transcript_rows(project)
             .into_iter()
-            .filter(|row| row_matches_query(row, &query))
+            .filter(|row| self.row_matches_find_query(row, &query))
             .map(|row| row.segment_id)
             .collect()
     }
@@ -110,7 +110,7 @@ impl StudioState {
             .position(|row| row.segment_id == selected_segment_id)?;
         let selected_row = rows.get(selected_index)?;
         let query = self.find_query.trim().to_lowercase();
-        if query.is_empty() || !row_matches_query(selected_row, &query) {
+        if query.is_empty() || !self.row_matches_find_query(selected_row, &query) {
             return None;
         }
 
@@ -133,11 +133,19 @@ impl StudioState {
             .into_iter()
             .find(|row| row.segment_id == selected_segment_id)?;
         let query = self.find_query.trim().to_lowercase();
-        if query.is_empty() || !row_matches_query(&selected_row, &query) {
+        if query.is_empty() || !self.row_matches_find_query(&selected_row, &query) {
             return None;
         }
 
         self.transcript_scroll_offset_for_segment(project, editor, selected_segment_id)
+    }
+
+    fn row_matches_find_query(&self, row: &TranscriptRowView, query: &str) -> bool {
+        let text = self
+            .segment_drafts
+            .get(&row.segment_id)
+            .map_or(row.text.as_str(), |draft| draft.text.as_str());
+        row_matches_query(row, text, query)
     }
 
     fn select_first_find_match(&mut self) {
@@ -159,10 +167,10 @@ impl StudioState {
     }
 }
 
-fn row_matches_query(row: &TranscriptRowView, query: &str) -> bool {
+fn row_matches_query(row: &TranscriptRowView, text: &str, query: &str) -> bool {
     row.display_id.to_lowercase().contains(query)
         || row.speaker_label.to_lowercase().contains(query)
         || row.start_time.to_lowercase().contains(query)
         || row.end_time.to_lowercase().contains(query)
-        || row.text.to_lowercase().contains(query)
+        || text.to_lowercase().contains(query)
 }
