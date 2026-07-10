@@ -300,18 +300,41 @@ impl StudioState {
             .segments
             .iter()
             .position(|segment| segment.id == segment_id)?;
-        let lane_id = project.segments[source_index].lane_id.as_str();
+        let source = &project.segments[source_index];
+        let compare_timeline_position =
+            |left_index: usize,
+             left: &studio_core::Segment,
+             right_index: usize,
+             right: &studio_core::Segment| {
+                left.start_seconds
+                    .total_cmp(&right.start_seconds)
+                    .then_with(|| left_index.cmp(&right_index))
+            };
+
+        let adjacent = project
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.lane_id == source.lane_id)
+            .filter(|(index, segment)| {
+                let ordering = compare_timeline_position(*index, segment, source_index, source);
+                match direction {
+                    TextMoveDirection::Previous => ordering.is_lt(),
+                    TextMoveDirection::Next => ordering.is_gt(),
+                }
+            });
 
         match direction {
-            TextMoveDirection::Previous => project.segments[..source_index]
-                .iter()
-                .rev()
-                .find(|segment| segment.lane_id == lane_id)
-                .map(|segment| segment.id.clone()),
-            TextMoveDirection::Next => project.segments[source_index + 1..]
-                .iter()
-                .find(|segment| segment.lane_id == lane_id)
-                .map(|segment| segment.id.clone()),
+            TextMoveDirection::Previous => adjacent
+                .max_by(|(left_index, left), (right_index, right)| {
+                    compare_timeline_position(*left_index, left, *right_index, right)
+                })
+                .map(|(_, segment)| segment.id.clone()),
+            TextMoveDirection::Next => adjacent
+                .min_by(|(left_index, left), (right_index, right)| {
+                    compare_timeline_position(*left_index, left, *right_index, right)
+                })
+                .map(|(_, segment)| segment.id.clone()),
         }
     }
 }
