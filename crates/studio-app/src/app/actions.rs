@@ -21,7 +21,7 @@ use super::native_auth::{
     native_clerk_url, save_native_auth_store, start_phone_code_login, verify_phone_code_login,
 };
 use super::native_auth_cli::native_babel_url;
-use super::state::{HelperFocusRestore, PendingLeaveIntent};
+use super::state::PendingLeaveIntent;
 use super::subaccounts::login_with_subaccount_code;
 use super::tag_suggestions;
 use super::updater::{check_for_updates, install_available_update};
@@ -803,9 +803,21 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::EscapePressed => {
             if !state.cancel_timeline_autoscroll() && !state.dismiss_top_surface_or_loop() {
-                let previous_restore = state.helper_last_focus_restore.clone();
+                let was_playing = state
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.is_playing);
                 state.handle_helper_unfocused_escape();
-                let focus_task = focus_restored_transcript_editor(state, previous_restore.as_ref());
+                let focus_task = if was_playing
+                    && state
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| !editor.is_playing)
+                {
+                    focus_restored_transcript_editor(state)
+                } else {
+                    Task::none()
+                };
                 return dispatch_pending_services(state, focus_task);
             }
         }
@@ -819,9 +831,21 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             return dispatch_pending_services(state, scroll_to_transcript_offset(scroll_target));
         }
         Message::HelperTogglePlayback => {
-            let previous_restore = state.helper_last_focus_restore.clone();
+            let was_playing = state
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.is_playing);
             state.handle_helper_toggle_playback();
-            let focus_task = focus_restored_transcript_editor(state, previous_restore.as_ref());
+            let focus_task = if was_playing
+                && state
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| !editor.is_playing)
+            {
+                focus_restored_transcript_editor(state)
+            } else {
+                Task::none()
+            };
             return dispatch_pending_services(state, focus_task);
         }
         Message::TogglePlayback => state.toggle_playback(),
@@ -841,9 +865,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::RightShiftSegmentNavigation(direction) => {
             if state.right_shift_pressed {
-                let previous_restore = state.helper_last_focus_restore.clone();
                 let scroll_target = state.select_adjacent_focused_segment(direction);
-                let focus_task = focus_restored_transcript_editor(state, previous_restore.as_ref());
+                let focus_task = if scroll_target.is_some() {
+                    focus_restored_transcript_editor(state)
+                } else {
+                    Task::none()
+                };
                 return dispatch_pending_services(
                     state,
                     Task::batch([scroll_to_transcript_offset(scroll_target), focus_task]),
@@ -1593,22 +1620,15 @@ fn scroll_to_transcript_offset(scroll_target: Option<f32>) -> Task<Message> {
     )
 }
 
-pub(super) fn restored_transcript_editor_id<'a>(
-    state: &'a StudioState,
-    previous_restore: Option<&HelperFocusRestore>,
-) -> Option<&'a str> {
+pub(super) fn restored_transcript_editor_id(state: &StudioState) -> Option<&str> {
     state
         .helper_last_focus_restore
         .as_ref()
-        .filter(|restore| previous_restore != Some(*restore))
         .map(|restore| restore.segment_id.as_str())
 }
 
-fn focus_restored_transcript_editor(
-    state: &StudioState,
-    previous_restore: Option<&HelperFocusRestore>,
-) -> Task<Message> {
-    let Some(segment_id) = restored_transcript_editor_id(state, previous_restore) else {
+fn focus_restored_transcript_editor(state: &StudioState) -> Task<Message> {
+    let Some(segment_id) = restored_transcript_editor_id(state) else {
         return Task::none();
     };
     focusable_text_editor::focus_transcript_text_editor(segment_id)

@@ -20041,10 +20041,8 @@ fn autoresearch_polish_score() {
         "focus_restore",
         "focus.identical_restore_value_still_plans_focus",
         150,
-        super::actions::restored_transcript_editor_id(
-            &repeated_restore_state,
-            Some(&repeated_restore)
-        ) == Some("annotation-1")
+        super::actions::restored_transcript_editor_id(&repeated_restore_state)
+            == Some("annotation-1")
     );
 
     transition_failed_ids.sort_unstable();
