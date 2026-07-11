@@ -501,10 +501,10 @@ impl AudioPlaybackBackend {
 
     fn ensure_sink(&mut self) -> Result<(), String> {
         if self.sink.is_none() {
-            self.sink = Some(
-                rodio::DeviceSinkBuilder::open_default_sink()
-                    .map_err(|error| format!("audio output unavailable: {error}"))?,
-            );
+            let mut sink = rodio::DeviceSinkBuilder::open_default_sink()
+                .map_err(|error| format!("audio output unavailable: {error}"))?;
+            sink.log_on_drop(false);
+            self.sink = Some(sink);
         }
 
         Ok(())

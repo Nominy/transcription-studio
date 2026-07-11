@@ -1,5 +1,5 @@
 use iced::widget::{scrollable, text_input};
-use iced::{Task, clipboard};
+use iced::{Task, clipboard, window};
 use studio_app::{EditorSession, TaskLookupEvent, TimeRange, resolve_submission_id_copy_success};
 use time::OffsetDateTime;
 
@@ -480,6 +480,42 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 state.subaccount_owner.error = None;
             }
         }
+        Message::SaveSubaccountRelayUrl => {
+            let host_url = state.subaccount_owner.host_url.clone();
+            state.remember_subaccount_relay_host_url(&host_url);
+        }
+        Message::StartSubaccountRelay | Message::TrayStartRelay => {
+            let task = state.begin_subaccount_relay_start();
+            return dispatch_pending_services(state, task);
+        }
+        Message::SubaccountRelayStarted(result) => {
+            state.complete_subaccount_relay_start(result);
+        }
+        Message::StopSubaccountRelay | Message::TrayStopRelay => {
+            state.stop_subaccount_relay();
+        }
+        Message::TrayRestoreRequested => {
+            return window::get_latest().map(Message::RestoreWindowRequested);
+        }
+        Message::RestoreWindowRequested(id) => {
+            if let Some(id) = id {
+                return Task::batch([
+                    window::change_mode(id, window::Mode::Windowed),
+                    window::minimize(id, false),
+                    window::gain_focus(id),
+                ]);
+            }
+        }
+        Message::HideWindowRequested(id) => {
+            if let Some(id) = id {
+                return window::change_mode(id, window::Mode::Hidden);
+            }
+        }
+        Message::TrayExitRequested => {
+            if let Some(intent) = state.request_leave(PendingLeaveIntent::ExitApplication) {
+                return execute_leave_intent(state, intent);
+            }
+        }
         Message::SubaccountOwnerCreateLabelChanged(value) => {
             if !state.subaccount_owner.is_pending {
                 state.subaccount_owner.create_label = value;
@@ -669,7 +705,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::CloseTaskLookup => state.task_lookup = None,
         Message::WindowCloseRequested => {
-            if let Some(intent) = state.request_leave(PendingLeaveIntent::ExitApplication) {
+            if let Some(intent) = state.request_leave(PendingLeaveIntent::HideToTray) {
                 return execute_leave_intent(state, intent);
             }
         }
@@ -1584,7 +1620,11 @@ fn dispatch_pending_services(state: &mut StudioState, task: Task<Message>) -> Ta
 
 fn execute_leave_intent(state: &mut StudioState, intent: PendingLeaveIntent) -> Task<Message> {
     match intent {
-        PendingLeaveIntent::ExitApplication => iced::exit(),
+        PendingLeaveIntent::ExitApplication => {
+            state.stop_subaccount_relay_for_exit();
+            iced::exit()
+        }
+        PendingLeaveIntent::HideToTray => window::get_latest().map(Message::HideWindowRequested),
         PendingLeaveIntent::BackToProjects => {
             state.no_work_modal = None;
             state.enter_dashboard();

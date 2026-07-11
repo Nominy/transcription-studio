@@ -388,6 +388,7 @@ fn view_subaccounts_screen(state: &StudioState) -> Element<'_, Message> {
 
 fn view_settings_screen(state: &StudioState) -> Element<'_, Message> {
     column![
+        view_relay_settings(state),
         view_auth_store_settings(),
         view_capability_settings(state),
         view_update_section(state),
@@ -469,6 +470,57 @@ fn view_subaccount_section(state: &StudioState) -> Element<'_, Message> {
     }
 
     content.into()
+}
+
+fn view_relay_settings(state: &StudioState) -> Element<'_, Message> {
+    let start_button = button(text("Start relay"))
+        .style(primary_button_style)
+        .on_press_maybe(
+            state
+                .relay_process
+                .can_start()
+                .then_some(Message::StartSubaccountRelay),
+        );
+    let stop_button = button(text("Stop relay"))
+        .style(secondary_button_style)
+        .on_press_maybe(
+            state
+                .relay_process
+                .can_stop()
+                .then_some(Message::StopSubaccountRelay),
+        );
+    let save_button = button(text("Save URL"))
+        .style(secondary_button_style)
+        .on_press(Message::SaveSubaccountRelayUrl);
+
+    container(
+        column![
+            text("Sub-account relay").size(15).font(SEMIBOLD),
+            text("Start the bundled relay on this machine and remember its URL for every Transcription Studio screen.")
+                .size(12),
+            row![
+                text_input("Relay URL, e.g. http://127.0.0.1:8787", &state.subaccount_owner.host_url)
+                    .on_input(Message::SubaccountOwnerHostUrlChanged)
+                    .padding(6)
+                    .width(Fill),
+                save_button,
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+            row![
+                start_button,
+                stop_button,
+                text(state.relay_process.label()).size(12),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(8),
+    )
+    .padding(10)
+    .width(Fill)
+    .style(subtle_panel_style)
+    .into()
 }
 fn view_auth_store_settings() -> Element<'static, Message> {
     let current_path = default_native_auth_store_path();

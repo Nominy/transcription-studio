@@ -576,15 +576,19 @@ async fn execute_http_upstream(upstream_url: &str, envelope: Value) -> Result<St
         .send()
         .await
         .map_err(|error| {
-            RelayError::bad_gateway(format!("upstream HTTP request failed: {error}"))
+            RelayError::bad_gateway(format!(
+                "upstream HTTP request failed for {upstream_url}: {error}; verify this URL is reachable from the relay host"
+            ))
         })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
-        RelayError::bad_gateway(format!("upstream HTTP response failed: {error}"))
+        RelayError::bad_gateway(format!(
+            "upstream HTTP response failed for {upstream_url}: {error}"
+        ))
     })?;
     if !status.is_success() {
         return Err(RelayError::bad_gateway(format!(
-            "upstream HTTP {status}: {}",
+            "upstream HTTP {status} from {upstream_url}: {}",
             response_body_snippet(&body)
         )));
     }
@@ -605,6 +609,7 @@ fn response_body_snippet(body: &str) -> String {
 fn shell_command(command_line: &str) -> Command {
     let mut command = Command::new("cmd");
     command.arg("/C").arg(command_line);
+    command.creation_flags(0x0800_0000);
     command
 }
 
@@ -1450,6 +1455,18 @@ mod tests {
                 .any(|session| session.subaccount_id == "sub-active")
         );
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn upstream_connection_error_identifies_relay_reachability() {
+        let upstream_url = "http://127.0.0.1:9/babel-service";
+        let error = execute_http_upstream(upstream_url, json!({ "operation": "health" }))
+            .await
+            .expect_err("closed upstream should fail");
+
+        let message = error.to_string();
+        assert!(message.contains(upstream_url));
+        assert!(message.contains("reachable from the relay host"));
     }
 
     async fn test_state(

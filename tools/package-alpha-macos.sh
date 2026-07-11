@@ -121,13 +121,14 @@ if [[ -n "${STUDIO_DEFAULT_UPDATE_FEED_URL:-}" ]]; then
 fi
 
 if [[ "$skip_build" != "1" && "$skip_build" != "true" ]]; then
-  cargo build -p studio-app --release --locked
+  cargo build -p studio-app -p studio-relay --release --locked
 fi
 
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir" "$output_dir"
 cp "$repo_root/target/release/studio-app" "$stage_dir/TranscriptionStudio"
-chmod +x "$stage_dir/TranscriptionStudio"
+cp "$repo_root/target/release/studio-relay" "$stage_dir/studio-relay"
+chmod +x "$stage_dir/TranscriptionStudio" "$stage_dir/studio-relay"
 
 for file in README.md Cargo.lock; do
   if [[ -f "$repo_root/$file" ]]; then

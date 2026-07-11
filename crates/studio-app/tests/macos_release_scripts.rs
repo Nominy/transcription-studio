@@ -7,6 +7,10 @@ fn macos_alpha_release_scripts_publish_only_atomic_current_payloads() {
 
     assert!(!package_script.contains("vpk bundle"));
     assert!(package_script.contains("run_vpk pack"));
+    assert!(
+        package_script.contains("cargo build -p studio-app -p studio-relay --release --locked")
+    );
+    assert!(package_script.contains("studio-relay"));
     assert!(package_script.contains("--bundleId"));
     assert!(package_script.contains("publish-manifest.json"));
     assert!(package_script.contains("RelativeFileName"));
@@ -52,5 +56,15 @@ fn macos_alpha_release_scripts_publish_only_atomic_current_payloads() {
     assert!(release_doc.contains("STUDIO_UPDATE_FEED_URL"));
     assert!(release_doc.contains("STUDIO_DEFAULT_UPDATE_FEED_URL"));
     assert!(release_doc.contains("mac-sonoma-x64"));
-    assert!(release_doc.contains("releases.alpha.json"));
+    assert!(release_doc.contains("feed metadata"));
+}
+
+#[test]
+fn windows_alpha_package_stages_relay_binary() {
+    let package_script = include_str!("../../../tools/package-alpha-windows.ps1");
+
+    assert!(package_script.contains("[string]$SourceRelayExe"));
+    assert!(package_script.contains("\"-p\", \"studio-relay\""));
+    assert!(package_script.contains("target\\release\\studio-relay.exe"));
+    assert!(package_script.contains("studio-relay.exe"));
 }

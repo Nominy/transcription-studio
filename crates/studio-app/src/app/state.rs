@@ -40,6 +40,10 @@ use super::native_capabilities::{
 };
 use super::panel_persistence::PanelCollapseStorage;
 use super::recovery::RecoveryDraft;
+use super::relay::{
+    RelayLaunchConfig, RelayProcessState, RelayProcessStatus, start_relay_process,
+    stop_relay_child, wait_for_relay_ready,
+};
 use super::review_backend_client::{ReviewBackendRequest, dispatch_review_backend_requests};
 use super::service_callbacks::{
     BabelServiceRequest, ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest,
@@ -59,7 +63,8 @@ use super::startup_route::{
 use super::subaccounts::{
     ManagedSubaccount, SubaccountOwnerDashboard, SubaccountOwnerRequest, SubaccountSession,
     clear_default_subaccount_session, default_subaccount_relay_host_url,
-    dispatch_subaccount_owner_requests, read_default_subaccount_session,
+    dispatch_subaccount_owner_requests, normalize_relay_host_url, read_default_subaccount_session,
+    save_default_subaccount_relay_host_url,
 };
 use super::tag_suggestions::{self, TagSuggestionKeyboardAction};
 use super::transcript_virtualization::{
@@ -149,6 +154,7 @@ pub(super) enum AppSurface {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PendingLeaveIntent {
     ExitApplication,
+    HideToTray,
     BackToProjects,
 }
 
@@ -489,6 +495,9 @@ pub(super) struct StudioState {
     pub(super) native_auth_flow: Option<NativeAuthFlowState>,
     pub(super) subaccount_session: Option<SubaccountSession>,
     pub(super) subaccount_owner: SubaccountOwnerPanelState,
+    pub(super) relay_process: RelayProcessState,
+    #[cfg(windows)]
+    pub(super) tray: Option<super::tray::TrayController>,
     pub(super) dashboard: DashboardState,
     pub(super) updater: UpdatePanelState,
     pub(super) workflow: Result<StudioWorkflow, String>,
@@ -660,6 +669,9 @@ impl Default for StudioState {
             native_auth_flow: None,
             subaccount_session: None,
             subaccount_owner: SubaccountOwnerPanelState::with_default_host(),
+            relay_process: RelayProcessState::default(),
+            #[cfg(windows)]
+            tray: None,
             dashboard: DashboardState::default(),
             updater: UpdatePanelState::default(),
             workflow,
@@ -3249,10 +3261,141 @@ impl StudioState {
     }
 
     pub(super) fn set_subaccount_session(&mut self, session: SubaccountSession) {
+        let host_url = session.host_url.clone();
         self.subaccount_session = Some(session);
+        self.apply_subaccount_relay_host_url(host_url.clone());
+        if let Err(error) = save_default_subaccount_relay_host_url(&host_url) {
+            self.status = format!("Sub-account relay URL could not be remembered: {error}");
+        }
         self.native_auth_flow = None;
         self.enter_dashboard();
         self.queue_dashboard_projects_refresh();
+    }
+
+    pub(super) fn apply_subaccount_relay_host_url(&mut self, host_url: String) {
+        self.subaccount_owner.host_url = host_url.clone();
+        if let Some(flow) = self.native_auth_flow.as_mut()
+            && !flow.is_pending
+        {
+            flow.subaccount_host_url = host_url;
+        }
+    }
+
+    pub(super) fn remember_subaccount_relay_host_url(&mut self, host_url: &str) -> Option<String> {
+        match save_default_subaccount_relay_host_url(host_url) {
+            Ok(normalized) => {
+                self.apply_subaccount_relay_host_url(normalized.clone());
+                self.subaccount_owner.error = None;
+                self.status = format!("Sub-account relay URL remembered: {normalized}");
+                Some(normalized)
+            }
+            Err(error) => {
+                self.subaccount_owner.error = Some(error.clone());
+                self.status = format!("Sub-account relay URL could not be remembered: {error}");
+                None
+            }
+        }
+    }
+
+    pub(super) fn begin_subaccount_relay_start(&mut self) -> Task<Message> {
+        if !self.relay_process.can_start() {
+            self.status = format!(
+                "Sub-account relay is already {}.",
+                self.relay_process.label()
+            );
+            return Task::none();
+        }
+        let config = match RelayLaunchConfig::from_environment() {
+            Ok(config) => config,
+            Err(error) => {
+                self.relay_process.status = RelayProcessStatus::Failed;
+                self.relay_process.last_error = Some(error.clone());
+                self.status = format!("Sub-account relay start failed: {error}");
+                return Task::none();
+            }
+        };
+        let remembered_url = config.remembered_url();
+        match start_relay_process(&config) {
+            Ok(started) => {
+                self.relay_process.status = RelayProcessStatus::Starting;
+                self.relay_process.url = remembered_url;
+                self.relay_process.last_error = None;
+                self.relay_process.child = Some(started.child);
+                self.status = "Starting Sub-account relay...".to_string();
+                Task::perform(
+                    wait_for_relay_ready(started.stderr),
+                    Message::SubaccountRelayStarted,
+                )
+            }
+            Err(error) => {
+                self.relay_process.status = RelayProcessStatus::Failed;
+                self.relay_process.last_error = Some(error.clone());
+                self.status = format!("Sub-account relay start failed: {error}");
+                Task::none()
+            }
+        }
+    }
+
+    pub(super) fn complete_subaccount_relay_start(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(url) => {
+                self.relay_process.status = RelayProcessStatus::Running;
+                self.relay_process.url = url.clone();
+                self.relay_process.last_error = None;
+                if self.subaccount_owner.host_url.trim().is_empty() {
+                    match save_default_subaccount_relay_host_url(&url) {
+                        Ok(normalized) => {
+                            self.apply_subaccount_relay_host_url(normalized.clone());
+                            self.status = format!("Sub-account relay running at {normalized}.");
+                        }
+                        Err(error) => {
+                            self.apply_subaccount_relay_host_url(url.clone());
+                            self.status = format!(
+                                "Sub-account relay running at {url}; URL was not remembered: {error}"
+                            );
+                        }
+                    }
+                } else {
+                    self.status = format!("Sub-account relay running at {url}.");
+                }
+            }
+            Err(error) => {
+                if let Some(mut child) = self.relay_process.child.take() {
+                    let _ = stop_relay_child(&mut child);
+                }
+                self.relay_process.status = RelayProcessStatus::Failed;
+                self.relay_process.last_error = Some(error.clone());
+                self.status = format!("Sub-account relay start failed: {error}");
+            }
+        }
+    }
+
+    pub(super) fn stop_subaccount_relay(&mut self) {
+        if let Some(mut child) = self.relay_process.child.take() {
+            match stop_relay_child(&mut child) {
+                Ok(()) => {
+                    self.relay_process.status = RelayProcessStatus::Stopped;
+                    self.relay_process.last_error = None;
+                    self.status = "Sub-account relay stopped.".to_string();
+                }
+                Err(error) => {
+                    self.relay_process.status = RelayProcessStatus::Failed;
+                    self.relay_process.last_error = Some(error.clone());
+                    self.status = format!("Sub-account relay stop failed: {error}");
+                }
+            }
+        } else {
+            self.relay_process.status = RelayProcessStatus::Stopped;
+            self.relay_process.last_error = None;
+            self.status = "Sub-account relay is not running.".to_string();
+        }
+    }
+
+    pub(super) fn stop_subaccount_relay_for_exit(&mut self) {
+        if let Some(mut child) = self.relay_process.child.take() {
+            let _ = stop_relay_child(&mut child);
+        }
+        self.relay_process.status = RelayProcessStatus::Stopped;
     }
 
     pub(super) fn clear_subaccount_session(&mut self) -> Result<(), String> {
@@ -3341,13 +3484,29 @@ impl StudioState {
         self.subaccount_owner.error = None;
     }
 
-    pub(super) fn queue_subaccount_owner_refresh(&mut self) -> bool {
-        let host_url = self.subaccount_owner.host_url.trim().to_string();
-        if host_url.is_empty() {
-            self.subaccount_owner.error = Some("Relay host URL is required.".to_string());
-            self.status = "Sub-account owner refresh blocked: missing relay host URL.".to_string();
-            return false;
+    fn normalized_owner_relay_host_url(&mut self, context: &str) -> Option<String> {
+        match normalize_relay_host_url(&self.subaccount_owner.host_url) {
+            Ok(host_url) => {
+                if let Err(error) = save_default_subaccount_relay_host_url(&host_url) {
+                    self.subaccount_owner.error = Some(error.clone());
+                    self.status = format!("Sub-account {context} blocked: {error}");
+                    return None;
+                }
+                self.apply_subaccount_relay_host_url(host_url.clone());
+                Some(host_url)
+            }
+            Err(error) => {
+                self.subaccount_owner.error = Some(error.clone());
+                self.status = format!("Sub-account {context} blocked: {error}");
+                None
+            }
         }
+    }
+
+    pub(super) fn queue_subaccount_owner_refresh(&mut self) -> bool {
+        let Some(host_url) = self.normalized_owner_relay_host_url("owner refresh") else {
+            return false;
+        };
         self.subaccount_owner.is_pending = true;
         self.subaccount_owner.error = None;
         self.status = "Loading Sub-account dashboard...".to_string();
@@ -3357,12 +3516,13 @@ impl StudioState {
     }
 
     pub(super) fn begin_subaccount_owner_create(&mut self) -> bool {
-        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        let Some(host_url) = self.normalized_owner_relay_host_url("create") else {
+            return false;
+        };
         let label = self.subaccount_owner.create_label.trim().to_string();
-        if host_url.is_empty() || label.is_empty() {
-            self.subaccount_owner.error =
-                Some("Relay host URL and sub-account label are required.".to_string());
-            self.status = "Sub-account create blocked: missing host URL or label.".to_string();
+        if label.is_empty() {
+            self.subaccount_owner.error = Some("Sub-account label is required.".to_string());
+            self.status = "Sub-account create blocked: missing label.".to_string();
             return false;
         }
         self.subaccount_owner.is_pending = true;
@@ -3374,11 +3534,12 @@ impl StudioState {
     }
 
     pub(super) fn begin_subaccount_owner_revoke(&mut self, subaccount_id: &str) -> bool {
-        let host_url = self.subaccount_owner.host_url.trim().to_string();
-        if host_url.is_empty() || subaccount_id.trim().is_empty() {
-            self.subaccount_owner.error =
-                Some("Relay host URL and sub-account ID are required.".to_string());
-            self.status = "Sub-account revoke blocked: missing host URL or ID.".to_string();
+        let Some(host_url) = self.normalized_owner_relay_host_url("revoke") else {
+            return false;
+        };
+        if subaccount_id.trim().is_empty() {
+            self.subaccount_owner.error = Some("Sub-account ID is required.".to_string());
+            self.status = "Sub-account revoke blocked: missing ID.".to_string();
             return false;
         }
         self.subaccount_owner.is_pending = true;
@@ -3393,7 +3554,9 @@ impl StudioState {
     }
 
     pub(super) fn begin_subaccount_owner_assignment(&mut self, subaccount_id: &str) -> bool {
-        let host_url = self.subaccount_owner.host_url.trim().to_string();
+        let Some(host_url) = self.normalized_owner_relay_host_url("project assignment") else {
+            return false;
+        };
         let draft = self
             .subaccount_owner
             .assignment_drafts
@@ -3401,11 +3564,9 @@ impl StudioState {
             .cloned()
             .unwrap_or_default();
         let project_ids = parse_project_assignment_csv(&draft);
-        if host_url.is_empty() || subaccount_id.trim().is_empty() {
-            self.subaccount_owner.error =
-                Some("Relay host URL and sub-account ID are required.".to_string());
-            self.status =
-                "Sub-account project assignment blocked: missing host URL or ID.".to_string();
+        if subaccount_id.trim().is_empty() {
+            self.subaccount_owner.error = Some("Sub-account ID is required.".to_string());
+            self.status = "Sub-account project assignment blocked: missing ID.".to_string();
             return false;
         }
         self.subaccount_owner.is_pending = true;

@@ -19,9 +19,12 @@ use super::platform_paths::application_support_dir_named;
 use super::service_callbacks::BabelServiceRequest;
 
 const SUBACCOUNT_SESSION_STORE_ENV: &str = "STUDIO_SUBACCOUNT_SESSION_STORE";
+const SUBACCOUNT_RELAY_SETTINGS_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_SETTINGS";
 pub(super) const SUBACCOUNT_RELAY_URL_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_URL";
 #[cfg(not(test))]
 const DEFAULT_SESSION_FILE_NAME: &str = "subaccount-session.json";
+#[cfg(not(test))]
+const DEFAULT_RELAY_SETTINGS_FILE_NAME: &str = "subaccount-relay-settings.json";
 const LOGIN_PATH: &str = "/api/subaccounts/login";
 const BABEL_SERVICE_PATH: &str = "/api/subaccounts/babel-service";
 const AUDIO_PRESIGN_PATH: &str = "/api/subaccounts/audio/presigned-urls";
@@ -100,10 +103,93 @@ fn default_subaccount_session_store_path_without_env() -> PathBuf {
     }
 }
 
+pub(super) fn default_subaccount_relay_settings_path() -> PathBuf {
+    env::var_os(SUBACCOUNT_RELAY_SETTINGS_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(default_subaccount_relay_settings_path_without_env)
+}
+
+fn default_subaccount_relay_settings_path_without_env() -> PathBuf {
+    #[cfg(test)]
+    {
+        env::temp_dir().join(format!(
+            "transcription-studio-test-subaccount-relay-settings-{}.json",
+            std::process::id()
+        ))
+    }
+
+    #[cfg(not(test))]
+    {
+        application_support_dir_named("Transcription Studio").join(DEFAULT_RELAY_SETTINGS_FILE_NAME)
+    }
+}
+
+pub(super) fn read_subaccount_relay_host_url(path: &Path) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let source = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "failed to read Sub-account relay settings {}: {error}",
+            path.display()
+        )
+    })?;
+    if source.trim().is_empty() {
+        return Ok(None);
+    }
+    subaccount_relay_host_url_from_str(&source).map(Some)
+}
+
+pub(super) fn read_default_subaccount_relay_host_url() -> Result<Option<String>, String> {
+    read_subaccount_relay_host_url(&default_subaccount_relay_settings_path())
+}
+
+pub(super) fn save_subaccount_relay_host_url(
+    path: &Path,
+    host_url: &str,
+) -> Result<String, String> {
+    let normalized = normalize_relay_host_url(host_url)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create Sub-account relay settings directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let payload = json!({
+        "version": 1,
+        "relayHostUrl": normalized,
+    });
+    fs::write(path, payload.to_string()).map_err(|error| {
+        format!(
+            "failed to save Sub-account relay settings {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(normalized)
+}
+
+pub(super) fn save_default_subaccount_relay_host_url(host_url: &str) -> Result<String, String> {
+    save_subaccount_relay_host_url(&default_subaccount_relay_settings_path(), host_url)
+}
+
+pub(super) fn subaccount_relay_host_url_from_str(source: &str) -> Result<String, String> {
+    let value = serde_json::from_str::<Value>(source)
+        .map_err(|error| format!("failed to decode Sub-account relay settings: {error}"))?;
+    let host_url = string_by_keys(
+        &value,
+        &["relayHostUrl", "relay_host_url", "hostUrl", "host"],
+    )
+    .ok_or_else(|| "Sub-account relay settings are missing relayHostUrl.".to_string())?;
+    normalize_relay_host_url(&host_url)
+}
+
 pub(super) fn default_subaccount_relay_host_url() -> String {
     env::var(SUBACCOUNT_RELAY_URL_ENV)
         .ok()
         .and_then(|value| normalize_relay_host_url(&value).ok())
+        .or_else(|| read_default_subaccount_relay_host_url().ok().flatten())
         .unwrap_or_default()
 }
 
@@ -115,7 +201,7 @@ pub(super) fn normalize_relay_host_url(input: &str) -> Result<String, String> {
     let candidate = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
-        format!("https://{trimmed}")
+        format!("{}://{trimmed}", default_relay_url_scheme(trimmed))
     };
     let parsed = url::Url::parse(&candidate)
         .map_err(|error| format!("Sub-account host URL is invalid: {error}"))?;
@@ -136,6 +222,25 @@ pub(super) fn normalize_relay_host_url(input: &str) -> Result<String, String> {
         normalized.pop();
     }
     Ok(normalized)
+}
+
+fn default_relay_url_scheme(value_without_scheme: &str) -> &'static str {
+    let authority = value_without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(value_without_scheme)
+        .trim();
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(ipv6) = authority.strip_prefix('[') {
+        ipv6.split(']').next().unwrap_or(ipv6)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    if host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.") {
+        "http"
+    } else {
+        "https"
+    }
 }
 
 pub(super) fn read_subaccount_session(path: &Path) -> Result<Option<SubaccountSession>, String> {
@@ -729,6 +834,30 @@ mod tests {
         assert_eq!(session.token, "secret");
         assert_eq!(session.subaccount_id, "sub-1");
         assert_eq!(session.display_name, "Desk");
+    }
+
+    #[test]
+    fn relay_settings_round_trip_normalized_host_url() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("relay-settings.json");
+
+        let normalized =
+            save_subaccount_relay_host_url(&path, "127.0.0.1:8787/").expect("saved settings");
+
+        assert_eq!(normalized, "http://127.0.0.1:8787");
+        assert_eq!(
+            read_subaccount_relay_host_url(&path).expect("read settings"),
+            Some("http://127.0.0.1:8787".to_string())
+        );
+    }
+
+    #[test]
+    fn relay_settings_parse_legacy_host_keys() {
+        assert_eq!(
+            subaccount_relay_host_url_from_str(r#"{"hostUrl":"http://localhost:8787/"}"#)
+                .expect("parsed settings"),
+            "http://localhost:8787"
+        );
     }
 
     #[test]

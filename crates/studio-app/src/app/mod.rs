@@ -29,6 +29,7 @@ mod navigation;
 mod panel_persistence;
 mod platform_paths;
 mod recovery;
+mod relay;
 mod renderer_capture;
 mod review_backend_client;
 mod segment_actions;
@@ -42,6 +43,8 @@ mod tag_suggestions;
 mod task_lookup;
 mod time_edit;
 mod transcript_virtualization;
+#[cfg(windows)]
+mod tray;
 mod updater;
 mod workbench_shell_smoke;
 
@@ -89,6 +92,11 @@ pub fn run() -> iced::Result {
         })
         .run_with(move || {
             let mut state = StudioState::default();
+            #[cfg(windows)]
+            match tray::create() {
+                Ok(tray) => state.tray = Some(tray),
+                Err(error) => state.status = format!("System tray unavailable: {error}"),
+            }
             apply_startup_route_config(&mut state, startup_route);
             state.open_native_auth_gate_from_store();
             let diff_smoke_mode = diff_workbench_smoke_mode();

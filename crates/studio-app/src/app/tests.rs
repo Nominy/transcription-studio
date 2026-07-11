@@ -21449,3 +21449,14 @@ fn autoresearch_polish_score() {
         ownership_total_checks - ownership_passed_checks
     );
 }
+
+#[test]
+fn starting_bundled_relay_preserves_configured_remote_url() {
+    let mut state = StudioState::default();
+    state.subaccount_owner.host_url = "http://93.127.223.38:8787".to_string();
+
+    state.complete_subaccount_relay_start(Ok("http://127.0.0.1:8787".to_string()));
+
+    assert_eq!(state.subaccount_owner.host_url, "http://93.127.223.38:8787");
+    assert_eq!(state.relay_process.url, "http://127.0.0.1:8787");
+}

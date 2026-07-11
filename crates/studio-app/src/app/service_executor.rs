@@ -1000,6 +1000,7 @@ fn service_command(command_line: &str) -> Command {
     command
         .args(["/D", "/S", "/C"])
         .raw_arg(format!("\"{command_line}\""));
+    command.creation_flags(0x0800_0000);
     command
 }
 

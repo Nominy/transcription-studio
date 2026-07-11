@@ -8,6 +8,7 @@ param(
     [string]$OutputDir = "",
     [string]$PublishDir = "",
     [string]$SourceExe = "",
+    [string]$SourceRelayExe = "",
     [string]$VpkCommand = "",
     [switch]$SkipBuild,
     [switch]$InstallVpk
@@ -258,15 +259,20 @@ if ([string]::IsNullOrWhiteSpace($PublishDir)) {
 if ([string]::IsNullOrWhiteSpace($SourceExe)) {
     $SourceExe = Join-Path $repoRoot "target\release\studio-app.exe"
 }
+if ([string]::IsNullOrWhiteSpace($SourceRelayExe)) {
+    $SourceRelayExe = Join-Path $repoRoot "target\release\studio-relay.exe"
+}
 
 $stagePath = [System.IO.Path]::GetFullPath($StageDir)
 $outputPath = [System.IO.Path]::GetFullPath($OutputDir)
 $publishPath = [System.IO.Path]::GetFullPath($PublishDir)
 $sourceExePath = [System.IO.Path]::GetFullPath($SourceExe)
+$sourceRelayExePath = [System.IO.Path]::GetFullPath($SourceRelayExe)
 Assert-ChildPath -Parent $repoRoot -Child $stagePath
 Assert-ChildPath -Parent $repoRoot -Child $outputPath
 Assert-ChildPath -Parent $repoRoot -Child $publishPath
 Assert-ChildPath -Parent $repoRoot -Child $sourceExePath
+Assert-ChildPath -Parent $repoRoot -Child $sourceRelayExePath
 Assert-NonOverlappingDirectories -FirstName "StageDir" -First $stagePath -SecondName "OutputDir" -Second $outputPath
 Assert-NonOverlappingDirectories -FirstName "StageDir" -First $stagePath -SecondName "PublishDir" -Second $publishPath
 Assert-NonOverlappingDirectories -FirstName "OutputDir" -First $outputPath -SecondName "PublishDir" -Second $publishPath
@@ -288,7 +294,7 @@ if ([string]::IsNullOrWhiteSpace($VpkCommand)) {
 }
 
 if (-not $SkipBuild) {
-    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "--release", "--locked")
+    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "-p", "studio-relay", "--release", "--locked")
 }
 
 if (Test-Path -LiteralPath $stagePath) {
@@ -301,6 +307,10 @@ if (-not (Test-Path -LiteralPath $sourceExePath -PathType Leaf)) {
     throw "Missing release executable: $sourceExePath"
 }
 Copy-Item -LiteralPath $sourceExePath -Destination (Join-Path $stagePath "TranscriptionStudio.exe")
+if (-not (Test-Path -LiteralPath $sourceRelayExePath -PathType Leaf)) {
+    throw "Missing relay executable: $sourceRelayExePath"
+}
+Copy-Item -LiteralPath $sourceRelayExePath -Destination (Join-Path $stagePath "studio-relay.exe")
 
 foreach ($file in @("README.md", "Cargo.lock")) {
     $source = Join-Path $repoRoot $file
