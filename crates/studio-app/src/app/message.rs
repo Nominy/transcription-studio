@@ -8,8 +8,11 @@ use studio_waveform::WaveformHit;
 use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_input::OutsideInteractionContext;
 use super::keybinds::{HotkeyAction, KeyBinding};
-use super::review_backend_client::ReviewBackendRequest;
-use super::service_callbacks::{SaveRequestToken, SubmitRequestToken};
+use super::review_backend_client::ReviewBackendServiceRequest;
+use super::service_callbacks::{
+    FeedbackBootstrapInputs, FeedbackBootstrapToken, FeedbackDraftBootstrap,
+    FeedbackDraftSaveToken, SaveRequestToken, SubmitRequestToken,
+};
 use super::state::{DashboardSection, NativeCapabilityModalTab};
 use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
 use super::tag_suggestions::{TagSuggestion, TagSuggestionKeyboardAction};
@@ -179,14 +182,61 @@ pub(super) enum Message {
     RetryAssessment,
     BackToProjects,
     OpenFeedbackPanel,
+    RetryFeedbackBootstrap,
+    #[allow(dead_code)]
+    FeedbackRubricFlagsLoaded {
+        token: FeedbackBootstrapToken,
+        rubric_flag_names: Vec<String>,
+    },
+    #[allow(dead_code)]
+    FeedbackRubricFlagsLoadFailed {
+        token: FeedbackBootstrapToken,
+        error: String,
+    },
+    #[allow(dead_code)]
+    FeedbackFormLoaded {
+        token: FeedbackBootstrapToken,
+        form_step_id: String,
+    },
+    #[allow(dead_code)]
+    FeedbackFormLoadFailed {
+        token: FeedbackBootstrapToken,
+        error: String,
+    },
+    #[allow(dead_code)]
+    FeedbackInputsLoaded {
+        token: FeedbackBootstrapToken,
+        result: FeedbackBootstrapInputs,
+    },
+    #[allow(dead_code)]
+    FeedbackInputsLoadFailed {
+        token: FeedbackBootstrapToken,
+        error: String,
+    },
+    #[allow(dead_code)]
+    FeedbackDraftLoaded {
+        token: FeedbackBootstrapToken,
+        draft: FeedbackDraftBootstrap,
+    },
+    #[allow(dead_code)]
+    FeedbackDraftLoadFailed {
+        token: FeedbackBootstrapToken,
+        error: String,
+    },
     CloseFeedbackPanel,
     FeedbackRatingChanged(String, u8),
-    FeedbackCommentChanged(String, String),
-    FeedbackOtherFeedbackChanged(String),
+    FeedbackCommentEdited(String, text_editor::Action),
+    FeedbackOtherFeedbackEdited(text_editor::Action),
     #[allow(dead_code)]
-    FeedbackDraftSaved(String),
+    FeedbackDraftSaved {
+        token: FeedbackDraftSaveToken,
+        last_saved: String,
+    },
     #[allow(dead_code)]
-    FeedbackDraftSaveFailed(String),
+    FeedbackDraftSaveFailed {
+        token: FeedbackDraftSaveToken,
+        error: String,
+    },
     TaskLookupProcessedTranscriptionChanged(String),
     TaskLookupReviewActionChanged(String),
     TaskLookupClickClaimStitched,
@@ -413,8 +463,8 @@ pub(super) enum Message {
     DraftApplyRow(String),
     DraftSkipRow(String),
     DraftApplyRedistributionGroup(String),
-    ReviewBackendRequestSucceeded(ReviewBackendRequest, String),
-    ReviewBackendRequestFailed(ReviewBackendRequest, String),
+    ReviewBackendRequestSucceeded(ReviewBackendServiceRequest, String),
+    ReviewBackendRequestFailed(ReviewBackendServiceRequest, String),
     ApplyTagSuggestion(String, TagSuggestion),
     TranscriptTagSuggestionKeyPressed(String, TagSuggestionKeyboardAction),
     AcknowledgeLowConfidenceWord(String, usize),

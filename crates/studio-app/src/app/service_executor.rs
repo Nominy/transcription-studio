@@ -15,11 +15,15 @@ use super::Message;
 use super::native_auth::{
     default_native_auth_store_path, mint_native_babel_authorization_from_store, native_clerk_url,
 };
+#[cfg(test)]
+use super::service_callbacks::FeedbackDraftSaveServiceRequest;
 use super::service_callbacks::{
     AdminRateReviewActionRequest, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
-    ClaimNextFromQueueRequest, DropWorkerActionRequest, LintAnnotationsRequest,
-    LoadLatestReviewActionRequest, LoadReviewActionRequest, SaveAnnotationsRequest,
-    SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
+    ClaimNextFromQueueRequest, DropWorkerActionRequest, FeedbackBootstrapInputs,
+    FeedbackBootstrapToken, FeedbackDraftBootstrap, FeedbackDraftSaveToken, LintAnnotationsRequest,
+    LoadFeedbackDraftRequest, LoadFeedbackFormRequest, LoadFeedbackInputsRequest,
+    LoadFeedbackRubricFlagsRequest, LoadLatestReviewActionRequest, LoadReviewActionRequest,
+    SaveAnnotationsRequest, SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
 };
 use super::subaccounts::{subaccount_relay_payload_for_request, subaccount_session_is_active};
 
@@ -60,6 +64,10 @@ pub(super) fn is_dispatchable_babel_service_request(request: &BabelServiceReques
             | BabelServiceRequest::DropWorkerAction(_)
             | BabelServiceRequest::SkipReviewAction(_)
             | BabelServiceRequest::AdminRateReviewAction(_)
+            | BabelServiceRequest::LoadFeedbackRubricFlags(_)
+            | BabelServiceRequest::LoadFeedbackForm(_)
+            | BabelServiceRequest::LoadFeedbackInputs(_)
+            | BabelServiceRequest::LoadFeedbackDraft(_)
             | BabelServiceRequest::SaveFeedbackDraft(_)
     )
 }
@@ -157,8 +165,20 @@ pub(super) fn fixture_payload_message_for_request(
                 "Please try again.",
             ))
         }
-        BabelServiceRequest::SaveFeedbackDraft(_) => {
-            Some(feedback_draft_message_from_payload(&payload))
+        BabelServiceRequest::LoadFeedbackRubricFlags(request) => Some(
+            feedback_rubric_flags_message_from_payload(&payload, request.token),
+        ),
+        BabelServiceRequest::LoadFeedbackForm(request) => {
+            Some(feedback_form_message_from_payload(&payload, request.token))
+        }
+        BabelServiceRequest::LoadFeedbackInputs(request) => Some(
+            feedback_inputs_message_from_payload(&payload, request.token),
+        ),
+        BabelServiceRequest::LoadFeedbackDraft(request) => Some(
+            feedback_bootstrap_draft_message_from_payload(&payload, request.token),
+        ),
+        BabelServiceRequest::SaveFeedbackDraft(request) => {
+            Some(feedback_draft_message_from_payload(&payload, request.token))
         }
     }
 }
@@ -295,26 +315,254 @@ fn simple_mutation_message_from_payload(
     }
 }
 
-fn feedback_draft_message_from_payload(payload: &str) -> Message {
+fn feedback_rubric_flags_message_from_payload(
+    payload: &str,
+    token: FeedbackBootstrapToken,
+) -> Message {
+    match feedback_bootstrap_payload_value(payload).and_then(|value| {
+        let flags = value
+            .as_array()
+            .ok_or_else(|| "Babel feedback rubric response must be an array".to_string())?;
+        flags
+            .iter()
+            .enumerate()
+            .map(|(index, flag)| {
+                flag.as_str()
+                    .map(str::trim)
+                    .filter(|flag| !flag.is_empty())
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        format!("Babel feedback rubric flag at index {index} must be a string")
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }) {
+        Ok(rubric_flag_names) => Message::FeedbackRubricFlagsLoaded {
+            token,
+            rubric_flag_names,
+        },
+        Err(error) => Message::FeedbackRubricFlagsLoadFailed { token, error },
+    }
+}
+
+fn feedback_form_message_from_payload(payload: &str, token: FeedbackBootstrapToken) -> Message {
+    match feedback_bootstrap_payload_value(payload).and_then(|value| {
+        value
+            .get("steps")
+            .and_then(Value::as_array)
+            .and_then(|steps| steps.first())
+            .and_then(|step| step.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|step_id| !step_id.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "Babel feedback form is missing its first step id".to_string())
+    }) {
+        Ok(form_step_id) => Message::FeedbackFormLoaded {
+            token,
+            form_step_id,
+        },
+        Err(error) => Message::FeedbackFormLoadFailed { token, error },
+    }
+}
+
+fn feedback_inputs_message_from_payload(payload: &str, token: FeedbackBootstrapToken) -> Message {
+    match feedback_bootstrap_payload_value(payload).and_then(|value| {
+        let values = value
+            .as_array()
+            .ok_or_else(|| "Babel feedback inputs response must be an array".to_string())?;
+        if values.is_empty() {
+            return Err("Babel feedback form returned no inputs".to_string());
+        }
+        let inputs = values
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                let object = input.as_object().ok_or_else(|| {
+                    format!("Babel feedback input at index {index} must be an object")
+                })?;
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        format!("Babel feedback input at index {index} is missing id")
+                    })?;
+                let label = match object.get("label") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(label)) => Some(label.clone()),
+                    Some(_) => {
+                        return Err(format!(
+                            "Babel feedback input label at index {index} must be a string or null"
+                        ));
+                    }
+                };
+                Ok(studio_app::FeedbackInput { id, label })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(FeedbackBootstrapInputs { inputs })
+    }) {
+        Ok(result) => Message::FeedbackInputsLoaded { token, result },
+        Err(error) => Message::FeedbackInputsLoadFailed { token, error },
+    }
+}
+
+fn feedback_bootstrap_draft_message_from_payload(
+    payload: &str,
+    token: FeedbackBootstrapToken,
+) -> Message {
+    match feedback_bootstrap_payload_value(payload).and_then(|value| {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "Babel feedback draft response must be an object".to_string())?;
+        let form_step_response_id = object
+            .get("formStepResponseId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                "Babel feedback draft response is missing formStepResponseId".to_string()
+            })?;
+        let updated_at = object
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "Babel feedback draft response is missing updatedAt".to_string())?;
+        let response_values = match object.get("inputResponses") {
+            None | Some(Value::Null) => &[][..],
+            Some(Value::Array(values)) => values.as_slice(),
+            Some(_) => {
+                return Err("Babel feedback draft inputResponses must be an array".to_string());
+            }
+        };
+        let input_responses = response_values
+            .iter()
+            .enumerate()
+            .map(|(index, response)| {
+                let response = response.as_object().ok_or_else(|| {
+                    format!("Babel feedback input response at index {index} must be an object")
+                })?;
+                let form_input_id = response
+                    .get("formInputId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        format!(
+                            "Babel feedback input response at index {index} is missing formInputId"
+                        )
+                    })?;
+                let value = response
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| {
+                        format!("Babel feedback input response at index {index} is missing value")
+                    })?;
+                Ok(studio_app::FeedbackInputResponse {
+                    form_input_id,
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(FeedbackDraftBootstrap {
+            form_step_response_id,
+            input_responses,
+            updated_at,
+        })
+    }) {
+        Ok(draft) => Message::FeedbackDraftLoaded { token, draft },
+        Err(error) => Message::FeedbackDraftLoadFailed { token, error },
+    }
+}
+
+fn feedback_bootstrap_payload_value(payload: &str) -> Result<Value, String> {
+    let value = decode_service_payload(payload)?;
+    if let Some(normalized) = normalize_trpc_response_value(&value) {
+        return Ok(normalized);
+    }
+    if let Some(error) =
+        first_string_by_key(&value, &["error", "message"]).filter(|error| !error.trim().is_empty())
+    {
+        return Err(error);
+    }
+    Ok(value)
+}
+
+fn feedback_draft_message_from_payload(payload: &str, token: FeedbackDraftSaveToken) -> Message {
     let value = match decode_service_payload(payload) {
         Ok(value) => value,
-        Err(error) => return Message::FeedbackDraftSaveFailed(error),
+        Err(error) => return Message::FeedbackDraftSaveFailed { token, error },
     };
 
-    if !response_success(&value) {
-        return Message::FeedbackDraftSaveFailed(response_error(
-            &value,
-            "Failed to save feedback draft. Please try again.",
-        ));
+    if let Some(error) = feedback_draft_response_error(&value) {
+        return Message::FeedbackDraftSaveFailed { token, error };
     }
 
-    Message::FeedbackDraftSaved(
-        first_string_by_key(
+    Message::FeedbackDraftSaved {
+        token,
+        last_saved: first_string_by_key(
             &value,
             &["updatedAt", "updated_at", "lastSaved", "last_saved"],
         )
         .unwrap_or_else(current_timestamp),
-    )
+    }
+}
+
+fn feedback_draft_response_error(value: &Value) -> Option<String> {
+    const FALLBACK: &str = "Failed to save feedback draft. Please try again.";
+
+    if let Some(error) =
+        first_string_by_key(value, &["error", "message"]).filter(|error| !error.trim().is_empty())
+    {
+        return Some(error);
+    }
+    if has_nonempty_value_by_key(value, &["error", "message"])
+        || has_false_bool_by_key(value, &["success", "ok"])
+    {
+        return Some(FALLBACK.to_string());
+    }
+    None
+}
+
+fn has_nonempty_value_by_key(value: &Value, keys: &[&str]) -> bool {
+    match value {
+        Value::Object(map) => {
+            keys.iter().any(|key| {
+                map.get(*key).is_some_and(|value| match value {
+                    Value::Null => false,
+                    Value::String(value) => !value.trim().is_empty(),
+                    Value::Array(values) => !values.is_empty(),
+                    Value::Object(values) => !values.is_empty(),
+                    Value::Bool(_) | Value::Number(_) => true,
+                })
+            }) || map
+                .values()
+                .any(|child| has_nonempty_value_by_key(child, keys))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|child| has_nonempty_value_by_key(child, keys)),
+        _ => false,
+    }
+}
+
+fn has_false_bool_by_key(value: &Value, keys: &[&str]) -> bool {
+    match value {
+        Value::Object(map) => {
+            keys.iter()
+                .any(|key| map.get(*key).and_then(Value::as_bool) == Some(false))
+                || map.values().any(|child| has_false_bool_by_key(child, keys))
+        }
+        Value::Array(items) => items.iter().any(|child| has_false_bool_by_key(child, keys)),
+        _ => false,
+    }
 }
 
 fn decode_service_payload(payload: &str) -> Result<Value, String> {
@@ -914,6 +1162,9 @@ fn live_trpc_query_operation(operation: &str) -> bool {
             | "milestones.getAllProjectMilestones"
             | "worker.getActiveQuests"
             | "timer.getActiveTemporaryRates"
+            | "transcriptionFeedbackForm.getRubricFlagNames"
+            | "transcriptionFeedbackForm.getForm"
+            | "forms.getFormInputsByStepId"
             | "transcriptions.getReviewActionDataById"
             | "transcriptions.getLatestReviewActionByProcessedTranscriptionId"
             | "audits.getPresignedUrls"
@@ -1110,11 +1361,43 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
                 "ratingReason": rating_reason,
             },
         }),
+        BabelServiceRequest::LoadFeedbackRubricFlags(LoadFeedbackRubricFlagsRequest {
+            project_id,
+            ..
+        }) => json!({
+            "operation": "transcriptionFeedbackForm.getRubricFlagNames",
+            "payload": { "projectId": project_id },
+        }),
+        BabelServiceRequest::LoadFeedbackForm(LoadFeedbackFormRequest { project_id, .. }) => {
+            json!({
+                "operation": "transcriptionFeedbackForm.getForm",
+                "payload": { "projectId": project_id },
+            })
+        }
+        BabelServiceRequest::LoadFeedbackInputs(LoadFeedbackInputsRequest { step_id, .. }) => {
+            json!({
+                "operation": "forms.getFormInputsByStepId",
+                "payload": { "stepId": step_id },
+            })
+        }
+        BabelServiceRequest::LoadFeedbackDraft(LoadFeedbackDraftRequest {
+            form_step_id,
+            review_action_id,
+            worker_id,
+            ..
+        }) => json!({
+            "operation": "transcriptionFeedbackForm.getOrCreateDraft",
+            "payload": {
+                "formStepId": form_step_id,
+                "reviewActionId": review_action_id,
+                "workerId": worker_id,
+            },
+        }),
         BabelServiceRequest::SaveFeedbackDraft(request) => json!({
             "operation": "transcriptionFeedbackForm.saveDraft",
             "payload": {
-                "formStepResponseId": request.form_step_response_id,
-                "inputResponses": request.input_responses.iter().map(|response| {
+                "formStepResponseId": request.payload.form_step_response_id,
+                "inputResponses": request.payload.input_responses.iter().map(|response| {
                     json!({
                         "formInputId": response.form_input_id,
                         "value": response.value,
@@ -1202,7 +1485,11 @@ fn normalize_dashboard_projects_response_payload(response: &str) -> String {
             .and_then(normalize_trpc_response_value)
             .filter(Value::is_array)
     {
-        return json!({ "projects": projects }).to_string();
+        let worker = items
+            .first()
+            .and_then(normalize_trpc_response_value)
+            .filter(Value::is_object);
+        return json!({ "worker": worker, "projects": projects }).to_string();
     }
 
     let normalized = normalize_trpc_response_value(&value).unwrap_or(value);
@@ -1611,9 +1898,28 @@ fn failure_message_for_request(request: BabelServiceRequest, error: &str) -> Mes
         BabelServiceRequest::AdminRateReviewAction(_) => {
             Message::AdminFlagFailed(error.to_string())
         }
-        BabelServiceRequest::SaveFeedbackDraft(_) => {
-            Message::FeedbackDraftSaveFailed(error.to_string())
+        BabelServiceRequest::LoadFeedbackRubricFlags(request) => {
+            Message::FeedbackRubricFlagsLoadFailed {
+                token: request.token,
+                error: format!("Feedback rubric flags load failed: {error}"),
+            }
         }
+        BabelServiceRequest::LoadFeedbackForm(request) => Message::FeedbackFormLoadFailed {
+            token: request.token,
+            error: format!("Feedback form load failed: {error}"),
+        },
+        BabelServiceRequest::LoadFeedbackInputs(request) => Message::FeedbackInputsLoadFailed {
+            token: request.token,
+            error: format!("Feedback form inputs load failed: {error}"),
+        },
+        BabelServiceRequest::LoadFeedbackDraft(request) => Message::FeedbackDraftLoadFailed {
+            token: request.token,
+            error: format!("Feedback draft bootstrap failed: {error}"),
+        },
+        BabelServiceRequest::SaveFeedbackDraft(request) => Message::FeedbackDraftSaveFailed {
+            token: request.token,
+            error: error.to_string(),
+        },
     }
 }
 
@@ -1688,12 +1994,15 @@ mod tests {
             script_path.display(),
             request_log.display()
         );
-        let request = BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveRequest {
-            form_step_response_id: "form-step-response-1".to_string(),
-            input_responses: vec![FeedbackInputResponse {
-                form_input_id: "comment".to_string(),
-                value: "Looks good".to_string(),
-            }],
+        let request = BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveServiceRequest {
+            payload: FeedbackDraftSaveRequest {
+                form_step_response_id: "form-step-response-1".to_string(),
+                input_responses: vec![FeedbackInputResponse {
+                    form_input_id: "comment".to_string(),
+                    value: "Looks good".to_string(),
+                }],
+            },
+            token: Default::default(),
         });
 
         let payload = command_payload_for_command_line(&request, &command_line)
@@ -1755,8 +2064,44 @@ mod tests {
             Message::DropClaimSucceeded
         ));
         assert!(matches!(
-            feedback_draft_message_from_payload(&normalized),
-            Message::FeedbackDraftSaved(_)
+            feedback_draft_message_from_payload(&normalized, Default::default()),
+            Message::FeedbackDraftSaved { .. }
+        ));
+    }
+
+    #[test]
+    fn feedback_draft_accepts_normalized_trpc_null_success() {
+        let normalized =
+            normalize_service_response_payload(r#"[{"result":{"data":{"json":null}}}]"#);
+
+        assert_eq!(normalized, "null");
+        assert!(matches!(
+            feedback_draft_message_from_payload(&normalized, Default::default()),
+            Message::FeedbackDraftSaved { .. }
+        ));
+    }
+
+    #[test]
+    fn feedback_draft_rejects_explicit_false_success_flags() {
+        for payload in [r#"{"success":false}"#, r#"{"ok":false}"#] {
+            assert!(matches!(
+                feedback_draft_message_from_payload(payload, Default::default()),
+                Message::FeedbackDraftSaveFailed { error, .. }
+                    if error == "Failed to save feedback draft. Please try again."
+            ));
+        }
+    }
+
+    #[test]
+    fn feedback_draft_rejects_trpc_error_payload() {
+        let normalized = normalize_service_response_payload(
+            r#"[{"error":{"json":{"message":"Feedback draft was rejected"}}}]"#,
+        );
+
+        assert!(matches!(
+            feedback_draft_message_from_payload(&normalized, Default::default()),
+            Message::FeedbackDraftSaveFailed { error, .. }
+                if error == "Feedback draft was rejected"
         ));
     }
 
@@ -1823,6 +2168,132 @@ mod tests {
         assert!(parts.url.contains("%2210%22"));
         assert!(parts.redacted_summary().contains("method=Get"));
         assert!(!parts.redacted_summary().contains("super-secret"));
+    }
+
+    #[test]
+    fn feedback_bootstrap_envelopes_match_babel_contract() {
+        let token = FeedbackBootstrapToken {
+            workspace_generation: 7,
+            attempt: 3,
+        };
+        let cases = [
+            (
+                BabelServiceRequest::LoadFeedbackRubricFlags(LoadFeedbackRubricFlagsRequest {
+                    project_id: "project-1".to_string(),
+                    token,
+                }),
+                json!({
+                    "operation": "transcriptionFeedbackForm.getRubricFlagNames",
+                    "payload": { "projectId": "project-1" },
+                }),
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackForm(LoadFeedbackFormRequest {
+                    project_id: "project-1".to_string(),
+                    token,
+                }),
+                json!({
+                    "operation": "transcriptionFeedbackForm.getForm",
+                    "payload": { "projectId": "project-1" },
+                }),
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackInputs(LoadFeedbackInputsRequest {
+                    step_id: "step-1".to_string(),
+                    token,
+                }),
+                json!({
+                    "operation": "forms.getFormInputsByStepId",
+                    "payload": { "stepId": "step-1" },
+                }),
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackDraft(LoadFeedbackDraftRequest {
+                    form_step_id: "step-1".to_string(),
+                    review_action_id: "review-1".to_string(),
+                    worker_id: "worker-1".to_string(),
+                    token,
+                }),
+                json!({
+                    "operation": "transcriptionFeedbackForm.getOrCreateDraft",
+                    "payload": {
+                        "formStepId": "step-1",
+                        "reviewActionId": "review-1",
+                        "workerId": "worker-1",
+                    },
+                }),
+            ),
+        ];
+
+        for (request, expected) in cases {
+            assert_eq!(request_envelope_for_service_command(&request), expected);
+        }
+    }
+
+    #[test]
+    fn feedback_bootstrap_callbacks_decode_batch_success_and_malformed_payloads() {
+        let token = FeedbackBootstrapToken {
+            workspace_generation: 2,
+            attempt: 4,
+        };
+        assert_eq!(
+            feedback_rubric_flags_message_from_payload(
+                r#"[{"result":{"data":{"json":["tx-word-accuracy","tx-other-feedback"]}}}]"#,
+                token,
+            ),
+            Message::FeedbackRubricFlagsLoaded {
+                token,
+                rubric_flag_names: vec![
+                    "tx-word-accuracy".to_string(),
+                    "tx-other-feedback".to_string(),
+                ],
+            }
+        );
+        assert_eq!(
+            feedback_form_message_from_payload(
+                r#"[{"result":{"data":{"json":{"steps":[{"id":"step-1"}]}}}}]"#,
+                token,
+            ),
+            Message::FeedbackFormLoaded {
+                token,
+                form_step_id: "step-1".to_string(),
+            }
+        );
+        assert!(matches!(
+            feedback_form_message_from_payload(r#"{"steps":[]}"#, token),
+            Message::FeedbackFormLoadFailed {
+                token: failed_token,
+                ..
+            } if failed_token == token
+        ));
+        assert!(matches!(
+            feedback_bootstrap_draft_message_from_payload(
+                r#"{"formStepResponseId":"response-1","inputResponses":[]}"#,
+                token,
+            ),
+            Message::FeedbackDraftLoadFailed {
+                token: failed_token,
+                ..
+            } if failed_token == token
+        ));
+    }
+
+    #[test]
+    fn dashboard_batch_normalization_retains_worker_id_and_projects() {
+        let normalized = normalize_dashboard_projects_response_payload(
+            r#"[
+                {"result":{"data":{"json":{"id":"worker-1"}}}},
+                {"result":{"data":{"json":null}}},
+                {"result":{"data":{"json":[{"id":"project-1"}]}}}
+            ]"#,
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&normalized).expect("normalized dashboard"),
+            json!({
+                "worker": { "id": "worker-1" },
+                "projects": [{ "id": "project-1" }],
+            })
+        );
     }
 
     #[test]
@@ -1923,12 +2394,49 @@ mod tests {
                 "transcriptions.getLatestReviewActionByProcessedTranscriptionId",
             ),
             (
-                BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveRequest {
-                    form_step_response_id: "form-step-response-1".to_string(),
-                    input_responses: vec![FeedbackInputResponse {
-                        form_input_id: "comment".to_string(),
-                        value: "Looks good".to_string(),
-                    }],
+                BabelServiceRequest::LoadFeedbackRubricFlags(LoadFeedbackRubricFlagsRequest {
+                    project_id: "project-1".to_string(),
+                    token: Default::default(),
+                }),
+                LiveTrpcMethod::Get,
+                "transcriptionFeedbackForm.getRubricFlagNames",
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackForm(LoadFeedbackFormRequest {
+                    project_id: "project-1".to_string(),
+                    token: Default::default(),
+                }),
+                LiveTrpcMethod::Get,
+                "transcriptionFeedbackForm.getForm",
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackInputs(LoadFeedbackInputsRequest {
+                    step_id: "step-1".to_string(),
+                    token: Default::default(),
+                }),
+                LiveTrpcMethod::Get,
+                "forms.getFormInputsByStepId",
+            ),
+            (
+                BabelServiceRequest::LoadFeedbackDraft(LoadFeedbackDraftRequest {
+                    form_step_id: "step-1".to_string(),
+                    review_action_id: "review-action-1".to_string(),
+                    worker_id: "worker-1".to_string(),
+                    token: Default::default(),
+                }),
+                LiveTrpcMethod::Post,
+                "transcriptionFeedbackForm.getOrCreateDraft",
+            ),
+            (
+                BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveServiceRequest {
+                    payload: FeedbackDraftSaveRequest {
+                        form_step_response_id: "form-step-response-1".to_string(),
+                        input_responses: vec![FeedbackInputResponse {
+                            form_input_id: "comment".to_string(),
+                            value: "Looks good".to_string(),
+                        }],
+                    },
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Post,
                 "transcriptionFeedbackForm.saveDraft",
@@ -1971,7 +2479,8 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&payload).expect("normalized projects"),
             json!({
-                "projects": [{ "projectId": "project-1", "name": "Project One" }]
+                "projects": [{ "projectId": "project-1", "name": "Project One" }],
+                "worker": { "id": "worker-1" }
             })
         );
     }
@@ -2054,12 +2563,15 @@ mod tests {
         set_env_var("STUDIO_BABEL_CLERK_URL", clerk.base_url.as_str());
         set_env_var(STUDIO_BABEL_SERVICE_BASE_URL, babel.base_url.as_str());
 
-        let request = BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveRequest {
-            form_step_response_id: "form-step-response-1".to_string(),
-            input_responses: vec![FeedbackInputResponse {
-                form_input_id: "comment".to_string(),
-                value: "Looks good".to_string(),
-            }],
+        let request = BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveServiceRequest {
+            payload: FeedbackDraftSaveRequest {
+                form_step_response_id: "form-step-response-1".to_string(),
+                input_responses: vec![FeedbackInputResponse {
+                    form_input_id: "comment".to_string(),
+                    value: "Looks good".to_string(),
+                }],
+            },
+            token: Default::default(),
         });
 
         let payload = live_payload_for_request(&request)

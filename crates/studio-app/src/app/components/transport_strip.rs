@@ -242,7 +242,8 @@ fn view_transport_strip_content(
                         fixed_submit_button(
                             submit.trigger_button.clone(),
                             REVIEW_SUBMIT_BUTTON_WIDTH,
-                            (!submit.trigger_disabled).then_some(Message::RequestSubmitReview),
+                            !submit.trigger_disabled,
+                            (!submit.show_pending_overlay).then_some(Message::RequestSubmitReview),
                         ),
                         container(text(submit_tooltip_content).size(12)).padding(6),
                         tooltip::Position::FollowCursor,
@@ -488,11 +489,11 @@ fn fixed_review_button(
 fn fixed_submit_button(
     label: String,
     width: f32,
+    visually_enabled: bool,
     message: Option<Message>,
 ) -> Element<'static, Message> {
-    let is_enabled = message.is_some();
     button(text(label).size(13))
-        .style(transport_submit_button_style(is_enabled))
+        .style(transport_submit_button_style(visually_enabled))
         .on_press_maybe(message)
         .padding([0, 12])
         .width(Length::Fixed(width))

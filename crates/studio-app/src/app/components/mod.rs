@@ -125,7 +125,7 @@ fn view_editor<'a>(
         content = stack![content, view_native_capability_modal_root(state)].into();
     }
     if let Some(panel) = state.feedback_panel.as_ref().filter(|panel| panel.open) {
-        content = stack![content, view_feedback_overlay(panel)].into();
+        content = stack![content, view_feedback_overlay(state, panel)].into();
     }
 
     if state.show_submit_dialog {
@@ -262,8 +262,11 @@ fn view_native_capability_modal_root<'a>(state: &'a StudioState) -> Element<'a, 
     )
 }
 
-fn view_feedback_overlay<'a>(panel: &'a FeedbackPanelState) -> Element<'a, Message> {
-    container(feedback_panel::view_feedback_panel(panel))
+fn view_feedback_overlay<'a>(
+    state: &'a StudioState,
+    panel: &'a FeedbackPanelState,
+) -> Element<'a, Message> {
+    container(feedback_panel::view_feedback_panel(state, panel))
         .width(Fill)
         .height(Fill)
         .align_x(iced::Alignment::End)

@@ -8,6 +8,7 @@ use super::super::native_capabilities::{
     ReviewerCardPreview, ReviewerFinalizePreview, ReviewerGeneratedReviewPreview,
     ReviewerSessionPreview, ReviewerSuggestionPreview, apply_redistribution_moves_to_allocations,
 };
+use super::super::review_backend_client::ReviewBackendRequest;
 use super::super::state::{DraftAudioCueStatus, DraftAudioGuard, NativeCapabilityModalTab};
 use super::super::styles::{modal_surface_style, outline_button_style, subtle_panel_style};
 use super::super::{Message, StudioState};
@@ -434,14 +435,36 @@ fn view_reviewer_workspace_section(state: &StudioState) -> Element<'_, Message> 
     ]
     .spacing(8);
 
+    let comments_saving = reviewer_comment_save_is_pending(state);
+    let save_comments_label = if comments_saving {
+        "Saving Comments..."
+    } else if state.reviewer_comments_dirty {
+        "Save Comment Changes"
+    } else {
+        "Save Comments"
+    };
+    let comments_status = if comments_saving {
+        "Saving the session comment and all card comments..."
+    } else if state.reviewer_comments_dirty {
+        "Unsaved comment changes. They will auto-save shortly, or save them now."
+    } else {
+        "Session and card comments are saved."
+    };
     let comments = column![
-        text_input("Session comment", &state.reviewer_session_comment)
-            .on_input(Message::ReviewerSessionCommentChanged)
-            .padding(6)
-            .size(13)
-            .width(Fill),
+        text("Session comment").size(12),
+        text_input(
+            "Comment about the full review session",
+            &state.reviewer_session_comment
+        )
+        .on_input(Message::ReviewerSessionCommentChanged)
+        .padding(6)
+        .size(13)
+        .width(Fill),
+        text("Card comments").size(12),
+        text("Select a card to edit its comment. Saving preserves comments on every card.")
+            .size(12),
         row![
-            text_input("Selected card", &state.reviewer_card_id)
+            text_input("Selected card ID", &state.reviewer_card_id)
                 .on_input(Message::ReviewerCardIdChanged)
                 .padding(6)
                 .size(13)
@@ -450,16 +473,24 @@ fn view_reviewer_workspace_section(state: &StudioState) -> Element<'_, Message> 
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
+        text("Comment for selected card").size(12),
         row![
-            text_input("Card comment", &state.reviewer_card_comment)
-                .on_input(Message::ReviewerCardCommentChanged)
-                .padding(6)
-                .size(13)
-                .width(Fill),
-            action_button("Save Comments", Message::ReviewerSaveComments),
+            text_input(
+                "Add or edit this card's comment",
+                &state.reviewer_card_comment
+            )
+            .on_input(Message::ReviewerCardCommentChanged)
+            .padding(6)
+            .size(13)
+            .width(Fill),
+            button(text(save_comments_label).size(13))
+                .padding([6, 10])
+                .style(outline_button_style)
+                .on_press_maybe((!comments_saving).then_some(Message::ReviewerSaveComments)),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
+        text(comments_status).size(12),
     ]
     .spacing(8);
 
@@ -530,6 +561,14 @@ fn view_reviewer_workspace_section(state: &StudioState) -> Element<'_, Message> 
         .spacing(10)
         .into(),
     )
+}
+
+fn reviewer_comment_save_is_pending(state: &StudioState) -> bool {
+    state
+        .review_backend_requests
+        .iter()
+        .chain(state.dispatched_review_backend_requests.iter())
+        .any(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
 }
 
 fn view_gold_drafting_section(state: &StudioState) -> Element<'_, Message> {

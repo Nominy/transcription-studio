@@ -95,6 +95,18 @@ pub(super) enum ReviewBackendRequest {
     DraftBrokerRedistributeText(Value),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ReviewBackendRequestToken {
+    pub(super) workspace_generation: u64,
+    pub(super) sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ReviewBackendServiceRequest {
+    pub(super) request: ReviewBackendRequest,
+    pub(super) token: ReviewBackendRequestToken,
+}
+
 impl ReviewBackendRequest {
     pub(super) fn to_parts(&self) -> BackendRequestParts {
         match self {
@@ -225,7 +237,7 @@ impl ReviewBackendRequest {
 }
 
 pub(super) fn dispatch_review_backend_requests(
-    requests: Vec<ReviewBackendRequest>,
+    requests: Vec<ReviewBackendServiceRequest>,
 ) -> Task<Message> {
     Task::batch(
         requests.into_iter().map(|request| {
@@ -234,8 +246,8 @@ pub(super) fn dispatch_review_backend_requests(
     )
 }
 
-async fn execute_review_backend_request(request: ReviewBackendRequest) -> Message {
-    match review_backend_payload_for_request(&request).await {
+async fn execute_review_backend_request(request: ReviewBackendServiceRequest) -> Message {
+    match review_backend_payload_for_request(&request.request).await {
         Ok(payload) => Message::ReviewBackendRequestSucceeded(request, payload),
         Err(error) => Message::ReviewBackendRequestFailed(request, error),
     }

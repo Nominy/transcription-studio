@@ -672,18 +672,43 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             }
         }
         Message::OpenFeedbackPanel => state.open_feedback_panel(),
+        Message::RetryFeedbackBootstrap => state.retry_feedback_bootstrap(),
+        Message::FeedbackRubricFlagsLoaded {
+            token,
+            rubric_flag_names,
+        } => state.complete_feedback_rubric_flags(token, rubric_flag_names),
+        Message::FeedbackRubricFlagsLoadFailed { token, error }
+        | Message::FeedbackFormLoadFailed { token, error }
+        | Message::FeedbackInputsLoadFailed { token, error }
+        | Message::FeedbackDraftLoadFailed { token, error } => {
+            state.fail_feedback_bootstrap(token, error)
+        }
+        Message::FeedbackFormLoaded {
+            token,
+            form_step_id,
+        } => state.complete_feedback_form(token, form_step_id),
+        Message::FeedbackInputsLoaded { token, result } => {
+            state.complete_feedback_inputs(token, result.inputs)
+        }
+        Message::FeedbackDraftLoaded { token, draft } => {
+            state.complete_feedback_draft(token, draft)
+        }
         Message::CloseFeedbackPanel => state.close_feedback_panel(),
         Message::FeedbackRatingChanged(field_key, rating) => {
             state.change_feedback_rating(&field_key, rating);
         }
-        Message::FeedbackCommentChanged(field_key, comment) => {
-            state.change_feedback_comment(&field_key, comment);
+        Message::FeedbackCommentEdited(field_key, action) => {
+            state.edit_feedback_comment(&field_key, action);
         }
-        Message::FeedbackOtherFeedbackChanged(feedback) => {
-            state.change_feedback_other_feedback(feedback);
+        Message::FeedbackOtherFeedbackEdited(action) => {
+            state.edit_feedback_other_feedback(action);
         }
-        Message::FeedbackDraftSaved(last_saved) => state.mark_feedback_draft_saved(last_saved),
-        Message::FeedbackDraftSaveFailed(error) => state.fail_feedback_draft_save(error),
+        Message::FeedbackDraftSaved { token, last_saved } => {
+            state.mark_feedback_draft_saved(token, last_saved)
+        }
+        Message::FeedbackDraftSaveFailed { token, error } => {
+            state.fail_feedback_draft_save(token, error)
+        }
         Message::TaskLookupProcessedTranscriptionChanged(value) => {
             state
                 .apply_task_lookup_event(TaskLookupEvent::ChangeProcessedTranscriptionId { value });
@@ -1459,13 +1484,11 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::DraftApplyRedistributionGroup(group_id) => {
             state.apply_redistribution_group(&group_id);
         }
-        Message::ReviewBackendRequestSucceeded(request, payload) => {
-            state
-                .review_backend_requests
-                .retain(|queued| queued != &request);
-            state
-                .dispatched_review_backend_requests
-                .retain(|queued| queued != &request);
+        Message::ReviewBackendRequestSucceeded(service_request, payload) => {
+            if !state.acknowledge_review_backend_request(&service_request) {
+                return Task::none();
+            }
+            let request = service_request.request;
             state.native_capability_last_response = Some(payload);
             state.native_capability_last_error = None;
             let payload = state
@@ -1477,19 +1500,19 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 state.status = "Review backend request completed.".to_string();
             }
         }
-        Message::ReviewBackendRequestFailed(request, error) => {
-            state
-                .review_backend_requests
-                .retain(|queued| queued != &request);
-            state
-                .dispatched_review_backend_requests
-                .retain(|queued| queued != &request);
+        Message::ReviewBackendRequestFailed(service_request, error) => {
+            if !state.acknowledge_review_backend_request(&service_request) {
+                return Task::none();
+            }
+            let request = service_request.request;
             if state.reconcile_draft_stream_failure(&request, &error) {
                 state.native_capability_last_error = Some(error);
                 return Task::none();
             }
             state.native_capability_last_error = Some(error.clone());
-            state.status = format!("Review backend request failed: {error}");
+            if !state.handle_native_capability_failure(&request, &error) {
+                state.status = format!("Review backend request failed: {error}");
+            }
         }
         Message::ApplyTagSuggestion(segment_id, suggestion) => {
             let mut layout_height_changed = false;

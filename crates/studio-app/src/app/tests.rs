@@ -53,14 +53,14 @@ use super::native_capabilities::{
     build_reviewer_payload,
 };
 use super::panel_persistence::PanelCollapseStorage;
-use super::review_backend_client::ReviewBackendRequest;
+use super::review_backend_client::{ReviewBackendRequest, ReviewBackendServiceRequest};
 use super::service_callbacks::{
     AdminRateReviewActionRequest, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
-    ClaimNextFromQueueRequest, DropWorkerActionRequest, LintAnnotationsRequest,
-    LoadLatestReviewActionRequest, LoadReviewActionRequest, SaveAnnotationsRequest,
-    SaveRequestToken, SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
-    build_lint_annotations_request, build_save_annotations_request,
-    build_save_annotations_request_with_asserted_warnings,
+    ClaimNextFromQueueRequest, DropWorkerActionRequest, FeedbackDraftSaveServiceRequest,
+    FeedbackDraftSaveToken, LintAnnotationsRequest, LoadLatestReviewActionRequest,
+    LoadReviewActionRequest, SaveAnnotationsRequest, SaveRequestToken, SkipReviewActionRequest,
+    SubmitRequestToken, SubmitReviewActionRequest, build_lint_annotations_request,
+    build_save_annotations_request, build_save_annotations_request_with_asserted_warnings,
     build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
@@ -72,7 +72,7 @@ use super::startup_route::{
 };
 use super::state::{
     AppSurface, DashboardProject, DashboardSection, HelperFocusRestore, NativeCapabilityModalTab,
-    PendingLeaveIntent, TimelineAutoscrollMode,
+    PendingLeaveIntent, ReviewerPendingFinalize, TimelineAutoscrollMode,
 };
 use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest, relay_request_kind};
 use super::tag_suggestions::{
@@ -251,6 +251,100 @@ fn enable_l2_reviewer_capability(state: &mut StudioState) {
         "babel.extra.package".to_string(),
         r#"{"action_level":2}"#.to_string(),
     )]);
+}
+
+fn reviewer_session_response(
+    session_comment: &str,
+    card_one_comment: &str,
+    card_two_comment: &str,
+) -> String {
+    serde_json::json!({
+        "sessionId": "session-1",
+        "reviewActionId": "review-action-42",
+        "comments": {
+            "sessionComment": session_comment,
+            "cardComments": {
+                "card-1": card_one_comment,
+                "card-2": card_two_comment,
+            },
+        },
+        "cards": [
+            {
+                "id": "card-1",
+                "changeIndex": 1,
+                "categories": ["Word Accuracy"],
+            },
+            {
+                "id": "card-2",
+                "changeIndex": 2,
+                "categories": ["Punctuation"],
+            },
+        ],
+        "suggestions": [],
+    })
+    .to_string()
+}
+
+fn activate_review_backend_request(state: &mut StudioState, request: &ReviewBackendRequest) {
+    if !state.review_backend_requests.contains(request)
+        && !state.dispatched_review_backend_requests.contains(request)
+    {
+        state.review_backend_requests.push(request.clone());
+    }
+}
+
+fn review_backend_service_request(
+    state: &mut StudioState,
+    request: ReviewBackendRequest,
+) -> ReviewBackendServiceRequest {
+    activate_review_backend_request(state, &request);
+    let _ = state.dispatch_new_review_backend_requests();
+    let index = state
+        .dispatched_review_backend_requests
+        .iter()
+        .rposition(|dispatched| dispatched == &request)
+        .expect("review backend request should be dispatched");
+    ReviewBackendServiceRequest {
+        request,
+        token: state.dispatched_review_backend_request_tokens[index],
+    }
+}
+
+fn complete_review_backend_request(
+    state: &mut StudioState,
+    request: ReviewBackendRequest,
+    payload: String,
+) {
+    let request = review_backend_service_request(state, request);
+    let _ = update(
+        state,
+        Message::ReviewBackendRequestSucceeded(request, payload),
+    );
+}
+
+fn fail_review_backend_request(
+    state: &mut StudioState,
+    request: ReviewBackendRequest,
+    error: String,
+) {
+    let request = review_backend_service_request(state, request);
+    let _ = update(state, Message::ReviewBackendRequestFailed(request, error));
+}
+
+fn load_reviewer_test_session(
+    state: &mut StudioState,
+    session_comment: &str,
+    card_one_comment: &str,
+    card_two_comment: &str,
+) {
+    let request = ReviewBackendRequest::ReviewGetSession {
+        session_id: "session-1".to_string(),
+    };
+    complete_review_backend_request(
+        state,
+        request,
+        reviewer_session_response(session_comment, card_one_comment, card_two_comment),
+    );
 }
 
 fn babel_day_to_day_contract() -> serde_json::Value {
@@ -9350,6 +9444,33 @@ fn request_submit_review_opens_babel_confirmation_without_submitting() {
 }
 
 #[test]
+fn required_feedback_block_opens_feedback_panel_with_concrete_status() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+    acknowledge_all_assertable_warnings(&mut state);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| !panel.open)
+    );
+
+    let _ = update(&mut state, Message::RequestSubmitReview);
+
+    assert!(!state.show_submit_dialog);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| panel.open)
+    );
+    assert_eq!(
+        state.status,
+        "Submit blocked: Please complete the feedback form Opened the required feedback panel."
+    );
+}
+
+#[test]
 fn request_submit_review_uses_recovered_babel_disabled_state() {
     let mut state = stable_sample_state();
 
@@ -10525,9 +10646,213 @@ fn enable_feedback_panel_for_word_accuracy(state: &mut StudioState) {
         "studio.babel.feedback.rubricFlags".to_string(),
         "tx-word-accuracy,tx-other-feedback".to_string(),
     );
+    project.metadata.insert(
+        "studio.babel.feedback.formStepResponseId".to_string(),
+        "feedback-step-response-1".to_string(),
+    );
+    project.metadata.insert(
+        "studio.babel.feedback.inputs".to_string(),
+        serde_json::json!([
+            { "id": "word-rating", "label": "Word Accuracy" },
+            { "id": "word-comment", "label": "Word Accuracy Comment" },
+            { "id": "other", "label": "Other Feedback" }
+        ])
+        .to_string(),
+    );
     state.replace_workflow(
         StudioWorkflow::from_project(project),
         "loaded feedback fixture".to_string(),
+    );
+}
+
+fn replace_feedback_comment(state: &mut StudioState, field_key: &str, value: &str) {
+    let _ = update(
+        state,
+        Message::FeedbackCommentEdited(field_key.to_string(), TextEditAction::SelectAll),
+    );
+    let _ = update(
+        state,
+        Message::FeedbackCommentEdited(
+            field_key.to_string(),
+            TextEditAction::Edit(TextEdit::Paste(value.to_string().into())),
+        ),
+    );
+}
+
+fn replace_feedback_other_feedback(state: &mut StudioState, value: &str) {
+    let _ = update(
+        state,
+        Message::FeedbackOtherFeedbackEdited(TextEditAction::SelectAll),
+    );
+    let _ = update(
+        state,
+        Message::FeedbackOtherFeedbackEdited(TextEditAction::Edit(TextEdit::Paste(
+            value.to_string().into(),
+        ))),
+    );
+}
+
+fn enable_feedback_panel_for_generated_review(
+    state: &mut StudioState,
+    rubric_flags: &str,
+    fields: &[(&str, &str)],
+) {
+    let mut project = state.project().unwrap().clone();
+    let inputs = fields
+        .iter()
+        .flat_map(|(key, label)| {
+            [
+                serde_json::json!({
+                    "id": format!("{key}-rating"),
+                    "label": label,
+                }),
+                serde_json::json!({
+                    "id": format!("{key}-comment"),
+                    "label": format!("{label} Comment"),
+                }),
+            ]
+        })
+        .collect::<Vec<_>>();
+    project.metadata.insert(
+        "studio.babel.feedback.showButton".to_string(),
+        "true".to_string(),
+    );
+    project.metadata.insert(
+        "studio.babel.feedback.rubricFlags".to_string(),
+        rubric_flags.to_string(),
+    );
+    project.metadata.insert(
+        "studio.babel.feedback.formStepResponseId".to_string(),
+        "generated-feedback-step".to_string(),
+    );
+    project.metadata.insert(
+        "studio.babel.feedback.inputs".to_string(),
+        serde_json::Value::Array(inputs).to_string(),
+    );
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "loaded generated feedback fixture".to_string(),
+    );
+}
+
+fn l2_feedback_bootstrap_state(
+    project_id: &str,
+    review_action_id: &str,
+    worker_id: &str,
+) -> StudioState {
+    let mut state = stable_sample_state();
+    state.dashboard.worker_id = worker_id.to_string();
+    state.dashboard.project_id = project_id.to_string();
+    state.dashboard.projects = vec![DashboardProject {
+        id: project_id.to_string(),
+        name: "L2 Feedback Project".to_string(),
+        chunked_queue_id: "chunked-feedback-queue".to_string(),
+        stitched_queue_id: "stitched-feedback-queue".to_string(),
+    }];
+
+    let mut project = state.project().unwrap().clone();
+    project.metadata.insert(
+        "babel.extra.package".to_string(),
+        r#"{"action_level":2}"#.to_string(),
+    );
+    project
+        .metadata
+        .insert("studio.babel.projectId".to_string(), project_id.to_string());
+    project.metadata.insert(
+        "studio.babel.reviewActionId".to_string(),
+        review_action_id.to_string(),
+    );
+    project.metadata.insert(
+        "studio.babel.isStitchedQueue".to_string(),
+        "true".to_string(),
+    );
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "loaded live L2 feedback fixture".to_string(),
+    );
+    state
+}
+
+fn apply_feedback_fixture_response(
+    state: &mut StudioState,
+    request: BabelServiceRequest,
+    payload: serde_json::Value,
+) {
+    let message = fixture_payload_message_for_request(request, payload.to_string())
+        .expect("feedback fixture request should map to a callback");
+    let _ = update(state, message);
+}
+
+fn feedback_draft_save_token(state: &StudioState) -> FeedbackDraftSaveToken {
+    state
+        .dispatched_babel_service_requests
+        .iter()
+        .chain(state.babel_service_requests.iter())
+        .find_map(|request| match request {
+            BabelServiceRequest::SaveFeedbackDraft(request) => Some(request.token),
+            _ => None,
+        })
+        .expect("feedback draft save should be queued or dispatched")
+}
+
+fn complete_live_feedback_bootstrap(state: &mut StudioState, comment: &str, other_feedback: &str) {
+    let form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .expect("feedback form request should be queued");
+    let flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .expect("feedback rubric request should be queued");
+    apply_feedback_fixture_response(
+        state,
+        form_request,
+        serde_json::json!({ "steps": [{ "id": "feedback-step-1" }] }),
+    );
+
+    let inputs_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackInputs(_)))
+        .cloned()
+        .expect("feedback input request should follow the form response");
+    apply_feedback_fixture_response(
+        state,
+        inputs_request,
+        serde_json::json!([
+            { "id": "word-rating", "label": "Word Accuracy" },
+            { "id": "word-comment", "label": "Word Accuracy Comment" },
+            { "id": "other", "label": "Other Feedback" }
+        ]),
+    );
+
+    let draft_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackDraft(_)))
+        .cloned()
+        .expect("feedback draft request should follow the input response");
+    apply_feedback_fixture_response(
+        state,
+        draft_request,
+        serde_json::json!({
+            "formStepResponseId": "feedback-step-response-1",
+            "inputResponses": [
+                { "formInputId": "word-rating", "value": "3" },
+                { "formInputId": "word-comment", "value": comment },
+                { "formInputId": "other", "value": other_feedback }
+            ],
+            "updatedAt": "2026-07-18T10:00:00Z"
+        }),
+    );
+    apply_feedback_fixture_response(
+        state,
+        flags_request,
+        serde_json::json!(["tx-word-accuracy", "tx-other-feedback"]),
     );
 }
 
@@ -10597,6 +10922,14 @@ fn feedback_panel_hydrates_recovered_initial_feedback_metadata() {
     assert_eq!(word_accuracy.rating, 3);
     assert_eq!(word_accuracy.comment, "Recovered initial draft");
     assert_eq!(panel.draft.other_feedback, "Recovered general note");
+    assert_eq!(
+        panel.comment_content("wordAccuracy").unwrap().text(),
+        "Recovered initial draft\n"
+    );
+    assert_eq!(
+        panel.other_feedback_content().unwrap().text(),
+        "Recovered general note\n"
+    );
     assert_eq!(panel.footer_label(), "Ready");
     assert!(!panel.is_saving);
 }
@@ -10687,14 +11020,8 @@ fn feedback_panel_updates_rubric_draft_with_recovered_comment_limit() {
         &mut state,
         Message::FeedbackRatingChanged("wordAccuracy".to_string(), 3),
     );
-    let _ = update(
-        &mut state,
-        Message::FeedbackCommentChanged("wordAccuracy".to_string(), "Specific fix".to_string()),
-    );
-    let _ = update(
-        &mut state,
-        Message::FeedbackOtherFeedbackChanged("General note".to_string()),
-    );
+    replace_feedback_comment(&mut state, "wordAccuracy", "Specific fix");
+    replace_feedback_other_feedback(&mut state, "General note");
 
     let panel = state.feedback_panel.as_ref().unwrap();
     let entry = panel.draft.entries.get("wordAccuracy").unwrap();
@@ -10704,11 +11031,8 @@ fn feedback_panel_updates_rubric_draft_with_recovered_comment_limit() {
     assert!(panel.is_saving);
 
     let too_long = "x".repeat(FEEDBACK_MAX_COMMENT_LENGTH + 1);
-    let _ = update(
-        &mut state,
-        Message::FeedbackCommentChanged("wordAccuracy".to_string(), too_long.clone()),
-    );
-    let _ = update(&mut state, Message::FeedbackOtherFeedbackChanged(too_long));
+    replace_feedback_comment(&mut state, "wordAccuracy", &too_long);
+    replace_feedback_other_feedback(&mut state, &too_long);
 
     let panel = state.feedback_panel.as_ref().unwrap();
     assert_eq!(
@@ -10717,15 +11041,162 @@ fn feedback_panel_updates_rubric_draft_with_recovered_comment_limit() {
     );
     assert_eq!(panel.draft.other_feedback, "General note");
 
+    let save_token = feedback_draft_save_token(&state);
+
     let _ = update(
         &mut state,
-        Message::FeedbackDraftSaved("2026-06-23T10:00:00Z".to_string()),
+        Message::FeedbackDraftSaved {
+            token: save_token,
+            last_saved: "2026-06-23T10:00:00Z".to_string(),
+        },
+    );
+    let latest_save_token = feedback_draft_save_token(&state);
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: latest_save_token,
+            last_saved: "2026-06-23T10:00:01Z".to_string(),
+        },
     );
 
     let panel = state.feedback_panel.as_ref().unwrap();
     assert!(!panel.is_saving);
-    assert_eq!(panel.last_saved.as_deref(), Some("2026-06-23T10:00:00Z"));
+    assert_eq!(panel.last_saved.as_deref(), Some("2026-06-23T10:00:01Z"));
     assert_eq!(panel.footer_label(), "Ready");
+}
+
+#[test]
+fn feedback_editor_actions_preserve_newlines_in_draft_and_save_payload() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackCommentEdited(
+            "wordAccuracy".to_string(),
+            TextEditAction::Edit(TextEdit::Paste("First line".to_string().into())),
+        ),
+    );
+    let _ = update(
+        &mut state,
+        Message::FeedbackCommentEdited(
+            "wordAccuracy".to_string(),
+            TextEditAction::Edit(TextEdit::Enter),
+        ),
+    );
+    let _ = update(
+        &mut state,
+        Message::FeedbackCommentEdited(
+            "wordAccuracy".to_string(),
+            TextEditAction::Edit(TextEdit::Paste("Second\nThird".to_string().into())),
+        ),
+    );
+    let _ = update(
+        &mut state,
+        Message::FeedbackOtherFeedbackEdited(TextEditAction::Edit(TextEdit::Paste(
+            "Other first\nOther second".to_string().into(),
+        ))),
+    );
+
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert_eq!(
+        panel.draft.entries["wordAccuracy"].comment,
+        "First line\nSecond\nThird"
+    );
+    assert_eq!(
+        panel.comment_content("wordAccuracy").unwrap().text(),
+        "First line\nSecond\nThird\n"
+    );
+    assert_eq!(panel.draft.other_feedback, "Other first\nOther second");
+    assert_eq!(
+        panel.other_feedback_content().unwrap().text(),
+        "Other first\nOther second\n"
+    );
+
+    let first_save_token = feedback_draft_save_token(&state);
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: first_save_token,
+            last_saved: "2026-07-18T12:00:00Z".to_string(),
+        },
+    );
+
+    let payload = state
+        .dispatched_babel_service_requests
+        .iter()
+        .chain(state.babel_service_requests.iter())
+        .find_map(|request| match request {
+            BabelServiceRequest::SaveFeedbackDraft(request) => Some(&request.payload),
+            _ => None,
+        })
+        .expect("multiline edit should queue a feedback draft save");
+    assert!(
+        payload
+            .input_responses
+            .iter()
+            .any(|response| { response.value == "First line\nSecond\nThird" })
+    );
+    assert!(
+        payload
+            .input_responses
+            .iter()
+            .any(|response| { response.value == "Other first\nOther second" })
+    );
+}
+
+#[test]
+fn feedback_editor_cursor_actions_do_not_queue_autosave() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+    let revision = state.feedback_draft_revision;
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackCommentEdited(
+            "wordAccuracy".to_string(),
+            TextEditAction::Move(TextEditMotion::DocumentEnd),
+        ),
+    );
+    let _ = update(
+        &mut state,
+        Message::FeedbackOtherFeedbackEdited(TextEditAction::SelectAll),
+    );
+
+    assert_eq!(state.feedback_draft_revision, revision);
+    assert!(!state.feedback_panel.as_ref().unwrap().is_saving);
+    assert!(
+        !state
+            .babel_service_requests
+            .iter()
+            .any(|request| { matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)) })
+    );
+}
+
+#[test]
+fn feedback_editor_rejects_edits_over_character_limit_without_autosave() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+    let too_long = "x".repeat(FEEDBACK_MAX_COMMENT_LENGTH + 1);
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackCommentEdited(
+            "wordAccuracy".to_string(),
+            TextEditAction::Edit(TextEdit::Paste(too_long.into())),
+        ),
+    );
+
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(panel.draft.entries["wordAccuracy"].comment.is_empty());
+    assert_eq!(panel.comment_content("wordAccuracy").unwrap().text(), "\n");
+    assert_eq!(state.feedback_draft_revision, 0);
+    assert!(
+        !state
+            .babel_service_requests
+            .iter()
+            .any(|request| { matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)) })
+    );
 }
 
 #[test]
@@ -10758,37 +11229,42 @@ fn feedback_panel_edits_enqueue_recovered_save_draft_request() {
         "loaded feedback save fixture".to_string(),
     );
 
-    let _ = update(
-        &mut state,
-        Message::FeedbackCommentChanged("wordAccuracy".to_string(), "Queued save".to_string()),
-    );
+    replace_feedback_comment(&mut state, "wordAccuracy", "Queued save");
+
+    let save_token = feedback_draft_save_token(&state);
 
     assert_eq!(
         state.babel_service_requests.last(),
         Some(&BabelServiceRequest::SaveFeedbackDraft(
-            FeedbackDraftSaveRequest {
-                form_step_response_id: "form-step-response-1".to_string(),
-                input_responses: vec![
-                    FeedbackInputResponse {
-                        form_input_id: "rating".to_string(),
-                        value: "1".to_string(),
-                    },
-                    FeedbackInputResponse {
-                        form_input_id: "comment".to_string(),
-                        value: "Queued save".to_string(),
-                    },
-                    FeedbackInputResponse {
-                        form_input_id: "other".to_string(),
-                        value: String::new(),
-                    },
-                ],
+            FeedbackDraftSaveServiceRequest {
+                payload: FeedbackDraftSaveRequest {
+                    form_step_response_id: "form-step-response-1".to_string(),
+                    input_responses: vec![
+                        FeedbackInputResponse {
+                            form_input_id: "rating".to_string(),
+                            value: "1".to_string(),
+                        },
+                        FeedbackInputResponse {
+                            form_input_id: "comment".to_string(),
+                            value: "Queued save".to_string(),
+                        },
+                        FeedbackInputResponse {
+                            form_input_id: "other".to_string(),
+                            value: String::new(),
+                        },
+                    ],
+                },
+                token: save_token,
             }
         ))
     );
 
     let _ = update(
         &mut state,
-        Message::FeedbackDraftSaved("2026-06-23T10:00:00Z".to_string()),
+        Message::FeedbackDraftSaved {
+            token: save_token,
+            last_saved: "2026-06-23T10:00:00Z".to_string(),
+        },
     );
 
     assert!(
@@ -10852,33 +11328,32 @@ fn feedback_panel_imports_recovered_service_metadata_and_enqueues_save_draft() {
     assert!(panel.open);
     assert_eq!(panel.footer_label(), "Complete all fields");
 
-    let _ = update(
-        &mut state,
-        Message::FeedbackCommentChanged(
-            "wordAccuracy".to_string(),
-            "Runtime feedback save".to_string(),
-        ),
-    );
+    replace_feedback_comment(&mut state, "wordAccuracy", "Runtime feedback save");
+
+    let save_token = feedback_draft_save_token(&state);
 
     assert_eq!(
         state.babel_service_requests.last(),
         Some(&BabelServiceRequest::SaveFeedbackDraft(
-            FeedbackDraftSaveRequest {
-                form_step_response_id: "runtime-form-step-response".to_string(),
-                input_responses: vec![
-                    FeedbackInputResponse {
-                        form_input_id: "rating".to_string(),
-                        value: "1".to_string(),
-                    },
-                    FeedbackInputResponse {
-                        form_input_id: "comment".to_string(),
-                        value: "Runtime feedback save".to_string(),
-                    },
-                    FeedbackInputResponse {
-                        form_input_id: "other".to_string(),
-                        value: String::new(),
-                    },
-                ],
+            FeedbackDraftSaveServiceRequest {
+                payload: FeedbackDraftSaveRequest {
+                    form_step_response_id: "runtime-form-step-response".to_string(),
+                    input_responses: vec![
+                        FeedbackInputResponse {
+                            form_input_id: "rating".to_string(),
+                            value: "1".to_string(),
+                        },
+                        FeedbackInputResponse {
+                            form_input_id: "comment".to_string(),
+                            value: "Runtime feedback save".to_string(),
+                        },
+                        FeedbackInputResponse {
+                            form_input_id: "other".to_string(),
+                            value: String::new(),
+                        },
+                    ],
+                },
+                token: save_token,
             }
         ))
     );
@@ -10903,10 +11378,7 @@ fn feedback_panel_submit_blocking_tracks_recovered_required_comment_state() {
         "Please complete the feedback form"
     );
 
-    let _ = update(
-        &mut state,
-        Message::FeedbackCommentChanged("wordAccuracy".to_string(), "Good correction".to_string()),
-    );
+    replace_feedback_comment(&mut state, "wordAccuracy", "Good correction");
 
     let saving_project = state.project().unwrap();
     let saving_submit = state.editor.as_ref().unwrap().submit_control(
@@ -10918,9 +11390,14 @@ fn feedback_panel_submit_blocking_tracks_recovered_required_comment_state() {
     assert!(saving_submit.trigger_disabled);
     assert_eq!(saving_submit.trigger_tooltip_content, "Saving feedback...");
 
+    let save_token = feedback_draft_save_token(&state);
+
     let _ = update(
         &mut state,
-        Message::FeedbackDraftSaved("2026-06-23T10:00:00Z".to_string()),
+        Message::FeedbackDraftSaved {
+            token: save_token,
+            last_saved: "2026-06-23T10:00:00Z".to_string(),
+        },
     );
 
     let saved_project = state.project().unwrap();
@@ -10931,6 +11408,618 @@ fn feedback_panel_submit_blocking_tracks_recovered_required_comment_state() {
         state.submit_has_error,
     );
     assert!(!saved_submit.trigger_disabled);
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_starts_parallel_requests_with_dashboard_context() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+
+    let bootstrap = state
+        .feedback_bootstrap
+        .as_ref()
+        .expect("editable L2 workflow should start feedback bootstrap");
+    assert_eq!(bootstrap.project_id, "feedback-project-1");
+    assert_eq!(bootstrap.review_action_id, "review-action-42");
+    assert_eq!(bootstrap.worker_id, "worker-7");
+    assert_eq!(
+        bootstrap.token.workspace_generation,
+        state.workspace_generation
+    );
+    assert_eq!(bootstrap.token.attempt, 1);
+    assert_eq!(state.dashboard.worker_id, "worker-7");
+
+    let flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .expect("rubric flags should load immediately");
+    let form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .expect("feedback form should load immediately");
+    assert_eq!(state.babel_service_requests.len(), 2);
+    assert_eq!(
+        request_envelope_for_service_command(&flags_request),
+        serde_json::json!({
+            "operation": "transcriptionFeedbackForm.getRubricFlagNames",
+            "payload": { "projectId": "feedback-project-1" }
+        })
+    );
+    assert_eq!(
+        request_envelope_for_service_command(&form_request),
+        serde_json::json!({
+            "operation": "transcriptionFeedbackForm.getForm",
+            "payload": { "projectId": "feedback-project-1" }
+        })
+    );
+
+    acknowledge_all_assertable_warnings(&mut state);
+    let _ = update(&mut state, Message::RequestSubmitReview);
+    assert!(!state.show_submit_dialog);
+    assert!(state.feedback_panel.as_ref().is_some_and(|panel| {
+        panel.open && panel.is_loading && panel.bootstrap_error.is_none()
+    }));
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_form_first_requests_inputs_then_draft_and_hydrates_panel() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    let form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .unwrap();
+    let flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .unwrap();
+    apply_feedback_fixture_response(
+        &mut state,
+        form_request,
+        serde_json::json!({ "steps": [{ "id": "feedback-step-1" }] }),
+    );
+
+    let inputs_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackInputs(_)))
+        .cloned()
+        .expect("inputs should be requested as soon as the first form step is known");
+    let BabelServiceRequest::LoadFeedbackInputs(inputs) = &inputs_request else {
+        unreachable!();
+    };
+    assert_eq!(inputs.step_id, "feedback-step-1");
+    assert!(
+        state
+            .feedback_bootstrap
+            .as_ref()
+            .is_some_and(|bootstrap| bootstrap.rubric_flag_names.is_none())
+    );
+    apply_feedback_fixture_response(
+        &mut state,
+        inputs_request,
+        serde_json::json!([
+            { "id": "word-rating", "label": "Word Accuracy" },
+            { "id": "word-comment", "label": "Word Accuracy Comment" },
+            { "id": "other", "label": "Other Feedback" }
+        ]),
+    );
+
+    let draft_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackDraft(_)))
+        .cloned()
+        .expect("draft should be requested only after inputs load");
+    let BabelServiceRequest::LoadFeedbackDraft(draft) = &draft_request else {
+        unreachable!();
+    };
+    assert_eq!(draft.form_step_id, "feedback-step-1");
+    assert_eq!(draft.review_action_id, "review-action-42");
+    assert_eq!(draft.worker_id, "worker-7");
+    assert_eq!(
+        request_envelope_for_service_command(&draft_request),
+        serde_json::json!({
+            "operation": "transcriptionFeedbackForm.getOrCreateDraft",
+            "payload": {
+                "formStepId": "feedback-step-1",
+                "reviewActionId": "review-action-42",
+                "workerId": "worker-7"
+            }
+        })
+    );
+    apply_feedback_fixture_response(
+        &mut state,
+        draft_request,
+        serde_json::json!({
+            "formStepResponseId": "feedback-step-response-1",
+            "inputResponses": [
+                { "formInputId": "word-rating", "value": "2" },
+                { "formInputId": "word-comment", "value": "Hydrated runtime feedback" },
+                { "formInputId": "other", "value": "Hydrated runtime note" }
+            ],
+            "updatedAt": "2026-07-18T10:00:00Z"
+        }),
+    );
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| panel.is_loading)
+    );
+    apply_feedback_fixture_response(
+        &mut state,
+        flags_request,
+        serde_json::json!(["tx-word-accuracy", "tx-other-feedback"]),
+    );
+
+    assert!(state.feedback_bootstrap.is_none());
+    assert!(!state.babel_service_requests.iter().any(|request| matches!(
+        request,
+        BabelServiceRequest::LoadFeedbackRubricFlags(_)
+            | BabelServiceRequest::LoadFeedbackForm(_)
+            | BabelServiceRequest::LoadFeedbackInputs(_)
+            | BabelServiceRequest::LoadFeedbackDraft(_)
+    )));
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!panel.is_loading);
+    assert!(panel.bootstrap_error.is_none());
+    assert_eq!(panel.last_saved.as_deref(), Some("2026-07-18T10:00:00Z"));
+    assert_eq!(panel.draft.entries["wordAccuracy"].rating, 2);
+    assert_eq!(
+        panel.draft.entries["wordAccuracy"].comment,
+        "Hydrated runtime feedback"
+    );
+    assert_eq!(panel.draft.other_feedback, "Hydrated runtime note");
+    assert_eq!(
+        panel.comment_content("wordAccuracy").unwrap().text(),
+        "Hydrated runtime feedback\n"
+    );
+    assert_eq!(
+        panel.other_feedback_content().unwrap().text(),
+        "Hydrated runtime note\n"
+    );
+    assert_eq!(panel.footer_label(), "Ready");
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_flags_first_waits_for_form_before_requesting_inputs() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    let flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .unwrap();
+    apply_feedback_fixture_response(
+        &mut state,
+        flags_request,
+        serde_json::json!(["tx-word-accuracy", "tx-other-feedback"]),
+    );
+    assert!(
+        !state
+            .babel_service_requests
+            .iter()
+            .any(|request| matches!(request, BabelServiceRequest::LoadFeedbackInputs(_)))
+    );
+
+    let form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .unwrap();
+    apply_feedback_fixture_response(
+        &mut state,
+        form_request,
+        serde_json::json!({ "steps": [{ "id": "feedback-step-after-flags" }] }),
+    );
+    assert!(state.babel_service_requests.iter().any(|request| {
+        matches!(request, BabelServiceRequest::LoadFeedbackInputs(request)
+            if request.step_id == "feedback-step-after-flags")
+    }));
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_malformed_and_failed_responses_are_retryable() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    acknowledge_all_assertable_warnings(&mut state);
+    let initial_token = state.feedback_bootstrap.as_ref().unwrap().token;
+    let malformed_form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .unwrap();
+    apply_feedback_fixture_response(
+        &mut state,
+        malformed_form_request,
+        serde_json::json!({ "steps": [] }),
+    );
+
+    assert!(state.feedback_bootstrap.is_none());
+    let failed_panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!failed_panel.is_loading);
+    assert_eq!(
+        failed_panel.bootstrap_error.as_deref(),
+        Some("Babel feedback form is missing its first step id")
+    );
+    let _ = update(&mut state, Message::RequestSubmitReview);
+    assert!(!state.show_submit_dialog);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| panel.open)
+    );
+
+    let _ = update(&mut state, Message::RetryFeedbackBootstrap);
+    let retry_token = state.feedback_bootstrap.as_ref().unwrap().token;
+    assert_eq!(
+        retry_token.workspace_generation,
+        initial_token.workspace_generation
+    );
+    assert!(retry_token.attempt > initial_token.attempt);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| panel.is_loading && panel.bootstrap_error.is_none())
+    );
+    let failed_flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .unwrap();
+    apply_feedback_fixture_response(
+        &mut state,
+        failed_flags_request,
+        serde_json::json!({ "error": "rubric service unavailable" }),
+    );
+    assert_eq!(
+        state
+            .feedback_panel
+            .as_ref()
+            .and_then(|panel| panel.bootstrap_error.as_deref()),
+        Some("rubric service unavailable")
+    );
+
+    let _ = update(&mut state, Message::RetryFeedbackBootstrap);
+    let second_retry = state.feedback_bootstrap.as_ref().unwrap().token;
+    assert!(second_retry.attempt > retry_token.attempt);
+    assert_eq!(
+        state
+            .babel_service_requests
+            .iter()
+            .filter(|request| matches!(
+                request,
+                BabelServiceRequest::LoadFeedbackRubricFlags(_)
+                    | BabelServiceRequest::LoadFeedbackForm(_)
+            ))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_ignores_callbacks_from_a_stale_workspace_generation() {
+    let mut state = l2_feedback_bootstrap_state("feedback-project-old", "review-old", "worker-7");
+    let old_token = state.feedback_bootstrap.as_ref().unwrap().token;
+    let old_flags_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackRubricFlags(_)))
+        .cloned()
+        .unwrap();
+    let old_form_request = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::LoadFeedbackForm(_)))
+        .cloned()
+        .unwrap();
+
+    let mut replacement = state.project().unwrap().clone();
+    replacement.metadata.insert(
+        "studio.babel.projectId".to_string(),
+        "feedback-project-new".to_string(),
+    );
+    replacement.metadata.insert(
+        "studio.babel.reviewActionId".to_string(),
+        "review-new".to_string(),
+    );
+    state.replace_workflow(
+        StudioWorkflow::from_project(replacement),
+        "replaced feedback workspace".to_string(),
+    );
+    let current_token = state.feedback_bootstrap.as_ref().unwrap().token;
+    assert_ne!(
+        current_token.workspace_generation,
+        old_token.workspace_generation
+    );
+
+    apply_feedback_fixture_response(
+        &mut state,
+        old_flags_request,
+        serde_json::json!(["tx-word-accuracy"]),
+    );
+    apply_feedback_fixture_response(
+        &mut state,
+        old_form_request,
+        serde_json::json!({ "steps": [{ "id": "stale-step" }] }),
+    );
+
+    let bootstrap = state.feedback_bootstrap.as_ref().unwrap();
+    assert_eq!(bootstrap.token, current_token);
+    assert_eq!(bootstrap.project_id, "feedback-project-new");
+    assert!(bootstrap.rubric_flag_names.is_none());
+    assert!(bootstrap.form_step_id.is_none());
+    assert!(!state.babel_service_requests.iter().any(|request| {
+        matches!(request, BabelServiceRequest::LoadFeedbackInputs(request)
+            if request.step_id == "stale-step")
+    }));
+}
+
+#[test]
+fn reviewer_feedback_draft_serializes_rapid_edits_and_saves_the_latest_snapshot() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    complete_live_feedback_bootstrap(&mut state, "Initially saved", "");
+
+    replace_feedback_comment(&mut state, "wordAccuracy", "First edit");
+    let first_save = state
+        .babel_service_requests
+        .iter()
+        .find(|request| matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+        .cloned()
+        .expect("first edit should queue a save");
+    let _ = state.dispatch_new_babel_service_requests();
+    assert_eq!(
+        state
+            .dispatched_babel_service_requests
+            .iter()
+            .filter(|request| matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+            .count(),
+        1
+    );
+
+    replace_feedback_comment(&mut state, "wordAccuracy", "Newest edit");
+    replace_feedback_other_feedback(&mut state, "Newest general note");
+    assert_eq!(
+        state
+            .babel_service_requests
+            .iter()
+            .filter(|request| matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+            .count(),
+        1
+    );
+    assert!(state.babel_service_requests.contains(&first_save));
+
+    let first_token = match &first_save {
+        BabelServiceRequest::SaveFeedbackDraft(request) => request.token,
+        _ => unreachable!(),
+    };
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaveFailed {
+            token: first_token,
+            error: "stale request timed out".to_string(),
+        },
+    );
+    assert_eq!(
+        state
+            .dispatched_babel_service_requests
+            .iter()
+            .filter(|request| matches!(
+                request,
+                BabelServiceRequest::SaveFeedbackDraft(request)
+                    if request.token != first_token
+            ))
+            .count(),
+        1
+    );
+    let newest_save = state
+        .babel_service_requests
+        .iter()
+        .find_map(|request| match request {
+            BabelServiceRequest::SaveFeedbackDraft(request) => Some(request),
+            _ => None,
+        })
+        .expect("settling the stale snapshot should queue the newest draft");
+    assert!(newest_save.payload.input_responses.iter().any(|response| {
+        response.form_input_id == "word-comment" && response.value == "Newest edit"
+    }));
+    assert!(newest_save.payload.input_responses.iter().any(|response| {
+        response.form_input_id == "other" && response.value == "Newest general note"
+    }));
+    assert!(state.feedback_panel.as_ref().unwrap().is_saving);
+    assert!(!state.feedback_panel.as_ref().unwrap().save_has_error);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .unwrap()
+            .last_autosave_error
+            .is_none()
+    );
+    assert_eq!(
+        state.feedback_panel.as_ref().unwrap().last_saved.as_deref(),
+        Some("2026-07-18T10:00:00Z")
+    );
+
+    let newest_token = newest_save.token;
+
+    let _ = state.dispatch_new_babel_service_requests();
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: newest_token,
+            last_saved: "2026-07-18T10:02:00Z".to_string(),
+        },
+    );
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!panel.is_saving);
+    assert!(!panel.save_has_error);
+    assert!(panel.last_autosave_error.is_none());
+    assert_eq!(panel.last_saved.as_deref(), Some("2026-07-18T10:02:00Z"));
+    assert!(
+        state
+            .babel_service_requests
+            .iter()
+            .chain(state.dispatched_babel_service_requests.iter())
+            .all(|request| !matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+    );
+}
+
+#[test]
+fn reviewer_feedback_terminal_save_error_blocks_submit_until_a_new_edit_succeeds() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    complete_live_feedback_bootstrap(&mut state, "Initially saved", "");
+    acknowledge_all_assertable_warnings(&mut state);
+    replace_feedback_comment(&mut state, "wordAccuracy", "Failed edit");
+    let _ = state.dispatch_new_babel_service_requests();
+    let failed_token = feedback_draft_save_token(&state);
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaveFailed {
+            token: failed_token,
+            error: "network unavailable".to_string(),
+        },
+    );
+
+    let failed_panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!failed_panel.is_saving);
+    assert!(failed_panel.save_has_error);
+    assert_eq!(
+        failed_panel.last_autosave_error.as_deref(),
+        Some("network unavailable")
+    );
+    assert_eq!(failed_panel.footer_label(), "Save failed");
+    let _ = update(&mut state, Message::RequestSubmitReview);
+    assert!(!state.show_submit_dialog);
+    assert!(
+        state
+            .feedback_panel
+            .as_ref()
+            .is_some_and(|panel| panel.open)
+    );
+
+    replace_feedback_comment(&mut state, "wordAccuracy", "Retried edit");
+    let retry_panel = state.feedback_panel.as_ref().unwrap();
+    assert!(retry_panel.is_saving);
+    assert!(!retry_panel.save_has_error);
+    assert!(retry_panel.last_autosave_error.is_none());
+    assert!(state.babel_service_requests.iter().any(|request| {
+        matches!(request, BabelServiceRequest::SaveFeedbackDraft(request)
+            if request.payload.input_responses.iter().any(|response|
+                response.form_input_id == "word-comment" && response.value == "Retried edit"))
+    }));
+    let retry_token = feedback_draft_save_token(&state);
+
+    let _ = state.dispatch_new_babel_service_requests();
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: retry_token,
+            last_saved: "2026-07-18T10:03:00Z".to_string(),
+        },
+    );
+
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!panel.is_saving);
+    assert!(!panel.save_has_error);
+    assert!(panel.last_autosave_error.is_none());
+    assert_eq!(panel.footer_label(), "Ready");
+    let _ = update(&mut state, Message::RequestSubmitReview);
+    assert!(state.show_submit_dialog);
+}
+
+#[test]
+fn reviewer_feedback_late_save_callbacks_cannot_settle_a_new_workspace_save() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-A", "review-action-A", "worker-7");
+    complete_live_feedback_bootstrap(&mut state, "Workspace A saved", "");
+    replace_feedback_comment(&mut state, "wordAccuracy", "Workspace A edit");
+    let _ = state.dispatch_new_babel_service_requests();
+    let workspace_a_token = feedback_draft_save_token(&state);
+
+    let mut workspace_b = state.project().unwrap().clone();
+    workspace_b.metadata.insert(
+        "studio.babel.projectId".to_string(),
+        "feedback-project-B".to_string(),
+    );
+    workspace_b.metadata.insert(
+        "studio.babel.reviewActionId".to_string(),
+        "review-action-B".to_string(),
+    );
+    state.replace_workflow(
+        StudioWorkflow::from_project(workspace_b),
+        "loaded feedback workspace B".to_string(),
+    );
+    complete_live_feedback_bootstrap(&mut state, "Workspace B saved", "");
+    replace_feedback_comment(&mut state, "wordAccuracy", "Workspace B edit");
+    let _ = state.dispatch_new_babel_service_requests();
+    let workspace_b_token = feedback_draft_save_token(&state);
+    assert_ne!(
+        workspace_a_token.workspace_generation,
+        workspace_b_token.workspace_generation
+    );
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: workspace_a_token,
+            last_saved: "2026-07-18T11:00:00Z".to_string(),
+        },
+    );
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaveFailed {
+            token: workspace_a_token,
+            error: "late workspace A failure".to_string(),
+        },
+    );
+
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(panel.is_saving);
+    assert!(!panel.save_has_error);
+    assert!(panel.last_autosave_error.is_none());
+    assert_eq!(panel.last_saved.as_deref(), Some("2026-07-18T10:00:00Z"));
+    assert!(
+        state
+            .dispatched_babel_service_requests
+            .iter()
+            .any(|request| {
+                matches!(request, BabelServiceRequest::SaveFeedbackDraft(request)
+            if request.token == workspace_b_token)
+            })
+    );
+
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: workspace_b_token,
+            last_saved: "2026-07-18T11:01:00Z".to_string(),
+        },
+    );
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(!panel.is_saving);
+    assert!(!panel.save_has_error);
+    assert!(panel.last_autosave_error.is_none());
+    assert_eq!(panel.last_saved.as_deref(), Some("2026-07-18T11:01:00Z"));
 }
 
 #[test]
@@ -10949,8 +12038,8 @@ fn feedback_panel_component_wires_recovered_drawer_copy_and_actions() {
     assert!(state_source.contains("Complete all fields"));
     assert!(state_source.contains("Ready"));
     assert!(panel_source.contains("Message::CloseFeedbackPanel"));
-    assert!(shell_source.contains("view_feedback_overlay(panel)"));
-    assert!(shell_source.contains("stack![content, view_feedback_overlay(panel)]"));
+    assert!(shell_source.contains("view_feedback_overlay(state, panel)"));
+    assert!(shell_source.contains("stack![content, view_feedback_overlay(state, panel)]"));
     assert!(
         !shell_source.contains("layout = layout.push(feedback_panel::view_feedback_panel(panel));")
     );
@@ -11368,10 +12457,7 @@ fn review_backend_service_requests_dispatch_once_until_callback_settles() {
     );
     assert_eq!(state.review_backend_requests, vec![request.clone()]);
 
-    let _ = update(
-        &mut state,
-        Message::ReviewBackendRequestSucceeded(request, "{\"ok\":true}".to_string()),
-    );
+    complete_review_backend_request(&mut state, request, "{\"ok\":true}".to_string());
 
     assert!(state.review_backend_requests.is_empty());
     assert!(state.dispatched_review_backend_requests.is_empty());
@@ -11426,6 +12512,73 @@ fn reviewer_payload_uses_preserved_original_and_current_native_transcript() {
         payload["current"]["recordings"]
             .as_array()
             .is_some_and(|items| !items.is_empty())
+    );
+}
+
+#[test]
+fn reviewer_l2_aliases_drive_capability_and_stable_l1_baseline_payload() {
+    let workflow = StudioWorkflow::from_babel_json(&review_action_final_with_local_audio())
+        .expect("recovered review action should import");
+    let base_project = workflow.project().clone();
+    let cases = [
+        ("actionLevel", "2"),
+        ("action_level", "L2"),
+        ("studio.babel.actionLevel", "l2"),
+        ("babel.extra.package", r#"{"actionLevel":"L2"}"#),
+        ("babel.extra.package", r#"{"action_level":2}"#),
+    ];
+
+    for (key, value) in cases {
+        let mut project = base_project.clone();
+        for metadata_key in [
+            "actionLevel",
+            "action_level",
+            "studio.babel.actionLevel",
+            "babel.extra.package",
+        ] {
+            project.metadata.remove(metadata_key);
+        }
+        project.metadata.insert(key.to_string(), value.to_string());
+        project.metadata.insert(
+            "babel.review_action.actionDecision".to_string(),
+            "fail".to_string(),
+        );
+        let mut state = StudioState::default();
+        state.replace_workflow(
+            StudioWorkflow::from_project(project.clone()),
+            "loaded L2 alias fixture".to_string(),
+        );
+        assert!(
+            state.reviewer_capability_available(),
+            "alias {key}={value} should resolve to L2"
+        );
+
+        let payload = build_reviewer_payload(&project).expect("L2 reviewer payload should build");
+        assert_eq!(payload["current"]["actionLevel"], serde_json::json!(2));
+        assert_eq!(payload["original"]["actionLevel"], serde_json::json!(1));
+        assert_eq!(payload["original"]["actionDecision"], "pass");
+        assert_eq!(payload["current"]["actionDecision"], "fail");
+        assert_eq!(payload["reviewActionId"], payload["current"]["actionId"]);
+    }
+}
+
+#[test]
+fn assistant_tools_open_on_reviewer_for_l2_and_gold_drafting_otherwise() {
+    let mut l2 = stable_sample_state();
+    enable_l2_reviewer_capability(&mut l2);
+    l2.native_capability_modal_tab = NativeCapabilityModalTab::GoldDrafting;
+    let _ = update(&mut l2, Message::ToggleNativeCapabilityPanel);
+    assert_eq!(
+        l2.native_capability_modal_tab,
+        NativeCapabilityModalTab::Reviewer
+    );
+
+    let mut gold = stable_sample_state();
+    gold.native_capability_modal_tab = NativeCapabilityModalTab::Reviewer;
+    let _ = update(&mut gold, Message::ToggleNativeCapabilityPanel);
+    assert_eq!(
+        gold.native_capability_modal_tab,
+        NativeCapabilityModalTab::GoldDrafting
     );
 }
 
@@ -11765,10 +12918,7 @@ fn drafting_stream_failure_queues_recovered_reconcile_request() {
         "rows": []
     }));
 
-    let _ = update(
-        &mut state,
-        Message::ReviewBackendRequestFailed(request, "failed to fetch".to_string()),
-    );
+    fail_review_backend_request(&mut state, request, "failed to fetch".to_string());
 
     assert!(state.review_backend_requests.iter().any(|request| {
         matches!(
@@ -11929,16 +13079,14 @@ fn drafting_transcription_success_populates_diff_preview_for_request_segment() {
         }
     }));
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "text": "Fresh broker transcription.",
-                "model": "openai/gpt-4o-mini"
-            })
-            .to_string(),
-        ),
+        request,
+        serde_json::json!({
+            "text": "Fresh broker transcription.",
+            "model": "openai/gpt-4o-mini"
+        })
+        .to_string(),
     );
 
     let preview = state
@@ -12067,16 +13215,14 @@ fn drafting_apply_segment_text_uses_preview_segment_when_selection_changes() {
             "rowId": segments[0].id.clone()
         }
     }));
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "text": "Fresh broker transcription.",
-                "model": "openai/gpt-4o-mini"
-            })
-            .to_string(),
-        ),
+        request,
+        serde_json::json!({
+            "text": "Fresh broker transcription.",
+            "model": "openai/gpt-4o-mini"
+        })
+        .to_string(),
     );
     state.editor.as_mut().unwrap().selected_segment_id = Some(segments[1].id.clone());
 
@@ -12121,58 +13267,57 @@ fn reviewer_success_responses_populate_native_session_and_template_state() {
     let session_request = ReviewBackendRequest::ReviewCreateSession(serde_json::json!({
         "reviewActionId": "review-action-1"
     }));
+    activate_review_backend_request(&mut state, &session_request);
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            session_request,
-            serde_json::json!({
-                "sessionId": "session-1",
-                "reviewActionId": "review-action-1",
-                "backendVersion": {
-                    "service": "babel-review-backend",
-                    "release": "0.3.9",
-                    "apiSchema": 1,
-                    "evidenceSchema": 1
-                },
-                "cards": [
-                    {
-                        "id": "card-1",
-                        "changeIndex": 4,
-                        "type": "TEXT CHANGE",
-                        "summary": "Text changed",
-                        "evidence": "[-old+new]",
-                        "categories": ["Word Accuracy"],
-                        "matchedTemplateId": "tpl-1",
-                        "templateTitle": "Wrong word",
-                        "matchSource": "model",
-                        "opinionText": "Use the template.",
-                        "rationale": "The diff is a word substitution."
-                    }
-                ],
-                "comments": {
-                    "sessionComment": "session note",
-                    "cardComments": {
-                        "card-1": "card note"
-                    }
-                },
-                "suggestions": [
-                    {
-                        "proposalId": "proposal-1",
-                        "operation": "create_template",
-                        "category": "Word Accuracy",
-                        "title": "New template",
-                        "description": "Reusable review note",
-                        "reportTexts": ["Use this wording"],
-                        "reason": "Repeated pattern",
-                        "sourceCardIds": ["card-1"],
-                        "decision": "pending"
-                    }
-                ],
-                "categoryFeedback": []
-            })
-            .to_string(),
-        ),
+        session_request,
+        serde_json::json!({
+            "sessionId": "session-1",
+            "reviewActionId": "review-action-1",
+            "backendVersion": {
+                "service": "babel-review-backend",
+                "release": "0.3.9",
+                "apiSchema": 1,
+                "evidenceSchema": 1
+            },
+            "cards": [
+                {
+                    "id": "card-1",
+                    "changeIndex": 4,
+                    "type": "TEXT CHANGE",
+                    "summary": "Text changed",
+                    "evidence": "[-old+new]",
+                    "categories": ["Word Accuracy"],
+                    "matchedTemplateId": "tpl-1",
+                    "templateTitle": "Wrong word",
+                    "matchSource": "model",
+                    "opinionText": "Use the template.",
+                    "rationale": "The diff is a word substitution."
+                }
+            ],
+            "comments": {
+                "sessionComment": "session note",
+                "cardComments": {
+                    "card-1": "card note"
+                }
+            },
+            "suggestions": [
+                {
+                    "proposalId": "proposal-1",
+                    "operation": "create_template",
+                    "category": "Word Accuracy",
+                    "title": "New template",
+                    "description": "Reusable review note",
+                    "reportTexts": ["Use this wording"],
+                    "reason": "Repeated pattern",
+                    "sourceCardIds": ["card-1"],
+                    "decision": "pending"
+                }
+            ],
+            "categoryFeedback": []
+        })
+        .to_string(),
     );
 
     let session = state
@@ -12199,25 +13344,24 @@ fn reviewer_success_responses_populate_native_session_and_template_state() {
         query: "wrong word".to_string(),
         limit: Some(20),
     };
-    let _ = update(
+    activate_review_backend_request(&mut state, &search_request);
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            search_request,
-            serde_json::json!({
-                "query": "wrong word",
-                "results": [
-                    {
-                        "id": "tpl-1",
-                        "title": "Wrong word",
-                        "description": "Use for word substitutions",
-                        "category": "Word Accuracy",
-                        "reportTexts": ["Wrong word"],
-                        "score": 0.91
-                    }
-                ]
-            })
-            .to_string(),
-        ),
+        search_request,
+        serde_json::json!({
+            "query": "wrong word",
+            "results": [
+                {
+                    "id": "tpl-1",
+                    "title": "Wrong word",
+                    "description": "Use for word substitutions",
+                    "category": "Word Accuracy",
+                    "reportTexts": ["Wrong word"],
+                    "score": 0.91
+                }
+            ]
+        })
+        .to_string(),
     );
 
     assert_eq!(state.reviewer_template_results.len(), 1);
@@ -12231,52 +13375,51 @@ fn reviewer_card_selection_syncs_template_and_comment_from_session_preview() {
     let session_request = ReviewBackendRequest::ReviewCreateSession(serde_json::json!({
         "reviewActionId": "review-action-1"
     }));
-    let _ = update(
+    activate_review_backend_request(&mut state, &session_request);
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            session_request,
-            serde_json::json!({
-                "sessionId": "session-1",
-                "reviewActionId": "review-action-1",
-                "cards": [
-                    {
-                        "id": "card-1",
-                        "changeIndex": 1,
-                        "type": "TEXT CHANGE",
-                        "summary": "First card",
-                        "evidence": "first",
-                        "matchedTemplateId": "tpl-1",
-                        "templateTitle": "First template"
-                    },
-                    {
-                        "id": "card-2",
-                        "changeIndex": 2,
-                        "type": "TEXT CHANGE",
-                        "summary": "Second card",
-                        "evidence": "second",
-                        "matchedTemplateId": "tpl-2",
-                        "templateTitle": "Second template"
-                    },
-                    {
-                        "id": "card-3",
-                        "changeIndex": 3,
-                        "type": "TEXT CHANGE",
-                        "summary": "Third card",
-                        "evidence": "third"
-                    }
-                ],
-                "comments": {
-                    "cardComments": {
-                        "card-1": "note one",
-                        "card-2": "note two",
-                        "card-3": "note three"
-                    }
+        session_request,
+        serde_json::json!({
+            "sessionId": "session-1",
+            "reviewActionId": "review-action-1",
+            "cards": [
+                {
+                    "id": "card-1",
+                    "changeIndex": 1,
+                    "type": "TEXT CHANGE",
+                    "summary": "First card",
+                    "evidence": "first",
+                    "matchedTemplateId": "tpl-1",
+                    "templateTitle": "First template"
                 },
-                "suggestions": [],
-                "categoryFeedback": []
-            })
-            .to_string(),
-        ),
+                {
+                    "id": "card-2",
+                    "changeIndex": 2,
+                    "type": "TEXT CHANGE",
+                    "summary": "Second card",
+                    "evidence": "second",
+                    "matchedTemplateId": "tpl-2",
+                    "templateTitle": "Second template"
+                },
+                {
+                    "id": "card-3",
+                    "changeIndex": 3,
+                    "type": "TEXT CHANGE",
+                    "summary": "Third card",
+                    "evidence": "third"
+                }
+            ],
+            "comments": {
+                "cardComments": {
+                    "card-1": "note one",
+                    "card-2": "note two",
+                    "card-3": "note three"
+                }
+            },
+            "suggestions": [],
+            "categoryFeedback": []
+        })
+        .to_string(),
     );
 
     let _ = update(
@@ -12315,29 +13458,27 @@ fn reviewer_session_workspace_expansion_matches_recovered_review_dialog() {
             })
         })
         .collect::<Vec<_>>();
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            session_request,
-            serde_json::json!({
-                "sessionId": "session-expanded",
-                "reviewActionId": "review-action-1",
-                "cards": cards,
-                "comments": {},
-                "suggestions": [
-                    {
-                        "proposalId": "proposal-1",
-                        "operation": "create_template",
-                        "category": "Word Accuracy",
-                        "title": "Reusable template",
-                        "reason": "Repeated reviewer change",
-                        "decision": "pending"
-                    }
-                ],
-                "categoryFeedback": []
-            })
-            .to_string(),
-        ),
+        session_request,
+        serde_json::json!({
+            "sessionId": "session-expanded",
+            "reviewActionId": "review-action-1",
+            "cards": cards,
+            "comments": {},
+            "suggestions": [
+                {
+                    "proposalId": "proposal-1",
+                    "operation": "create_template",
+                    "category": "Word Accuracy",
+                    "title": "Reusable template",
+                    "reason": "Repeated reviewer change",
+                    "decision": "pending"
+                }
+            ],
+            "categoryFeedback": []
+        })
+        .to_string(),
     );
 
     assert!(!state.reviewer_cards_expanded);
@@ -12401,9 +13542,9 @@ fn reviewer_comment_changes_autosave_on_tick_without_duplicate_requests() {
 
     assert!(state.reviewer_comments_dirty);
 
-    let _ = update(&mut state, Message::AutoSaveTick);
+    let _ = update(&mut state, Message::ReviewerCommentSaveTick);
 
-    assert!(!state.reviewer_comments_dirty);
+    assert!(state.reviewer_comments_dirty);
     let update_requests = state
         .review_backend_requests
         .iter()
@@ -12425,7 +13566,7 @@ fn reviewer_comment_changes_autosave_on_tick_without_duplicate_requests() {
         "card autosave note"
     );
 
-    let _ = update(&mut state, Message::AutoSaveTick);
+    let _ = update(&mut state, Message::ReviewerCommentSaveTick);
 
     assert_eq!(
         state
@@ -12467,6 +13608,214 @@ fn reviewer_comment_save_tick_matches_recovered_500ms_debounce() {
 }
 
 #[test]
+fn reviewer_comment_save_serializes_all_cards_and_preserves_selection_on_refresh() {
+    let mut state = stable_sample_state();
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "session old", "card one old", "card two old");
+
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardCommentChanged("card one edited".to_string()),
+    );
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardIdChanged("card-2".to_string()),
+    );
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardCommentChanged("card two edited".to_string()),
+    );
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardIdChanged("card-1".to_string()),
+    );
+    let _ = update(&mut state, Message::ReviewerSaveComments);
+
+    let request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+        .cloned()
+        .expect("complete comment save should be queued");
+    let ReviewBackendRequest::ReviewUpdateComments { body, .. } = &request else {
+        unreachable!();
+    };
+    assert_eq!(body["cardComments"]["card-1"], "card one edited");
+    assert_eq!(body["cardComments"]["card-2"], "card two edited");
+    assert!(state.reviewer_comments_dirty);
+
+    complete_review_backend_request(
+        &mut state,
+        request,
+        reviewer_session_response("session old", "card one edited", "card two edited"),
+    );
+
+    assert!(!state.reviewer_comments_dirty);
+    assert_eq!(state.reviewer_card_id, "card-1");
+    assert_eq!(state.reviewer_card_comment, "card one edited");
+    assert_eq!(
+        state
+            .reviewer_session_preview
+            .as_ref()
+            .unwrap()
+            .cards
+            .iter()
+            .find(|card| card.id == "card-2")
+            .unwrap()
+            .comment,
+        "card two edited"
+    );
+}
+
+#[test]
+fn reviewer_comment_ack_preserves_edits_made_while_save_is_in_flight() {
+    let mut state = stable_sample_state();
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "", "old", "");
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardCommentChanged("sent snapshot".to_string()),
+    );
+    let _ = update(&mut state, Message::ReviewerSaveComments);
+    let request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+        .cloned()
+        .unwrap();
+
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardCommentChanged("newer local edit".to_string()),
+    );
+    complete_review_backend_request(
+        &mut state,
+        request,
+        reviewer_session_response("", "sent snapshot", ""),
+    );
+
+    assert!(state.reviewer_comments_dirty);
+    assert_eq!(state.reviewer_card_id, "card-1");
+    assert_eq!(state.reviewer_card_comment, "newer local edit");
+    assert_eq!(
+        state.reviewer_session_preview.as_ref().unwrap().cards[0].comment,
+        "newer local edit"
+    );
+}
+
+#[test]
+fn reviewer_comment_failure_stays_dirty_and_requires_manual_retry() {
+    let mut state = stable_sample_state();
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "", "", "");
+    let _ = update(
+        &mut state,
+        Message::ReviewerSessionCommentChanged("must survive".to_string()),
+    );
+    let _ = update(&mut state, Message::ReviewerSaveComments);
+    let request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+        .cloned()
+        .unwrap();
+
+    fail_review_backend_request(&mut state, request, "network down".to_string());
+    assert!(state.reviewer_comments_dirty);
+    assert!(state.reviewer_comment_save_failed);
+    assert!(!state.should_run_reviewer_comment_save_tick());
+    let _ = update(&mut state, Message::ReviewerCommentSaveTick);
+    assert!(
+        !state
+            .review_backend_requests
+            .iter()
+            .any(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+    );
+
+    let _ = update(&mut state, Message::ReviewerSaveComments);
+    assert!(!state.reviewer_comment_save_failed);
+    assert!(state.reviewer_comments_dirty);
+    assert!(state.review_backend_requests.iter().any(|request| {
+        matches!(request, ReviewBackendRequest::ReviewUpdateComments { body, .. }
+            if body["sessionComment"] == "must survive")
+    }));
+}
+
+#[test]
+fn reviewer_finalize_waits_for_comments_then_applies_feedback_and_closes_tools() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "", "", "");
+    state.native_capability_panel_open = true;
+    let _ = update(
+        &mut state,
+        Message::ReviewerCardCommentChanged("final comment".to_string()),
+    );
+
+    let _ = update(&mut state, Message::ReviewerFinalizeApply);
+    assert!(
+        state
+            .reviewer_pending_finalize
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.session_id == "session-1"
+                    && pending.mode == "apply"
+                    && pending.workspace_generation == state.workspace_generation
+            })
+    );
+    assert!(
+        !state
+            .review_backend_requests
+            .iter()
+            .any(|request| matches!(request, ReviewBackendRequest::ReviewFinalizeSession { .. }))
+    );
+    let comment_request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+        .cloned()
+        .unwrap();
+
+    complete_review_backend_request(
+        &mut state,
+        comment_request,
+        reviewer_session_response("", "final comment", ""),
+    );
+    let finalize_request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| matches!(request, ReviewBackendRequest::ReviewFinalizeSession { .. }))
+        .cloned()
+        .expect("finalize should queue only after comment acknowledgement");
+    assert!(!state.reviewer_comments_dirty);
+
+    complete_review_backend_request(
+        &mut state,
+        finalize_request,
+        serde_json::json!({
+            "sessionId": "session-1",
+            "mode": "apply",
+            "categoryFeedback": [{
+                "category": "Word Accuracy",
+                "score": 3,
+                "note": "Use the finalized reviewer wording.",
+            }],
+        })
+        .to_string(),
+    );
+
+    assert!(!state.native_capability_panel_open);
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert!(panel.open);
+    assert_eq!(
+        panel.draft.entries.get("wordAccuracy").unwrap().comment,
+        "Use the finalized reviewer wording."
+    );
+    assert!(state.reviewer_finalize_preview.is_some());
+}
+
+#[test]
 fn reviewer_generate_success_populates_preview_and_analytics_payload() {
     let mut state = stable_sample_state();
     state.replace_workflow(
@@ -12478,40 +13827,39 @@ fn reviewer_generate_success_populates_preview_and_analytics_payload() {
     let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
         "reviewActionId": "review-action-1"
     }));
+    activate_review_backend_request(&mut state, &request);
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "prepared": {
-                    "promptVersion": "review-v1",
-                    "metricsVersion": "metrics-v1"
-                },
-                "llm": {
-                    "feedback": [
-                        {
-                            "category": "Word Accuracy",
-                            "score": 1,
-                            "note": "Use the wrong-word template text."
-                        }
-                    ],
-                    "rawContent": "{\"classifications\":[{\"change\":4,\"templateId\":\"tpl-1\"}]}",
-                    "model": "openai/gpt-4o-mini",
-                    "latencyMs": 1200,
-                    "receivedAt": "2026-06-29T10:00:00Z",
-                    "matchedTemplateIds": ["tpl-1"],
-                    "classifications": [
-                        {
-                            "change": 4,
-                            "templateId": "tpl-1"
-                        }
-                    ],
-                    "templateRegistryVersion": "registry-v1"
-                }
-            })
-            .to_string(),
-        ),
+        request,
+        serde_json::json!({
+            "prepared": {
+                "promptVersion": "review-v1",
+                "metricsVersion": "metrics-v1"
+            },
+            "llm": {
+                "feedback": [
+                    {
+                        "category": "Word Accuracy",
+                        "score": 1,
+                        "note": "Use the wrong-word template text."
+                    }
+                ],
+                "rawContent": "{\"classifications\":[{\"change\":4,\"templateId\":\"tpl-1\"}]}",
+                "model": "openai/gpt-4o-mini",
+                "latencyMs": 1200,
+                "receivedAt": "2026-06-29T10:00:00Z",
+                "matchedTemplateIds": ["tpl-1"],
+                "classifications": [
+                    {
+                        "change": 4,
+                        "templateId": "tpl-1"
+                    }
+                ],
+                "templateRegistryVersion": "registry-v1"
+            }
+        })
+        .to_string(),
     );
 
     let generated = state
@@ -12541,6 +13889,265 @@ fn reviewer_generate_success_populates_preview_and_analytics_payload() {
                 && payload["inputBoxes"]["categories"]["Word Accuracy"]["note"] == "Use the wrong-word template text."
                 && payload["metadata"]["client"] == "transcription-studio-native")
     }));
+}
+
+#[test]
+fn reviewer_generate_automatically_applies_all_matching_feedback_in_one_draft_save() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_generated_review(
+        &mut state,
+        "tx-word-accuracy,tx-timestamp-accuracy,tx-punctuation-formatting",
+        &[
+            ("wordAccuracy", "Word Accuracy"),
+            ("timestampAccuracy", "Timestamp Accuracy"),
+            ("punctuationFormatting", "Punctuation & Formatting"),
+        ],
+    );
+    let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "review-action-1"
+    }));
+    activate_review_backend_request(&mut state, &request);
+
+    complete_review_backend_request(
+        &mut state,
+        request,
+        serde_json::json!({
+            "categoryFeedback": [
+                {
+                    "category": "Word Accuracy",
+                    "score": 3,
+                    "note": "The corrected words are accurate."
+                },
+                {
+                    "category": "timestampAccuracy",
+                    "score": 2,
+                    "note": "One timestamp needs review."
+                },
+                {
+                    "category": "Punctuation",
+                    "score": 1,
+                    "note": "Punctuation and casing need work."
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    let generated = state
+        .reviewer_generated_review_preview
+        .as_ref()
+        .expect("generated preview should remain available for diagnostics");
+    assert_eq!(generated.feedback.len(), 3);
+    let panel = state.feedback_panel.as_ref().unwrap();
+    assert_eq!(
+        panel.draft.entries.get("wordAccuracy"),
+        Some(&studio_app::FeedbackRubricEntry {
+            rating: 3,
+            comment: "The corrected words are accurate.".to_string(),
+        })
+    );
+    assert_eq!(
+        panel.draft.entries.get("timestampAccuracy"),
+        Some(&studio_app::FeedbackRubricEntry {
+            rating: 2,
+            comment: "One timestamp needs review.".to_string(),
+        })
+    );
+    assert_eq!(
+        panel.draft.entries.get("punctuationFormatting"),
+        Some(&studio_app::FeedbackRubricEntry {
+            rating: 1,
+            comment: "Punctuation and casing need work.".to_string(),
+        })
+    );
+    assert_eq!(
+        panel.comment_content("wordAccuracy").unwrap().text(),
+        "The corrected words are accurate.\n"
+    );
+    assert_eq!(
+        panel.comment_content("timestampAccuracy").unwrap().text(),
+        "One timestamp needs review.\n"
+    );
+    assert_eq!(
+        panel
+            .comment_content("punctuationFormatting")
+            .unwrap()
+            .text(),
+        "Punctuation and casing need work.\n"
+    );
+    assert_eq!(state.feedback_draft_revision, 1);
+
+    let saves = state
+        .babel_service_requests
+        .iter()
+        .filter_map(|request| match request {
+            BabelServiceRequest::SaveFeedbackDraft(save) => Some(save),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(saves.len(), 1);
+    let saved_responses = &saves[0].payload.input_responses;
+    for (input_id, value) in [
+        ("wordAccuracy-rating", "3"),
+        ("wordAccuracy-comment", "The corrected words are accurate."),
+        ("timestampAccuracy-rating", "2"),
+        ("timestampAccuracy-comment", "One timestamp needs review."),
+        ("punctuationFormatting-rating", "1"),
+        (
+            "punctuationFormatting-comment",
+            "Punctuation and casing need work.",
+        ),
+    ] {
+        assert!(
+            saved_responses
+                .iter()
+                .any(|response| { response.form_input_id == input_id && response.value == value })
+        );
+    }
+}
+
+#[test]
+fn reviewer_generate_category_aliases_target_the_loaded_tts_rubric() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_generated_review(
+        &mut state,
+        "tts-word-character-accuracy,tts-punctuation-formatting-accuracy,tts-non-speech-tag-accuracy,tts-style-tag-accuracy",
+        &[
+            ("wordCharacterAccuracy", "Word & Character Set Accuracy"),
+            (
+                "punctuationFormattingAccuracy",
+                "Punctuation & Formatting Accuracy",
+            ),
+            ("nonSpeechTagAccuracy", "Non-Speech Tag Accuracy"),
+            ("styleTagAccuracy", "Style Tag Accuracy"),
+        ],
+    );
+    let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "review-action-1"
+    }));
+    activate_review_backend_request(&mut state, &request);
+
+    complete_review_backend_request(
+        &mut state,
+        request,
+        serde_json::json!({
+            "feedback": [
+                {
+                    "category": "words",
+                    "score": "2 - acceptable",
+                    "note": "TTS words are mostly correct."
+                },
+                {
+                    "category": "punctuation",
+                    "score": 3,
+                    "note": "TTS punctuation is correct."
+                },
+                {
+                    "category": "non-speech tags",
+                    "score": 1,
+                    "note": "A sound tag is missing."
+                },
+                {
+                    "category": "style tags",
+                    "score": 2,
+                    "note": "One delivery tag needs review."
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    let panel = state.feedback_panel.as_ref().unwrap();
+    for (key, rating, comment) in [
+        ("wordCharacterAccuracy", 2, "TTS words are mostly correct."),
+        (
+            "punctuationFormattingAccuracy",
+            3,
+            "TTS punctuation is correct.",
+        ),
+        ("nonSpeechTagAccuracy", 1, "A sound tag is missing."),
+        ("styleTagAccuracy", 2, "One delivery tag needs review."),
+    ] {
+        let entry = panel.draft.entries.get(key).unwrap();
+        assert_eq!(entry.rating, rating);
+        assert_eq!(entry.comment, comment);
+    }
+    assert_eq!(
+        state
+            .babel_service_requests
+            .iter()
+            .filter(|request| matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn reviewer_generate_ignores_unknown_and_ambiguous_categories_without_saving() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_generated_review(
+        &mut state,
+        "tx-punctuation-formatting,tts-punctuation-formatting-accuracy",
+        &[
+            ("punctuationFormatting", "Punctuation & Formatting"),
+            (
+                "punctuationFormattingAccuracy",
+                "Punctuation & Formatting Accuracy",
+            ),
+        ],
+    );
+    let revision_before = state.feedback_draft_revision;
+    let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "review-action-1"
+    }));
+    activate_review_backend_request(&mut state, &request);
+
+    complete_review_backend_request(
+        &mut state,
+        request,
+        serde_json::json!({
+            "categoryFeedback": [
+                {
+                    "category": "punctuation",
+                    "score": 3,
+                    "note": "Ambiguous when both punctuation rubrics are loaded."
+                },
+                {
+                    "category": "speaker identity",
+                    "score": 2,
+                    "note": "This category is not in the loaded rubric."
+                }
+            ]
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        state
+            .reviewer_generated_review_preview
+            .as_ref()
+            .unwrap()
+            .feedback
+            .len(),
+        2
+    );
+    let panel = state.feedback_panel.as_ref().unwrap();
+    for key in ["punctuationFormatting", "punctuationFormattingAccuracy"] {
+        let entry = panel.draft.entries.get(key).unwrap();
+        assert_eq!(entry.rating, 1);
+        assert!(entry.comment.is_empty());
+    }
+    assert_eq!(state.feedback_draft_revision, revision_before);
+    assert!(
+        state
+            .babel_service_requests
+            .iter()
+            .all(|request| !matches!(request, BabelServiceRequest::SaveFeedbackDraft(_)))
+    );
+    assert_eq!(
+        state.status,
+        "No matching non-empty reviewer feedback was available to apply."
+    );
 }
 
 #[test]
@@ -12575,24 +14182,23 @@ fn reviewer_apply_selected_card_updates_feedback_draft_and_queues_save() {
     let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
         "reviewActionId": "review-action-1"
     }));
+    activate_review_backend_request(&mut state, &request);
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "llm": {
-                    "feedback": [
-                        {
-                            "category": "Word Accuracy",
-                            "score": 2,
-                            "note": "Wrong-word correction should be reviewed."
-                        }
-                    ]
-                }
-            })
-            .to_string(),
-        ),
+        request,
+        serde_json::json!({
+            "llm": {
+                "feedback": [
+                    {
+                        "category": "Word Accuracy",
+                        "score": 2,
+                        "note": "Wrong-word correction should be reviewed."
+                    }
+                ]
+            }
+        })
+        .to_string(),
     );
 
     let _ = update(
@@ -12617,46 +14223,51 @@ fn reviewer_apply_selected_card_updates_feedback_draft_and_queues_save() {
     assert!(state.status.contains("Applied reviewer card feedback-0"));
     assert!(state.babel_service_requests.iter().any(|request| {
         matches!(request, BabelServiceRequest::SaveFeedbackDraft(save)
-            if save.form_step_response_id == "feedback-step-1"
-                && save.input_responses.iter().any(|response| response.form_input_id == "word-rating" && response.value == "2")
-                && save.input_responses.iter().any(|response| response.form_input_id == "word-comment" && response.value == "Wrong-word correction should be reviewed."))
+            if save.payload.form_step_response_id == "feedback-step-1"
+                && save.payload.input_responses.iter().any(|response| response.form_input_id == "word-rating" && response.value == "2")
+                && save.payload.input_responses.iter().any(|response| response.form_input_id == "word-comment" && response.value == "Wrong-word correction should be reviewed."))
     }));
 }
 
 #[test]
 fn reviewer_finalize_success_populates_feedback_preview_without_session_cards() {
     let mut state = stable_sample_state();
+    state.reviewer_session_id = "session-1".to_string();
+    state.reviewer_pending_finalize = Some(ReviewerPendingFinalize {
+        session_id: "session-1".to_string(),
+        mode: "skip".to_string(),
+        workspace_generation: state.workspace_generation,
+    });
     let request = ReviewBackendRequest::ReviewFinalizeSession {
         session_id: "session-1".to_string(),
         body: serde_json::json!({ "mode": "skip" }),
     };
+    activate_review_backend_request(&mut state, &request);
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "sessionId": "session-1",
-                "reviewActionId": "review-action-1",
-                "backendVersion": {
-                    "service": "babel-review-backend",
-                    "release": "0.3.9",
-                    "apiSchema": 1,
-                    "evidenceSchema": 1
-                },
-                "categoryFeedback": [
-                    {
-                        "category": "Timestamp Accuracy",
-                        "score": 1,
-                        "note": "Timing issue note."
-                    }
-                ],
-                "appliedAt": "2026-06-29T10:00:00Z",
-                "mode": "skip",
-                "aiReview": null
-            })
-            .to_string(),
-        ),
+        request,
+        serde_json::json!({
+            "sessionId": "session-1",
+            "reviewActionId": "review-action-1",
+            "backendVersion": {
+                "service": "babel-review-backend",
+                "release": "0.3.9",
+                "apiSchema": 1,
+                "evidenceSchema": 1
+            },
+            "categoryFeedback": [
+                {
+                    "category": "Timestamp Accuracy",
+                    "score": 1,
+                    "note": "Timing issue note."
+                }
+            ],
+            "appliedAt": "2026-06-29T10:00:00Z",
+            "mode": "skip",
+            "aiReview": null
+        })
+        .to_string(),
     );
 
     let preview = state
@@ -12679,6 +14290,232 @@ fn reviewer_finalize_success_populates_feedback_preview_without_session_cards() 
 }
 
 #[test]
+fn reviewer_workspace_replacement_clears_state_and_ignores_late_backend_success() {
+    let mut state = stable_sample_state();
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "session A", "card A", "");
+    state.reviewer_comments_dirty = true;
+    state.reviewer_comment_save_failed = true;
+    state.reviewer_pending_finalize = Some(ReviewerPendingFinalize {
+        session_id: "session-1".to_string(),
+        mode: "apply".to_string(),
+        workspace_generation: state.workspace_generation,
+    });
+    state.native_capability_panel_open = true;
+    let stale_request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "review-action-A"
+    }));
+    let stale_service_request = review_backend_service_request(&mut state, stale_request.clone());
+    assert!(
+        state
+            .dispatched_review_backend_requests
+            .contains(&stale_request)
+    );
+
+    let replacement = StudioWorkflow::from_project(state.project().unwrap().clone());
+    state.replace_workflow(replacement, "loaded workspace B".to_string());
+
+    assert!(state.review_backend_requests.is_empty());
+    assert!(state.dispatched_review_backend_requests.is_empty());
+    assert!(state.reviewer_session_preview.is_none());
+    assert!(state.reviewer_generated_review_preview.is_none());
+    assert!(state.reviewer_finalize_preview.is_none());
+    assert_eq!(state.reviewer_session_id, "session-1");
+    assert!(state.reviewer_session_comment.is_empty());
+    assert!(state.reviewer_card_id.is_empty());
+    assert!(state.reviewer_card_comment.is_empty());
+    assert!(!state.reviewer_comments_dirty);
+    assert!(!state.reviewer_comment_save_failed);
+    assert!(state.reviewer_pending_finalize.is_none());
+    assert!(!state.native_capability_panel_open);
+
+    let _ = update(
+        &mut state,
+        Message::ReviewBackendRequestSucceeded(
+            stale_service_request,
+            serde_json::json!({
+                "llm": {
+                    "feedback": [{
+                        "category": "Word Accuracy",
+                        "score": 1,
+                        "note": "Late workspace A feedback"
+                    }]
+                }
+            })
+            .to_string(),
+        ),
+    );
+    assert!(state.reviewer_generated_review_preview.is_none());
+    assert!(state.reviewer_finalize_preview.is_none());
+    assert!(state.reviewer_session_preview.is_none());
+}
+
+#[test]
+fn reviewer_identical_request_in_new_workspace_rejects_old_dispatch_identity() {
+    let mut state = stable_sample_state();
+    enable_l2_reviewer_capability(&mut state);
+    let request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "structurally-identical"
+    }));
+    let workspace_a = review_backend_service_request(&mut state, request.clone());
+
+    let replacement = StudioWorkflow::from_project(state.project().unwrap().clone());
+    state.replace_workflow(
+        replacement,
+        "loaded identical-request workspace B".to_string(),
+    );
+    let workspace_b = review_backend_service_request(&mut state, request.clone());
+    assert_eq!(workspace_a.request, workspace_b.request);
+    assert_ne!(
+        workspace_a.token.workspace_generation,
+        workspace_b.token.workspace_generation
+    );
+    assert_ne!(workspace_a.token, workspace_b.token);
+
+    let _ = update(
+        &mut state,
+        Message::ReviewBackendRequestSucceeded(
+            workspace_a,
+            serde_json::json!({
+                "llm": {
+                    "feedback": [{
+                        "category": "Word Accuracy",
+                        "score": 1,
+                        "note": "Late workspace A result"
+                    }]
+                }
+            })
+            .to_string(),
+        ),
+    );
+    assert!(state.reviewer_generated_review_preview.is_none());
+    assert!(
+        state
+            .dispatched_review_backend_request_tokens
+            .contains(&workspace_b.token)
+    );
+    assert!(state.dispatched_review_backend_requests.contains(&request));
+
+    let _ = update(
+        &mut state,
+        Message::ReviewBackendRequestSucceeded(
+            workspace_b,
+            serde_json::json!({
+                "llm": {
+                    "feedback": [{
+                        "category": "Word Accuracy",
+                        "score": 3,
+                        "note": "Current workspace B result"
+                    }]
+                }
+            })
+            .to_string(),
+        ),
+    );
+    assert_eq!(
+        state
+            .reviewer_generated_review_preview
+            .as_ref()
+            .unwrap()
+            .feedback[0]
+            .note,
+        "Current workspace B result"
+    );
+}
+
+#[test]
+fn reviewer_late_finalize_for_previous_session_cannot_mutate_current_session() {
+    let mut state = stable_sample_state();
+    enable_feedback_panel_for_word_accuracy(&mut state);
+    enable_l2_reviewer_capability(&mut state);
+    load_reviewer_test_session(&mut state, "session A", "card A", "");
+    state.native_capability_panel_open = true;
+    let _ = update(&mut state, Message::ReviewerFinalizeApply);
+    let stale_finalize = state
+        .review_backend_requests
+        .iter()
+        .find(|request| {
+            matches!(request, ReviewBackendRequest::ReviewFinalizeSession { session_id, .. }
+                if session_id == "session-1")
+        })
+        .cloned()
+        .expect("session A finalize should be queued");
+
+    let _ = update(
+        &mut state,
+        Message::ReviewerSessionIdChanged("session-B".to_string()),
+    );
+    let _ = update(&mut state, Message::ReviewerLoadSession);
+    let session_b_request = state
+        .review_backend_requests
+        .iter()
+        .find(|request| {
+            matches!(request, ReviewBackendRequest::ReviewGetSession { session_id }
+                if session_id == "session-B")
+        })
+        .cloned()
+        .expect("session B load should be queued");
+    complete_review_backend_request(
+        &mut state,
+        session_b_request,
+        serde_json::json!({
+            "sessionId": "session-B",
+            "reviewActionId": "review-action-B",
+            "comments": {
+                "sessionComment": "current session B",
+                "cardComments": { "card-B": "current card B" }
+            },
+            "cards": [{
+                "id": "card-B",
+                "changeIndex": 1,
+                "categories": ["Word Accuracy"]
+            }],
+            "suggestions": [],
+            "categoryFeedback": []
+        })
+        .to_string(),
+    );
+    assert_eq!(state.reviewer_session_id, "session-B");
+    assert_eq!(
+        state.reviewer_session_preview.as_ref().unwrap().session_id,
+        "session-B"
+    );
+    assert_eq!(
+        state.feedback_panel.as_ref().unwrap().draft.entries["wordAccuracy"].comment,
+        ""
+    );
+
+    complete_review_backend_request(
+        &mut state,
+        stale_finalize,
+        serde_json::json!({
+            "sessionId": "session-1",
+            "reviewActionId": "review-action-A",
+            "mode": "apply",
+            "categoryFeedback": [{
+                "category": "Word Accuracy",
+                "score": 1,
+                "note": "Late session A feedback must be ignored"
+            }]
+        })
+        .to_string(),
+    );
+
+    assert_eq!(state.reviewer_session_id, "session-B");
+    assert_eq!(
+        state.reviewer_session_preview.as_ref().unwrap().session_id,
+        "session-B"
+    );
+    assert!(state.reviewer_finalize_preview.is_none());
+    assert!(state.reviewer_generated_review_preview.is_none());
+    assert!(state.native_capability_panel_open);
+    assert_eq!(
+        state.feedback_panel.as_ref().unwrap().draft.entries["wordAccuracy"].comment,
+        ""
+    );
+}
+
+#[test]
 fn drafting_health_request_and_success_populate_backend_readiness() {
     let mut state = stable_sample_state();
 
@@ -12691,27 +14528,25 @@ fn drafting_health_request_and_success_populate_backend_readiness() {
             .any(|request| matches!(request, ReviewBackendRequest::BackendHealth))
     );
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            ReviewBackendRequest::BackendHealth,
-            serde_json::json!({
-                "ok": true,
-                "service": "babel-review-backend",
-                "backendVersion": "0.3.9",
-                "testMode": false,
-                "drafting": {
-                    "provider": "openrouter",
-                    "model": "openai/gpt-4o-mini",
-                    "serviceTier": "auto",
-                    "reasoningEffort": "low"
-                },
-                "openRouterCredits": {
-                    "remaining_credits": 8
-                }
-            })
-            .to_string(),
-        ),
+        ReviewBackendRequest::BackendHealth,
+        serde_json::json!({
+            "ok": true,
+            "service": "babel-review-backend",
+            "backendVersion": "0.3.9",
+            "testMode": false,
+            "drafting": {
+                "provider": "openrouter",
+                "model": "openai/gpt-4o-mini",
+                "serviceTier": "auto",
+                "reasoningEffort": "low"
+            },
+            "openRouterCredits": {
+                "remaining_credits": 8
+            }
+        })
+        .to_string(),
     );
 
     let health = state
@@ -12748,40 +14583,38 @@ fn drafting_response_previews_rows_and_applies_or_skips_individual_edits() {
         .text
         .clone();
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            ReviewBackendRequest::DraftGenerate(serde_json::json!({ "jobId": "draft-job" })),
-            serde_json::json!({
-                "draftRows": [
-                    {
-                        "rowId": first_segment_id,
-                        "rewrittenText": "Preview replacement one.",
-                        "status": "rewritten",
-                        "warnings": []
-                    },
-                    {
-                        "rowId": second_segment_id,
-                        "rewrittenText": "Preview replacement two.",
-                        "status": "rewritten",
-                        "warnings": ["length_delta"]
-                    }
-                ],
-                "summary": {
-                    "totalRows": 2,
-                    "rewrittenRows": 2,
-                    "unchangedRows": 0,
-                    "failedRows": 0,
-                    "anomalyCounts": { "length_delta": 1 }
+        ReviewBackendRequest::DraftGenerate(serde_json::json!({ "jobId": "draft-job" })),
+        serde_json::json!({
+            "draftRows": [
+                {
+                    "rowId": first_segment_id,
+                    "rewrittenText": "Preview replacement one.",
+                    "status": "rewritten",
+                    "warnings": []
                 },
-                "generationMeta": {
-                    "model": "openai/gpt-4o-mini",
-                    "rulePackVersion": "ru-gold-2sp-v1",
-                    "generatedAt": "2026-06-29T10:00:00Z"
+                {
+                    "rowId": second_segment_id,
+                    "rewrittenText": "Preview replacement two.",
+                    "status": "rewritten",
+                    "warnings": ["length_delta"]
                 }
-            })
-            .to_string(),
-        ),
+            ],
+            "summary": {
+                "totalRows": 2,
+                "rewrittenRows": 2,
+                "unchangedRows": 0,
+                "failedRows": 0,
+                "anomalyCounts": { "length_delta": 1 }
+            },
+            "generationMeta": {
+                "model": "openai/gpt-4o-mini",
+                "rulePackVersion": "ru-gold-2sp-v1",
+                "generatedAt": "2026-06-29T10:00:00Z"
+            }
+        })
+        .to_string(),
     );
 
     assert_eq!(state.draft_row_previews.len(), 2);
@@ -12853,27 +14686,25 @@ fn accepted_redistribution_preview_applies_draft_allocations_with_undo() {
         ]
     }));
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "model": "openai/gpt-4o-mini",
-                "results": [
-                    {
-                        "groupId": "speaker-group-1",
-                        "ok": true,
-                        "model": "openai/gpt-4o-mini",
-                        "review": {
-                            "acceptDraft": true,
-                            "moves": [],
-                            "notes": "Looks balanced."
-                        }
+        request,
+        serde_json::json!({
+            "model": "openai/gpt-4o-mini",
+            "results": [
+                {
+                    "groupId": "speaker-group-1",
+                    "ok": true,
+                    "model": "openai/gpt-4o-mini",
+                    "review": {
+                        "acceptDraft": true,
+                        "moves": [],
+                        "notes": "Looks balanced."
                     }
-                ]
-            })
-            .to_string(),
-        ),
+                }
+            ]
+        })
+        .to_string(),
     );
 
     assert_eq!(state.draft_redistribution_previews.len(), 1);
@@ -12927,27 +14758,25 @@ fn malformed_redistribution_move_surfaces_validation_copy_and_blocks_apply() {
         ]
     }));
 
-    let _ = update(
+    complete_review_backend_request(
         &mut state,
-        Message::ReviewBackendRequestSucceeded(
-            request,
-            serde_json::json!({
-                "results": [
-                    {
-                        "groupId": "speaker-group-1",
-                        "ok": true,
-                        "review": {
-                            "acceptDraft": false,
-                            "moves": [
-                                { "fromIndex": 1, "sentenceCount": 1 }
-                            ],
-                            "notes": "Move one sentence, but the model omitted the target."
-                        }
+        request,
+        serde_json::json!({
+            "results": [
+                {
+                    "groupId": "speaker-group-1",
+                    "ok": true,
+                    "review": {
+                        "acceptDraft": false,
+                        "moves": [
+                            { "fromIndex": 1, "sentenceCount": 1 }
+                        ],
+                        "notes": "Move one sentence, but the model omitted the target."
                     }
-                ]
-            })
-            .to_string(),
-        ),
+                }
+            ]
+        })
+        .to_string(),
     );
 
     let preview = state
@@ -13299,6 +15128,10 @@ fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_c
         workspace_generation: 7,
         revision: 11,
     };
+    let feedback_token = FeedbackDraftSaveToken {
+        workspace_generation: 7,
+        revision: 3,
+    };
     let mutation_requests = [
         BabelServiceRequest::SubmitReviewAction(SubmitReviewActionRequest {
             review_action_id: "review-action-42".to_string(),
@@ -13317,12 +15150,15 @@ fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_c
             rating: 1,
             rating_reason: Some("wrong emotion".to_string()),
         }),
-        BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveRequest {
-            form_step_response_id: "form-step-response-1".to_string(),
-            input_responses: vec![FeedbackInputResponse {
-                form_input_id: "comment".to_string(),
-                value: "Looks good".to_string(),
-            }],
+        BabelServiceRequest::SaveFeedbackDraft(FeedbackDraftSaveServiceRequest {
+            payload: FeedbackDraftSaveRequest {
+                form_step_response_id: "form-step-response-1".to_string(),
+                input_responses: vec![FeedbackInputResponse {
+                    form_input_id: "comment".to_string(),
+                    value: "Looks good".to_string(),
+                }],
+            },
+            token: feedback_token,
         }),
     ];
     assert!(
@@ -13382,18 +15218,20 @@ fn fixture_service_executor_dispatches_and_maps_recovered_mutation_requests_to_c
             mutation_requests[4].clone(),
             r#"{"success":true,"updatedAt":"2026-06-23T10:00:00Z"}"#.to_string()
         ),
-        Some(Message::FeedbackDraftSaved(
-            "2026-06-23T10:00:00Z".to_string()
-        ))
+        Some(Message::FeedbackDraftSaved {
+            token: feedback_token,
+            last_saved: "2026-06-23T10:00:00Z".to_string(),
+        })
     );
     assert_eq!(
         fixture_payload_message_for_request(
             mutation_requests[4].clone(),
             r#"{"success":false,"error":"draft rejected"}"#.to_string()
         ),
-        Some(Message::FeedbackDraftSaveFailed(
-            "draft rejected".to_string()
-        ))
+        Some(Message::FeedbackDraftSaveFailed {
+            token: feedback_token,
+            error: "draft rejected".to_string(),
+        })
     );
 }
 
@@ -13778,12 +15616,15 @@ fn service_command_envelopes_use_recovered_trpc_operation_names_and_payload_keys
     );
     assert_eq!(
         request_envelope_for_service_command(&BabelServiceRequest::SaveFeedbackDraft(
-            FeedbackDraftSaveRequest {
-                form_step_response_id: "form-step-response-1".to_string(),
-                input_responses: vec![FeedbackInputResponse {
-                    form_input_id: "comment".to_string(),
-                    value: "Looks good".to_string(),
-                }],
+            FeedbackDraftSaveServiceRequest {
+                payload: FeedbackDraftSaveRequest {
+                    form_step_response_id: "form-step-response-1".to_string(),
+                    input_responses: vec![FeedbackInputResponse {
+                        form_input_id: "comment".to_string(),
+                        value: "Looks good".to_string(),
+                    }],
+                },
+                token: Default::default(),
             },
         )),
         serde_json::json!({
@@ -14422,6 +16263,144 @@ fn submit_review_emits_recovered_babel_service_payload_without_auto_success() {
         }
         other => panic!("expected submit review action request, got {other:?}"),
     }
+}
+#[test]
+fn l2_babel_submit_queues_exact_submit_payload_and_reviewer_analytics() {
+    let mut state =
+        l2_feedback_bootstrap_state("feedback-project-1", "review-action-42", "worker-7");
+    complete_live_feedback_bootstrap(&mut state, "Previously saved feedback", "");
+
+    let session_request = ReviewBackendRequest::ReviewCreateSession(serde_json::json!({
+        "reviewActionId": "review-action-42"
+    }));
+    activate_review_backend_request(&mut state, &session_request);
+    complete_review_backend_request(
+        &mut state,
+        session_request,
+        serde_json::json!({
+            "sessionId": "session-submit",
+            "reviewActionId": "review-action-42",
+            "comments": {
+                "sessionComment": "Current reviewer session comment",
+                "cardComments": {
+                    "card-submit": "Current reviewer card comment"
+                }
+            },
+            "cards": [{
+                "id": "card-submit",
+                "changeIndex": 1,
+                "categories": ["Word Accuracy"]
+            }],
+            "suggestions": [],
+            "categoryFeedback": []
+        })
+        .to_string(),
+    );
+    let generate_request = ReviewBackendRequest::ReviewGenerate(serde_json::json!({
+        "reviewActionId": "review-action-42"
+    }));
+    activate_review_backend_request(&mut state, &generate_request);
+    complete_review_backend_request(
+        &mut state,
+        generate_request,
+        serde_json::json!({
+            "prepared": { "promptVersion": "review-submit-v1" },
+            "llm": {
+                "feedback": [{
+                    "category": "Word Accuracy",
+                    "score": 3,
+                    "note": "Current runtime feedback"
+                }]
+            }
+        })
+        .to_string(),
+    );
+
+    replace_feedback_comment(&mut state, "wordAccuracy", "Current runtime feedback");
+    replace_feedback_other_feedback(&mut state, "Current general feedback");
+    let save_token = feedback_draft_save_token(&state);
+    let _ = state.dispatch_new_babel_service_requests();
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: save_token,
+            last_saved: "2026-07-18T10:04:00Z".to_string(),
+        },
+    );
+    let latest_save_token = feedback_draft_save_token(&state);
+    assert_ne!(latest_save_token, save_token);
+    let _ = update(
+        &mut state,
+        Message::FeedbackDraftSaved {
+            token: latest_save_token,
+            last_saved: "2026-07-18T10:04:01Z".to_string(),
+        },
+    );
+    let feedback_panel = state.feedback_panel.as_ref().unwrap();
+    assert!(feedback_panel.is_ready());
+    assert!(!feedback_panel.is_saving);
+    assert!(!feedback_panel.save_has_error);
+    assert_eq!(
+        feedback_panel.draft.entries["wordAccuracy"].comment,
+        "Current runtime feedback"
+    );
+
+    acknowledge_all_assertable_warnings(&mut state);
+    let _ = update(&mut state, Message::RequestSubmitReview);
+    assert!(state.show_submit_dialog);
+    let _ = update(&mut state, Message::SubmitReview);
+    let token = state.current_submit_request_token().unwrap();
+    let _ = update(
+        &mut state,
+        Message::LintAnnotationsSucceeded {
+            token,
+            issues: Vec::new(),
+        },
+    );
+
+    let submit = state
+        .babel_service_requests
+        .iter()
+        .find_map(|request| match request {
+            BabelServiceRequest::SubmitReviewAction(request) => Some(request.clone()),
+            _ => None,
+        })
+        .expect("L2 Babel submit should be queued");
+    assert_eq!(submit.review_action_id, "review-action-42");
+    assert!(!submit.annotations.is_empty());
+    assert!(submit.is_stitched_queue);
+    assert_eq!(submit.token, token);
+    let envelope = request_envelope_for_service_command(&BabelServiceRequest::SubmitReviewAction(
+        submit.clone(),
+    ));
+    assert_eq!(
+        envelope,
+        serde_json::json!({
+            "operation": "transcriptions.submitTranscriptReviewAction",
+            "payload": {
+                "reviewActionId": "review-action-42",
+                "annotations": submit.annotations,
+                "isStitchedQueue": true
+            }
+        })
+    );
+
+    assert!(state.review_backend_requests.iter().any(|request| {
+        matches!(request, ReviewBackendRequest::ReviewSubmitAnalytics(payload)
+            if payload["reviewActionId"] == "review-action-42"
+                && payload["original"]["actionLevel"] == 1
+                && payload["original"]["actionDecision"] == "pass"
+                && payload["current"]["actionLevel"] == 2
+                && payload["prepared"]["promptVersion"] == "review-submit-v1"
+                && payload["inputBoxes"]["categories"]["Word Accuracy"]["score"] == "3"
+                && payload["inputBoxes"]["categories"]["Word Accuracy"]["note"] == "Current runtime feedback"
+                && payload["inputBoxes"]["notes"][0]["scope"] == "session"
+                && payload["inputBoxes"]["notes"][0]["comment"] == "Current reviewer session comment"
+                && payload["inputBoxes"]["notes"][1]["scope"] == "card"
+                && payload["inputBoxes"]["notes"][1]["cardId"] == "card-submit"
+                && payload["inputBoxes"]["notes"][1]["comment"] == "Current reviewer card comment"
+                && payload["metadata"]["client"] == "transcription-studio-native")
+    }));
 }
 
 #[test]

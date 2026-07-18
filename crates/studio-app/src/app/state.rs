@@ -10,11 +10,11 @@ use std::{
 use iced::{Point, Task, keyboard::Modifiers};
 use serde_json::Value;
 use studio_app::{
-    BabelProjectLintTagConfig, EditorSession, LaneWaveform, LoopStripHit, LoopStripHitTarget,
-    META_BABEL_PROJECT_ID, NoWorkModalInput, NoWorkModalModel, ORIGINAL_SCRIPT_STORAGE_KEY,
-    OverviewWaveformView, ReviewState, SCRIPT_CONTEXT_STORAGE_KEY, ServerLintIssue,
-    ServerLintSnapshot, StudioWorkflow, SubmitControlView, TaskLookupEffect, TaskLookupState,
-    TimeRange, TimelineLaneView, TimelineScrollbarView, TimelineSegmentIndex,
+    BabelProjectLintTagConfig, EditorSession, FeedbackInput, LaneWaveform, LoopStripHit,
+    LoopStripHitTarget, META_BABEL_PROJECT_ID, NoWorkModalInput, NoWorkModalModel,
+    ORIGINAL_SCRIPT_STORAGE_KEY, OverviewWaveformView, ReviewState, SCRIPT_CONTEXT_STORAGE_KEY,
+    ServerLintIssue, ServerLintSnapshot, StudioWorkflow, SubmitControlView, TaskLookupEffect,
+    TaskLookupState, TimeRange, TimelineLaneView, TimelineScrollbarView, TimelineSegmentIndex,
     TimelineSegmentPreview, TrackFilter, TranscriptAnnotationKind, TranscriptRowView,
     TransportStripView, WaveformBlock, babel_project_lint_tag_metadata, build_no_work_modal_model,
     load_sample_project, resolve_babel_project_lint_tag_config,
@@ -44,14 +44,18 @@ use super::relay::{
     RelayLaunchConfig, RelayProcessState, RelayProcessStatus, start_relay_process,
     stop_relay_child, wait_for_relay_ready,
 };
-use super::review_backend_client::{ReviewBackendRequest, dispatch_review_backend_requests};
+use super::review_backend_client::{
+    ReviewBackendRequest, ReviewBackendRequestToken, ReviewBackendServiceRequest,
+    dispatch_review_backend_requests,
+};
 use super::service_callbacks::{
     BabelServiceRequest, ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest,
-    LoadLatestReviewActionRequest, LoadReviewActionRequest, META_ACTIVE_QUEUE_ID,
-    META_CHUNKED_QUEUE_ID, META_QUEUE_ID, META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID,
-    SaveRequestToken, SubmitRequestToken, build_admin_rate_review_action_request,
-    build_drop_worker_action_request, build_lint_annotations_request,
-    build_skip_review_action_request, build_submit_review_action_request_with_asserted_warnings,
+    FeedbackBootstrapToken, FeedbackDraftBootstrap, LoadLatestReviewActionRequest,
+    LoadReviewActionRequest, META_ACTIVE_QUEUE_ID, META_CHUNKED_QUEUE_ID, META_QUEUE_ID,
+    META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID, SaveRequestToken, SubmitRequestToken,
+    build_admin_rate_review_action_request, build_drop_worker_action_request,
+    build_lint_annotations_request, build_skip_review_action_request,
+    build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
     dispatch_babel_service_requests, is_dispatchable_babel_service_request,
@@ -163,6 +167,12 @@ pub(super) struct PendingLeave {
     pub(super) intent: PendingLeaveIntent,
     pub(super) continue_after_save: bool,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReviewerPendingFinalize {
+    pub(super) session_id: String,
+    pub(super) mode: String,
+    pub(super) workspace_generation: u64,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum DashboardSection {
@@ -182,6 +192,7 @@ pub(super) enum NativeCapabilityModalTab {
 pub(super) struct DashboardState {
     pub(super) section: DashboardSection,
     pub(super) projects: Vec<DashboardProject>,
+    pub(super) worker_id: String,
     pub(super) project_id: String,
     pub(super) chunked_queue_id: String,
     pub(super) stitched_queue_id: String,
@@ -199,6 +210,20 @@ pub(super) struct DashboardProject {
     pub(super) name: String,
     pub(super) chunked_queue_id: String,
     pub(super) stitched_queue_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FeedbackBootstrapState {
+    pub(super) token: FeedbackBootstrapToken,
+    pub(super) project_id: String,
+    pub(super) review_action_id: String,
+    pub(super) worker_id: String,
+    pub(super) rubric_flag_names: Option<Vec<String>>,
+    pub(super) form_step_id: Option<String>,
+    pub(super) inputs: Option<Vec<FeedbackInput>>,
+    pub(super) draft: Option<FeedbackDraftBootstrap>,
+    pub(super) inputs_requested: bool,
+    pub(super) draft_requested: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -571,12 +596,17 @@ pub(super) struct StudioState {
     pub(super) admin_flag_is_pending: bool,
     pub(super) no_work_modal: Option<NoWorkModalModel>,
     pub(super) feedback_panel: Option<FeedbackPanelState>,
+    pub(super) feedback_bootstrap: Option<FeedbackBootstrapState>,
+    pub(super) feedback_bootstrap_attempt: u64,
+    pub(super) feedback_draft_revision: u64,
     pub(super) task_lookup: Option<TaskLookupState>,
     pub(super) task_lookup_last_effect: Option<TaskLookupEffect>,
     pub(super) babel_service_requests: Vec<BabelServiceRequest>,
     pub(super) dispatched_babel_service_requests: Vec<BabelServiceRequest>,
     pub(super) review_backend_requests: Vec<ReviewBackendRequest>,
     pub(super) dispatched_review_backend_requests: Vec<ReviewBackendRequest>,
+    pub(super) dispatched_review_backend_request_tokens: Vec<ReviewBackendRequestToken>,
+    pub(super) next_review_backend_request_sequence: u64,
     pub(super) subaccount_owner_requests: Vec<SubaccountOwnerRequest>,
     pub(super) dispatched_subaccount_owner_requests: Vec<SubaccountOwnerRequest>,
     pub(super) native_capability_panel_open: bool,
@@ -586,6 +616,8 @@ pub(super) struct StudioState {
     pub(super) reviewer_card_id: String,
     pub(super) reviewer_card_comment: String,
     pub(super) reviewer_comments_dirty: bool,
+    pub(super) reviewer_comment_save_failed: bool,
+    pub(super) reviewer_pending_finalize: Option<ReviewerPendingFinalize>,
     pub(super) reviewer_cards_expanded: bool,
     pub(super) reviewer_suggestions_expanded: bool,
     pub(super) reviewer_template_query: String,
@@ -744,12 +776,17 @@ impl Default for StudioState {
             admin_flag_is_pending: false,
             no_work_modal: None,
             feedback_panel,
+            feedback_bootstrap: None,
+            feedback_bootstrap_attempt: 0,
+            feedback_draft_revision: 0,
             task_lookup,
             task_lookup_last_effect: None,
             babel_service_requests: Vec::new(),
             dispatched_babel_service_requests: Vec::new(),
             review_backend_requests: Vec::new(),
             dispatched_review_backend_requests: Vec::new(),
+            dispatched_review_backend_request_tokens: Vec::new(),
+            next_review_backend_request_sequence: 0,
             subaccount_owner_requests: Vec::new(),
             dispatched_subaccount_owner_requests: Vec::new(),
             native_capability_panel_open: false,
@@ -759,6 +796,8 @@ impl Default for StudioState {
             reviewer_card_id: String::new(),
             reviewer_card_comment: String::new(),
             reviewer_comments_dirty: false,
+            reviewer_comment_save_failed: false,
+            reviewer_pending_finalize: None,
             reviewer_cards_expanded: false,
             reviewer_suggestions_expanded: true,
             reviewer_template_query: String::new(),
@@ -1542,6 +1581,33 @@ impl StudioState {
         self.invalidate_transcript_rows_cache();
     }
 
+    fn reset_reviewer_workspace_state(&mut self) {
+        self.review_backend_requests.clear();
+        self.dispatched_review_backend_requests.clear();
+        self.dispatched_review_backend_request_tokens.clear();
+        self.native_capability_panel_open = false;
+        self.native_capability_modal_tab = NativeCapabilityModalTab::Reviewer;
+        self.reviewer_session_id.clear();
+        self.reviewer_session_comment.clear();
+        self.reviewer_card_id.clear();
+        self.reviewer_card_comment.clear();
+        self.reviewer_comments_dirty = false;
+        self.reviewer_comment_save_failed = false;
+        self.reviewer_pending_finalize = None;
+        self.reviewer_cards_expanded = false;
+        self.reviewer_suggestions_expanded = true;
+        self.reviewer_template_query.clear();
+        self.reviewer_template_id.clear();
+        self.reviewer_proposal_id.clear();
+        self.reviewer_history_query.clear();
+        self.reviewer_generated_review_preview = None;
+        self.reviewer_finalize_preview = None;
+        self.reviewer_session_preview = None;
+        self.reviewer_template_results.clear();
+        self.native_capability_last_response = None;
+        self.native_capability_last_error = None;
+    }
+
     pub(super) fn replace_workflow(&mut self, workflow: StudioWorkflow, status: String) {
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
@@ -1550,8 +1616,16 @@ impl StudioState {
                 BabelServiceRequest::SaveAnnotations(_)
                     | BabelServiceRequest::LintAnnotations(_)
                     | BabelServiceRequest::SubmitReviewAction(_)
+                    | BabelServiceRequest::LoadFeedbackRubricFlags(_)
+                    | BabelServiceRequest::LoadFeedbackForm(_)
+                    | BabelServiceRequest::LoadFeedbackInputs(_)
+                    | BabelServiceRequest::LoadFeedbackDraft(_)
+                    | BabelServiceRequest::SaveFeedbackDraft(_)
             )
         });
+        self.feedback_bootstrap = None;
+        self.feedback_draft_revision = 0;
+        self.reset_reviewer_workspace_state();
         self.audio_playback.stop();
         self.editor = Some(EditorSession::for_project(workflow.project()));
         self.workflow = Ok(workflow);
@@ -1569,6 +1643,7 @@ impl StudioState {
         self.admin_flag_is_pending = false;
         self.no_work_modal = None;
         self.feedback_panel = self.project().and_then(FeedbackPanelState::from_project);
+        self.initialize_feedback_panel_for_workflow();
         self.update_feedback_submit_metadata();
         self.task_lookup = self.project().and_then(Self::task_lookup_from_project);
         self.task_lookup_last_effect = None;
@@ -1810,6 +1885,52 @@ impl StudioState {
         self.dispatched_babel_service_requests
             .retain(|request| !should_drain(request));
     }
+    pub(super) fn drain_review_backend_requests_matching(
+        &mut self,
+        mut should_drain: impl FnMut(&ReviewBackendRequest) -> bool,
+    ) {
+        self.review_backend_requests
+            .retain(|request| !should_drain(request));
+
+        let dispatched_requests = std::mem::take(&mut self.dispatched_review_backend_requests);
+        let dispatched_tokens = std::mem::take(&mut self.dispatched_review_backend_request_tokens);
+        debug_assert_eq!(dispatched_requests.len(), dispatched_tokens.len());
+        for (request, token) in dispatched_requests.into_iter().zip(dispatched_tokens) {
+            if !should_drain(&request) {
+                self.dispatched_review_backend_requests.push(request);
+                self.dispatched_review_backend_request_tokens.push(token);
+            }
+        }
+    }
+    pub(super) fn acknowledge_review_backend_request(
+        &mut self,
+        service_request: &ReviewBackendServiceRequest,
+    ) -> bool {
+        if service_request.token.workspace_generation != self.workspace_generation {
+            return false;
+        }
+        let Some(index) = self
+            .dispatched_review_backend_request_tokens
+            .iter()
+            .position(|token| token == &service_request.token)
+        else {
+            return false;
+        };
+        if self.dispatched_review_backend_requests.get(index) != Some(&service_request.request) {
+            return false;
+        }
+
+        self.dispatched_review_backend_request_tokens.remove(index);
+        self.dispatched_review_backend_requests.remove(index);
+        if let Some(index) = self
+            .review_backend_requests
+            .iter()
+            .position(|request| request == &service_request.request)
+        {
+            self.review_backend_requests.remove(index);
+        }
+        true
+    }
 
     pub(super) fn dispatch_new_babel_service_requests(&mut self) -> Task<Message> {
         if self.native_auth_flow_blocks_service_dispatch() {
@@ -1848,12 +1969,27 @@ impl StudioState {
             return Task::none();
         }
 
-        self.dispatched_review_backend_requests
-            .extend(new_requests.iter().cloned());
-        if std::env::var_os("STUDIO_LOG_REVIEW_BACKEND_DISPATCH").is_some() {
-            eprintln!("Transcription Studio review backend dispatch: requests={new_requests:?}");
+        let mut service_requests = Vec::with_capacity(new_requests.len());
+        for request in new_requests {
+            let token = ReviewBackendRequestToken {
+                workspace_generation: self.workspace_generation,
+                sequence: self.next_review_backend_request_sequence,
+            };
+            self.next_review_backend_request_sequence = self
+                .next_review_backend_request_sequence
+                .checked_add(1)
+                .expect("review backend request sequence exhausted");
+            self.dispatched_review_backend_requests
+                .push(request.clone());
+            self.dispatched_review_backend_request_tokens.push(token);
+            service_requests.push(ReviewBackendServiceRequest { request, token });
         }
-        dispatch_review_backend_requests(new_requests)
+        if std::env::var_os("STUDIO_LOG_REVIEW_BACKEND_DISPATCH").is_some() {
+            eprintln!(
+                "Transcription Studio review backend dispatch: requests={service_requests:?}"
+            );
+        }
+        dispatch_review_backend_requests(service_requests)
     }
 
     pub(super) fn dispatch_new_subaccount_owner_requests(&mut self) -> Task<Message> {
@@ -2990,6 +3126,24 @@ impl StudioState {
     }
 
     pub(super) fn enter_dashboard(&mut self) {
+        self.workspace_generation = self.workspace_generation.saturating_add(1);
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(
+                request,
+                BabelServiceRequest::SaveAnnotations(_)
+                    | BabelServiceRequest::LintAnnotations(_)
+                    | BabelServiceRequest::SubmitReviewAction(_)
+                    | BabelServiceRequest::LoadFeedbackRubricFlags(_)
+                    | BabelServiceRequest::LoadFeedbackForm(_)
+                    | BabelServiceRequest::LoadFeedbackInputs(_)
+                    | BabelServiceRequest::LoadFeedbackDraft(_)
+                    | BabelServiceRequest::SaveFeedbackDraft(_)
+            )
+        });
+        self.feedback_bootstrap = None;
+        self.feedback_panel = None;
+        self.feedback_draft_revision = 0;
+        self.reset_reviewer_workspace_state();
         self.audio_playback.stop();
         self.with_editor_mut(|editor| editor.is_playing = false);
         self.held_audition_keys.clear();
@@ -3060,7 +3214,9 @@ impl StudioState {
     pub(super) fn discard_pending_leave(&mut self) -> Option<PendingLeaveIntent> {
         let pending = self.pending_leave.take()?;
         self.show_exit_confirm_dialog = false;
-        self.workspace_generation = self.workspace_generation.saturating_add(1);
+        if pending.intent != PendingLeaveIntent::HideToTray {
+            self.workspace_generation = self.workspace_generation.saturating_add(1);
+        }
         self.drain_babel_service_requests_matching(|request| {
             matches!(
                 request,
@@ -3110,6 +3266,9 @@ impl StudioState {
             matches!(request, BabelServiceRequest::LoadWorkerProjects)
         });
         self.dashboard.is_pending = false;
+        if let Some(worker_id) = dashboard_worker_id_from_payload(&source) {
+            self.dashboard.worker_id = worker_id;
+        }
         match dashboard_projects_from_payload(&source) {
             Ok(projects) => {
                 self.dashboard.projects = projects;
@@ -4968,6 +5127,9 @@ impl StudioState {
             self.show_submit_dialog = false;
             return;
         }
+        if self.feedback_bootstrap_blocks_submit() {
+            return;
+        }
 
         let submit = match (self.project(), self.editor.as_ref()) {
             (Some(project), Some(editor)) => editor.submit_control(
@@ -4988,7 +5150,20 @@ impl StudioState {
 
         if submit.trigger_disabled {
             self.show_submit_dialog = false;
-            self.status = submit.trigger_tooltip_content;
+            if submit
+                .trigger_tooltip_content
+                .to_ascii_lowercase()
+                .contains("feedback")
+                && let Some(panel) = self.feedback_panel.as_mut()
+            {
+                panel.open = true;
+                self.status = format!(
+                    "Submit blocked: {} Opened the required feedback panel.",
+                    submit.trigger_tooltip_content
+                );
+            } else {
+                self.status = submit.trigger_tooltip_content;
+            }
             return;
         }
 
@@ -5001,6 +5176,10 @@ impl StudioState {
             return false;
         }
         if self.block_read_only_edit("Submit") {
+            return false;
+        }
+        if self.feedback_bootstrap_blocks_submit() {
+            self.submit_has_error = true;
             return false;
         }
 
@@ -5159,6 +5338,9 @@ impl StudioState {
         self.status = status.to_string();
         self.babel_service_requests
             .push(BabelServiceRequest::SubmitReviewAction(request));
+        if self.reviewer_capability_available() {
+            self.queue_reviewer_submit_analytics_best_effort();
+        }
         true
     }
 
@@ -5909,6 +6091,28 @@ fn parse_project_assignment_csv(source: &str) -> Vec<String> {
         .collect()
 }
 
+fn dashboard_worker_id_from_payload(source: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(source).ok()?;
+    value
+        .get("worker")
+        .and_then(|worker| worker.get("id"))
+        .or_else(|| value.get("workerId"))
+        .or_else(|| value.get("worker_id"))
+        .or_else(|| {
+            let worker = value.as_array()?.first()?;
+            worker
+                .pointer("/result/data/json/id")
+                .or_else(|| worker.pointer("/data/json/id"))
+                .or_else(|| worker.pointer("/result/data/id"))
+                .or_else(|| worker.pointer("/data/id"))
+                .or_else(|| worker.get("id"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|worker_id| !worker_id.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn dashboard_projects_from_payload(source: &str) -> Result<Vec<DashboardProject>, String> {
     let value: Value = serde_json::from_str(source)
         .map_err(|error| format!("failed to decode Babel projects response: {error}"))?;
@@ -6190,7 +6394,7 @@ fn metadata_f32(project: &Project, key: &str) -> Option<f32> {
         .filter(|value| value.is_finite())
 }
 
-fn project_review_action_level(project: &Project) -> Option<i64> {
+pub(super) fn project_review_action_level(project: &Project) -> Option<i64> {
     REVIEWER_ACTION_LEVEL_METADATA_KEYS
         .iter()
         .find_map(|key| {

@@ -4,7 +4,10 @@ use studio_waveform::DecodedAudio;
 use time::OffsetDateTime;
 
 use super::review_backend_client::{BackendMultipartAudioTrack, ReviewBackendRequest};
-use super::state::{DraftAudioGuard, NativeCapabilityModalTab, StudioState};
+use super::state::{
+    DraftAudioGuard, NativeCapabilityModalTab, ReviewerPendingFinalize, StudioState,
+    project_review_action_level,
+};
 
 pub(super) const DRAFT_OPENROUTER_API_KEY_ENV: &str = "STUDIO_DRAFT_OPENROUTER_API_KEY";
 pub(super) const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
@@ -15,6 +18,7 @@ const META_REVIEW_ACTION_ENVELOPE: &str = "babel.review_action.envelope";
 const META_ORIGINAL_TEXT: &str = "studio.babel.original.text";
 const META_ORIGINAL_START_SECONDS: &str = "studio.babel.original.startSeconds";
 const META_ORIGINAL_END_SECONDS: &str = "studio.babel.original.endSeconds";
+const META_REVIEW_ACTION_ID: &str = "studio.babel.reviewActionId";
 const META_ORIGINAL_LANE_ID: &str = "studio.babel.original.laneId";
 pub(super) const META_REVIEWER_SELECTED_SESSION_ID: &str = "studio.native.reviewer.sessionId";
 
@@ -439,14 +443,25 @@ fn normalized_review_action(
     original: bool,
     package_extra: &Map<String, Value>,
 ) -> Value {
+    let current_action_level = project_review_action_level(project).unwrap_or(0);
+    let action_level = if original && current_action_level == 2 {
+        1
+    } else {
+        current_action_level
+    };
+    let action_decision = if original && current_action_level == 2 {
+        "pass".to_string()
+    } else {
+        action_decision(project, package_extra)
+    };
     let annotations = sorted_segments(project)
         .into_iter()
         .map(|segment| review_annotation(project, segment, review_action_id, original))
         .collect::<Vec<_>>();
     json!({
         "actionId": review_action_id,
-        "actionLevel": number_from_extra(package_extra, "action_level").unwrap_or(0),
-        "actionDecision": action_decision(project, package_extra),
+        "actionLevel": action_level,
+        "actionDecision": action_decision,
         "annotations": annotations,
         "recordings": review_recordings(project),
         "lintErrors": package_extra.get("lint_errors").and_then(Value::as_array).cloned().unwrap_or_default(),
@@ -631,18 +646,25 @@ fn metadata_string(segment: &Segment, key: &str) -> Option<String> {
         _ => None,
     })
 }
+fn review_action_id(project: &Project) -> Option<String> {
+    project
+        .metadata
+        .get(META_REVIEW_ACTION_ID)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            project
+                .segments
+                .iter()
+                .find_map(|segment| metadata_string(segment, "reviewActionId"))
+        })
+        .or_else(|| string_from_map(&package_extra(project), &["action_id", "actionId"]))
+        .or_else(|| review_action_id_from_envelope(project))
+}
 
 fn metadata_f64(segment: &Segment, key: &str) -> Option<f64> {
     segment.metadata.get(key).and_then(Value::as_f64)
-}
-
-fn review_action_id(project: &Project) -> Option<String> {
-    project
-        .segments
-        .iter()
-        .find_map(|segment| metadata_string(segment, "reviewActionId"))
-        .or_else(|| string_from_map(&package_extra(project), &["action_id", "actionId"]))
-        .or_else(|| review_action_id_from_envelope(project))
 }
 
 fn review_action_id_from_envelope(project: &Project) -> Option<String> {
@@ -737,11 +759,6 @@ fn string_from_map(map: &Map<String, Value>, keys: &[&str]) -> Option<String> {
     })
 }
 
-fn number_from_extra(map: &Map<String, Value>, key: &str) -> Option<i64> {
-    map.get(key)
-        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
-}
-
 fn current_utc_timestamp() -> String {
     let now = OffsetDateTime::now_utc();
     format!(
@@ -760,8 +777,12 @@ impl StudioState {
     pub(super) fn toggle_native_capability_panel(&mut self) {
         let opening = !self.native_capability_panel_open;
         self.native_capability_panel_open = opening;
-        if opening && !self.reviewer_capability_available() {
-            self.native_capability_modal_tab = NativeCapabilityModalTab::GoldDrafting;
+        if opening {
+            self.native_capability_modal_tab = if self.reviewer_capability_available() {
+                NativeCapabilityModalTab::Reviewer
+            } else {
+                NativeCapabilityModalTab::GoldDrafting
+            };
         }
     }
 
@@ -807,6 +828,10 @@ impl StudioState {
         if self.block_reviewer_capability_unavailable("Reviewer comments") {
             return;
         }
+        if self.has_pending_reviewer_comment_request() {
+            self.status = "Reviewer comments are already being saved.".to_string();
+            return;
+        }
         let session_id = match required_reviewer_field("session ID", &self.reviewer_session_id) {
             Ok(value) => value,
             Err(status) => {
@@ -814,24 +839,12 @@ impl StudioState {
                 return;
             }
         };
-        let card_comments = if self.reviewer_card_id.trim().is_empty() {
-            json!({})
-        } else {
-            json!({
-                self.reviewer_card_id.trim().to_string(): self.reviewer_card_comment.clone()
-            })
-        };
+        let body = self.reviewer_comments_body();
+        self.reviewer_comment_save_failed = false;
         self.queue_review_backend_request(
             "Saving review comments...",
-            ReviewBackendRequest::ReviewUpdateComments {
-                session_id,
-                body: json!({
-                    "sessionComment": self.reviewer_session_comment,
-                    "cardComments": card_comments,
-                }),
-            },
+            ReviewBackendRequest::ReviewUpdateComments { session_id, body },
         );
-        self.reviewer_comments_dirty = false;
     }
 
     pub(super) fn queue_reviewer_template_search(&mut self) {
@@ -849,10 +862,14 @@ impl StudioState {
     }
 
     pub(super) fn update_reviewer_session_comment(&mut self, value: String) {
-        if self.reviewer_session_comment != value {
-            self.reviewer_session_comment = value;
-            self.reviewer_comments_dirty = true;
+        if self.reviewer_session_comment == value {
+            return;
         }
+        self.reviewer_session_comment = value.clone();
+        if let Some(session) = self.reviewer_session_preview.as_mut() {
+            session.session_comment = value;
+        }
+        self.reviewer_comments_dirty = true;
     }
 
     pub(super) fn set_reviewer_cards_expanded(&mut self, expanded: bool) {
@@ -864,15 +881,26 @@ impl StudioState {
     }
 
     pub(super) fn update_reviewer_session_id(&mut self, value: String) {
-        self.reviewer_session_id = value.trim().to_string();
+        let session_id = value.trim().to_string();
+        self.cancel_reviewer_session_persistence_if_changed(&session_id);
+        self.reviewer_session_id = session_id;
         self.persist_reviewer_selected_session_id();
     }
 
     pub(super) fn update_reviewer_card_comment(&mut self, value: String) {
-        if self.reviewer_card_comment != value {
-            self.reviewer_card_comment = value;
-            self.reviewer_comments_dirty = true;
+        if self.reviewer_card_comment == value {
+            return;
         }
+        self.reviewer_card_comment = value.clone();
+        if let Some(card) = self.reviewer_session_preview.as_mut().and_then(|session| {
+            session
+                .cards
+                .iter_mut()
+                .find(|card| card.id == self.reviewer_card_id)
+        }) {
+            card.comment = value;
+        }
+        self.reviewer_comments_dirty = true;
     }
 
     pub(super) fn select_reviewer_card(&mut self, card_id: String) {
@@ -892,6 +920,7 @@ impl StudioState {
     pub(super) fn auto_save_reviewer_comments(&mut self) {
         if !self.reviewer_capability_available()
             || !self.reviewer_comments_dirty
+            || self.reviewer_comment_save_failed
             || self.reviewer_session_id.trim().is_empty()
             || self.has_pending_reviewer_comment_request()
         {
@@ -903,6 +932,7 @@ impl StudioState {
     pub(super) fn should_run_reviewer_comment_save_tick(&self) -> bool {
         self.reviewer_capability_available()
             && self.reviewer_comments_dirty
+            && !self.reviewer_comment_save_failed
             && !self.reviewer_session_id.trim().is_empty()
             && !self.has_pending_reviewer_comment_request()
     }
@@ -1007,13 +1037,22 @@ impl StudioState {
                 return;
             }
         };
-        self.queue_review_backend_request(
-            "Finalizing review session...",
-            ReviewBackendRequest::ReviewFinalizeSession {
+        if self.reviewer_comments_dirty || self.has_pending_reviewer_comment_request() {
+            self.reviewer_pending_finalize = Some(ReviewerPendingFinalize {
                 session_id,
-                body: json!({ "mode": mode }),
-            },
-        );
+                mode: mode.to_string(),
+                workspace_generation: self.workspace_generation,
+            });
+            if !self.has_pending_reviewer_comment_request() {
+                self.queue_reviewer_save_comments();
+            }
+            if self.has_pending_reviewer_comment_request() {
+                self.status =
+                    format!("Saving all reviewer comments before finalizing as {mode}...");
+            }
+            return;
+        }
+        self.enqueue_reviewer_finalize(mode);
     }
 
     pub(super) fn queue_reviewer_submit_analytics(&mut self) {
@@ -1037,6 +1076,21 @@ impl StudioState {
                 ReviewBackendRequest::ReviewSubmitAnalytics(payload),
             ),
             Err(error) => self.fail_native_capability_request("Reviewer analytics", error),
+        }
+    }
+    pub(super) fn queue_reviewer_submit_analytics_best_effort(&mut self) {
+        let Some(project) = self.project().cloned() else {
+            return;
+        };
+        match build_reviewer_analytics_payload_with_session(
+            &project,
+            self.reviewer_session_preview.as_ref(),
+            self.reviewer_generated_review_preview.as_ref(),
+        ) {
+            Ok(payload) => self
+                .review_backend_requests
+                .push(ReviewBackendRequest::ReviewSubmitAnalytics(payload)),
+            Err(error) => self.native_capability_last_error = Some(error),
         }
     }
 
@@ -1458,7 +1512,6 @@ impl StudioState {
             },
             ReviewBackendRequest::ReviewCreateSession(_)
             | ReviewBackendRequest::ReviewGetSession { .. }
-            | ReviewBackendRequest::ReviewUpdateComments { .. }
             | ReviewBackendRequest::ReviewSetTemplateMatch { .. }
             | ReviewBackendRequest::ReviewClearTemplateMatch { .. }
             | ReviewBackendRequest::ReviewGenerateTemplateSuggestions { .. }
@@ -1468,30 +1521,62 @@ impl StudioState {
                     Err(error) => self.status = format!("Reviewer session parse failed: {error}"),
                 }
             }
+            ReviewBackendRequest::ReviewUpdateComments { session_id, body } => {
+                if session_id != &self.reviewer_session_id {
+                    return;
+                }
+                match parse_reviewer_session_preview(payload) {
+                    Ok(session) => {
+                        self.complete_reviewer_comment_save(session_id, body, session);
+                    }
+                    Err(error) => {
+                        self.reviewer_comments_dirty = true;
+                        self.reviewer_comment_save_failed = true;
+                        self.status = format!(
+                            "Reviewer comments response could not be acknowledged: {error}"
+                        );
+                    }
+                }
+            }
             ReviewBackendRequest::ReviewGenerate(_) => {
                 match parse_generated_review_preview(payload) {
                     Ok(preview) => {
-                        let card_count = preview.cards.len();
+                        let feedback = preview.feedback.clone();
+                        let feedback_count = feedback.len();
                         self.reviewer_generated_review_preview = Some(preview);
-                        self.status =
-                            format!("Loaded {card_count} generated review preview cards.");
+                        let applied = self.apply_reviewer_feedback_items(&feedback);
+                        if applied > 0 {
+                            self.status = format!(
+                                "Generated review automatically applied {applied} of {feedback_count} feedback item(s); saving draft..."
+                            );
+                        }
                     }
                     Err(error) => self.status = format!("Reviewer generate parse failed: {error}"),
                 }
             }
             ReviewBackendRequest::ReviewFinalizeSession { session_id, body } => {
-                match parse_generated_review_preview(payload) {
+                if !self.reviewer_finalize_request_is_current(session_id, body) {
+                    return;
+                }
+                match parse_reviewer_finalize_preview(session_id, body, payload) {
                     Ok(preview) => {
                         let feedback_count = preview.feedback.len();
-                        self.reviewer_finalize_preview =
-                            parse_reviewer_finalize_preview(session_id, body, payload).ok();
-                        self.reviewer_generated_review_preview = Some(preview);
-                        let mode = body.get("mode").and_then(Value::as_str).unwrap_or("apply");
+                        let applied = self.apply_reviewer_feedback_items(&preview.feedback);
+                        if let Ok(generated) = parse_generated_review_preview(payload) {
+                            self.reviewer_generated_review_preview = Some(generated);
+                        }
+                        let mode = preview.mode.clone();
+                        self.reviewer_finalize_preview = Some(preview);
+                        self.reviewer_pending_finalize = None;
+                        self.native_capability_panel_open = false;
                         self.status = format!(
-                            "Finalized review session as {mode}; {feedback_count} feedback items."
+                            "Finalized review session as {mode}; applied {applied} of {feedback_count} feedback items."
                         );
                     }
-                    Err(error) => self.status = format!("Reviewer finalize parse failed: {error}"),
+                    Err(error) => {
+                        self.reviewer_pending_finalize = None;
+                        self.status = format!("Reviewer finalize parse failed: {error}");
+                    }
                 }
             }
             ReviewBackendRequest::ReviewSearchTemplates { .. } => {
@@ -1674,11 +1759,185 @@ impl StudioState {
         self.native_capability_last_error = Some(error);
     }
 
+    pub(super) fn handle_native_capability_failure(
+        &mut self,
+        request: &ReviewBackendRequest,
+        error: &str,
+    ) -> bool {
+        match request {
+            ReviewBackendRequest::ReviewUpdateComments { session_id, .. } => {
+                if session_id != &self.reviewer_session_id {
+                    return true;
+                }
+                self.reviewer_comments_dirty = true;
+                self.reviewer_comment_save_failed = true;
+                self.status = format!(
+                    "Reviewer comments save failed: {error}. Drafts remain unsaved; use Save comments to retry."
+                );
+                true
+            }
+            ReviewBackendRequest::ReviewFinalizeSession { session_id, body } => {
+                if !self.reviewer_finalize_request_is_current(session_id, body) {
+                    return true;
+                }
+                self.reviewer_pending_finalize = None;
+                self.status = format!("Reviewer finalize failed: {error}");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn cancel_reviewer_session_persistence_if_changed(&mut self, next_session_id: &str) {
+        if self.reviewer_session_id == next_session_id {
+            return;
+        }
+        self.reviewer_comments_dirty = false;
+        self.reviewer_comment_save_failed = false;
+        self.reviewer_pending_finalize = None;
+        self.drain_review_backend_requests_matching(|request| {
+            matches!(
+                request,
+                ReviewBackendRequest::ReviewUpdateComments { session_id, .. }
+                    | ReviewBackendRequest::ReviewFinalizeSession { session_id, .. }
+                    if session_id != next_session_id
+            )
+        });
+    }
+
+    fn reviewer_finalize_request_is_current(
+        &self,
+        request_session_id: &str,
+        request_body: &Value,
+    ) -> bool {
+        let Some(request_mode) = request_body.get("mode").and_then(Value::as_str) else {
+            return false;
+        };
+        self.reviewer_session_id == request_session_id
+            && self
+                .reviewer_pending_finalize
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.session_id == request_session_id
+                        && pending.mode == request_mode
+                        && pending.workspace_generation == self.workspace_generation
+                })
+    }
+
+    fn reviewer_comments_body(&self) -> Value {
+        let mut card_comments = Map::new();
+        if let Some(session) = self.reviewer_session_preview.as_ref() {
+            for card in &session.cards {
+                card_comments.insert(card.id.clone(), json!(card.comment));
+            }
+        }
+        if !self.reviewer_card_id.trim().is_empty()
+            && !card_comments.contains_key(self.reviewer_card_id.trim())
+        {
+            card_comments.insert(
+                self.reviewer_card_id.trim().to_string(),
+                json!(self.reviewer_card_comment),
+            );
+        }
+        json!({
+            "sessionComment": self.reviewer_session_comment,
+            "cardComments": card_comments,
+        })
+    }
+
+    fn merge_current_reviewer_comments_into(&self, session: &mut ReviewerSessionPreview) {
+        if session.session_id != self.reviewer_session_id {
+            return;
+        }
+        session.session_comment = self.reviewer_session_comment.clone();
+        let comments = self
+            .reviewer_comments_body()
+            .get("cardComments")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for card in &mut session.cards {
+            if let Some(comment) = comments.get(&card.id).and_then(Value::as_str) {
+                card.comment = comment.to_string();
+            }
+        }
+    }
+
+    fn complete_reviewer_comment_save(
+        &mut self,
+        request_session_id: &str,
+        request_body: &Value,
+        mut session: ReviewerSessionPreview,
+    ) {
+        if self.reviewer_session_id != request_session_id
+            || session.session_id != request_session_id
+        {
+            return;
+        }
+        let acknowledged_current = request_body == &self.reviewer_comments_body();
+        self.reviewer_comment_save_failed = false;
+        if acknowledged_current {
+            self.reviewer_comments_dirty = false;
+        } else {
+            self.merge_current_reviewer_comments_into(&mut session);
+            self.reviewer_comments_dirty = true;
+        }
+        self.replace_reviewer_session_preview(session);
+
+        let Some(pending) = self.reviewer_pending_finalize.as_ref() else {
+            return;
+        };
+        if pending.session_id != request_session_id
+            || pending.workspace_generation != self.workspace_generation
+        {
+            return;
+        }
+        if self.reviewer_comments_dirty {
+            self.queue_reviewer_save_comments();
+        } else {
+            let mode = pending.mode.clone();
+            self.enqueue_reviewer_finalize(&mode);
+        }
+    }
+
+    fn enqueue_reviewer_finalize(&mut self, mode: &str) {
+        let Ok(session_id) = required_reviewer_field("session ID", &self.reviewer_session_id)
+        else {
+            return;
+        };
+        if self
+            .review_backend_requests
+            .iter()
+            .chain(self.dispatched_review_backend_requests.iter())
+            .any(|request| matches!(request, ReviewBackendRequest::ReviewFinalizeSession { .. }))
+        {
+            return;
+        }
+        self.reviewer_pending_finalize = Some(ReviewerPendingFinalize {
+            session_id: session_id.clone(),
+            mode: mode.to_string(),
+            workspace_generation: self.workspace_generation,
+        });
+        self.queue_review_backend_request(
+            "Finalizing review session...",
+            ReviewBackendRequest::ReviewFinalizeSession {
+                session_id,
+                body: json!({ "mode": mode }),
+            },
+        );
+    }
+
     fn has_pending_reviewer_comment_request(&self) -> bool {
         self.review_backend_requests
             .iter()
             .chain(self.dispatched_review_backend_requests.iter())
-            .any(|request| matches!(request, ReviewBackendRequest::ReviewUpdateComments { .. }))
+            .any(|request| {
+                matches!(
+                    request,
+                    ReviewBackendRequest::ReviewUpdateComments { session_id, .. }
+                        if session_id == &self.reviewer_session_id
+                )
+            })
     }
 
     fn drafting_request_config(&self) -> DraftingRequestConfig {
@@ -1691,20 +1950,37 @@ impl StudioState {
         )
     }
 
-    fn replace_reviewer_session_preview(&mut self, session: ReviewerSessionPreview) {
+    fn replace_reviewer_session_preview(&mut self, mut session: ReviewerSessionPreview) {
+        self.cancel_reviewer_session_persistence_if_changed(&session.session_id);
+        let selected_card_id = self.reviewer_card_id.clone();
+        let preserve_local_comments = session.session_id == self.reviewer_session_id
+            && (self.reviewer_comments_dirty || self.has_pending_reviewer_comment_request());
+        if preserve_local_comments {
+            self.merge_current_reviewer_comments_into(&mut session);
+        }
+
         self.reviewer_session_id = session.session_id.clone();
         self.reviewer_session_comment = session.session_comment.clone();
         self.persist_reviewer_selected_session_id();
-        if let Some(card) = session.cards.first() {
+        let selected_card = session
+            .cards
+            .iter()
+            .find(|card| card.id == selected_card_id)
+            .or_else(|| session.cards.first());
+        if let Some(card) = selected_card {
             self.reviewer_card_id = card.id.clone();
             self.reviewer_card_comment = card.comment.clone();
-            if let Some(template_id) = card.matched_template_id.as_ref() {
-                self.reviewer_template_id = template_id.clone();
-            }
+            self.reviewer_template_id = card.matched_template_id.clone().unwrap_or_default();
+        } else {
+            self.reviewer_card_id.clear();
+            self.reviewer_card_comment.clear();
+            self.reviewer_template_id.clear();
         }
-        if let Some(suggestion) = session.suggestions.first() {
-            self.reviewer_proposal_id = suggestion.proposal_id.clone();
-        }
+        self.reviewer_proposal_id = session
+            .suggestions
+            .first()
+            .map(|suggestion| suggestion.proposal_id.clone())
+            .unwrap_or_default();
         let card_count = session.cards.len();
         self.reviewer_session_preview = Some(session);
         self.status = format!("Loaded review session with {card_count} cards.");

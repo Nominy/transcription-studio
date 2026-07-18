@@ -591,6 +591,10 @@ pub(super) fn relay_request_kind(request: &BabelServiceRequest) -> &'static str 
         BabelServiceRequest::ClaimByProcessedTranscription(_) => "claimByProcessedTranscription",
         BabelServiceRequest::LoadReviewAction(_) => "loadReviewAction",
         BabelServiceRequest::LoadLatestReviewAction(_) => "loadLatestReviewAction",
+        BabelServiceRequest::LoadFeedbackRubricFlags(_) => "loadFeedbackRubricFlags",
+        BabelServiceRequest::LoadFeedbackForm(_) => "loadFeedbackForm",
+        BabelServiceRequest::LoadFeedbackInputs(_) => "loadFeedbackInputs",
+        BabelServiceRequest::LoadFeedbackDraft(_) => "loadFeedbackDraft",
         BabelServiceRequest::SaveFeedbackDraft(_) => "saveFeedbackDraft",
     }
 }

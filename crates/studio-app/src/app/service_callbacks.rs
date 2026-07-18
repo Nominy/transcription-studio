@@ -4,7 +4,8 @@ use serde_json::{Map, Value};
 use studio_core::{Project, Segment};
 
 use studio_app::{
-    AdminFlagPayload, FeedbackDraftSaveRequest, StudioWorkflow, TaskLookupEffect, TaskLookupState,
+    AdminFlagPayload, FeedbackDraftSaveRequest, FeedbackInput, FeedbackInputResponse,
+    StudioWorkflow, TaskLookupEffect, TaskLookupState,
 };
 
 pub(super) const META_REVIEW_ACTION_ID: &str = "studio.babel.reviewActionId";
@@ -13,7 +14,7 @@ pub(super) const META_QUEUE_ID: &str = "studio.babel.queueId";
 pub(super) const META_CHUNKED_QUEUE_ID: &str = "studio.babel.chunkedQueueId";
 pub(super) const META_STITCHED_QUEUE_ID: &str = "studio.babel.stitchedQueueId";
 pub(super) const META_IS_STITCHED_QUEUE: &str = "studio.babel.isStitchedQueue";
-const META_PROJECT_ID: &str = "studio.babel.projectId";
+pub(super) const META_PROJECT_ID: &str = "studio.babel.projectId";
 const META_REVIEW_ACTION_ENVELOPE: &str = "babel.review_action.envelope";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,7 +30,11 @@ pub(super) enum BabelServiceRequest {
     ClaimByProcessedTranscription(ClaimByProcessedTranscriptionRequest),
     LoadReviewAction(LoadReviewActionRequest),
     LoadLatestReviewAction(LoadLatestReviewActionRequest),
-    SaveFeedbackDraft(FeedbackDraftSaveRequest),
+    LoadFeedbackRubricFlags(LoadFeedbackRubricFlagsRequest),
+    LoadFeedbackForm(LoadFeedbackFormRequest),
+    LoadFeedbackInputs(LoadFeedbackInputsRequest),
+    LoadFeedbackDraft(LoadFeedbackDraftRequest),
+    SaveFeedbackDraft(FeedbackDraftSaveServiceRequest),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +54,62 @@ pub(super) struct SaveRequestToken {
 pub(super) struct SubmitRequestToken {
     pub(super) workspace_generation: u64,
     pub(super) revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct FeedbackBootstrapToken {
+    pub(super) workspace_generation: u64,
+    pub(super) attempt: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct FeedbackDraftSaveToken {
+    pub(super) workspace_generation: u64,
+    pub(super) revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct FeedbackDraftSaveServiceRequest {
+    pub(super) payload: FeedbackDraftSaveRequest,
+    pub(super) token: FeedbackDraftSaveToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoadFeedbackRubricFlagsRequest {
+    pub(super) project_id: String,
+    pub(super) token: FeedbackBootstrapToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoadFeedbackFormRequest {
+    pub(super) project_id: String,
+    pub(super) token: FeedbackBootstrapToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoadFeedbackInputsRequest {
+    pub(super) step_id: String,
+    pub(super) token: FeedbackBootstrapToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoadFeedbackDraftRequest {
+    pub(super) form_step_id: String,
+    pub(super) review_action_id: String,
+    pub(super) worker_id: String,
+    pub(super) token: FeedbackBootstrapToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FeedbackDraftBootstrap {
+    pub(super) form_step_response_id: String,
+    pub(super) input_responses: Vec<FeedbackInputResponse>,
+    pub(super) updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FeedbackBootstrapInputs {
+    pub(super) inputs: Vec<FeedbackInput>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,13 +326,17 @@ fn stitched_queue_id(project: &Project) -> String {
     .unwrap_or_default()
 }
 
-fn review_action_id(project: &Project) -> String {
+pub(super) fn review_action_id(project: &Project) -> String {
     first_nonempty_string([
         trimmed_project_metadata(project, META_REVIEW_ACTION_ID),
         review_action_id_from_segments(project),
         review_action_id_from_envelope(project),
     ])
     .unwrap_or_default()
+}
+
+pub(super) fn feedback_project_id(project: &Project) -> String {
+    trimmed_project_metadata(project, META_PROJECT_ID).unwrap_or_default()
 }
 
 fn review_action_id_from_segments(project: &Project) -> Option<String> {

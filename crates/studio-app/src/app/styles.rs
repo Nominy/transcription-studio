@@ -144,6 +144,76 @@ pub(crate) fn modal_surface_style(_theme: &Theme) -> container::Style {
         })
 }
 
+pub(crate) fn feedback_panel_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::WHITE)
+        .border(
+            border::rounded(0)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+        .shadow(Shadow {
+            color: Color::from_rgba8(15, 23, 42, 0.16),
+            offset: Vector::new(-4.0, 0.0),
+            blur_radius: 20.0,
+        })
+}
+
+pub(crate) fn feedback_card_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(248, 250, 252))
+        .border(
+            border::rounded(8)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+}
+
+pub(crate) fn feedback_footer_style(_theme: &Theme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgb8(248, 250, 252))
+        .border(
+            border::rounded(0)
+                .width(1)
+                .color(Color::from_rgb8(226, 232, 240)),
+        )
+}
+
+pub(crate) fn feedback_rating_button_style(
+    selected: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style + Copy {
+    move |_theme, status| {
+        let background = match (selected, status) {
+            (true, button::Status::Hovered) => Color::from_rgb8(30, 41, 59),
+            (true, button::Status::Pressed) => Color::from_rgb8(51, 65, 85),
+            (true, _) => Color::from_rgb8(15, 23, 42),
+            (false, button::Status::Hovered) => Color::from_rgb8(241, 245, 249),
+            (false, button::Status::Pressed) => Color::from_rgb8(226, 232, 240),
+            (false, button::Status::Disabled) => Color::from_rgb8(248, 250, 252),
+            (false, button::Status::Active) => Color::WHITE,
+        };
+        let text_color = if selected {
+            Color::WHITE
+        } else if status == button::Status::Disabled {
+            Color::from_rgb8(148, 163, 184)
+        } else {
+            Color::from_rgb8(51, 65, 85)
+        };
+        let border_color = if selected {
+            background
+        } else {
+            Color::from_rgb8(203, 213, 225)
+        };
+
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color,
+            border: border::rounded(7).width(1).color(border_color),
+            shadow: Default::default(),
+        }
+    }
+}
+
 pub(crate) fn dashboard_sidebar_style(_theme: &Theme) -> container::Style {
     container::Style::default()
         .background(Color::from_rgb8(15, 23, 42))
