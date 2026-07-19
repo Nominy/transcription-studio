@@ -1,9 +1,18 @@
 use iced::Task;
-use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
+use time::OffsetDateTime;
 use url::form_urlencoded::byte_serialize;
 
-use super::Message;
+use super::{
+    Message,
+    native_auth::{
+        default_native_auth_store_path, mint_native_babel_authorization_from_store,
+        native_clerk_url,
+    },
+    native_auth_cli::native_babel_url,
+    subaccounts::subaccount_session_is_active,
+};
 
 pub(super) const REVIEW_BACKEND_BASE_URL_ENV: &str = "STUDIO_REVIEW_BACKEND_BASE_URL";
 pub(super) const DEFAULT_REVIEW_BACKEND_BASE_URL: &str = "https://reviewgen.ovh";
@@ -273,6 +282,7 @@ async fn review_backend_payload_for_request(
             "application/json"
         },
     );
+    let builder = maybe_apply_main_account_auth(builder).await?;
 
     let builder = if !parts.audio_tracks.is_empty() {
         let payload = parts.body.unwrap_or(Value::Null);
@@ -317,6 +327,25 @@ async fn review_backend_payload_for_request(
             payload
         ))
     }
+}
+async fn maybe_apply_main_account_auth(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::RequestBuilder, String> {
+    if !subaccount_session_is_active() {
+        return Ok(builder);
+    }
+
+    let store_path = default_native_auth_store_path();
+    let babel_url = native_babel_url();
+    let clerk_url = native_clerk_url();
+    let authorization = mint_native_babel_authorization_from_store(
+        &store_path,
+        &babel_url,
+        &clerk_url,
+        OffsetDateTime::now_utc().unix_timestamp(),
+    )
+    .await?;
+    Ok(builder.header(AUTHORIZATION, authorization))
 }
 
 fn is_draft_stream_request(request: &ReviewBackendRequest) -> bool {
@@ -401,7 +430,6 @@ fn post_with_audio(
         audio_tracks,
     }
 }
-
 fn encode_path_segment(value: &str) -> String {
     byte_serialize(value.as_bytes())
         .collect::<String>()
@@ -424,11 +452,172 @@ fn encode_query_params(params: &[(String, String)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        env,
+        ffi::{OsStr, OsString},
+        fs,
+        io::{Read, Write as IoWrite},
+        net::TcpListener,
+        sync::{Mutex, MutexGuard},
+        thread,
+    };
+
     use serde_json::json;
 
     use super::{
-        BackendHttpMethod, ReviewBackendRequest, final_payload_from_sse_stream, review_backend_url,
+        BackendHttpMethod, REVIEW_BACKEND_BASE_URL_ENV, ReviewBackendRequest,
+        final_payload_from_sse_stream, review_backend_payload_for_request, review_backend_url,
     };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct MockHttpResponse {
+        body: String,
+        headers: Vec<String>,
+    }
+
+    struct MockHttpServer {
+        base_url: String,
+        handle: thread::JoinHandle<Vec<String>>,
+    }
+
+    impl MockHttpServer {
+        fn start(responses: Vec<MockHttpResponse>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+            let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+            let handle = thread::spawn(move || {
+                let mut requests = Vec::new();
+                for response in responses {
+                    let (mut stream, _) = listener.accept().expect("accept request");
+                    requests.push(read_http_request(&mut stream));
+                    write_http_response(&mut stream, &response.body, &response.headers);
+                }
+                requests
+            });
+            Self { base_url, handle }
+        }
+
+        fn start_simple(responses: Vec<&str>) -> Self {
+            Self::start(
+                responses
+                    .into_iter()
+                    .map(|body| MockHttpResponse {
+                        body: body.to_string(),
+                        headers: Vec::new(),
+                    })
+                    .collect(),
+            )
+        }
+
+        fn join(self) -> Vec<String> {
+            self.handle.join().expect("mock server join")
+        }
+    }
+
+    struct TestEnv {
+        _guard: MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl TestEnv {
+        fn with_review_subaccount_and_main_account_auth() -> Self {
+            let guard = ENV_LOCK.lock().expect("env lock");
+            let names = vec![
+                REVIEW_BACKEND_BASE_URL_ENV,
+                "STUDIO_SUBACCOUNT_SESSION_STORE",
+                "STUDIO_BABEL_AUTH_STORE",
+                "STUDIO_BABEL_CLERK_URL",
+                "STUDIO_BABEL_SERVICE_BASE_URL",
+            ];
+            let saved = names
+                .iter()
+                .map(|name| (*name, env::var_os(name)))
+                .collect::<Vec<_>>();
+            for (name, _) in &saved {
+                remove_env_var(name);
+            }
+            Self {
+                _guard: guard,
+                saved,
+            }
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => set_env_var(name, value),
+                    None => remove_env_var(name),
+                }
+            }
+        }
+    }
+
+    fn set_env_var(name: &str, value: impl AsRef<OsStr>) {
+        unsafe {
+            env::set_var(name, value);
+        }
+    }
+
+    fn remove_env_var(name: &str) {
+        unsafe {
+            env::remove_var(name);
+        }
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let read = stream.read(&mut chunk).expect("read request");
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            let text = String::from_utf8_lossy(&buffer);
+            if let Some(header_end) = text.find("\r\n\r\n") {
+                let headers = &text[..header_end];
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("content-length: ")
+                            .or_else(|| line.strip_prefix("Content-Length: "))
+                    })
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if buffer.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        String::from_utf8(buffer).expect("utf8 request")
+    }
+
+    fn write_http_response(stream: &mut std::net::TcpStream, body: &str, headers: &[String]) {
+        let extra_headers = if headers.is_empty() {
+            String::new()
+        } else {
+            format!("{}\r\n", headers.join("\r\n"))
+        };
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\n{}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            extra_headers,
+            body.len(),
+            body
+        );
+    }
+
+    fn request_contains(request: &str, expected: &str) -> bool {
+        request
+            .to_ascii_lowercase()
+            .contains(&expected.to_ascii_lowercase())
+    }
+
+    fn write_auth_store(path: &std::path::Path, body: serde_json::Value) {
+        fs::write(path, body.to_string()).expect("write auth store");
+    }
 
     #[test]
     fn maps_reviewer_session_and_template_routes_to_backend_contract() {
@@ -614,5 +803,85 @@ mod tests {
             review_backend_url("https://reviewgen.ovh/", "/api/review/generate"),
             "https://reviewgen.ovh/api/review/generate"
         );
+    }
+
+    #[tokio::test]
+    async fn review_backend_request_for_subaccount_uses_main_account_authorization() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let _env = TestEnv::with_review_subaccount_and_main_account_auth();
+        let clerk = MockHttpServer::start(vec![
+            MockHttpResponse {
+                body: r#"{"response":{"object":"client","last_active_session_id":"sess_native","sessions":[{"id":"sess_native","status":"active"}]}}"#.to_string(),
+                headers: Vec::new(),
+            },
+            MockHttpResponse {
+                body: r#"{"object":"token","jwt":"jwt-from-clerk"}"#.to_string(),
+                headers: Vec::new(),
+            },
+        ]);
+        let review_backend = MockHttpServer::start_simple(vec!["{\"result\":\"ok\"}"]);
+
+        let subaccount_session_path = temp.path().join("subaccount-session.json");
+        fs::write(
+            &subaccount_session_path,
+            format!(
+                r#"{{"version":1,"hostUrl":"{}","token":"relay-token","subaccountId":"sub-1","displayName":"Main Tester"}}"#,
+                clerk.base_url
+            ),
+        )
+        .expect("write subaccount session");
+
+        let auth_store_path = temp.path().join("babel-auth.json");
+        write_auth_store(
+            &auth_store_path,
+            json!({
+                "version": 1,
+                "cookies": [
+                    {
+                        "name": "__client",
+                        "value": "client-cookie",
+                        "domain": "127.0.0.1",
+                        "path": "/",
+                        "secure": false,
+                    }
+                ]
+            }),
+        );
+        set_env_var(
+            "STUDIO_SUBACCOUNT_SESSION_STORE",
+            subaccount_session_path.as_os_str(),
+        );
+        set_env_var("STUDIO_BABEL_AUTH_STORE", auth_store_path.as_os_str());
+        set_env_var("STUDIO_BABEL_CLERK_URL", clerk.base_url.as_str());
+        set_env_var("STUDIO_BABEL_SERVICE_BASE_URL", clerk.base_url.as_str());
+        set_env_var(
+            REVIEW_BACKEND_BASE_URL_ENV,
+            review_backend.base_url.as_str(),
+        );
+
+        let payload = review_backend_payload_for_request(&ReviewBackendRequest::ReviewGetSession {
+            session_id: "session-1".to_string(),
+        })
+        .await
+        .expect("review backend request should succeed");
+
+        assert_eq!(payload, "{\"result\":\"ok\"}");
+
+        let review_requests = review_backend.join();
+        assert!(request_contains(
+            &review_requests[0],
+            "GET /api/review/sessions/session-1"
+        ));
+        assert!(request_contains(
+            &review_requests[0],
+            "Authorization: Bearer jwt-from-clerk"
+        ));
+
+        let clerk_requests = clerk.join();
+        assert!(request_contains(&clerk_requests[0], "GET /v1/client?"));
+        assert!(request_contains(
+            &clerk_requests[1],
+            "POST /v1/client/sessions/sess_native/tokens?"
+        ));
     }
 }

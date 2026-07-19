@@ -16,6 +16,7 @@ pub(super) const META_STITCHED_QUEUE_ID: &str = "studio.babel.stitchedQueueId";
 pub(super) const META_IS_STITCHED_QUEUE: &str = "studio.babel.isStitchedQueue";
 pub(super) const META_PROJECT_ID: &str = "studio.babel.projectId";
 const META_REVIEW_ACTION_ENVELOPE: &str = "babel.review_action.envelope";
+const META_EXTRA_PACKAGE: &str = "babel.extra.package";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BabelServiceRequest {
@@ -330,13 +331,18 @@ pub(super) fn review_action_id(project: &Project) -> String {
     first_nonempty_string([
         trimmed_project_metadata(project, META_REVIEW_ACTION_ID),
         review_action_id_from_segments(project),
+        review_action_id_from_package(project),
         review_action_id_from_envelope(project),
     ])
     .unwrap_or_default()
 }
 
 pub(super) fn feedback_project_id(project: &Project) -> String {
-    trimmed_project_metadata(project, META_PROJECT_ID).unwrap_or_default()
+    first_nonempty_string([
+        trimmed_project_metadata(project, META_PROJECT_ID),
+        Some(project.id.trim().to_string()).filter(|value| !value.is_empty()),
+    ])
+    .unwrap_or_default()
 }
 
 fn review_action_id_from_segments(project: &Project) -> Option<String> {
@@ -344,17 +350,55 @@ fn review_action_id_from_segments(project: &Project) -> Option<String> {
         segment
             .metadata
             .get("reviewActionId")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
+            .and_then(metadata_string)
+            .or_else(|| {
+                segment
+                    .metadata
+                    .get("review_action_id")
+                    .and_then(metadata_string)
+            })
     })
+}
+
+fn review_action_id_from_package(project: &Project) -> Option<String> {
+    let package = project.metadata.get(META_EXTRA_PACKAGE)?;
+    let package = serde_json::from_str::<Value>(package).ok()?;
+    string_from_map(
+        package.as_object()?,
+        &[
+            "reviewActionId",
+            "review_action_id",
+            "actionId",
+            "action_id",
+        ],
+    )
 }
 
 fn review_action_id_from_envelope(project: &Project) -> Option<String> {
     let envelope = project.metadata.get(META_REVIEW_ACTION_ENVELOPE)?;
     let value: Value = serde_json::from_str(envelope).ok()?;
-    find_string_by_key(&value, "actionId")
+    find_string_by_key(&value, "actionId").or_else(|| find_string_by_key(&value, "reviewActionId"))
+}
+
+fn metadata_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        }
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn string_from_map(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(metadata_string))
 }
 
 fn trimmed_project_metadata(project: &Project, key: &str) -> Option<String> {

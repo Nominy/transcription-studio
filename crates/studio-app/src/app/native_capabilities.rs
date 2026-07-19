@@ -659,7 +659,17 @@ fn review_action_id(project: &Project) -> Option<String> {
                 .iter()
                 .find_map(|segment| metadata_string(segment, "reviewActionId"))
         })
-        .or_else(|| string_from_map(&package_extra(project), &["action_id", "actionId"]))
+        .or_else(|| {
+            string_from_map(
+                &package_extra(project),
+                &[
+                    "reviewActionId",
+                    "review_action_id",
+                    "action_id",
+                    "actionId",
+                ],
+            )
+        })
         .or_else(|| review_action_id_from_envelope(project))
 }
 

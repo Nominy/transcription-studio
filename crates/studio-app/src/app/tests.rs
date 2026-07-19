@@ -10735,10 +10735,11 @@ fn enable_feedback_panel_for_generated_review(
     );
 }
 
-fn l2_feedback_bootstrap_state(
+fn l2_feedback_bootstrap_state_with_metadata(
     project_id: &str,
-    review_action_id: &str,
     worker_id: &str,
+    review_action_id: &str,
+    configure: impl FnOnce(&mut Project),
 ) -> StudioState {
     let mut state = stable_sample_state();
     state.dashboard.worker_id = worker_id.to_string();
@@ -10751,6 +10752,7 @@ fn l2_feedback_bootstrap_state(
     }];
 
     let mut project = state.project().unwrap().clone();
+    project.id = project_id.to_string();
     project.metadata.insert(
         "babel.extra.package".to_string(),
         r#"{"action_level":2}"#.to_string(),
@@ -10766,11 +10768,68 @@ fn l2_feedback_bootstrap_state(
         "studio.babel.isStitchedQueue".to_string(),
         "true".to_string(),
     );
+    configure(&mut project);
     state.replace_workflow(
         StudioWorkflow::from_project(project),
         "loaded live L2 feedback fixture".to_string(),
     );
     state
+}
+
+fn l2_feedback_bootstrap_state(
+    project_id: &str,
+    review_action_id: &str,
+    worker_id: &str,
+) -> StudioState {
+    l2_feedback_bootstrap_state_with_metadata(project_id, worker_id, review_action_id, |_| ())
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_falls_back_to_project_id_from_project_metadata() {
+    let state = l2_feedback_bootstrap_state_with_metadata(
+        "feedback-project-1",
+        "worker-7",
+        "review-action-42",
+        |project| {
+            project.metadata.remove("studio.babel.projectId");
+        },
+    );
+    let bootstrap = state
+        .feedback_bootstrap
+        .as_ref()
+        .expect("editable L2 workflow should start feedback bootstrap");
+    assert_eq!(bootstrap.project_id, "feedback-project-1");
+    assert_eq!(bootstrap.review_action_id, "review-action-42");
+    assert_eq!(bootstrap.worker_id, "worker-7");
+    assert_eq!(state.babel_service_requests.len(), 2);
+}
+
+#[test]
+fn reviewer_feedback_bootstrap_falls_back_to_review_action_id_from_package_action_id() {
+    let state = l2_feedback_bootstrap_state_with_metadata(
+        "feedback-project-1",
+        "worker-7",
+        "should-not-be-used",
+        |project| {
+            project.metadata.remove("studio.babel.reviewActionId");
+            for segment in project.segments.iter_mut() {
+                segment.metadata.remove("reviewActionId");
+                segment.metadata.remove("review_action_id");
+            }
+            project.metadata.insert(
+                "babel.extra.package".to_string(),
+                r#"{"action_level":2,"action_id":"review-action-42"}"#.to_string(),
+            );
+        },
+    );
+    let bootstrap = state
+        .feedback_bootstrap
+        .as_ref()
+        .expect("editable L2 workflow should start feedback bootstrap");
+    assert_eq!(bootstrap.review_action_id, "review-action-42");
+    assert_eq!(bootstrap.project_id, "feedback-project-1");
+    assert_eq!(bootstrap.worker_id, "worker-7");
+    assert_eq!(state.babel_service_requests.len(), 2);
 }
 
 fn apply_feedback_fixture_response(
@@ -12512,6 +12571,32 @@ fn reviewer_payload_uses_preserved_original_and_current_native_transcript() {
         payload["current"]["recordings"]
             .as_array()
             .is_some_and(|items| !items.is_empty())
+    );
+}
+
+#[test]
+fn reviewer_payload_falls_back_to_package_review_action_id() {
+    let workflow = StudioWorkflow::from_babel_json(&review_action_final_with_local_audio())
+        .expect("recovered review action should import");
+    let mut project = workflow.project().clone();
+    project.metadata.remove("studio.babel.reviewActionId");
+    for segment in project.segments.iter_mut() {
+        segment.metadata.remove("reviewActionId");
+        segment.metadata.remove("review_action_id");
+    }
+    project.metadata.insert(
+        "babel.extra.package".to_string(),
+        r#"{"action_level":2,"reviewActionId":"review-action-42"}"#.to_string(),
+    );
+
+    let payload = build_reviewer_payload(&project).expect("reviewer payload should build");
+    assert_eq!(
+        payload["reviewActionId"],
+        serde_json::json!("review-action-42")
+    );
+    assert_eq!(
+        payload["current"]["actionId"],
+        serde_json::json!("review-action-42")
     );
 }
 
