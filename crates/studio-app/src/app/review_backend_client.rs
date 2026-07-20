@@ -3,7 +3,7 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::Value;
 use url::form_urlencoded::byte_serialize;
 
-use super::{Message, subaccounts::subaccount_relay_review_backend_payload_for_request};
+use super::Message;
 
 pub(super) const REVIEW_BACKEND_BASE_URL_ENV: &str = "STUDIO_REVIEW_BACKEND_BASE_URL";
 pub(super) const DEFAULT_REVIEW_BACKEND_BASE_URL: &str = "https://reviewgen.ovh";
@@ -258,10 +258,6 @@ async fn review_backend_payload_for_request(
 ) -> Result<String, String> {
     let parts = request.to_parts();
     let stream_request = is_draft_stream_request(request);
-
-    if let Some(payload) = subaccount_relay_review_backend_payload_for_request(&parts).await? {
-        return finalize_review_backend_payload(payload, stream_request);
-    }
 
     let base_url = review_backend_base_url_from_env();
     let url = review_backend_url(&base_url, &parts.path);
@@ -779,18 +775,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_backend_request_for_subaccount_routes_through_relay() {
+    async fn review_backend_request_sends_no_authorization_even_for_active_subaccount_session() {
         let temp = tempfile::tempdir().expect("temp dir");
         let _env = TestEnv::with_clean_review_backend_env();
-        let relay = MockHttpServer::start_simple(vec![r#"{"payload":{"result":"ok"}}"#]);
+        let review_backend = MockHttpServer::start_simple(vec![r#"{"result":"ok"}"#]);
+        set_env_var(
+            REVIEW_BACKEND_BASE_URL_ENV,
+            review_backend.base_url.as_str(),
+        );
 
+        // The review backend (reviewgen.ovh) has no authentication on its review/draft
+        // routes; a sub-account session being active must not change how these
+        // requests are sent, and must never require credentials a sub-account
+        // (code-login only, no Clerk session) can never produce.
         let subaccount_session_path = temp.path().join("subaccount-session.json");
         fs::write(
             &subaccount_session_path,
-            format!(
-                r#"{{"version":1,"hostUrl":"{}","token":"relay-token","subaccountId":"sub-1","displayName":"Field Worker"}}"#,
-                relay.base_url
-            ),
+            r#"{"version":1,"hostUrl":"https://relay.example","token":"relay-token","subaccountId":"sub-1","displayName":"Field Worker"}"#,
         )
         .expect("write subaccount session");
         set_env_var(
@@ -802,23 +803,15 @@ mod tests {
             session_id: "session-1".to_string(),
         })
         .await
-        .expect("review backend request should route through the sub-account relay");
+        .expect("review backend request should succeed without any authorization");
 
         assert_eq!(payload, r#"{"result":"ok"}"#);
 
-        let relay_requests = relay.join();
+        let requests = review_backend.join();
         assert!(request_contains(
-            &relay_requests[0],
-            "POST /api/subaccounts/babel-service"
+            &requests[0],
+            "GET /api/review/sessions/session-1"
         ));
-        assert!(request_contains(
-            &relay_requests[0],
-            "Authorization: Bearer relay-token"
-        ));
-        assert!(request_contains(&relay_requests[0], "reviewBackend"));
-        assert!(request_contains(
-            &relay_requests[0],
-            "/api/review/sessions/session-1"
-        ));
+        assert!(!request_contains(&requests[0], "authorization:"));
     }
 }

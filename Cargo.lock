@@ -4776,10 +4776,9 @@ dependencies = [
 
 [[package]]
 name = "studio-app"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
- "base64",
  "httpdate",
  "iced",
  "reqwest",
