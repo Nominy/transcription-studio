@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 httpdate.workspace = true
 iced.workspace = true
 reqwest.workspace = true

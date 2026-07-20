@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iced::Task;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
@@ -14,6 +15,7 @@ use super::native_auth::{
     default_native_auth_store_path, mint_native_babel_authorization_from_store, native_clerk_url,
 };
 use super::native_auth_cli::native_babel_url;
+use super::review_backend_client::{BackendHttpMethod, BackendRequestParts};
 #[cfg(not(test))]
 use super::platform_paths::application_support_dir_named;
 use super::service_callbacks::BabelServiceRequest;
@@ -30,6 +32,14 @@ const BABEL_SERVICE_PATH: &str = "/api/subaccounts/babel-service";
 const AUDIO_PRESIGN_PATH: &str = "/api/subaccounts/audio/presigned-urls";
 const OWNER_DASHBOARD_PATH: &str = "/api/subaccounts/owner/dashboard";
 const OWNER_SUBACCOUNTS_PATH: &str = "/api/subaccounts/owner/subaccounts";
+
+/// Cross-module lock for tests that mutate the process-global
+/// STUDIO_SUBACCOUNT_SESSION_STORE env var (and friends). `std::env::set_var` is
+/// process-wide, and `cargo test` runs tests from different modules concurrently
+/// (see .cargo/config.toml RUST_TEST_THREADS), so every module whose tests touch
+/// this env var must serialize on this lock, not just its own local one.
+#[cfg(test)]
+pub(super) static SUBACCOUNT_SESSION_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SubaccountSession {
@@ -392,6 +402,72 @@ pub(super) async fn subaccount_relay_payload_for_request(
         ));
     }
     Ok(Some(extract_relay_payload(&body)))
+}
+
+const REVIEW_BACKEND_RELAY_KIND: &str = "reviewBackend";
+
+/// Proxies an L2 review-backend request (reviewgen.ovh) through the owner's relay
+/// when a Sub-account session is active. Sub-accounts never hold native Clerk
+/// credentials, so they cannot authenticate to the review backend directly; the
+/// owner's relay bridge (STUDIO_BABEL_SERVICE_COMMAND / STUDIO_SUBACCOUNT_UPSTREAM_URL)
+/// must recognize requestKind == "reviewBackend" and forward
+/// { method, path, body, audioTracks: [{ trackId, fileName, mimeType, metadata, bytesBase64 }] }
+/// to the review backend using the owner's own authorization, the same way it
+/// already forwards Babel service envelopes.
+pub(super) async fn subaccount_relay_review_backend_payload_for_request(
+    parts: &BackendRequestParts,
+) -> Result<Option<String>, String> {
+    let Some(session) = read_default_subaccount_session()? else {
+        return Ok(None);
+    };
+    let auth = relay_auth_from_session(&session)?;
+    let body = json!({
+        "requestKind": REVIEW_BACKEND_RELAY_KIND,
+        "envelope": review_backend_relay_envelope(parts),
+    });
+    let response = reqwest::Client::new()
+        .post(api_url(&auth.host_url, BABEL_SERVICE_PATH))
+        .headers(relay_headers(&auth.authorization)?)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("Sub-account relay request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("failed to read Sub-account relay response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Sub-account relay HTTP {status}: {}",
+            response_body_snippet(&body)
+        ));
+    }
+    Ok(Some(extract_relay_payload(&body)))
+}
+
+fn review_backend_relay_envelope(parts: &BackendRequestParts) -> Value {
+    json!({
+        "method": match parts.method {
+            BackendHttpMethod::Get => "GET",
+            BackendHttpMethod::Post => "POST",
+        },
+        "path": parts.path,
+        "body": parts.body.clone().unwrap_or(Value::Null),
+        "audioTracks": parts
+            .audio_tracks
+            .iter()
+            .map(|track| {
+                json!({
+                    "trackId": track.track_id,
+                    "fileName": track.file_name,
+                    "mimeType": track.mime_type,
+                    "metadata": track.metadata,
+                    "bytesBase64": BASE64_STANDARD.encode(&track.bytes),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
 }
 
 pub(super) async fn subaccount_audio_presigned_urls(

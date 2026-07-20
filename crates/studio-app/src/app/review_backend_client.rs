@@ -1,18 +1,9 @@
 use iced::Task;
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::Value;
-use time::OffsetDateTime;
 use url::form_urlencoded::byte_serialize;
 
-use super::{
-    Message,
-    native_auth::{
-        default_native_auth_store_path, mint_native_babel_authorization_from_store,
-        native_clerk_url,
-    },
-    native_auth_cli::native_babel_url,
-    subaccounts::subaccount_session_is_active,
-};
+use super::{Message, subaccounts::subaccount_relay_review_backend_payload_for_request};
 
 pub(super) const REVIEW_BACKEND_BASE_URL_ENV: &str = "STUDIO_REVIEW_BACKEND_BASE_URL";
 pub(super) const DEFAULT_REVIEW_BACKEND_BASE_URL: &str = "https://reviewgen.ovh";
@@ -265,10 +256,15 @@ async fn execute_review_backend_request(request: ReviewBackendServiceRequest) ->
 async fn review_backend_payload_for_request(
     request: &ReviewBackendRequest,
 ) -> Result<String, String> {
-    let base_url = review_backend_base_url_from_env();
     let parts = request.to_parts();
-    let url = review_backend_url(&base_url, &parts.path);
     let stream_request = is_draft_stream_request(request);
+
+    if let Some(payload) = subaccount_relay_review_backend_payload_for_request(&parts).await? {
+        return finalize_review_backend_payload(payload, stream_request);
+    }
+
+    let base_url = review_backend_base_url_from_env();
+    let url = review_backend_url(&base_url, &parts.path);
     let client = reqwest::Client::new();
     let builder = match parts.method {
         BackendHttpMethod::Get => client.get(&url),
@@ -282,7 +278,6 @@ async fn review_backend_payload_for_request(
             "application/json"
         },
     );
-    let builder = maybe_apply_main_account_auth(builder).await?;
 
     let builder = if !parts.audio_tracks.is_empty() {
         let payload = parts.body.unwrap_or(Value::Null);
@@ -315,11 +310,7 @@ async fn review_backend_payload_for_request(
         .await
         .map_err(|error| format!("review backend response read failed: {error}"))?;
     if status.is_success() {
-        if stream_request && !payload.trim_start().starts_with('{') {
-            final_payload_from_sse_stream(&payload)
-        } else {
-            Ok(payload)
-        }
+        finalize_review_backend_payload(payload, stream_request)
     } else {
         Err(format!(
             "review backend returned HTTP {}: {}",
@@ -328,24 +319,16 @@ async fn review_backend_payload_for_request(
         ))
     }
 }
-async fn maybe_apply_main_account_auth(
-    builder: reqwest::RequestBuilder,
-) -> Result<reqwest::RequestBuilder, String> {
-    if !subaccount_session_is_active() {
-        return Ok(builder);
-    }
 
-    let store_path = default_native_auth_store_path();
-    let babel_url = native_babel_url();
-    let clerk_url = native_clerk_url();
-    let authorization = mint_native_babel_authorization_from_store(
-        &store_path,
-        &babel_url,
-        &clerk_url,
-        OffsetDateTime::now_utc().unix_timestamp(),
-    )
-    .await?;
-    Ok(builder.header(AUTHORIZATION, authorization))
+fn finalize_review_backend_payload(
+    payload: String,
+    stream_request: bool,
+) -> Result<String, String> {
+    if stream_request && !payload.trim_start().starts_with('{') {
+        final_payload_from_sse_stream(&payload)
+    } else {
+        Ok(payload)
+    }
 }
 
 fn is_draft_stream_request(request: &ReviewBackendRequest) -> bool {
@@ -458,7 +441,7 @@ mod tests {
         fs,
         io::{Read, Write as IoWrite},
         net::TcpListener,
-        sync::{Mutex, MutexGuard},
+        sync::MutexGuard,
         thread,
     };
 
@@ -468,8 +451,6 @@ mod tests {
         BackendHttpMethod, REVIEW_BACKEND_BASE_URL_ENV, ReviewBackendRequest,
         final_payload_from_sse_stream, review_backend_payload_for_request, review_backend_url,
     };
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct MockHttpResponse {
         body: String,
@@ -520,15 +501,11 @@ mod tests {
     }
 
     impl TestEnv {
-        fn with_review_subaccount_and_main_account_auth() -> Self {
-            let guard = ENV_LOCK.lock().expect("env lock");
-            let names = vec![
-                REVIEW_BACKEND_BASE_URL_ENV,
-                "STUDIO_SUBACCOUNT_SESSION_STORE",
-                "STUDIO_BABEL_AUTH_STORE",
-                "STUDIO_BABEL_CLERK_URL",
-                "STUDIO_BABEL_SERVICE_BASE_URL",
-            ];
+        fn with_clean_review_backend_env() -> Self {
+            let guard = super::super::subaccounts::SUBACCOUNT_SESSION_ENV_LOCK
+                .lock()
+                .expect("subaccount env lock");
+            let names = vec![REVIEW_BACKEND_BASE_URL_ENV, "STUDIO_SUBACCOUNT_SESSION_STORE"];
             let saved = names
                 .iter()
                 .map(|name| (*name, env::var_os(name)))
@@ -613,10 +590,6 @@ mod tests {
         request
             .to_ascii_lowercase()
             .contains(&expected.to_ascii_lowercase())
-    }
-
-    fn write_auth_store(path: &std::path::Path, body: serde_json::Value) {
-        fs::write(path, body.to_string()).expect("write auth store");
     }
 
     #[test]
@@ -806,82 +779,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_backend_request_for_subaccount_uses_main_account_authorization() {
+    async fn review_backend_request_for_subaccount_routes_through_relay() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let _env = TestEnv::with_review_subaccount_and_main_account_auth();
-        let clerk = MockHttpServer::start(vec![
-            MockHttpResponse {
-                body: r#"{"response":{"object":"client","last_active_session_id":"sess_native","sessions":[{"id":"sess_native","status":"active"}]}}"#.to_string(),
-                headers: Vec::new(),
-            },
-            MockHttpResponse {
-                body: r#"{"object":"token","jwt":"jwt-from-clerk"}"#.to_string(),
-                headers: Vec::new(),
-            },
-        ]);
-        let review_backend = MockHttpServer::start_simple(vec!["{\"result\":\"ok\"}"]);
+        let _env = TestEnv::with_clean_review_backend_env();
+        let relay = MockHttpServer::start_simple(vec![r#"{"payload":{"result":"ok"}}"#]);
 
         let subaccount_session_path = temp.path().join("subaccount-session.json");
         fs::write(
             &subaccount_session_path,
             format!(
-                r#"{{"version":1,"hostUrl":"{}","token":"relay-token","subaccountId":"sub-1","displayName":"Main Tester"}}"#,
-                clerk.base_url
+                r#"{{"version":1,"hostUrl":"{}","token":"relay-token","subaccountId":"sub-1","displayName":"Field Worker"}}"#,
+                relay.base_url
             ),
         )
         .expect("write subaccount session");
-
-        let auth_store_path = temp.path().join("babel-auth.json");
-        write_auth_store(
-            &auth_store_path,
-            json!({
-                "version": 1,
-                "cookies": [
-                    {
-                        "name": "__client",
-                        "value": "client-cookie",
-                        "domain": "127.0.0.1",
-                        "path": "/",
-                        "secure": false,
-                    }
-                ]
-            }),
-        );
         set_env_var(
             "STUDIO_SUBACCOUNT_SESSION_STORE",
             subaccount_session_path.as_os_str(),
-        );
-        set_env_var("STUDIO_BABEL_AUTH_STORE", auth_store_path.as_os_str());
-        set_env_var("STUDIO_BABEL_CLERK_URL", clerk.base_url.as_str());
-        set_env_var("STUDIO_BABEL_SERVICE_BASE_URL", clerk.base_url.as_str());
-        set_env_var(
-            REVIEW_BACKEND_BASE_URL_ENV,
-            review_backend.base_url.as_str(),
         );
 
         let payload = review_backend_payload_for_request(&ReviewBackendRequest::ReviewGetSession {
             session_id: "session-1".to_string(),
         })
         .await
-        .expect("review backend request should succeed");
+        .expect("review backend request should route through the sub-account relay");
 
-        assert_eq!(payload, "{\"result\":\"ok\"}");
+        assert_eq!(payload, r#"{"result":"ok"}"#);
 
-        let review_requests = review_backend.join();
+        let relay_requests = relay.join();
         assert!(request_contains(
-            &review_requests[0],
-            "GET /api/review/sessions/session-1"
+            &relay_requests[0],
+            "POST /api/subaccounts/babel-service"
         ));
         assert!(request_contains(
-            &review_requests[0],
-            "Authorization: Bearer jwt-from-clerk"
+            &relay_requests[0],
+            "Authorization: Bearer relay-token"
         ));
-
-        let clerk_requests = clerk.join();
-        assert!(request_contains(&clerk_requests[0], "GET /v1/client?"));
+        assert!(request_contains(&relay_requests[0], "reviewBackend"));
         assert!(request_contains(
-            &clerk_requests[1],
-            "POST /v1/client/sessions/sess_native/tokens?"
+            &relay_requests[0],
+            "/api/review/sessions/session-1"
         ));
     }
 }

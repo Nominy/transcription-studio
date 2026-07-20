@@ -2695,6 +2695,7 @@ mod tests {
 
     struct TestEnv {
         _guard: MutexGuard<'static, ()>,
+        _subaccount_guard: MutexGuard<'static, ()>,
         _temp_dir: tempfile::TempDir,
         saved: Vec<(&'static str, Option<OsString>)>,
     }
@@ -2702,6 +2703,9 @@ mod tests {
     impl TestEnv {
         fn with_live_native_auth() -> Self {
             let guard = ENV_LOCK.lock().expect("env lock");
+            let subaccount_guard = super::super::subaccounts::SUBACCOUNT_SESSION_ENV_LOCK
+                .lock()
+                .expect("subaccount env lock");
             let names = vec![
                 STUDIO_BABEL_SERVICE_MODE,
                 STUDIO_BABEL_SERVICE_COMMAND,
@@ -2731,6 +2735,7 @@ mod tests {
             );
             Self {
                 _guard: guard,
+                _subaccount_guard: subaccount_guard,
                 _temp_dir: temp_dir,
                 saved,
             }
