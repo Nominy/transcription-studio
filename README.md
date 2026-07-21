@@ -20,6 +20,12 @@ cargo check --workspace
 cargo run -p studio-app
 ```
 
+Enable the local pre-push gate once per clone so a failing `cargo fmt`/`cargo clippy` never reaches CI (or main) in the first place:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
 ## Native Babel Service Bridge
 
 Set `STUDIO_BABEL_SERVICE_COMMAND` to a command line such as `node bridge.js` or `"C:\path with spaces\bridge.cmd" --profile local` to connect load/claim/submit/skip/drop/admin/feedback actions to an adapter. Studio sends a JSON envelope on stdin with `operation` and `payload`, and accepts either a raw JSON response, `{ "data": ... }`, or `{ "result": { "data": ... } }` on stdout.
