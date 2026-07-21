@@ -30,6 +30,7 @@ const BABEL_SERVICE_PATH: &str = "/api/subaccounts/babel-service";
 const AUDIO_PRESIGN_PATH: &str = "/api/subaccounts/audio/presigned-urls";
 const OWNER_DASHBOARD_PATH: &str = "/api/subaccounts/owner/dashboard";
 const OWNER_SUBACCOUNTS_PATH: &str = "/api/subaccounts/owner/subaccounts";
+const OWNER_PROJECT_QUEUES_PATH: &str = "/api/subaccounts/owner/project-queues";
 
 /// Cross-module lock for tests that mutate the process-global
 /// STUDIO_SUBACCOUNT_SESSION_STORE env var (and friends). `std::env::set_var` is
@@ -82,6 +83,17 @@ pub(super) enum SubaccountOwnerRequest {
         subaccount_id: String,
         project_ids: Vec<String>,
     },
+    PushProjectQueueConfigs {
+        host_url: String,
+        configs: Vec<ProjectQueueConfig>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectQueueConfig {
+    pub(super) project_id: String,
+    pub(super) chunked_queue_id: String,
+    pub(super) stitched_queue_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,11 +448,12 @@ pub(super) async fn subaccount_audio_presigned_urls(
 pub(super) fn dispatch_subaccount_owner_requests(
     requests: Vec<SubaccountOwnerRequest>,
 ) -> Task<Message> {
-    Task::batch(
-        requests.into_iter().map(|request| {
-            Task::perform(execute_subaccount_owner_request(request), |message| message)
-        }),
-    )
+    Task::batch(requests.into_iter().map(|request| match request {
+        SubaccountOwnerRequest::PushProjectQueueConfigs { .. } => {
+            Task::perform(push_project_queue_configs(request), |message| message)
+        }
+        _ => Task::perform(execute_subaccount_owner_request(request), |message| message),
+    }))
 }
 
 async fn execute_subaccount_owner_request(request: SubaccountOwnerRequest) -> Message {
@@ -450,6 +463,82 @@ async fn execute_subaccount_owner_request(request: SubaccountOwnerRequest) -> Me
     }
 }
 
+async fn push_project_queue_configs(request: SubaccountOwnerRequest) -> Message {
+    let (host_url, configs) = match request {
+        SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, configs } => {
+            (host_url, configs)
+        }
+        _ => {
+            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(
+                "internal: unexpected request kind".to_string(),
+            ));
+        }
+    };
+    let host_url = match normalize_relay_host_url(&host_url) {
+        Ok(host_url) => host_url,
+        Err(error) => return Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)),
+    };
+    let authorization = match mint_native_babel_authorization_from_store(
+        &default_native_auth_store_path(),
+        &native_babel_url(),
+        &native_clerk_url(),
+        OffsetDateTime::now_utc().unix_timestamp(),
+    )
+    .await
+    {
+        Ok(authorization) => authorization,
+        Err(error) => {
+            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
+                "Main Babel account auth is required for Sub-account controls: {error}"
+            )));
+        }
+    };
+    let headers = match relay_headers(&authorization) {
+        Ok(headers) => headers,
+        Err(error) => return Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)),
+    };
+    let client = reqwest::Client::new();
+    let response = client
+        .put(api_url(&host_url, OWNER_PROJECT_QUEUES_PATH))
+        .headers(headers)
+        .json(&json!({
+            "configs": configs
+                .iter()
+                .map(|config| json!({
+                    "projectId": config.project_id,
+                    "chunkedQueueId": config.chunked_queue_id,
+                    "stitchedTxQueueId": config.stitched_queue_id,
+                }))
+                .collect::<Vec<_>>()
+        }))
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
+                "Sub-account owner request failed: {error}"
+            )));
+        }
+    };
+    let status = response.status();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
+                "failed to read Sub-account owner response: {error}"
+            )));
+        }
+    };
+    if !status.is_success() {
+        return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
+            "Sub-account owner HTTP {status}: {}",
+            response_body_snippet(&body)
+        )));
+    }
+    Message::SubaccountOwnerProjectQueuesPushFinished(Ok(()))
+}
+
 async fn owner_dashboard_payload_for_request(
     request: SubaccountOwnerRequest,
 ) -> Result<SubaccountOwnerDashboard, String> {
@@ -457,7 +546,8 @@ async fn owner_dashboard_payload_for_request(
         SubaccountOwnerRequest::LoadDashboard { host_url }
         | SubaccountOwnerRequest::Create { host_url, .. }
         | SubaccountOwnerRequest::Revoke { host_url, .. }
-        | SubaccountOwnerRequest::AssignProjects { host_url, .. } => {
+        | SubaccountOwnerRequest::AssignProjects { host_url, .. }
+        | SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, .. } => {
             normalize_relay_host_url(host_url)?
         }
     };
@@ -520,6 +610,11 @@ async fn owner_dashboard_payload_for_request(
                 .json(&json!({ "projectIds": project_ids }))
                 .send()
                 .await
+        }
+        SubaccountOwnerRequest::PushProjectQueueConfigs { .. } => {
+            return Err("internal: PushProjectQueueConfigs must be dispatched via \
+                 push_project_queue_configs"
+                .to_string());
         }
     }
     .map_err(|error| format!("Sub-account owner request failed: {error}"))?;

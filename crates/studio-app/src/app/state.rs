@@ -65,8 +65,8 @@ use super::startup_route::{
     META_TASK_LOOKUP_REVIEW_ACTION_ID,
 };
 use super::subaccounts::{
-    ManagedSubaccount, SubaccountOwnerDashboard, SubaccountOwnerRequest, SubaccountSession,
-    clear_default_subaccount_session, default_subaccount_relay_host_url,
+    ManagedSubaccount, ProjectQueueConfig, SubaccountOwnerDashboard, SubaccountOwnerRequest,
+    SubaccountSession, clear_default_subaccount_session, default_subaccount_relay_host_url,
     dispatch_subaccount_owner_requests, normalize_relay_host_url, read_default_subaccount_session,
     save_default_subaccount_relay_host_url,
 };
@@ -3288,6 +3288,26 @@ impl StudioState {
                         "s"
                     }
                 );
+                if self.subaccount_session.is_none()
+                    && !self.subaccount_owner.host_url.trim().is_empty()
+                    && !self.dashboard.projects.is_empty()
+                {
+                    self.subaccount_owner_requests.push(
+                        SubaccountOwnerRequest::PushProjectQueueConfigs {
+                            host_url: self.subaccount_owner.host_url.clone(),
+                            configs: self
+                                .dashboard
+                                .projects
+                                .iter()
+                                .map(|project| ProjectQueueConfig {
+                                    project_id: project.id.clone(),
+                                    chunked_queue_id: project.chunked_queue_id.clone(),
+                                    stitched_queue_id: project.stitched_queue_id.clone(),
+                                })
+                                .collect(),
+                        },
+                    );
+                }
             }
             Err(error) => {
                 self.dashboard.error = Some(error.clone());
@@ -6173,11 +6193,8 @@ fn dashboard_project_from_object(
         &["displayName", "display_name", "title", "label", "name"],
     )
     .unwrap_or_else(|| id.clone());
-    let recovered = recovered_babel_project(&id).or_else(|| recovered_babel_project(&raw_name));
     let discovered = queue_configs.get(&id);
-    let name = recovered
-        .map(|project| project.display_name.to_string())
-        .unwrap_or(raw_name);
+    let name = raw_name;
     let chunked_queue_id = direct_string_by_keys(
         value,
         &[
@@ -6189,7 +6206,6 @@ fn dashboard_project_from_object(
         ],
     )
     .or_else(|| discovered.map(|config| config.chunked_queue_id.clone()))
-    .or_else(|| recovered.map(|project| project.chunked_queue_id.to_string()))
     .unwrap_or_default();
     let stitched_queue_id = direct_string_by_keys(
         value,
@@ -6201,7 +6217,6 @@ fn dashboard_project_from_object(
         ],
     )
     .or_else(|| discovered.map(|config| config.stitched_queue_id.clone()))
-    .or_else(|| recovered.map(|project| project.stitched_queue_id.to_string()))
     .unwrap_or_default();
 
     if chunked_queue_id.is_empty() && stitched_queue_id.is_empty() {
@@ -6311,53 +6326,6 @@ fn dashboard_object_is_queue_config_only(value: &Value) -> bool {
             ],
         )
         .is_none()
-}
-
-#[derive(Clone, Copy)]
-struct RecoveredBabelProject {
-    project_id: &'static str,
-    slug: &'static str,
-    display_name: &'static str,
-    chunked_queue_id: &'static str,
-    stitched_queue_id: &'static str,
-}
-
-fn recovered_babel_project(id_or_slug: &str) -> Option<RecoveredBabelProject> {
-    const PROJECTS: &[RecoveredBabelProject] = &[
-        RecoveredBabelProject {
-            project_id: "0bf29f0c-371a-506a-8b77-5fffd14e5762",
-            slug: "RU-tx-gold",
-            display_name: "Russian Transcription - Gold",
-            chunked_queue_id: "f95babcc-8681-521c-a39f-66454a16347f",
-            stitched_queue_id: "a47543d7-8687-5ffe-95d3-754387fe3426",
-        },
-        RecoveredBabelProject {
-            project_id: "73f8e130-9fb4-5c17-b142-5a2e75d89b6d",
-            slug: "RU-tx-silver",
-            display_name: "Russian Transcription - Silver",
-            chunked_queue_id: "866acc27-eb40-51ee-bb4e-57b4cb15fb0c",
-            stitched_queue_id: "a10c7c04-49bc-5376-97d6-03c3d154bfa8",
-        },
-        RecoveredBabelProject {
-            project_id: "fc3f4db4-a201-5286-9a7c-411365bf6eb4",
-            slug: "RU-tx-gold-non-bg",
-            display_name: "Russian Transcription - Gold (Non-BG Noise)",
-            chunked_queue_id: "40ab3a13-32d2-5095-a67c-eaa1fb109fbd",
-            stitched_queue_id: "6d29da26-5417-5e96-a6f5-7235e1dd40e4",
-        },
-        RecoveredBabelProject {
-            project_id: "d6031436-1fd5-4c79-9b8f-2a7452fc8c4b",
-            slug: "RU-transcription",
-            display_name: "Russian Transcription",
-            chunked_queue_id: "bab7b5be-eb9e-43a0-b713-16b9d2fed66a",
-            stitched_queue_id: "638f1a1f-d811-4140-ad5e-ec92a84c03ae",
-        },
-    ];
-    let needle = id_or_slug.trim();
-    PROJECTS
-        .iter()
-        .copied()
-        .find(|project| project.project_id == needle || project.slug.eq_ignore_ascii_case(needle))
 }
 
 fn direct_string_by_keys(value: &Value, keys: &[&str]) -> Option<String> {

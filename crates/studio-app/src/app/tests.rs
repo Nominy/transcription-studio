@@ -74,7 +74,9 @@ use super::state::{
     AppSurface, DashboardProject, DashboardSection, HelperFocusRestore, NativeCapabilityModalTab,
     PendingLeaveIntent, ReviewerPendingFinalize, TimelineAutoscrollMode,
 };
-use super::subaccounts::{ManagedSubaccount, SubaccountOwnerRequest, relay_request_kind};
+use super::subaccounts::{
+    ManagedSubaccount, SubaccountOwnerRequest, SubaccountSession, relay_request_kind,
+};
 use super::tag_suggestions::{
     TagSuggestionKeyboardAction, TagSuggestionKind, tag_suggestions_for_draft,
     tag_suggestions_for_text,
@@ -15039,7 +15041,9 @@ fn dashboard_project_refresh_dispatches_worker_get_projects_callback() {
                     "projectId": "0bf29f0c-371a-506a-8b77-5fffd14e5762",
                     "name": "RU-tx-gold",
                     "permissionStatus": "active",
-                    "status": "active"
+                    "status": "active",
+                    "chunkedQueueId": "11111111-1111-1111-1111-111111111111",
+                    "stitchedTxQueueId": "22222222-2222-2222-2222-222222222222"
                 },
                 {
                     "projectId": "c07a40d3-61e4-4fc6-ace6-2b79b5e66575",
@@ -15053,13 +15057,10 @@ fn dashboard_project_refresh_dispatches_worker_get_projects_callback() {
     );
 
     assert_eq!(state.dashboard.projects.len(), 1);
-    assert_eq!(
-        state.dashboard.projects[0].name,
-        "Russian Transcription - Gold"
-    );
+    assert_eq!(state.dashboard.projects[0].name, "RU-tx-gold");
     assert_eq!(
         state.dashboard.projects[0].chunked_queue_id,
-        "f95babcc-8681-521c-a39f-66454a16347f"
+        "11111111-1111-1111-1111-111111111111"
     );
     assert!(!state.dashboard.is_pending);
 }
@@ -15106,6 +15107,85 @@ fn dashboard_project_refresh_merges_discovered_queue_config_for_new_active_proje
 }
 
 #[test]
+fn dashboard_project_load_pushes_project_queue_configs_for_owner() {
+    let mut state = stable_sample_state();
+    state.subaccount_owner.host_url = "https://relay.example.test".to_string();
+    assert!(state.subaccount_session.is_none());
+
+    let _ = update(
+        &mut state,
+        Message::DashboardProjectsLoaded(
+            serde_json::json!([
+                {
+                    "projectId": "1c97f55a-3868-4861-9778-d39ee80cda3d",
+                    "name": "RU-tx-gold-dg",
+                    "permissionStatus": "active",
+                    "status": "active",
+                    "chunkedQueueId": "dg-chunked-queue",
+                    "stitchedTxQueueId": "dg-stitched-queue"
+                }
+            ])
+            .to_string(),
+        ),
+    );
+
+    assert!(
+        state
+            .subaccount_owner_requests
+            .iter()
+            .any(|request| matches!(
+                request,
+                SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, configs }
+                    if host_url == "https://relay.example.test"
+                        && configs.iter().any(|config| {
+                            config.project_id == "1c97f55a-3868-4861-9778-d39ee80cda3d"
+                                && config.chunked_queue_id == "dg-chunked-queue"
+                                && config.stitched_queue_id == "dg-stitched-queue"
+                        })
+            ))
+    );
+}
+
+#[test]
+fn dashboard_project_load_does_not_push_project_queue_configs_for_subaccount() {
+    let mut state = stable_sample_state();
+    state.subaccount_owner.host_url = "https://relay.example.test".to_string();
+    state.subaccount_session = Some(SubaccountSession {
+        host_url: "https://relay.example.test".to_string(),
+        token: "sub-token".to_string(),
+        subaccount_id: "sub-1".to_string(),
+        display_name: "Sub One".to_string(),
+    });
+
+    let _ = update(
+        &mut state,
+        Message::DashboardProjectsLoaded(
+            serde_json::json!([
+                {
+                    "projectId": "1c97f55a-3868-4861-9778-d39ee80cda3d",
+                    "name": "RU-tx-gold-dg",
+                    "permissionStatus": "active",
+                    "status": "active",
+                    "chunkedQueueId": "dg-chunked-queue",
+                    "stitchedTxQueueId": "dg-stitched-queue"
+                }
+            ])
+            .to_string(),
+        ),
+    );
+
+    assert!(
+        !state
+            .subaccount_owner_requests
+            .iter()
+            .any(|request| matches!(
+                request,
+                SubaccountOwnerRequest::PushProjectQueueConfigs { .. }
+            ))
+    );
+}
+
+#[test]
 fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile() {
     let project_id = "0bf29f0c-371a-506a-8b77-5fffd14e5762";
     let mut state = stable_sample_state();
@@ -15118,7 +15198,9 @@ fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile(
                     "projectId": project_id,
                     "name": "RU-tx-gold",
                     "permissionStatus": "active",
-                    "status": "active"
+                    "status": "active",
+                    "chunkedQueueId": "33333333-3333-3333-3333-333333333333",
+                    "stitchedTxQueueId": "44444444-4444-4444-4444-444444444444"
                 }
             ])
             .to_string(),
@@ -15129,7 +15211,7 @@ fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile(
     assert!(state.babel_service_requests.iter().any(|request| matches!(
         request,
         BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id })
-            if queue_id == "f95babcc-8681-521c-a39f-66454a16347f"
+            if queue_id == "33333333-3333-3333-3333-333333333333"
     )));
 
     let minimal_babel_task = serde_json::json!({
@@ -16679,6 +16761,7 @@ fn begin_submit_review_request_refuses_project_without_recoverable_review_action
     let mut project = state.project().unwrap().clone();
     project.metadata.remove("studio.babel.reviewActionId");
     project.metadata.remove("babel.review_action.envelope");
+    project.metadata.remove("babel.extra.package");
     for segment in &mut project.segments {
         segment.metadata.remove("reviewActionId");
         segment.metadata.remove("review_action_id");
@@ -20594,7 +20677,7 @@ fn cargo_dev_profile_keeps_incremental_builds_with_reduced_debug_info() {
 }
 
 #[test]
-fn ci_runs_format_once_and_restores_per_os_rust_caches() {
+fn ci_runs_fmt_clippy_and_test_as_independent_parallel_jobs() {
     let workflow = include_str!("../../../../.github/workflows/ci.yml");
     assert_eq!(workflow.matches("cargo fmt --all --check").count(), 1);
 
@@ -20602,22 +20685,37 @@ fn ci_runs_format_once_and_restores_per_os_rust_caches() {
         .split_once("\n  fmt:\n")
         .expect("CI should define one formatting job")
         .1
-        .split_once("\n  rust:\n")
-        .expect("formatting should be separate from Rust jobs")
+        .split_once("\n  clippy:\n")
+        .expect("formatting should be separate from the clippy job")
         .0;
     assert!(fmt_job.contains("runs-on: ubuntu-latest"));
+    assert!(!fmt_job.contains("needs:"));
 
-    let rust_job = workflow
-        .split_once("\n  rust:\n")
-        .expect("CI should define Rust jobs")
+    let clippy_job = workflow
+        .split_once("\n  clippy:\n")
+        .expect("CI should define a clippy job")
+        .1
+        .split_once("\n  test:\n")
+        .expect("clippy should be separate from the test job")
+        .0;
+    assert!(!clippy_job.contains("needs:"));
+    assert!(clippy_job.contains("Swatinem/rust-cache@v2"));
+    assert!(clippy_job.contains("shared-key: ci-clippy-${{ runner.os }}"));
+    assert!(clippy_job.contains("cache-on-failure: true"));
+    assert!(clippy_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
+    assert!(!clippy_job.contains("cargo fmt --all --check"));
+    assert!(!clippy_job.contains("cargo test --workspace --all-targets --locked"));
+
+    let test_job = workflow
+        .split_once("\n  test:\n")
+        .expect("CI should define a test job")
         .1;
-    assert!(rust_job.contains("needs: fmt"));
-    assert!(rust_job.contains("Swatinem/rust-cache@v2"));
-    assert!(rust_job.contains("shared-key: ci-${{ runner.os }}"));
-    assert!(rust_job.contains("cache-on-failure: true"));
-    assert!(!rust_job.contains("cargo fmt --all --check"));
-    assert!(rust_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
-    assert!(rust_job.contains("cargo test --workspace --all-targets --locked"));
+    assert!(!test_job.contains("needs:"));
+    assert!(test_job.contains("Swatinem/rust-cache@v2"));
+    assert!(test_job.contains("shared-key: ci-test-${{ runner.os }}"));
+    assert!(test_job.contains("cache-on-failure: true"));
+    assert!(test_job.contains("cargo test --workspace --all-targets --locked"));
+    assert!(!test_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
 }
 
 #[test]

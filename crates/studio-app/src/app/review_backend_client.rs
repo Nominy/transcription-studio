@@ -501,7 +501,10 @@ mod tests {
             let guard = super::super::subaccounts::SUBACCOUNT_SESSION_ENV_LOCK
                 .lock()
                 .expect("subaccount env lock");
-            let names = vec![REVIEW_BACKEND_BASE_URL_ENV, "STUDIO_SUBACCOUNT_SESSION_STORE"];
+            let names = [
+                REVIEW_BACKEND_BASE_URL_ENV,
+                "STUDIO_SUBACCOUNT_SESSION_STORE",
+            ];
             let saved = names
                 .iter()
                 .map(|name| (*name, env::var_os(name)))

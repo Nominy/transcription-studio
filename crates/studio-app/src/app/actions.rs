@@ -549,6 +549,10 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::SubaccountOwnerDashboardLoaded(dashboard) => {
             state.complete_subaccount_owner_dashboard(dashboard);
         }
+        Message::SubaccountOwnerProjectQueuesPushFinished(Ok(())) => {}
+        Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)) => {
+            state.status = format!("Sub-account project sync failed: {error}");
+        }
         Message::SubaccountOwnerRequestFailed(error) => {
             state.fail_subaccount_owner_request(error);
         }

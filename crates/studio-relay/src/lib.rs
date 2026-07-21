@@ -103,6 +103,10 @@ pub fn router(state: RelayState) -> Router {
             "/api/subaccounts/owner/subaccounts/{subaccount_id}/projects",
             put(owner_assign_projects),
         )
+        .route(
+            "/api/subaccounts/owner/project-queues",
+            put(owner_upsert_project_queue_configs),
+        )
         .route("/api/subaccounts/babel-service", post(babel_service))
         .route(
             "/api/subaccounts/audio/presigned-urls",
@@ -183,7 +187,7 @@ struct RelayStore {
     subaccounts: Vec<SubaccountRecord>,
     sessions: Vec<SessionRecord>,
     #[serde(default)]
-    known_project_queues: BTreeMap<String, String>,
+    project_queue_configs: BTreeMap<String, ProjectQueueConfig>,
 }
 
 impl Default for RelayStore {
@@ -192,7 +196,7 @@ impl Default for RelayStore {
             version: 1,
             subaccounts: Vec::new(),
             sessions: Vec::new(),
-            known_project_queues: BTreeMap::new(),
+            project_queue_configs: BTreeMap::new(),
         }
     }
 }
@@ -215,6 +219,15 @@ impl RelayStore {
         fs::write(path, format!("{payload}\n")).await?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectQueueConfig {
+    #[serde(default)]
+    chunked_queue_id: String,
+    #[serde(default)]
+    stitched_queue_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +280,25 @@ struct OwnerCreateRequest {
 #[serde(rename_all = "camelCase")]
 struct OwnerAssignRequest {
     project_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectQueueConfigInput {
+    project_id: String,
+    #[serde(default)]
+    chunked_queue_id: String,
+    // Wire field is "stitchedTxQueueId" everywhere else in this contract (see
+    // OwnerAssignRequest neighbors and studio-app's ProjectQueueConfig), which the
+    // auto-derived camelCase rename would not produce from `stitched_queue_id`.
+    #[serde(default, rename = "stitchedTxQueueId")]
+    stitched_queue_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushProjectQueueConfigsRequest {
+    configs: Vec<ProjectQueueConfigInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -403,6 +435,37 @@ async fn owner_assign_projects(
     Ok(Json(dashboard_payload(&store)))
 }
 
+async fn owner_upsert_project_queue_configs(
+    State(state): State<Arc<RelayState>>,
+    headers: HeaderMap,
+    Json(request): Json<PushProjectQueueConfigsRequest>,
+) -> Result<Json<Value>, RelayError> {
+    require_owner(&headers, &state.config)?;
+    let mut store = state.store.lock().await;
+    let mut stored_project_ids = Vec::new();
+    for entry in request.configs {
+        let project_id = entry.project_id.trim().to_string();
+        if project_id.is_empty() {
+            continue;
+        }
+        let config = store
+            .project_queue_configs
+            .entry(project_id.clone())
+            .or_default();
+        let chunked = entry.chunked_queue_id.trim();
+        if !chunked.is_empty() {
+            config.chunked_queue_id = chunked.to_string();
+        }
+        let stitched = entry.stitched_queue_id.trim();
+        if !stitched.is_empty() {
+            config.stitched_queue_id = stitched.to_string();
+        }
+        stored_project_ids.push(project_id);
+    }
+    state.save(&store).await?;
+    Ok(Json(json!({ "storedProjectIds": stored_project_ids })))
+}
+
 async fn babel_service(
     State(state): State<Arc<RelayState>>,
     headers: HeaderMap,
@@ -430,7 +493,13 @@ async fn babel_service(
             .find(|subaccount| subaccount.id == subaccount_id)
             .ok_or_else(|| RelayError::forbidden("Sub-account is revoked."))?;
         payload = filter_projects_payload(&payload, &subaccount.allowed_project_ids);
-        remember_known_project_queues(&mut store, &payload);
+        let allowed_project_ids = subaccount.allowed_project_ids.clone();
+        remember_project_queue_configs(&mut store, &payload);
+        payload = attach_known_project_queue_configs(
+            &payload,
+            &store.project_queue_configs,
+            &allowed_project_ids,
+        );
         should_save = true;
     }
     if request.request_kind.starts_with("claim")
@@ -646,11 +715,14 @@ fn queue_request_is_allowed(
 }
 
 fn project_id_for_queue_id<'a>(store: &'a RelayStore, queue_id: &str) -> Option<&'a str> {
+    let queue_id = queue_id.trim();
     store
-        .known_project_queues
-        .get(queue_id)
-        .map(String::as_str)
-        .or_else(|| recovered_project_id_for_queue_id(queue_id))
+        .project_queue_configs
+        .iter()
+        .find_map(|(project_id, config)| {
+            (config.chunked_queue_id == queue_id || config.stitched_queue_id == queue_id)
+                .then_some(project_id.as_str())
+        })
 }
 
 fn filter_projects_payload(payload: &str, allowed_project_ids: &[String]) -> String {
@@ -705,24 +777,92 @@ fn filter_projects_value(value: Value, allowed: &BTreeSet<String>) -> Value {
     }
 }
 
-fn remember_known_project_queues(store: &mut RelayStore, payload: &str) {
+fn remember_project_queue_configs(store: &mut RelayStore, payload: &str) {
     let Ok(value) = serde_json::from_str::<Value>(payload.trim()) else {
         return;
     };
     for project in collect_project_likes(&value) {
         let project_id = project_id_for(project).to_string();
-        for key in [
-            "chunkedQueueId",
-            "chunked_queue_id",
-            "stitchedTxQueueId",
-            "stitchedQueueId",
-        ] {
-            if let Some(queue_id) = project.get(key).and_then(Value::as_str) {
-                store
-                    .known_project_queues
-                    .insert(queue_id.to_string(), project_id.clone());
+        if project_id.is_empty() {
+            continue;
+        }
+        let config = store.project_queue_configs.entry(project_id).or_default();
+        for key in ["chunkedQueueId", "chunked_queue_id"] {
+            if let Some(queue_id) = project
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|queue_id| !queue_id.is_empty())
+            {
+                config.chunked_queue_id = queue_id.to_string();
             }
         }
+        for key in ["stitchedTxQueueId", "stitchedQueueId", "stitched_queue_id"] {
+            if let Some(queue_id) = project
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|queue_id| !queue_id.is_empty())
+            {
+                config.stitched_queue_id = queue_id.to_string();
+            }
+        }
+    }
+}
+
+fn attach_known_project_queue_configs(
+    payload: &str,
+    configs: &BTreeMap<String, ProjectQueueConfig>,
+    allowed_project_ids: &[String],
+) -> String {
+    let attachments: Vec<Value> = allowed_project_ids
+        .iter()
+        .filter_map(|project_id| {
+            let config = configs.get(project_id)?;
+            if config.chunked_queue_id.is_empty() && config.stitched_queue_id.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "projectId": project_id,
+                "chunkedQueueId": config.chunked_queue_id,
+                "stitchedTxQueueId": config.stitched_queue_id,
+            }))
+        })
+        .collect();
+    if attachments.is_empty() {
+        return payload.to_string();
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(payload.trim()) else {
+        return payload.to_string();
+    };
+    match &mut value {
+        Value::Object(map) => {
+            let mut merged: Vec<Value> = Vec::new();
+            let mut seen_ids: BTreeSet<String> = BTreeSet::new();
+            if let Some(Value::Array(existing)) = map.get("projectConfigs") {
+                for entry in existing {
+                    if let Some(id) = entry.get("projectId").and_then(Value::as_str) {
+                        seen_ids.insert(id.to_string());
+                    }
+                    merged.push(entry.clone());
+                }
+            }
+            for attachment in attachments {
+                if let Some(id) = attachment.get("projectId").and_then(Value::as_str)
+                    && seen_ids.insert(id.to_string())
+                {
+                    merged.push(attachment);
+                }
+            }
+            map.insert("projectConfigs".to_string(), Value::Array(merged));
+            value.to_string()
+        }
+        Value::Array(_) => json!({
+            "projects": value,
+            "projectConfigs": attachments,
+        })
+        .to_string(),
+        _ => payload.to_string(),
     }
 }
 
@@ -807,44 +947,6 @@ fn collect_project_likes_into<'a>(value: &'a Value, projects: &mut Vec<&'a Value
         }
         _ => {}
     }
-}
-struct RecoveredBabelProjectQueue {
-    project_id: &'static str,
-    chunked_queue_id: &'static str,
-    stitched_queue_id: &'static str,
-}
-
-const RECOVERED_BABEL_PROJECT_QUEUES: &[RecoveredBabelProjectQueue] = &[
-    RecoveredBabelProjectQueue {
-        project_id: "0bf29f0c-371a-506a-8b77-5fffd14e5762",
-        chunked_queue_id: "f95babcc-8681-521c-a39f-66454a16347f",
-        stitched_queue_id: "a47543d7-8687-5ffe-95d3-754387fe3426",
-    },
-    RecoveredBabelProjectQueue {
-        project_id: "1c97f55a-3868-4861-9778-d39ee80cda3d",
-        chunked_queue_id: "bab7b5be-eb9e-43a0-b713-16b9d2fed66a",
-        stitched_queue_id: "638f1a1f-d811-4140-ad5e-ec92a84c03ae",
-    },
-    RecoveredBabelProjectQueue {
-        project_id: "46f0510f-4822-40dd-905c-63a5b54791d5",
-        chunked_queue_id: "866acc27-eb40-51ee-bb4e-57b4cb15fb0c",
-        stitched_queue_id: "a10c7c04-49bc-5376-97d6-03c3d154bfa8",
-    },
-    RecoveredBabelProjectQueue {
-        project_id: "72f8c096-278e-4808-b92b-c752c6a71991",
-        chunked_queue_id: "40ab3a13-32d2-5095-a67c-eaa1fb109fbd",
-        stitched_queue_id: "6d29da26-5417-5e96-a6f5-7235e1dd40e4",
-    },
-];
-
-fn recovered_project_id_for_queue_id(queue_id: &str) -> Option<&'static str> {
-    let queue_id = queue_id.trim();
-    RECOVERED_BABEL_PROJECT_QUEUES
-        .iter()
-        .find(|project| {
-            project.chunked_queue_id == queue_id || project.stitched_queue_id == queue_id
-        })
-        .map(|project| project.project_id)
 }
 
 fn normalize_audio_presign_payload(payload: String) -> Value {
@@ -987,26 +1089,40 @@ mod tests {
 
     use super::*;
     #[test]
-    fn restricted_subaccount_allows_recovered_queue_ids_for_assigned_project() {
+    fn restricted_subaccount_allows_known_queue_ids_for_assigned_project() {
         let subaccount = SubaccountRecord {
             id: "sub-1".to_string(),
             label: "Tester".to_string(),
             code: "CODE".to_string(),
-            allowed_project_ids: vec!["0bf29f0c-371a-506a-8b77-5fffd14e5762".to_string()],
+            allowed_project_ids: vec!["project-allowed".to_string()],
             revoked: false,
             analytics: AnalyticsRecord::default(),
             active_claims: BTreeMap::new(),
         };
-        let store = RelayStore::default();
+        let mut store = RelayStore::default();
+        store.project_queue_configs.insert(
+            "project-allowed".to_string(),
+            ProjectQueueConfig {
+                chunked_queue_id: "queue-allowed".to_string(),
+                stitched_queue_id: "queue-allowed-stitched".to_string(),
+            },
+        );
+        store.project_queue_configs.insert(
+            "project-blocked".to_string(),
+            ProjectQueueConfig {
+                chunked_queue_id: "queue-blocked".to_string(),
+                stitched_queue_id: "queue-blocked-stitched".to_string(),
+            },
+        );
 
         assert!(queue_request_is_allowed(
             &subaccount,
-            &json!({ "payload": { "queueId": "f95babcc-8681-521c-a39f-66454a16347f" } }),
+            &json!({ "payload": { "queueId": "queue-allowed" } }),
             &store
         ));
         assert!(!queue_request_is_allowed(
             &subaccount,
-            &json!({ "payload": { "queueId": "40ab3a13-32d2-5095-a67c-eaa1fb109fbd" } }),
+            &json!({ "payload": { "queueId": "queue-blocked" } }),
             &store
         ));
     }
@@ -1317,7 +1433,7 @@ mod tests {
                     last_seen_at: 6,
                 },
             ],
-            known_project_queues: BTreeMap::new(),
+            project_queue_configs: BTreeMap::new(),
         }
         .save(&store_path)
         .await
@@ -1454,6 +1570,241 @@ mod tests {
                 .iter()
                 .any(|session| session.subaccount_id == "sub-active")
         );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn owner_project_queues_endpoint_requires_owner_auth() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let state = test_state(
+            temp.path().join("store.json"),
+            Arc::new(AtomicI64::new(1_783_425_600_000)),
+            Arc::new(|_| Box::pin(async { Ok(json!({ "success": true }).to_string()) })),
+            0,
+        )
+        .await;
+        let (base_url, handle) = spawn_server(state).await;
+        let client = Client::new();
+
+        let missing_auth = client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .json(&json!({ "configs": [] }))
+            .send()
+            .await
+            .expect("missing auth response");
+        assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
+
+        let wrong_auth = client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .bearer_auth("not-the-owner-token")
+            .json(&json!({ "configs": [] }))
+            .send()
+            .await
+            .expect("wrong auth response");
+        assert_eq!(wrong_auth.status(), StatusCode::UNAUTHORIZED);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn owner_project_queues_endpoint_persists_durably() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("store.json");
+        let state = test_state(
+            store_path.clone(),
+            Arc::new(AtomicI64::new(1_783_425_600_000)),
+            Arc::new(|_| Box::pin(async { Ok(json!({ "success": true }).to_string()) })),
+            0,
+        )
+        .await;
+        let (base_url, handle) = spawn_server(state).await;
+        let client = Client::new();
+
+        let response = client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .bearer_auth("owner-token")
+            .json(&json!({
+                "configs": [
+                    {
+                        "projectId": "project-durable",
+                        "chunkedQueueId": "chunked-durable",
+                        "stitchedTxQueueId": "stitched-durable",
+                    }
+                ]
+            }))
+            .send()
+            .await
+            .expect("push response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.expect("push json");
+        assert_eq!(body["storedProjectIds"], json!(["project-durable"]));
+
+        handle.abort();
+
+        let persisted = RelayStore::load(&store_path)
+            .await
+            .expect("persisted store");
+        let config = persisted
+            .project_queue_configs
+            .get("project-durable")
+            .expect("persisted config");
+        assert_eq!(config.chunked_queue_id, "chunked-durable");
+        assert_eq!(config.stitched_queue_id, "stitched-durable");
+    }
+
+    #[tokio::test]
+    async fn owner_project_queues_endpoint_never_clobbers_known_field_with_blank() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("store.json");
+        let state = test_state(
+            store_path.clone(),
+            Arc::new(AtomicI64::new(1_783_425_600_000)),
+            Arc::new(|_| Box::pin(async { Ok(json!({ "success": true }).to_string()) })),
+            0,
+        )
+        .await;
+        let (base_url, handle) = spawn_server(state).await;
+        let client = Client::new();
+
+        client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .bearer_auth("owner-token")
+            .json(&json!({
+                "configs": [
+                    { "projectId": "project-partial", "chunkedQueueId": "c1", "stitchedTxQueueId": "s1" }
+                ]
+            }))
+            .send()
+            .await
+            .expect("first push response");
+
+        client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .bearer_auth("owner-token")
+            .json(&json!({
+                "configs": [
+                    { "projectId": "project-partial", "chunkedQueueId": "", "stitchedTxQueueId": "s2" }
+                ]
+            }))
+            .send()
+            .await
+            .expect("second push response");
+
+        handle.abort();
+
+        let persisted = RelayStore::load(&store_path)
+            .await
+            .expect("persisted store");
+        let config = persisted
+            .project_queue_configs
+            .get("project-partial")
+            .expect("persisted config");
+        assert_eq!(config.chunked_queue_id, "c1");
+        assert_eq!(config.stitched_queue_id, "s2");
+    }
+
+    #[tokio::test]
+    async fn subaccount_load_worker_projects_surfaces_owner_pushed_queue_configs_for_unlisted_project()
+     {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let state = test_state(
+            temp.path().join("store.json"),
+            Arc::new(AtomicI64::new(1_783_425_600_000)),
+            Arc::new(|envelope| {
+                Box::pin(async move {
+                    let operation = envelope
+                        .get("operation")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if operation == "worker.get,worker.queryWorkerMetadata,worker.getProjects" {
+                        Ok(json!({
+                            "projects": [
+                                { "projectId": "project-dg", "name": "Gold DG" }
+                            ]
+                        })
+                        .to_string())
+                    } else {
+                        Ok(json!({ "success": true }).to_string())
+                    }
+                })
+            }),
+            0,
+        )
+        .await;
+        let (base_url, handle) = spawn_server(state).await;
+        let client = Client::new();
+
+        let created: Value = client
+            .post(format!("{base_url}/api/subaccounts/owner/subaccounts"))
+            .bearer_auth("owner-token")
+            .json(&json!({ "label": "Reviewer" }))
+            .send()
+            .await
+            .expect("create response")
+            .json()
+            .await
+            .expect("create json");
+        let subaccount_id = created["subaccounts"][0]["id"].as_str().expect("id");
+        let code = created["subaccounts"][0]["code"].as_str().expect("code");
+
+        client
+            .put(format!(
+                "{base_url}/api/subaccounts/owner/subaccounts/{subaccount_id}/projects"
+            ))
+            .bearer_auth("owner-token")
+            .json(&json!({ "projectIds": ["project-dg"] }))
+            .send()
+            .await
+            .expect("assign response");
+
+        client
+            .put(format!("{base_url}/api/subaccounts/owner/project-queues"))
+            .bearer_auth("owner-token")
+            .json(&json!({
+                "configs": [
+                    { "projectId": "project-dg", "chunkedQueueId": "dg-chunked", "stitchedTxQueueId": "dg-stitched" }
+                ]
+            }))
+            .send()
+            .await
+            .expect("push queue config response");
+
+        let login: Value = client
+            .post(format!("{base_url}/api/subaccounts/login"))
+            .json(&json!({ "code": code }))
+            .send()
+            .await
+            .expect("login response")
+            .json()
+            .await
+            .expect("login json");
+        let token = login["session"]["token"].as_str().expect("session token");
+
+        let projects: Value = client
+            .post(format!("{base_url}/api/subaccounts/babel-service"))
+            .bearer_auth(token)
+            .json(&json!({
+                "requestKind": "loadWorkerProjects",
+                "envelope": { "operation": "worker.get,worker.queryWorkerMetadata,worker.getProjects" }
+            }))
+            .send()
+            .await
+            .expect("projects response")
+            .json()
+            .await
+            .expect("projects json");
+        let payload: Value = serde_json::from_str(projects["payload"].as_str().expect("payload"))
+            .expect("payload json");
+        let configs = payload["projectConfigs"]
+            .as_array()
+            .expect("project configs");
+        let dg_config = configs
+            .iter()
+            .find(|config| config["projectId"] == "project-dg")
+            .expect("dg config present");
+        assert_eq!(dg_config["chunkedQueueId"], "dg-chunked");
+        assert_eq!(dg_config["stitchedTxQueueId"], "dg-stitched");
+
         handle.abort();
     }
 

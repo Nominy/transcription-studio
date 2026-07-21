@@ -144,6 +144,7 @@ pub(super) enum Message {
     SubaccountOwnerSaveAssignment(String),
     SubaccountOwnerProjectToggled(String, String, bool),
     SubaccountOwnerDashboardLoaded(SubaccountOwnerDashboard),
+    SubaccountOwnerProjectQueuesPushFinished(Result<(), String>),
     SubaccountOwnerRequestFailed(String),
     DashboardRefreshProjects,
     DashboardRecoverLatestDraft,
