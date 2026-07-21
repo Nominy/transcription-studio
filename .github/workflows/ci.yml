@@ -83,6 +83,7 @@ jobs:
         with:
           shared-key: ci-clippy-${{ runner.os }}
           cache-on-failure: true
+          cache-workspace-crates: "true"
 
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -115,6 +116,7 @@ jobs:
         with:
           shared-key: ci-test-${{ runner.os }}
           cache-on-failure: true
+          cache-workspace-crates: "true"
 
       - name: Install Node.js
         if: runner.os == 'Windows'
