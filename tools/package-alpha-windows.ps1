@@ -87,6 +87,22 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return -join ($bytes | ForEach-Object { $_.ToString("X2") })
+}
+
 function Invoke-Vpk {
     param(
         [string]$RepoRoot,
@@ -216,7 +232,7 @@ function New-PublishDirectory {
             RelativeFileName = $file.RelativeFileName
             Kind = $file.Kind
             Size = $copied.Length
-            SHA256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash
+            SHA256 = Get-Sha256Hex -Path $destination
         })
     }
 

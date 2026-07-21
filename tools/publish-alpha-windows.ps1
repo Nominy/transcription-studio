@@ -28,6 +28,22 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return -join ($bytes | ForEach-Object { $_.ToString("X2") })
+}
+
 function Assert-SafeRemotePath {
     param(
         [string]$Name,
@@ -144,7 +160,7 @@ function Get-ValidatedPublishManifest {
         if ($item.Length -ne [long]$file.Size) {
             throw "Publish file size mismatch for $relativePath"
         }
-        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate).Hash
+        $actualHash = Get-Sha256Hex -Path $candidate
         if (-not $actualHash.Equals([string]$file.SHA256, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Publish file SHA-256 mismatch for $relativePath"
         }
@@ -245,7 +261,7 @@ if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
     throw "Publish manifest version is not safe for a deployment directory: $Version"
 }
 
-$manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publishPath "publish-manifest.json")).Hash.ToLowerInvariant()
+$manifestHash = (Get-Sha256Hex -Path (Join-Path $publishPath "publish-manifest.json")).ToLowerInvariant()
 $deploymentVersion = $Version.Replace("+", "_")
 $deploymentId = "$deploymentVersion-$($manifestHash.Substring(0, 16))"
 $remotePlatformRoot = "$($RemoteIncomingRoot.TrimEnd('/'))/win-x64"
