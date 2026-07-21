@@ -132,9 +132,13 @@ pub(super) enum Message {
     StartSubaccountRelay,
     SubaccountRelayStarted(Result<String, String>),
     StopSubaccountRelay,
+    #[cfg_attr(not(windows), allow(dead_code))]
     TrayRestoreRequested,
+    #[cfg_attr(not(windows), allow(dead_code))]
     TrayStartRelay,
+    #[cfg_attr(not(windows), allow(dead_code))]
     TrayStopRelay,
+    #[cfg_attr(not(windows), allow(dead_code))]
     TrayExitRequested,
     SubaccountOwnerCreateLabelChanged(String),
     SubaccountOwnerRefresh,

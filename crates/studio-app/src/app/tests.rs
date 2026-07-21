@@ -20879,6 +20879,8 @@ fn windows_alpha_packager_validates_fake_asset_index_and_selects_only_current_fi
     std::fs::create_dir_all(&output_dir).unwrap();
     let source_exe = sandbox.join("studio-app.exe");
     std::fs::write(&source_exe, b"MZ fake executable").unwrap();
+    let source_relay_exe = sandbox.join("studio-relay.exe");
+    std::fs::write(&source_relay_exe, b"MZ fake relay executable").unwrap();
     let fake_vpk = sandbox.join("fake-vpk.cmd");
     std::fs::write(&fake_vpk, b"@echo off\r\nexit /b 0\r\n").unwrap();
 
@@ -20904,6 +20906,8 @@ fn windows_alpha_packager_validates_fake_asset_index_and_selects_only_current_fi
             .arg("-SkipBuild")
             .arg("-SourceExe")
             .arg(&source_exe)
+            .arg("-SourceRelayExe")
+            .arg(&source_relay_exe)
             .arg("-VpkCommand")
             .arg(&fake_vpk)
             .arg("-StageDir")
