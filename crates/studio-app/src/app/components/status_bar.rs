@@ -32,7 +32,7 @@ pub(super) fn view_editor_status_bar<'a>(
 
     let activity = concise_status(&state.status)
         .filter(|status| !is_redundant_status(status, save_label))
-        .unwrap_or_else(|| "Autosave is on".to_string());
+        .unwrap_or_else(|| "Use Save to store changes.".to_string());
     let activity_color = if status_is_error(&activity) {
         Color::from_rgb8(185, 28, 28)
     } else {

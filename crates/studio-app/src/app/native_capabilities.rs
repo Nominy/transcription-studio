@@ -2044,6 +2044,14 @@ impl StudioState {
     }
 
     fn apply_segment_updates(&mut self, action_name: &str, updates: Vec<SegmentUpdate>) -> bool {
+        let target_segment_ids = updates
+            .iter()
+            .map(|update| update.segment_id.clone())
+            .collect::<Vec<_>>();
+        if !self.apply_pending_drafts(action_name) {
+            return false;
+        }
+
         let applied = match &mut self.workflow {
             Ok(workflow) => match workflow.apply_segment_edits(updates) {
                 Ok(()) => true,
@@ -2058,7 +2066,9 @@ impl StudioState {
             }
         };
         if applied {
-            self.reset_segment_drafts();
+            for segment_id in target_segment_ids {
+                self.refresh_segment_draft(&segment_id);
+            }
             self.mark_dirty();
             self.reconcile_editor_with_project_preserving_viewport();
             self.invalidate_transcript_layout_cache();

@@ -58,6 +58,11 @@ pub(super) struct SubmitRequestToken {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct BabelPayloadRequestToken {
+    pub(super) generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct FeedbackBootstrapToken {
     pub(super) workspace_generation: u64,
     pub(super) attempt: u64,
@@ -149,23 +154,27 @@ pub(super) struct AdminRateReviewActionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ClaimNextFromQueueRequest {
     pub(super) queue_id: String,
+    pub(super) token: BabelPayloadRequestToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ClaimByProcessedTranscriptionRequest {
     pub(super) processed_transcription_id: String,
     pub(super) queue_id: String,
+    pub(super) token: BabelPayloadRequestToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LoadReviewActionRequest {
     pub(super) review_action_id: String,
+    pub(super) token: BabelPayloadRequestToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LoadLatestReviewActionRequest {
     pub(super) processed_transcription_id: String,
     pub(super) queue_id: String,
+    pub(super) token: BabelPayloadRequestToken,
 }
 
 pub(super) fn build_save_annotations_request_with_asserted_warnings(
@@ -274,6 +283,7 @@ pub(super) fn task_lookup_request(
     project: Option<&Project>,
     state: Option<&TaskLookupState>,
     effect: &TaskLookupEffect,
+    token: BabelPayloadRequestToken,
 ) -> Option<BabelServiceRequest> {
     match effect {
         TaskLookupEffect::SetProcessedTranscriptionId { .. }
@@ -285,6 +295,7 @@ pub(super) fn task_lookup_request(
                 ClaimByProcessedTranscriptionRequest {
                     processed_transcription_id: state.processed_transcription_id.clone(),
                     queue_id: stitched_queue_id(project),
+                    token,
                 },
             ))
         }
@@ -293,6 +304,7 @@ pub(super) fn task_lookup_request(
             Some(BabelServiceRequest::LoadReviewAction(
                 LoadReviewActionRequest {
                     review_action_id: state.review_action_id.clone(),
+                    token,
                 },
             ))
         }
@@ -303,6 +315,7 @@ pub(super) fn task_lookup_request(
                 LoadLatestReviewActionRequest {
                     processed_transcription_id: state.processed_transcription_id.clone(),
                     queue_id: stitched_queue_id(project),
+                    token,
                 },
             ))
         }

@@ -248,7 +248,6 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         } => {
             state.complete_save_progress_failure(token, error, issues);
         }
-        Message::AutoSaveTick => state.auto_save_progress(),
         Message::DropClaim => {
             state.begin_drop_claim_request();
         }
@@ -758,40 +757,41 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
                 return execute_leave_intent(state, intent);
             }
         }
-        Message::LoadReviewActionSucceeded(source) => {
-            let task = state.complete_load_review_action_success(source);
+        Message::LoadReviewActionSucceeded { token, source } => {
+            let task = state.complete_load_review_action_success(token, source);
             return dispatch_pending_services(state, task);
         }
-        Message::LoadReviewActionFailed(error) => {
-            state.fail_load_review_action(error);
+        Message::LoadReviewActionFailed { token, error } => {
+            state.fail_load_review_action(token, error);
         }
-        Message::LoadLatestReviewActionSucceeded(source) => {
-            let task = state.complete_load_latest_review_action_success(source);
+        Message::LoadLatestReviewActionSucceeded { token, source } => {
+            let task = state.complete_load_latest_review_action_success(token, source);
             return dispatch_pending_services(state, task);
         }
-        Message::LoadLatestReviewActionFailed(error) => {
-            state.fail_load_latest_review_action(error);
+        Message::LoadLatestReviewActionFailed { token, error } => {
+            state.fail_load_latest_review_action(token, error);
         }
-        Message::ClaimByProcessedTranscriptionSucceeded(source) => {
-            let task = state.complete_claim_by_processed_transcription_success(source);
+        Message::ClaimByProcessedTranscriptionSucceeded { token, source } => {
+            let task = state.complete_claim_by_processed_transcription_success(token, source);
             return dispatch_pending_services(state, task);
         }
-        Message::ClaimByProcessedTranscriptionFailed(error) => {
-            state.fail_claim_by_processed_transcription(error);
+        Message::ClaimByProcessedTranscriptionFailed { token, error } => {
+            state.fail_claim_by_processed_transcription(token, error);
         }
-        Message::ClaimNextFromQueueSucceeded(source) => {
-            let task = state.complete_claim_next_from_queue_success(source);
+        Message::ClaimNextFromQueueSucceeded { token, source } => {
+            let task = state.complete_claim_next_from_queue_success(token, source);
             return dispatch_pending_services(state, task);
         }
-        Message::ClaimNextFromQueueFailed(error) => {
-            state.complete_claim_next_from_queue_failure(error);
+        Message::ClaimNextFromQueueFailed { token, error } => {
+            state.complete_claim_next_from_queue_failure(token, error);
         }
         Message::BabelAudioPrepared {
+            token,
             kind,
             route_metadata,
             result,
         } => {
-            state.complete_babel_audio_prepared(kind, route_metadata, result);
+            state.complete_babel_audio_prepared(token, kind, route_metadata, result);
         }
         Message::CreateRegionTrackChanged(lane_id) => state.change_create_region_track(lane_id),
         Message::CreateRegionStartChanged(value) => state.change_create_region_start(value),

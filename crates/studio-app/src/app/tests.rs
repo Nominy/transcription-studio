@@ -25,6 +25,7 @@ use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_waveform::{DecodedAudio, WaveformHit, WaveformHitTarget};
 
 use super::annotation_smoke::{AnnotationMutationSmokeReport, run_annotation_mutation_smoke};
+use super::babel_audio::{BabelPayloadLoadKind, PreparedBabelAudioPayload};
 use super::browser_behavior_smoke::run_browser_behavior_smoke;
 use super::browser_input::OutsideInteractionContext;
 use super::create_region::{
@@ -37,10 +38,9 @@ use super::formatting::{
     zoom_factor_from_babel_slider,
 };
 use super::hotkeys::{
-    AUTO_SAVE_TICK_MILLIS, hotkey_message, hotkey_message_for_cut_preview_overlay,
-    hotkey_message_for_physical_status, hotkey_message_for_repeat, hotkey_message_for_status,
+    hotkey_message, hotkey_message_for_cut_preview_overlay, hotkey_message_for_physical_status,
+    hotkey_message_for_repeat, hotkey_message_for_status,
 };
-use super::io_actions::editor_auto_save_runtime_trace_line;
 use super::large_project_smoke::{
     run_large_project_smoke, run_large_project_synthetic_waveform_smoke,
 };
@@ -55,12 +55,13 @@ use super::native_capabilities::{
 use super::panel_persistence::PanelCollapseStorage;
 use super::review_backend_client::{ReviewBackendRequest, ReviewBackendServiceRequest};
 use super::service_callbacks::{
-    AdminRateReviewActionRequest, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
-    ClaimNextFromQueueRequest, DropWorkerActionRequest, FeedbackDraftSaveServiceRequest,
-    FeedbackDraftSaveToken, LintAnnotationsRequest, LoadLatestReviewActionRequest,
-    LoadReviewActionRequest, SaveAnnotationsRequest, SaveRequestToken, SkipReviewActionRequest,
-    SubmitRequestToken, SubmitReviewActionRequest, build_lint_annotations_request,
-    build_save_annotations_request, build_save_annotations_request_with_asserted_warnings,
+    AdminRateReviewActionRequest, BabelPayloadRequestToken, BabelServiceRequest,
+    ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest, DropWorkerActionRequest,
+    FeedbackDraftSaveServiceRequest, FeedbackDraftSaveToken, LintAnnotationsRequest,
+    LoadLatestReviewActionRequest, LoadReviewActionRequest, SaveAnnotationsRequest,
+    SaveRequestToken, SkipReviewActionRequest, SubmitRequestToken, SubmitReviewActionRequest,
+    build_lint_annotations_request, build_save_annotations_request,
+    build_save_annotations_request_with_asserted_warnings,
     build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
@@ -223,6 +224,11 @@ const STABLE_WORKFLOW_TASK_JSON: &str =
 const BABEL_DAY_TO_DAY_CONTRACT_JSON: &str =
     include_str!("../../tests/fixtures/babel-day-to-day-contract.json");
 
+fn current_babel_payload_token(state: &StudioState) -> BabelPayloadRequestToken {
+    BabelPayloadRequestToken {
+        generation: state.babel_payload_request_generation,
+    }
+}
 fn stable_sample_state() -> StudioState {
     let mut state = StudioState::default();
     let workflow = StudioWorkflow::from_babel_json(STABLE_WORKFLOW_TASK_JSON)
@@ -4656,6 +4662,91 @@ fn applying_text_and_timing_undoes_as_one_step() {
 }
 
 #[test]
+fn global_undo_and_redo_are_blocked_losslessly_with_pending_transcript_drafts() {
+    let mut undo_state = stable_sample_state();
+    undo_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("Committed history step.".to_string());
+    undo_state.apply_segment("annotation-1");
+    let committed_text = undo_state
+        .project()
+        .unwrap()
+        .segment("annotation-1")
+        .unwrap()
+        .text
+        .clone();
+    {
+        let draft = undo_state.segment_drafts.get_mut("annotation-1").unwrap();
+        draft.replace_text("Pending local edit.".to_string());
+        draft.set_cursor_to_char_offset("Pending".chars().count());
+        draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('!')));
+    }
+
+    let _ = update(&mut undo_state, Message::Undo);
+
+    assert_eq!(
+        undo_state
+            .project()
+            .unwrap()
+            .segment("annotation-1")
+            .unwrap()
+            .text,
+        committed_text
+    );
+    let draft = undo_state.segment_drafts.get_mut("annotation-1").unwrap();
+    assert_eq!(draft.text, "Pending! local edit.");
+    assert_eq!(draft.editor_text(), "Pending! local edit.");
+    assert_eq!(draft.text_content.cursor_position(), (0, "Pending!".len()));
+    assert!(draft.can_undo_text_edit_to("Pending local edit."));
+    assert_eq!(
+        undo_state.status,
+        "Undo blocked: use the focused text editor's local undo or save transcript edits first."
+    );
+
+    let mut redo_state = stable_sample_state();
+    redo_state
+        .segment_drafts
+        .get_mut("annotation-1")
+        .unwrap()
+        .replace_text("Redo history step.".to_string());
+    redo_state.apply_segment("annotation-1");
+    redo_state.undo();
+    let undone_text = redo_state
+        .project()
+        .unwrap()
+        .segment("annotation-1")
+        .unwrap()
+        .text
+        .clone();
+    set_draft_text_with_cursor_at_end(&mut redo_state, "annotation-1", "Pending redo-safe draft.");
+
+    let _ = update(&mut redo_state, Message::Redo);
+
+    assert_eq!(
+        redo_state
+            .project()
+            .unwrap()
+            .segment("annotation-1")
+            .unwrap()
+            .text,
+        undone_text
+    );
+    let draft = redo_state.segment_drafts.get_mut("annotation-1").unwrap();
+    assert_eq!(draft.text, "Pending redo-safe draft.");
+    assert_eq!(draft.editor_text(), "Pending redo-safe draft.");
+    assert_eq!(
+        draft.text_content.cursor_position(),
+        (0, "Pending redo-safe draft.".len())
+    );
+    assert_eq!(
+        redo_state.status,
+        "Redo blocked: use the focused text editor's local undo or save transcript edits first."
+    );
+}
+
+#[test]
 fn unrelated_actions_preserve_unapplied_drafts() {
     let mut state = stable_sample_state();
     state
@@ -5100,6 +5191,14 @@ fn waveform_start_handle_drag_previews_and_commits_segment_boundary() {
     let lane_id = original.lane_id.clone();
     let moved_start = original.start_seconds + 0.25;
     let before_viewport = state.editor.as_ref().unwrap().viewport;
+    let before_edit = "edge drag preserves editor";
+    let edited_text = "edge! drag preserves editor";
+    {
+        let draft = state.segment_drafts.get_mut(&original.id).unwrap();
+        draft.replace_text(before_edit.to_string());
+        draft.set_cursor_to_char_offset("edge".chars().count());
+        draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('!')));
+    }
 
     let _ = update(
         &mut state,
@@ -5188,6 +5287,17 @@ fn waveform_start_handle_drag_previews_and_commits_segment_boundary() {
             .waveform_magnifier_overlay_for_lane(&lane_id)
             .is_none()
     );
+    let draft = state.segment_drafts.get_mut(&original.id).unwrap();
+    assert_eq!(draft.text, edited_text);
+    assert_eq!(draft.editor_text(), edited_text);
+    assert_eq!(draft.text_content.cursor_position(), (0, "edge!".len()));
+    assert!(draft.can_undo_text_edit_to(before_edit));
+    draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('?')));
+    assert_eq!(draft.text, "edge!? drag preserves editor");
+    assert!(draft.undo_text_edit());
+    assert_eq!(draft.text, edited_text);
+    assert!(draft.undo_text_edit());
+    assert_eq!(draft.text, before_edit);
 }
 
 #[test]
@@ -10296,7 +10406,6 @@ fn save_acknowledgement_keeps_edits_made_after_the_sent_revision_dirty() {
     let editor = state.editor.as_ref().unwrap();
     assert!(editor.is_dirty);
     assert!(!editor.is_saving);
-    assert!(state.should_run_editor_auto_save_tick());
     assert_eq!(
         state.status,
         "Earlier changes saved; newer edits are still pending."
@@ -10630,146 +10739,6 @@ fn apply_pending_drafts_commits_multiple_rows_as_one_undo_step() {
             .unwrap()
             .text,
         original_second
-    );
-}
-
-#[test]
-fn auto_save_tick_preserves_transcript_draft_caret_and_local_undo_history() {
-    let temp = tempfile::tempdir().expect("temp dir should be created");
-    let export_path = temp.path().join("babel-task.json");
-    let mut state = StudioState {
-        export_path: export_path.display().to_string(),
-        ..stable_sample_state()
-    };
-    let segment_id = "annotation-2";
-    let before_edit = "autosave preserves editor";
-    let saved_text = "autosave! preserves editor";
-    {
-        let draft = state.segment_drafts.get_mut(segment_id).unwrap();
-        draft.replace_text(before_edit.to_string());
-        draft.set_cursor_to_char_offset("autosave".chars().count());
-        draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('!')));
-        assert_eq!(draft.text_content.cursor_position(), (0, "autosave!".len()));
-        assert!(draft.can_undo_text_edit_to(before_edit));
-    }
-    state.mark_dirty();
-
-    let _ = update(&mut state, Message::AutoSaveTick);
-
-    let project_segment = state.project().unwrap().segment(segment_id).unwrap();
-    assert_eq!(project_segment.text, saved_text);
-    let draft = state.segment_drafts.get_mut(segment_id).unwrap();
-    assert_eq!(draft.text, saved_text);
-    assert_eq!(draft.editor_text(), saved_text);
-    assert_eq!(draft.text_content.cursor_position(), (0, "autosave!".len()));
-    assert!(draft.can_undo_text_edit_to(before_edit));
-
-    draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('?')));
-    assert_eq!(draft.text, "autosave!? preserves editor");
-    assert_eq!(draft.editor_text(), "autosave!? preserves editor");
-    assert_eq!(
-        draft.text_content.cursor_position(),
-        (0, "autosave!?".len())
-    );
-    assert!(draft.can_undo_text_edit_to(saved_text));
-    assert!(draft.undo_text_edit());
-    assert_eq!(draft.text, saved_text);
-    assert!(draft.can_undo_text_edit_to(before_edit));
-    assert!(draft.undo_text_edit());
-    assert_eq!(draft.text, before_edit);
-    assert_eq!(draft.editor_text(), before_edit);
-
-    let exported = std::fs::read_to_string(export_path).unwrap();
-    let package: BabelTaskPackage = serde_json::from_str(&exported).unwrap();
-    let annotation = package
-        .annotations
-        .iter()
-        .find(|annotation| annotation.annotation_id == segment_id)
-        .unwrap();
-    assert_eq!(annotation.text, saved_text);
-}
-
-#[test]
-fn auto_save_tick_flushes_dirty_pending_draft_like_recovered_interval_save() {
-    let temp = tempfile::tempdir().expect("temp dir should be created");
-    let export_path = temp.path().join("babel-task.json");
-    let mut state = StudioState {
-        export_path: export_path.display().to_string(),
-        ..stable_sample_state()
-    };
-    state
-        .segment_drafts
-        .get_mut("annotation-2")
-        .unwrap()
-        .replace_text("autosaved in place".to_string());
-    state.mark_dirty();
-
-    let _ = update(&mut state, Message::AutoSaveTick);
-
-    assert_eq!(state.status, "Progress saved.");
-    assert!(!state.editor.as_ref().unwrap().is_dirty);
-    assert!(state.editor.as_ref().unwrap().last_saved_at.is_some());
-    let exported = std::fs::read_to_string(export_path).unwrap();
-    let package: BabelTaskPackage = serde_json::from_str(&exported).unwrap();
-    let annotation = package
-        .annotations
-        .iter()
-        .find(|annotation| annotation.annotation_id == "annotation-2")
-        .unwrap();
-    assert_eq!(annotation.text, "autosaved in place");
-}
-
-#[test]
-fn auto_save_tick_skips_while_submit_pauses_recovered_autosave() {
-    let temp = tempfile::tempdir().expect("temp dir should be created");
-    let export_path = temp.path().join("babel-task.json");
-    let mut state = StudioState {
-        export_path: export_path.display().to_string(),
-        ..stable_sample_state()
-    };
-    state
-        .segment_drafts
-        .get_mut("annotation-2")
-        .unwrap()
-        .replace_text("pending submit autosave pause".to_string());
-    state.mark_dirty();
-    state.submit_is_pending = true;
-    let previous_status = state.status.clone();
-
-    let _ = update(&mut state, Message::AutoSaveTick);
-
-    assert!(state.editor.as_ref().unwrap().is_dirty);
-    assert!(!export_path.exists());
-    assert_eq!(state.status, previous_status);
-}
-
-#[test]
-fn editor_autosave_predicate_matches_recovered_dirty_saving_and_paused_gates() {
-    let mut state = stable_sample_state();
-
-    assert!(!state.should_run_editor_auto_save_tick());
-
-    state.mark_dirty();
-    assert!(state.should_run_editor_auto_save_tick());
-
-    state.submit_is_pending = true;
-    assert!(!state.should_run_editor_auto_save_tick());
-
-    state.submit_is_pending = false;
-    state.editor.as_mut().unwrap().begin_save();
-    assert!(!state.should_run_editor_auto_save_tick());
-}
-
-#[test]
-fn editor_autosave_runtime_trace_line_reports_save_result() {
-    assert_eq!(
-        editor_auto_save_runtime_trace_line(
-            ".studio-dev/export/babel-task.json",
-            true,
-            false,
-            false
-        ),
-        "Transcription Studio editor autosave: action=save path=.studio-dev/export/babel-task.json dirty=true->false error=false"
     );
 }
 
@@ -12346,6 +12315,7 @@ fn startup_route_args_enqueue_recovered_review_action_load_before_default_claim(
         Some(&BabelServiceRequest::LoadReviewAction(
             LoadReviewActionRequest {
                 review_action_id: "review-action-url".to_string(),
+                token: current_babel_payload_token(&state),
             }
         ))
     );
@@ -12393,9 +12363,13 @@ fn review_action_route_success_imports_recovered_payload_and_drains_request() {
             .any(|request| matches!(request, BabelServiceRequest::LoadReviewAction(_)))
     );
 
+    let token = current_babel_payload_token(&state);
     let _ = update(
         &mut state,
-        Message::LoadReviewActionSucceeded(review_action_final_with_local_audio()),
+        Message::LoadReviewActionSucceeded {
+            token,
+            source: review_action_final_with_local_audio(),
+        },
     );
 
     assert!(
@@ -12466,9 +12440,13 @@ fn remote_babel_payload_success_waits_for_audio_preparation_before_editor() {
         },
     );
 
+    let token = current_babel_payload_token(&state);
     let _ = update(
         &mut state,
-        Message::ClaimNextFromQueueSucceeded(source.to_string()),
+        Message::ClaimNextFromQueueSucceeded {
+            token,
+            source: source.to_string(),
+        },
     );
 
     assert!(
@@ -12505,9 +12483,13 @@ fn babel_payload_success_callbacks_import_and_drain_matching_service_request() {
             .any(|request| matches!(request, BabelServiceRequest::LoadLatestReviewAction(_)))
     );
 
+    let latest_token = current_babel_payload_token(&latest_state);
     let _ = update(
         &mut latest_state,
-        Message::LoadLatestReviewActionSucceeded(source.to_string()),
+        Message::LoadLatestReviewActionSucceeded {
+            token: latest_token,
+            source: source.to_string(),
+        },
     );
 
     assert!(
@@ -12556,9 +12538,13 @@ fn babel_payload_success_callbacks_import_and_drain_matching_service_request() {
             ))
     );
 
+    let lookup_token = current_babel_payload_token(&lookup_claim_state);
     let _ = update(
         &mut lookup_claim_state,
-        Message::ClaimByProcessedTranscriptionSucceeded(source.to_string()),
+        Message::ClaimByProcessedTranscriptionSucceeded {
+            token: lookup_token,
+            source: source.to_string(),
+        },
     );
 
     assert!(
@@ -12589,9 +12575,13 @@ fn babel_payload_success_callbacks_import_and_drain_matching_service_request() {
             .any(|request| matches!(request, BabelServiceRequest::ClaimNextFromQueue(_)))
     );
 
+    let queue_token = current_babel_payload_token(&queue_claim_state);
     let _ = update(
         &mut queue_claim_state,
-        Message::ClaimNextFromQueueSucceeded(source.to_string()),
+        Message::ClaimNextFromQueueSucceeded {
+            token: queue_token,
+            source: source.to_string(),
+        },
     );
 
     assert!(
@@ -12632,6 +12622,7 @@ fn load_and_claim_service_requests_dispatch_once_until_callback_settles() {
         vec![BabelServiceRequest::LoadReviewAction(
             LoadReviewActionRequest {
                 review_action_id: "review-action-url".to_string(),
+                token: current_babel_payload_token(&state),
             }
         )]
     );
@@ -12642,9 +12633,13 @@ fn load_and_claim_service_requests_dispatch_once_until_callback_settles() {
             .any(|request| matches!(request, BabelServiceRequest::LoadReviewAction(_)))
     );
 
+    let token = current_babel_payload_token(&state);
     let _ = update(
         &mut state,
-        Message::LoadReviewActionSucceeded(review_action_final_with_local_audio()),
+        Message::LoadReviewActionSucceeded {
+            token,
+            source: review_action_final_with_local_audio(),
+        },
     );
 
     assert!(state.babel_service_requests.is_empty());
@@ -14814,13 +14809,6 @@ fn drafting_response_previews_rows_and_applies_or_skips_individual_edits() {
     let mut state = stable_sample_state();
     let first_segment_id = state.project().unwrap().segments[0].id.clone();
     let second_segment_id = state.project().unwrap().segments[1].id.clone();
-    let original_second = state
-        .project()
-        .unwrap()
-        .segment(&second_segment_id)
-        .unwrap()
-        .text
-        .clone();
 
     complete_review_backend_request(
         &mut state,
@@ -14868,8 +14856,16 @@ fn drafting_response_previews_rows_and_applies_or_skips_individual_edits() {
         2
     );
 
-    let _ = update(&mut state, Message::DraftSkipRow(second_segment_id.clone()));
-    let _ = update(&mut state, Message::DraftApplyRow(first_segment_id.clone()));
+    {
+        let draft = state.segment_drafts.get_mut(&first_segment_id).unwrap();
+        draft.replace_text_from_user_edit("Pending manual A.".to_string());
+        draft.replace_text_from_user_edit("Pending manual A latest.".to_string());
+    }
+    let _ = update(
+        &mut state,
+        Message::DraftApplyRow(second_segment_id.clone()),
+    );
+    let _ = update(&mut state, Message::DraftSkipRow(first_segment_id.clone()));
 
     assert_eq!(
         state
@@ -14878,7 +14874,7 @@ fn drafting_response_previews_rows_and_applies_or_skips_individual_edits() {
             .segment(&first_segment_id)
             .unwrap()
             .text,
-        "Preview replacement one."
+        "Pending manual A latest."
     );
     assert_eq!(
         state
@@ -14887,10 +14883,19 @@ fn drafting_response_previews_rows_and_applies_or_skips_individual_edits() {
             .segment(&second_segment_id)
             .unwrap()
             .text,
-        original_second
+        "Preview replacement two."
     );
-    assert!(state.draft_row_previews[0].applied);
-    assert!(state.draft_row_previews[1].skipped);
+    let first_draft = state.segment_drafts.get_mut(&first_segment_id).unwrap();
+    assert_eq!(first_draft.text, "Pending manual A latest.");
+    assert_eq!(first_draft.editor_text(), "Pending manual A latest.");
+    assert!(first_draft.can_undo_text_edit_to("Pending manual A."));
+    assert!(first_draft.undo_text_edit());
+    assert_eq!(first_draft.text, "Pending manual A.");
+    let second_draft = state.segment_drafts.get(&second_segment_id).unwrap();
+    assert_eq!(second_draft.text, "Preview replacement two.");
+    assert_eq!(second_draft.editor_text(), "Preview replacement two.");
+    assert!(state.draft_row_previews[0].skipped);
+    assert!(state.draft_row_previews[1].applied);
     assert!(state.can_undo());
 }
 
@@ -15454,7 +15459,7 @@ fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile(
     assert!(state.begin_dashboard_start_project(project_id));
     assert!(state.babel_service_requests.iter().any(|request| matches!(
         request,
-        BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id })
+        BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id, .. })
             if queue_id == "33333333-3333-3333-3333-333333333333"
     )));
 
@@ -15467,7 +15472,8 @@ fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile(
     })
     .to_string();
 
-    let _ = state.complete_claim_next_from_queue_success(minimal_babel_task);
+    let token = current_babel_payload_token(&state);
+    let _ = state.complete_claim_next_from_queue_success(token, minimal_babel_task);
 
     let metadata = &state
         .project()
@@ -15488,25 +15494,34 @@ fn claim_next_success_preserves_dashboard_project_and_resolves_lint_tag_profile(
 #[test]
 fn fixture_service_executor_maps_recovered_load_and_claim_requests_to_callbacks() {
     let payload = "{\"ok\":true}".to_string();
+    let token = BabelPayloadRequestToken { generation: 7 };
 
     assert_eq!(
         fixture_payload_message_for_request(
             BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest {
                 review_action_id: "review-action-url".to_string(),
+                token,
             }),
             payload.clone(),
         ),
-        Some(Message::LoadReviewActionSucceeded(payload.clone()))
+        Some(Message::LoadReviewActionSucceeded {
+            token,
+            source: payload.clone(),
+        })
     );
     assert_eq!(
         fixture_payload_message_for_request(
             BabelServiceRequest::LoadLatestReviewAction(LoadLatestReviewActionRequest {
                 processed_transcription_id: "processed-url".to_string(),
                 queue_id: "stitched-queue-url".to_string(),
+                token,
             }),
             payload.clone(),
         ),
-        Some(Message::LoadLatestReviewActionSucceeded(payload.clone()))
+        Some(Message::LoadLatestReviewActionSucceeded {
+            token,
+            source: payload.clone(),
+        })
     );
     assert_eq!(
         fixture_payload_message_for_request(
@@ -15514,23 +15529,65 @@ fn fixture_service_executor_maps_recovered_load_and_claim_requests_to_callbacks(
                 ClaimByProcessedTranscriptionRequest {
                     processed_transcription_id: "processed-url".to_string(),
                     queue_id: "stitched-queue-url".to_string(),
+                    token,
                 },
             ),
             payload.clone(),
         ),
-        Some(Message::ClaimByProcessedTranscriptionSucceeded(
-            payload.clone()
-        ))
+        Some(Message::ClaimByProcessedTranscriptionSucceeded {
+            token,
+            source: payload.clone(),
+        })
     );
     assert_eq!(
         fixture_payload_message_for_request(
             BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest {
                 queue_id: "chunked-queue-url".to_string(),
+                token,
             }),
             payload.clone(),
         ),
-        Some(Message::ClaimNextFromQueueSucceeded(payload))
+        Some(Message::ClaimNextFromQueueSucceeded {
+            token,
+            source: payload,
+        })
     );
+}
+
+#[test]
+fn stale_babel_payload_and_audio_completions_cannot_replace_current_workflow() {
+    let mut state = stable_sample_state();
+    let stale_token = state.issue_babel_payload_request_token();
+    let mut current_project = state.project().unwrap().clone();
+    current_project.id = "current-workflow".to_string();
+    current_project.segments[0].text = "Current workflow text.".to_string();
+    state.replace_workflow(
+        StudioWorkflow::from_project(current_project),
+        "Loaded current workflow.".to_string(),
+    );
+
+    let _ = state
+        .complete_load_review_action_success(stale_token, STABLE_WORKFLOW_TASK_JSON.to_string());
+    assert_eq!(state.project().unwrap().id, "current-workflow");
+    assert_eq!(
+        state.project().unwrap().segments[0].text,
+        "Current workflow text."
+    );
+
+    state.complete_babel_audio_prepared(
+        stale_token,
+        BabelPayloadLoadKind::ReviewAction,
+        Vec::new(),
+        Ok(PreparedBabelAudioPayload::local(
+            STABLE_WORKFLOW_TASK_JSON.to_string(),
+        )),
+    );
+    assert_eq!(state.project().unwrap().id, "current-workflow");
+    assert_eq!(
+        state.project().unwrap().segments[0].text,
+        "Current workflow text."
+    );
+    assert_eq!(state.status, "Loaded current workflow.");
 }
 
 #[test]
@@ -15939,6 +15996,7 @@ fn service_command_envelopes_use_recovered_trpc_operation_names_and_payload_keys
         request_envelope_for_service_command(&BabelServiceRequest::ClaimNextFromQueue(
             ClaimNextFromQueueRequest {
                 queue_id: "chunked-queue-url".to_string(),
+                token: BabelPayloadRequestToken::default(),
             },
         )),
         serde_json::json!({
@@ -15951,6 +16009,7 @@ fn service_command_envelopes_use_recovered_trpc_operation_names_and_payload_keys
             LoadLatestReviewActionRequest {
                 processed_transcription_id: "processed-url".to_string(),
                 queue_id: "stitched-queue-url".to_string(),
+                token: BabelPayloadRequestToken::default(),
             },
         )),
         serde_json::json!({
@@ -16087,6 +16146,7 @@ fn startup_route_args_wire_task_lookup_and_processed_load_like_recovered_query()
             LoadLatestReviewActionRequest {
                 processed_transcription_id: "processed-url".to_string(),
                 queue_id: "stitched-queue-url".to_string(),
+                token: current_babel_payload_token(&processed_state),
             }
         ))
     );
@@ -16112,6 +16172,7 @@ fn startup_route_args_wire_task_lookup_and_processed_load_like_recovered_query()
         Some(&BabelServiceRequest::ClaimNextFromQueue(
             ClaimNextFromQueueRequest {
                 queue_id: "chunked-queue-url".to_string(),
+                token: current_babel_payload_token(&default_claim_state),
             }
         ))
     );
@@ -16203,6 +16264,7 @@ fn task_lookup_modal_claim_and_read_only_effects_follow_recovered_priority() {
             ClaimByProcessedTranscriptionRequest {
                 processed_transcription_id: "processed-1".to_string(),
                 queue_id: "stitched-queue-9".to_string(),
+                token: current_babel_payload_token(&state),
             }
         ))
     );
@@ -16217,6 +16279,7 @@ fn task_lookup_modal_claim_and_read_only_effects_follow_recovered_priority() {
         Some(&BabelServiceRequest::LoadReviewAction(
             LoadReviewActionRequest {
                 review_action_id: "action-1".to_string(),
+                token: current_babel_payload_token(&state),
             }
         ))
     );
@@ -16236,6 +16299,7 @@ fn task_lookup_modal_claim_and_read_only_effects_follow_recovered_priority() {
             LoadLatestReviewActionRequest {
                 processed_transcription_id: "processed-1".to_string(),
                 queue_id: "stitched-queue-9".to_string(),
+                token: current_babel_payload_token(&state),
             }
         ))
     );
@@ -16296,13 +16360,18 @@ fn default_queue_claim_failure_opens_recovered_no_work_modal() {
         Some(&BabelServiceRequest::ClaimNextFromQueue(
             ClaimNextFromQueueRequest {
                 queue_id: "chunked-queue-url".to_string(),
+                token: current_babel_payload_token(&state),
             }
         ))
     );
 
+    let token = current_babel_payload_token(&state);
     let _ = update(
         &mut state,
-        Message::ClaimNextFromQueueFailed("No tasks available".to_string()),
+        Message::ClaimNextFromQueueFailed {
+            token,
+            error: "No tasks available".to_string(),
+        },
     );
 
     assert!(state.babel_service_requests.is_empty());
@@ -18754,26 +18823,6 @@ fn transport_subscription_uses_sixteen_millisecond_cadence_for_smooth_playhead()
     assert!(!hotkey_source.contains("Duration::from_millis(100)"));
     assert!(message_source.contains("TransportTick(Instant)"));
     assert!(action_source.contains("advance_transport_tick"));
-}
-
-#[test]
-fn editor_autosave_subscription_uses_recovered_interval_and_save_tick() {
-    let hotkey_source = include_str!("hotkeys.rs");
-    let action_source = include_str!("actions.rs");
-    let message_source = include_str!("message.rs");
-    let io_source = include_str!("io_actions.rs");
-
-    assert_eq!(AUTO_SAVE_TICK_MILLIS, 60_000);
-    assert!(hotkey_source.contains("AUTO_SAVE_TICK_MILLIS"));
-    assert!(hotkey_source.contains("STUDIO_AUTOSAVE_TICK_MILLIS"));
-    assert!(hotkey_source.contains("auto_save_tick_millis()"));
-    assert!(hotkey_source.contains("should_run_editor_auto_save_tick"));
-    assert!(message_source.contains("AutoSaveTick"));
-    assert!(action_source.contains("Message::AutoSaveTick"));
-    assert!(action_source.contains("auto_save_progress"));
-    assert!(io_source.contains("should_run_auto_save_tick(self.submit_is_pending)"));
-    assert!(io_source.contains("STUDIO_TRACE_EDITOR_AUTOSAVE"));
-    assert!(io_source.contains("editor_auto_save_runtime_trace_line"));
 }
 
 #[test]

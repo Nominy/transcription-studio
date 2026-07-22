@@ -294,7 +294,7 @@ fn transport_strip_exposes_babel_undo_redo_disabled_state() {
 }
 
 #[test]
-fn save_state_matches_recovered_babel_completion_and_autosave_rules() {
+fn save_state_matches_recovered_babel_completion_rules() {
     let project = sample_project();
     let mut session = EditorSession::for_project(&project);
 
@@ -302,18 +302,14 @@ fn save_state_matches_recovered_babel_completion_and_autosave_rules() {
         session.transport_strip(&project).save_tooltip_content,
         "All changes saved"
     );
-    assert!(!session.should_run_auto_save_tick(false));
 
     session.mark_dirty();
-    assert!(session.should_run_auto_save_tick(false));
-    assert!(!session.should_run_auto_save_tick(true));
 
     session.begin_save();
     let strip = session.transport_strip(&project);
     assert_eq!(strip.save_label, "Saving...");
     assert!(strip.save_disabled);
     assert!(strip.save_clickable);
-    assert!(!session.should_run_auto_save_tick(false));
 
     session.complete_save(false, "remote save timed out");
     let strip = session.transport_strip(&project);
@@ -356,7 +352,6 @@ fn save_completion_only_clears_the_revision_that_was_sent() {
     assert!(session.complete_save_for_revision(saved_revision, true, "2026-07-09T10:00:00Z"));
     assert!(session.is_dirty);
     assert!(!session.is_saving);
-    assert!(session.should_run_auto_save_tick(false));
     assert_eq!(session.edit_revision(), saved_revision + 1);
     assert_eq!(
         session.last_saved_at.as_deref(),

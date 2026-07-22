@@ -288,10 +288,6 @@ impl EditorSession {
         true
     }
 
-    pub fn should_run_auto_save_tick(&self, paused: bool) -> bool {
-        self.is_dirty && !self.is_saving && !paused
-    }
-
     pub fn set_lane_waveform(&mut self, lane_id: impl Into<String>, waveform: LaneWaveform) {
         self.lane_waveforms.insert(lane_id.into(), waveform);
     }

@@ -130,17 +130,29 @@ pub(super) fn fixture_payload_message_for_request(
         BabelServiceRequest::LintAnnotations(request) => Some(
             lint_annotations_message_from_payload(&payload, request.token),
         ),
-        BabelServiceRequest::LoadReviewAction(_) => {
-            Some(Message::LoadReviewActionSucceeded(payload))
+        BabelServiceRequest::LoadReviewAction(request) => {
+            Some(Message::LoadReviewActionSucceeded {
+                token: request.token,
+                source: payload,
+            })
         }
-        BabelServiceRequest::LoadLatestReviewAction(_) => {
-            Some(Message::LoadLatestReviewActionSucceeded(payload))
+        BabelServiceRequest::LoadLatestReviewAction(request) => {
+            Some(Message::LoadLatestReviewActionSucceeded {
+                token: request.token,
+                source: payload,
+            })
         }
-        BabelServiceRequest::ClaimByProcessedTranscription(_) => {
-            Some(Message::ClaimByProcessedTranscriptionSucceeded(payload))
+        BabelServiceRequest::ClaimByProcessedTranscription(request) => {
+            Some(Message::ClaimByProcessedTranscriptionSucceeded {
+                token: request.token,
+                source: payload,
+            })
         }
-        BabelServiceRequest::ClaimNextFromQueue(_) => {
-            Some(Message::ClaimNextFromQueueSucceeded(payload))
+        BabelServiceRequest::ClaimNextFromQueue(request) => {
+            Some(Message::ClaimNextFromQueueSucceeded {
+                token: request.token,
+                source: payload,
+            })
         }
         BabelServiceRequest::SubmitReviewAction(request) => {
             Some(submit_review_message_from_payload(&payload, request.token))
@@ -1294,14 +1306,17 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
                 "consensusData": consensus_data,
             },
         }),
-        BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id }) => json!({
-            "operation": "transcriptions.claimNextReviewActionFromReviewQueue",
-            "payload": { "queueId": queue_id },
-        }),
+        BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest { queue_id, .. }) => {
+            json!({
+                "operation": "transcriptions.claimNextReviewActionFromReviewQueue",
+                "payload": { "queueId": queue_id },
+            })
+        }
         BabelServiceRequest::ClaimByProcessedTranscription(
             ClaimByProcessedTranscriptionRequest {
                 processed_transcription_id,
                 queue_id,
+                ..
             },
         ) => json!({
             "operation": "transcriptions.claimReviewActionByProcessedTranscriptionId",
@@ -1310,7 +1325,9 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
                 "queueId": queue_id,
             },
         }),
-        BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest { review_action_id }) => {
+        BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest {
+            review_action_id, ..
+        }) => {
             json!({
                 "operation": "transcriptions.getReviewActionDataById",
                 "payload": { "reviewActionId": review_action_id },
@@ -1319,6 +1336,7 @@ pub(super) fn request_envelope_for_service_command(request: &BabelServiceRequest
         BabelServiceRequest::LoadLatestReviewAction(LoadLatestReviewActionRequest {
             processed_transcription_id,
             queue_id,
+            ..
         }) => json!({
             "operation": "transcriptions.getLatestReviewActionByProcessedTranscriptionId",
             "payload": {
@@ -1876,18 +1894,26 @@ fn failure_message_for_request(request: BabelServiceRequest, error: &str) -> Mes
             error: error.to_string(),
             issues: None,
         },
-        BabelServiceRequest::LoadReviewAction(_) => {
-            Message::LoadReviewActionFailed(error.to_string())
+        BabelServiceRequest::LoadReviewAction(request) => Message::LoadReviewActionFailed {
+            token: request.token,
+            error: error.to_string(),
+        },
+        BabelServiceRequest::LoadLatestReviewAction(request) => {
+            Message::LoadLatestReviewActionFailed {
+                token: request.token,
+                error: error.to_string(),
+            }
         }
-        BabelServiceRequest::LoadLatestReviewAction(_) => {
-            Message::LoadLatestReviewActionFailed(error.to_string())
+        BabelServiceRequest::ClaimByProcessedTranscription(request) => {
+            Message::ClaimByProcessedTranscriptionFailed {
+                token: request.token,
+                error: error.to_string(),
+            }
         }
-        BabelServiceRequest::ClaimByProcessedTranscription(_) => {
-            Message::ClaimByProcessedTranscriptionFailed(error.to_string())
-        }
-        BabelServiceRequest::ClaimNextFromQueue(_) => {
-            Message::ClaimNextFromQueueFailed(error.to_string())
-        }
+        BabelServiceRequest::ClaimNextFromQueue(request) => Message::ClaimNextFromQueueFailed {
+            token: request.token,
+            error: error.to_string(),
+        },
         BabelServiceRequest::SubmitReviewAction(request) => Message::SubmitReviewFailed {
             token: request.token,
             error: error.to_string(),
@@ -2364,6 +2390,7 @@ mod tests {
             (
                 BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest {
                     queue_id: "queue-1".to_string(),
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Post,
                 "transcriptions.claimNextReviewActionFromReviewQueue",
@@ -2373,6 +2400,7 @@ mod tests {
                     ClaimByProcessedTranscriptionRequest {
                         processed_transcription_id: "processed-1".to_string(),
                         queue_id: "queue-1".to_string(),
+                        token: Default::default(),
                     },
                 ),
                 LiveTrpcMethod::Post,
@@ -2381,6 +2409,7 @@ mod tests {
             (
                 BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest {
                     review_action_id: "review-action-1".to_string(),
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Get,
                 "transcriptions.getReviewActionDataById",
@@ -2389,6 +2418,7 @@ mod tests {
                 BabelServiceRequest::LoadLatestReviewAction(LoadLatestReviewActionRequest {
                     processed_transcription_id: "processed-1".to_string(),
                     queue_id: "queue-1".to_string(),
+                    token: Default::default(),
                 }),
                 LiveTrpcMethod::Get,
                 "transcriptions.getLatestReviewActionByProcessedTranscriptionId",
@@ -2509,6 +2539,7 @@ mod tests {
         let payload = normalize_service_response_payload_for_request(
             &BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest {
                 queue_id: "queue-1".to_string(),
+                token: Default::default(),
             }),
             r#"{
                 "actionId": "review-action-1",

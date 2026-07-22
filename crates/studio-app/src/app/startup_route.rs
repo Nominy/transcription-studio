@@ -140,10 +140,14 @@ pub(super) fn apply_startup_route_config(state: &mut StudioState, config: Startu
     }
 
     if let Some(review_action_id) = config.review_action_id {
+        let token = state.issue_babel_payload_request_token();
         state
             .babel_service_requests
             .push(BabelServiceRequest::LoadReviewAction(
-                LoadReviewActionRequest { review_action_id },
+                LoadReviewActionRequest {
+                    review_action_id,
+                    token,
+                },
             ));
         state.status = "Review action route load requested.".to_string();
         return;
@@ -153,12 +157,14 @@ pub(super) fn apply_startup_route_config(state: &mut StudioState, config: Startu
         config.processed_transcription_id,
         config.stitched_queue_id.clone(),
     ) {
+        let token = state.issue_babel_payload_request_token();
         state
             .babel_service_requests
             .push(BabelServiceRequest::LoadLatestReviewAction(
                 LoadLatestReviewActionRequest {
                     processed_transcription_id,
                     queue_id,
+                    token,
                 },
             ));
         state.status = "Processed transcription route load requested.".to_string();
@@ -166,10 +172,11 @@ pub(super) fn apply_startup_route_config(state: &mut StudioState, config: Startu
     }
 
     if let Some(queue_id) = config.chunked_queue_id {
+        let token = state.issue_babel_payload_request_token();
         state
             .babel_service_requests
             .push(BabelServiceRequest::ClaimNextFromQueue(
-                ClaimNextFromQueueRequest { queue_id },
+                ClaimNextFromQueueRequest { queue_id, token },
             ));
         state.status = "Default queue claim requested.".to_string();
     }

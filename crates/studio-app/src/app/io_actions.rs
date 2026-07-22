@@ -11,23 +11,6 @@ use super::service_callbacks::{
 };
 use super::service_executor::babel_remote_mutations_configured;
 
-const EDITOR_AUTOSAVE_TRACE_ENV: &str = "STUDIO_TRACE_EDITOR_AUTOSAVE";
-
-pub(super) fn editor_auto_save_runtime_trace_line(
-    path: &str,
-    dirty_before: bool,
-    dirty_after: bool,
-    save_has_error: bool,
-) -> String {
-    format!(
-        "Transcription Studio editor autosave: action=save path={path} dirty={dirty_before}->{dirty_after} error={save_has_error}"
-    )
-}
-
-fn editor_auto_save_trace_enabled() -> bool {
-    std::env::var(EDITOR_AUTOSAVE_TRACE_ENV).is_ok_and(|value| value != "0")
-}
-
 fn save_failure_detail(status: &str) -> String {
     status
         .strip_prefix("Save failed: ")
@@ -279,37 +262,6 @@ impl StudioState {
         }
         self.status = format!("Save failed: {error}");
         true
-    }
-
-    pub(super) fn should_run_editor_auto_save_tick(&self) -> bool {
-        self.editor
-            .as_ref()
-            .is_some_and(|editor| editor.should_run_auto_save_tick(self.submit_is_pending))
-    }
-
-    pub(super) fn auto_save_progress(&mut self) {
-        if self.should_run_editor_auto_save_tick() {
-            let dirty_before = self.editor.as_ref().is_some_and(|editor| editor.is_dirty);
-            self.save_progress();
-
-            if editor_auto_save_trace_enabled() {
-                let (dirty_after, save_has_error) = self
-                    .editor
-                    .as_ref()
-                    .map(|editor| (editor.is_dirty, editor.save_has_error))
-                    .unwrap_or((false, false));
-                eprintln!(
-                    "{}",
-                    editor_auto_save_runtime_trace_line(
-                        &self.export_path,
-                        dirty_before,
-                        dirty_after,
-                        save_has_error
-                    )
-                );
-            }
-        }
-        self.auto_save_reviewer_comments();
     }
 
     #[cfg(test)]

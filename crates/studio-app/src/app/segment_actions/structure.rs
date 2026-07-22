@@ -102,6 +102,57 @@ impl StudioState {
             editor.open_actions_segment_id = None;
         });
     }
+    fn merge_neighbor_segment_id(&self, segment_id: &str, previous: bool) -> Option<String> {
+        let project = self.project()?;
+        let segment = project.segment(segment_id)?;
+        let candidates = project.segments.iter().filter(|candidate| {
+            candidate.id != segment_id
+                && candidate.speaker_id == segment.speaker_id
+                && candidate.lane_id == segment.lane_id
+                && if previous {
+                    candidate.end_seconds <= segment.start_seconds
+                } else {
+                    segment.end_seconds <= candidate.start_seconds
+                }
+        });
+        if previous {
+            candidates
+                .max_by(|left, right| {
+                    left.end_seconds
+                        .partial_cmp(&right.end_seconds)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|candidate| candidate.id.clone())
+        } else {
+            candidates
+                .min_by(|left, right| {
+                    left.start_seconds
+                        .partial_cmp(&right.start_seconds)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|candidate| candidate.id.clone())
+        }
+    }
+
+    fn pending_merge_text_edits(
+        &self,
+        segment_id: &str,
+        neighbor_segment_id: &str,
+    ) -> Vec<studio_core::SegmentUpdate> {
+        [segment_id, neighbor_segment_id]
+            .into_iter()
+            .filter_map(|segment_id| {
+                let segment = self.project()?.segment(segment_id)?;
+                let draft = self.segment_drafts.get(segment_id)?;
+                (draft.text != segment.text).then(|| studio_core::SegmentUpdate {
+                    segment_id: segment_id.to_string(),
+                    start_seconds: segment.start_seconds,
+                    end_seconds: segment.end_seconds,
+                    text: draft.text.clone(),
+                })
+            })
+            .collect()
+    }
 
     fn trace_row_structure_action(
         &self,
@@ -711,7 +762,9 @@ impl StudioState {
                 "Moved `{segment_id}` to {start_seconds:.3}s-{end_seconds:.3}s."
             ))
         }) {
-            self.refresh_segment_draft(&segment_id);
+            if let Some(draft) = self.segment_drafts.get_mut(&segment_id) {
+                draft.replace_times(start_seconds, end_seconds);
+            }
             self.mark_dirty();
             self.reconcile_editor_with_project_preserving_viewport();
         } else if let Ok(workflow) = &mut self.workflow {
@@ -835,8 +888,19 @@ impl StudioState {
         if self.block_read_only_edit("Merge") {
             return;
         }
+        let neighbor_segment_id = self.merge_neighbor_segment_id(&segment_id, true);
+        let pending_text_edits = neighbor_segment_id
+            .as_deref()
+            .map_or_else(Vec::new, |neighbor| {
+                self.pending_merge_text_edits(&segment_id, neighbor)
+            });
         self.clear_low_confidence_review_state(&segment_id);
         if self.with_workflow_mut("Merge", |workflow| {
+            if !pending_text_edits.is_empty() {
+                workflow
+                    .apply_segment_edits(pending_text_edits)
+                    .map_err(|error| error.to_string())?;
+            }
             workflow
                 .merge_with_previous(&segment_id)
                 .map_err(|error| error.to_string())?;
@@ -857,8 +921,19 @@ impl StudioState {
         if self.block_read_only_edit("Merge") {
             return;
         }
+        let neighbor_segment_id = self.merge_neighbor_segment_id(&segment_id, false);
+        let pending_text_edits = neighbor_segment_id
+            .as_deref()
+            .map_or_else(Vec::new, |neighbor| {
+                self.pending_merge_text_edits(&segment_id, neighbor)
+            });
         self.clear_low_confidence_review_state(&segment_id);
         if self.with_workflow_mut("Merge", |workflow| {
+            if !pending_text_edits.is_empty() {
+                workflow
+                    .apply_segment_edits(pending_text_edits)
+                    .map_err(|error| error.to_string())?;
+            }
             workflow
                 .merge_with_next(&segment_id)
                 .map_err(|error| error.to_string())?;
@@ -904,7 +979,6 @@ impl StudioState {
                 "Marked low-confidence words reviewed for `{segment_id}`."
             ))
         }) {
-            self.refresh_segment_draft(&segment_id);
             self.mark_dirty();
             self.reconcile_editor_with_project();
         }
@@ -1024,7 +1098,9 @@ impl StudioState {
                 .map_err(|error| error.to_string())?;
             Ok(format!("Moved `{segment_id}` to `{lane_id}`."))
         }) {
-            self.refresh_segment_draft(&segment_id);
+            if let Some(draft) = self.segment_drafts.get_mut(&segment_id) {
+                draft.track_edit.select(&lane_id);
+            }
             self.mark_dirty();
             self.reconcile_transcript_ownership_to_visible();
         }
@@ -1046,7 +1122,6 @@ impl StudioState {
                 "Set `{segment_id}` annotation type to `{annotation_type}`."
             ))
         }) {
-            self.refresh_segment_draft(&segment_id);
             self.mark_dirty();
             self.reconcile_editor_with_project();
         }

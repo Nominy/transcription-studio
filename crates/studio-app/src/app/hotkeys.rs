@@ -17,9 +17,7 @@ use crate::app::state::SUPPORT_ID_COPIED_RESET_DELAY_MS;
 
 pub(crate) const TRANSPORT_TICK_MILLIS: u64 = 16;
 pub(crate) const TRANSPORT_TICK_SECONDS: f64 = TRANSPORT_TICK_MILLIS as f64 / 1000.0;
-pub(crate) const AUTO_SAVE_TICK_MILLIS: u64 = 60_000;
 pub(crate) const REVIEWER_COMMENT_SAVE_TICK_MILLIS: u64 = 500;
-const AUTO_SAVE_TICK_OVERRIDE_ENV: &str = "STUDIO_AUTOSAVE_TICK_MILLIS";
 const RENDERER_SMOKE_SCREENSHOT_ENV: &str = "STUDIO_SMOKE_RENDERER_SCREENSHOT";
 
 const CTRL_F: &str = "\u{6}";
@@ -43,12 +41,6 @@ pub(crate) fn subscription(state: &StudioState) -> Subscription<Message> {
     {
         subscriptions.push(
             time::every(Duration::from_millis(TRANSPORT_TICK_MILLIS)).map(Message::TransportTick),
-        );
-    }
-    if state.should_run_editor_auto_save_tick() {
-        subscriptions.push(
-            time::every(Duration::from_millis(auto_save_tick_millis()))
-                .map(|_| Message::AutoSaveTick),
         );
     }
     if state.should_run_reviewer_comment_save_tick() {
@@ -83,14 +75,6 @@ pub(crate) fn subscription(state: &StudioState) -> Subscription<Message> {
     }
 
     Subscription::batch(subscriptions)
-}
-
-pub(crate) fn auto_save_tick_millis() -> u64 {
-    std::env::var(AUTO_SAVE_TICK_OVERRIDE_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(AUTO_SAVE_TICK_MILLIS)
 }
 
 fn renderer_smoke_screenshot_enabled() -> bool {

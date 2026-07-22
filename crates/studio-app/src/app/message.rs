@@ -10,8 +10,8 @@ use super::browser_input::OutsideInteractionContext;
 use super::keybinds::{HotkeyAction, KeyBinding};
 use super::review_backend_client::ReviewBackendServiceRequest;
 use super::service_callbacks::{
-    FeedbackBootstrapInputs, FeedbackBootstrapToken, FeedbackDraftBootstrap,
-    FeedbackDraftSaveToken, SaveRequestToken, SubmitRequestToken,
+    BabelPayloadRequestToken, FeedbackBootstrapInputs, FeedbackBootstrapToken,
+    FeedbackDraftBootstrap, FeedbackDraftSaveToken, SaveRequestToken, SubmitRequestToken,
 };
 use super::state::{DashboardSection, NativeCapabilityModalTab};
 use super::subaccounts::{SubaccountOwnerDashboard, SubaccountOwnerRequest, SubaccountSession};
@@ -94,7 +94,6 @@ pub(super) enum Message {
         error: String,
         issues: Option<Vec<ServerLintIssue>>,
     },
-    AutoSaveTick,
     DropClaim,
     #[allow(dead_code)]
     DropClaimSucceeded,
@@ -256,23 +255,48 @@ pub(super) enum Message {
     SaveAndContinuePendingLeave,
     DiscardAndContinuePendingLeave,
     #[allow(dead_code)]
-    LoadReviewActionSucceeded(String),
+    LoadReviewActionSucceeded {
+        token: BabelPayloadRequestToken,
+        source: String,
+    },
     #[allow(dead_code)]
-    LoadReviewActionFailed(String),
+    LoadReviewActionFailed {
+        token: BabelPayloadRequestToken,
+        error: String,
+    },
     #[allow(dead_code)]
-    LoadLatestReviewActionSucceeded(String),
+    LoadLatestReviewActionSucceeded {
+        token: BabelPayloadRequestToken,
+        source: String,
+    },
     #[allow(dead_code)]
-    LoadLatestReviewActionFailed(String),
+    LoadLatestReviewActionFailed {
+        token: BabelPayloadRequestToken,
+        error: String,
+    },
     #[allow(dead_code)]
-    ClaimByProcessedTranscriptionSucceeded(String),
+    ClaimByProcessedTranscriptionSucceeded {
+        token: BabelPayloadRequestToken,
+        source: String,
+    },
     #[allow(dead_code)]
-    ClaimByProcessedTranscriptionFailed(String),
+    ClaimByProcessedTranscriptionFailed {
+        token: BabelPayloadRequestToken,
+        error: String,
+    },
     #[allow(dead_code)]
-    ClaimNextFromQueueSucceeded(String),
+    ClaimNextFromQueueSucceeded {
+        token: BabelPayloadRequestToken,
+        source: String,
+    },
     #[allow(dead_code)]
-    ClaimNextFromQueueFailed(String),
+    ClaimNextFromQueueFailed {
+        token: BabelPayloadRequestToken,
+        error: String,
+    },
     #[allow(dead_code)]
     BabelAudioPrepared {
+        token: BabelPayloadRequestToken,
         kind: BabelPayloadLoadKind,
         route_metadata: Vec<(String, String)>,
         result: Result<PreparedBabelAudioPayload, String>,

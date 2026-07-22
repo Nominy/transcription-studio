@@ -49,13 +49,13 @@ use super::review_backend_client::{
     dispatch_review_backend_requests,
 };
 use super::service_callbacks::{
-    BabelServiceRequest, ClaimByProcessedTranscriptionRequest, ClaimNextFromQueueRequest,
-    FeedbackBootstrapToken, FeedbackDraftBootstrap, LoadLatestReviewActionRequest,
-    LoadReviewActionRequest, META_ACTIVE_QUEUE_ID, META_CHUNKED_QUEUE_ID, META_QUEUE_ID,
-    META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID, SaveRequestToken, SubmitRequestToken,
-    build_admin_rate_review_action_request, build_drop_worker_action_request,
-    build_lint_annotations_request, build_skip_review_action_request,
-    build_submit_review_action_request_with_asserted_warnings,
+    BabelPayloadRequestToken, BabelServiceRequest, ClaimByProcessedTranscriptionRequest,
+    ClaimNextFromQueueRequest, FeedbackBootstrapToken, FeedbackDraftBootstrap,
+    LoadLatestReviewActionRequest, LoadReviewActionRequest, META_ACTIVE_QUEUE_ID,
+    META_CHUNKED_QUEUE_ID, META_QUEUE_ID, META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID,
+    SaveRequestToken, SubmitRequestToken, build_admin_rate_review_action_request,
+    build_drop_worker_action_request, build_lint_annotations_request,
+    build_skip_review_action_request, build_submit_review_action_request_with_asserted_warnings,
 };
 use super::service_executor::{
     dispatch_babel_service_requests, is_dispatchable_babel_service_request,
@@ -601,6 +601,7 @@ pub(super) struct StudioState {
     pub(super) feedback_draft_revision: u64,
     pub(super) task_lookup: Option<TaskLookupState>,
     pub(super) task_lookup_last_effect: Option<TaskLookupEffect>,
+    pub(super) babel_payload_request_generation: u64,
     pub(super) babel_service_requests: Vec<BabelServiceRequest>,
     pub(super) dispatched_babel_service_requests: Vec<BabelServiceRequest>,
     pub(super) review_backend_requests: Vec<ReviewBackendRequest>,
@@ -781,6 +782,7 @@ impl Default for StudioState {
             feedback_draft_revision: 0,
             task_lookup,
             task_lookup_last_effect: None,
+            babel_payload_request_generation: 0,
             babel_service_requests: Vec::new(),
             dispatched_babel_service_requests: Vec::new(),
             review_backend_requests: Vec::new(),
@@ -1610,6 +1612,7 @@ impl StudioState {
     }
 
     pub(super) fn replace_workflow(&mut self, workflow: StudioWorkflow, status: String) {
+        self.advance_babel_payload_request_generation();
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
             matches!(
@@ -1674,9 +1677,19 @@ impl StudioState {
         self.reset_segment_drafts();
     }
 
-    pub(super) fn complete_claim_next_from_queue_failure(&mut self, error: String) {
+    pub(super) fn complete_claim_next_from_queue_failure(
+        &mut self,
+        token: BabelPayloadRequestToken,
+        error: String,
+    ) {
+        if !self.is_current_babel_payload_request(token) {
+            return;
+        }
         self.drain_babel_service_requests_matching(|request| {
-            matches!(request, BabelServiceRequest::ClaimNextFromQueue(_))
+            matches!(
+                request,
+                BabelServiceRequest::ClaimNextFromQueue(request) if request.token == token
+            )
         });
         self.no_work_modal = Some(build_no_work_modal_model(NoWorkModalInput {
             open: true,
@@ -1692,36 +1705,56 @@ impl StudioState {
         self.dashboard.error = Some(self.status.clone());
     }
 
-    pub(super) fn complete_load_review_action_success(&mut self, source: String) -> Task<Message> {
+    pub(super) fn complete_load_review_action_success(
+        &mut self,
+        token: BabelPayloadRequestToken,
+        source: String,
+    ) -> Task<Message> {
         self.complete_babel_payload_load_success(
+            token,
             source,
             BabelPayloadLoadKind::ReviewAction,
-            |request| matches!(request, BabelServiceRequest::LoadReviewAction(_)),
+            |request| {
+                matches!(
+                    request,
+                    BabelServiceRequest::LoadReviewAction(request) if request.token == token
+                )
+            },
         )
     }
 
     pub(super) fn complete_load_latest_review_action_success(
         &mut self,
+        token: BabelPayloadRequestToken,
         source: String,
     ) -> Task<Message> {
         self.complete_babel_payload_load_success(
+            token,
             source,
             BabelPayloadLoadKind::LatestReviewAction,
-            |request| matches!(request, BabelServiceRequest::LoadLatestReviewAction(_)),
+            |request| {
+                matches!(
+                    request,
+                    BabelServiceRequest::LoadLatestReviewAction(request) if request.token == token
+                )
+            },
         )
     }
 
     pub(super) fn complete_claim_by_processed_transcription_success(
         &mut self,
+        token: BabelPayloadRequestToken,
         source: String,
     ) -> Task<Message> {
         self.complete_babel_payload_load_success(
+            token,
             source,
             BabelPayloadLoadKind::ClaimByProcessedTranscription,
             |request| {
                 matches!(
                     request,
-                    BabelServiceRequest::ClaimByProcessedTranscription(_)
+                    BabelServiceRequest::ClaimByProcessedTranscription(request)
+                        if request.token == token
                 )
             },
         )
@@ -1729,37 +1762,67 @@ impl StudioState {
 
     pub(super) fn complete_claim_next_from_queue_success(
         &mut self,
+        token: BabelPayloadRequestToken,
         source: String,
     ) -> Task<Message> {
         self.complete_babel_payload_load_success(
+            token,
             source,
             BabelPayloadLoadKind::ClaimNextFromQueue,
-            |request| matches!(request, BabelServiceRequest::ClaimNextFromQueue(_)),
+            |request| {
+                matches!(
+                    request,
+                    BabelServiceRequest::ClaimNextFromQueue(request) if request.token == token
+                )
+            },
         )
     }
 
-    pub(super) fn fail_load_review_action(&mut self, error: String) {
-        self.complete_babel_payload_load_failure(error, "Review action load", |request| {
-            matches!(request, BabelServiceRequest::LoadReviewAction(_))
+    pub(super) fn fail_load_review_action(
+        &mut self,
+        token: BabelPayloadRequestToken,
+        error: String,
+    ) {
+        self.complete_babel_payload_load_failure(token, error, "Review action load", |request| {
+            matches!(
+                request,
+                BabelServiceRequest::LoadReviewAction(request) if request.token == token
+            )
         });
     }
 
-    pub(super) fn fail_load_latest_review_action(&mut self, error: String) {
+    pub(super) fn fail_load_latest_review_action(
+        &mut self,
+        token: BabelPayloadRequestToken,
+        error: String,
+    ) {
         self.complete_babel_payload_load_failure(
+            token,
             error,
             "Processed transcription load",
-            |request| matches!(request, BabelServiceRequest::LoadLatestReviewAction(_)),
+            |request| {
+                matches!(
+                    request,
+                    BabelServiceRequest::LoadLatestReviewAction(request) if request.token == token
+                )
+            },
         );
     }
 
-    pub(super) fn fail_claim_by_processed_transcription(&mut self, error: String) {
+    pub(super) fn fail_claim_by_processed_transcription(
+        &mut self,
+        token: BabelPayloadRequestToken,
+        error: String,
+    ) {
         self.complete_babel_payload_load_failure(
+            token,
             error,
             "Stitched transcription claim",
             |request| {
                 matches!(
                     request,
-                    BabelServiceRequest::ClaimByProcessedTranscription(_)
+                    BabelServiceRequest::ClaimByProcessedTranscription(request)
+                        if request.token == token
                 )
             },
         );
@@ -1767,10 +1830,14 @@ impl StudioState {
 
     fn complete_babel_payload_load_success(
         &mut self,
+        token: BabelPayloadRequestToken,
         source: String,
         kind: BabelPayloadLoadKind,
         should_drain: impl FnMut(&BabelServiceRequest) -> bool,
     ) -> Task<Message> {
+        if !self.is_current_babel_payload_request(token) {
+            return Task::none();
+        }
         let route_metadata = self.project_metadata_for_keys(BABEL_ROUTE_METADATA_KEYS);
         self.drain_babel_service_requests_matching(should_drain);
 
@@ -1781,6 +1848,7 @@ impl StudioState {
             self.dashboard.error = None;
             return Task::perform(prepare_babel_audio_payload(source), move |result| {
                 Message::BabelAudioPrepared {
+                    token,
                     kind,
                     route_metadata: route_metadata.clone(),
                     result,
@@ -1798,10 +1866,14 @@ impl StudioState {
 
     pub(super) fn complete_babel_audio_prepared(
         &mut self,
+        token: BabelPayloadRequestToken,
         kind: BabelPayloadLoadKind,
         route_metadata: Vec<(String, String)>,
         result: Result<PreparedBabelAudioPayload, String>,
     ) {
+        if !self.is_current_babel_payload_request(token) {
+            return;
+        }
         match result {
             Ok(payload) => self.import_prepared_babel_payload(payload, route_metadata, kind),
             Err(error) => {
@@ -1852,10 +1924,14 @@ impl StudioState {
 
     fn complete_babel_payload_load_failure(
         &mut self,
+        token: BabelPayloadRequestToken,
         error: String,
         failure_label: &str,
         should_drain: impl FnMut(&BabelServiceRequest) -> bool,
     ) {
+        if !self.is_current_babel_payload_request(token) {
+            return;
+        }
         self.drain_babel_service_requests_matching(should_drain);
         self.status = format!("{failure_label} failed: {error}");
         self.app_surface = AppSurface::Dashboard;
@@ -3373,6 +3449,24 @@ impl StudioState {
         };
     }
 
+    fn advance_babel_payload_request_generation(&mut self) -> BabelPayloadRequestToken {
+        self.babel_payload_request_generation = self
+            .babel_payload_request_generation
+            .checked_add(1)
+            .expect("Babel payload request generation exhausted");
+        BabelPayloadRequestToken {
+            generation: self.babel_payload_request_generation,
+        }
+    }
+
+    pub(super) fn issue_babel_payload_request_token(&mut self) -> BabelPayloadRequestToken {
+        self.advance_babel_payload_request_generation()
+    }
+
+    fn is_current_babel_payload_request(&self, token: BabelPayloadRequestToken) -> bool {
+        token.generation == self.babel_payload_request_generation
+    }
+
     pub(super) fn begin_dashboard_start_project(&mut self, project_id: &str) -> bool {
         let Some(project) = self
             .dashboard
@@ -3403,9 +3497,10 @@ impl StudioState {
         self.dashboard.is_pending = true;
         self.dashboard.error = None;
         self.status = "Starting next Babel task...".to_string();
+        let token = self.issue_babel_payload_request_token();
         self.babel_service_requests
             .push(BabelServiceRequest::ClaimNextFromQueue(
-                ClaimNextFromQueueRequest { queue_id },
+                ClaimNextFromQueueRequest { queue_id, token },
             ));
         true
     }
@@ -3422,9 +3517,13 @@ impl StudioState {
         self.dashboard.is_pending = true;
         self.dashboard.error = None;
         self.status = "Loading Babel review action...".to_string();
+        let token = self.issue_babel_payload_request_token();
         self.babel_service_requests
             .push(BabelServiceRequest::LoadReviewAction(
-                LoadReviewActionRequest { review_action_id },
+                LoadReviewActionRequest {
+                    review_action_id,
+                    token,
+                },
             ));
         true
     }
@@ -3444,11 +3543,13 @@ impl StudioState {
         self.dashboard.is_pending = true;
         self.dashboard.error = None;
         self.status = "Loading Babel processed transcription...".to_string();
+        let token = self.issue_babel_payload_request_token();
         self.babel_service_requests
             .push(BabelServiceRequest::LoadLatestReviewAction(
                 LoadLatestReviewActionRequest {
                     processed_transcription_id,
                     queue_id,
+                    token,
                 },
             ));
         true
@@ -3469,11 +3570,13 @@ impl StudioState {
         self.dashboard.is_pending = true;
         self.dashboard.error = None;
         self.status = "Claiming Babel stitched transcription...".to_string();
+        let token = self.issue_babel_payload_request_token();
         self.babel_service_requests
             .push(BabelServiceRequest::ClaimByProcessedTranscription(
                 ClaimByProcessedTranscriptionRequest {
                     processed_transcription_id,
                     queue_id,
+                    token,
                 },
             ));
         true
@@ -4359,7 +4462,6 @@ impl StudioState {
                 ))
             }) {
                 self.acknowledged_low_confidence_words.remove(segment_id);
-                self.refresh_segment_draft(segment_id);
                 self.mark_dirty();
                 self.reconcile_editor_with_project();
             }

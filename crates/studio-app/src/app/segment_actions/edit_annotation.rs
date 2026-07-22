@@ -104,6 +104,11 @@ impl StudioState {
         };
 
         let segment_id = payload.segment_id.clone();
+        let has_pending_text = self
+            .project()
+            .and_then(|project| project.segment(&segment_id))
+            .zip(self.segment_drafts.get(&segment_id))
+            .is_some_and(|(segment, draft)| segment.text != draft.text);
         if self.with_editable_workflow_mut("Annotation edit", |workflow| {
             workflow
                 .update_annotation_metadata(
@@ -118,7 +123,16 @@ impl StudioState {
             if edit_annotation_trace_enabled() {
                 eprintln!("{}", edit_annotation_runtime_trace_line("submit", &dialog));
             }
-            self.refresh_segment_draft(&segment_id);
+            if !has_pending_text
+                && let Some(updated_text) = self
+                    .project()
+                    .and_then(|project| project.segment(&segment_id))
+                    .map(|segment| segment.text.clone())
+                && let Some(draft) = self.segment_drafts.get_mut(&segment_id)
+                && draft.text != updated_text
+            {
+                draft.replace_text(updated_text);
+            }
             self.mark_dirty();
             self.reconcile_editor_with_project();
         } else {

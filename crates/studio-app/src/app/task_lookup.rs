@@ -5,7 +5,7 @@ use studio_app::{
 use studio_core::Project;
 
 use super::StudioState;
-use super::service_callbacks::task_lookup_request;
+use super::service_callbacks::{BabelPayloadRequestToken, task_lookup_request};
 
 const META_TASK_LOOKUP_OPEN: &str = "studio.babel.taskLookup.open";
 const META_TASK_LOOKUP_PROCESSED_ID: &str = "studio.babel.taskLookup.processedTranscriptionId";
@@ -60,9 +60,15 @@ impl StudioState {
                 "Task lookup read-only processed transcription requested.".to_string()
             }
         };
-        if let Some(request) =
-            task_lookup_request(self.project(), self.task_lookup.as_ref(), &effect)
-        {
+        let request = match effect {
+            TaskLookupEffect::SetProcessedTranscriptionId { .. }
+            | TaskLookupEffect::SetReviewActionId { .. } => None,
+            _ => {
+                let token: BabelPayloadRequestToken = self.issue_babel_payload_request_token();
+                task_lookup_request(self.project(), self.task_lookup.as_ref(), &effect, token)
+            }
+        };
+        if let Some(request) = request {
             self.babel_service_requests.push(request);
         }
         self.task_lookup_last_effect = Some(effect);
