@@ -4779,6 +4779,7 @@ name = "studio-app"
 version = "0.1.12"
 dependencies = [
  "anyhow",
+ "bytes",
  "httpdate",
  "iced",
  "reqwest",

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 #[cfg(not(test))]
 use std::time::Instant;
@@ -9,6 +9,9 @@ use studio_waveform::DecodedAudio;
 #[cfg(not(test))]
 const AUDIO_STARTUP_TRACE_ENV: &str = "STUDIO_TRACE_AUDIO_STARTUP";
 const AUDIO_PREWARMED_PLAYER_POOL_SIZE: usize = 4;
+// Stopped players normally drain on the next mixer callback. If enough remain
+// stalled, drop the entire output graph so mixer-owned sources cannot accumulate.
+const AUDIO_DRAINING_PLAYER_LIMIT: usize = 16;
 const AUDIO_PLAYBACK_CONTROL_INTERVAL_MILLIS: usize = 20;
 
 fn playback_control_span_samples(
@@ -310,7 +313,27 @@ pub(super) struct AudioPlaybackBackend {
     sink: Option<rodio::MixerDeviceSink>,
     players: Vec<rodio::Player>,
     idle_players: Vec<rodio::Player>,
-    draining_players: Vec<rodio::Player>,
+    draining_players: VecDeque<rodio::Player>,
+}
+
+fn reclaim_draining_players<T>(
+    draining_players: &mut VecDeque<T>,
+    idle_players: &mut Vec<T>,
+    mut is_drained: impl FnMut(&T) -> bool,
+) -> bool {
+    let player_count = draining_players.len();
+    for _ in 0..player_count {
+        let player = draining_players
+            .pop_front()
+            .expect("player count comes from draining queue");
+        if is_drained(&player) {
+            idle_players.push(player);
+        } else {
+            draining_players.push_back(player);
+        }
+    }
+
+    draining_players.len() >= AUDIO_DRAINING_PLAYER_LIMIT
 }
 
 #[cfg(not(test))]
@@ -487,7 +510,7 @@ impl AudioPlaybackBackend {
     pub(super) fn stop(&mut self) {
         for player in self.players.drain(..) {
             player.stop();
-            self.draining_players.push(player);
+            self.draining_players.push_back(player);
         }
         self.reclaim_drained_players();
         self.trim_idle_player_pool();
@@ -511,8 +534,8 @@ impl AudioPlaybackBackend {
     }
 
     fn ensure_player_pool(&mut self, min_idle_count: usize) -> Result<(), String> {
-        self.ensure_sink()?;
         self.reclaim_drained_players();
+        self.ensure_sink()?;
 
         while self.idle_players.len() < min_idle_count {
             self.idle_players.push(self.connect_player());
@@ -530,15 +553,22 @@ impl AudioPlaybackBackend {
     }
 
     fn reclaim_drained_players(&mut self) {
-        let mut index = 0;
-        while index < self.draining_players.len() {
-            if self.draining_players[index].len() == 0 {
-                let player = self.draining_players.swap_remove(index);
-                self.idle_players.push(player);
-            } else {
-                index += 1;
-            }
+        let output_stalled = reclaim_draining_players(
+            &mut self.draining_players,
+            &mut self.idle_players,
+            |player| player.len() == 0,
+        );
+        if output_stalled {
+            self.reset_output();
         }
+    }
+
+    fn reset_output(&mut self) {
+        let sink = self.sink.take();
+        self.players.clear();
+        self.idle_players.clear();
+        self.draining_players.clear();
+        drop(sink);
     }
 
     fn trim_idle_player_pool(&mut self) {
@@ -668,14 +698,14 @@ impl AudioPlaybackBackend {
 #[cfg(test)]
 mod tests {
     use rodio::{ChannelCount, Player, SampleRate, Source};
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::VecDeque, sync::Arc, time::Duration};
 
     use studio_waveform::DecodedAudio;
 
     use super::{
-        DecodedAudioPlaybackSource, MixedDecodedAudioPlaybackSource,
+        AUDIO_DRAINING_PLAYER_LIMIT, DecodedAudioPlaybackSource, MixedDecodedAudioPlaybackSource,
         audio_backend_prepare_runtime_trace_line, audio_backend_startup_runtime_trace_line,
-        playback_control_span_samples,
+        playback_control_span_samples, reclaim_draining_players,
     };
 
     #[test]
@@ -711,6 +741,105 @@ mod tests {
             ),
             "Transcription Studio audio backend prepare: outcome=error sink_ms=6.000 player_pool_ms=0.000"
         );
+    }
+
+    #[derive(Debug)]
+    struct DrainingTestPlayer {
+        id: usize,
+        drained: bool,
+        _resource: Arc<()>,
+    }
+
+    #[test]
+    fn stalled_draining_players_request_output_reset_at_hard_limit() {
+        let restart_count = AUDIO_DRAINING_PLAYER_LIMIT + 3;
+        let mut draining_players = VecDeque::new();
+        let mut idle_players = Vec::new();
+        let mut resources = Vec::new();
+        let mut reset_count = 0;
+
+        for id in 0..restart_count {
+            let resource = Arc::new(());
+            resources.push(Arc::downgrade(&resource));
+            draining_players.push_back(DrainingTestPlayer {
+                id,
+                drained: false,
+                _resource: resource,
+            });
+            if reclaim_draining_players(&mut draining_players, &mut idle_players, |player| {
+                player.drained
+            }) {
+                draining_players.clear();
+                idle_players.clear();
+                reset_count += 1;
+            }
+        }
+
+        assert_eq!(reset_count, 1);
+        assert_eq!(draining_players.len(), 3);
+        assert!(idle_players.is_empty());
+        assert_eq!(
+            draining_players
+                .iter()
+                .map(|player| player.id)
+                .collect::<Vec<_>>(),
+            (AUDIO_DRAINING_PLAYER_LIMIT..restart_count).collect::<Vec<_>>()
+        );
+        assert!(
+            resources[..AUDIO_DRAINING_PLAYER_LIMIT]
+                .iter()
+                .all(|resource| resource.upgrade().is_none()),
+            "reset stopped players should release their retained resources"
+        );
+        assert!(
+            resources[AUDIO_DRAINING_PLAYER_LIMIT..]
+                .iter()
+                .all(|resource| resource.upgrade().is_some()),
+            "players below the next hard limit should remain available for normal mixer reclaim"
+        );
+    }
+
+    #[test]
+    fn completed_draining_players_return_to_idle_pool() {
+        let (mixer, mut output) = rodio::mixer::mixer(
+            ChannelCount::new(1).expect("one channel"),
+            SampleRate::new(1_000).expect("positive sample rate"),
+        );
+        let audio = DecodedAudio::new(1_000, vec![vec![0.5; 100]]).expect("valid decoded audio");
+        let source = DecodedAudioPlaybackSource::new(Arc::new(audio), 0.0, None)
+            .expect("valid playback source");
+        let player = Player::connect_new(&mixer);
+        player.append(source);
+        player.stop();
+
+        let mut draining_players = VecDeque::from([player]);
+        let mut idle_players = Vec::new();
+        assert!(!reclaim_draining_players(
+            &mut draining_players,
+            &mut idle_players,
+            Player::empty,
+        ));
+        assert_eq!(draining_players.len(), 1);
+        assert!(idle_players.is_empty());
+
+        for _ in 0..100 {
+            if draining_players[0].empty() {
+                break;
+            }
+            let _ = output.next();
+        }
+        assert!(
+            draining_players[0].empty(),
+            "healthy mixer callback should process the stop"
+        );
+
+        assert!(!reclaim_draining_players(
+            &mut draining_players,
+            &mut idle_players,
+            Player::empty,
+        ));
+        assert!(draining_players.is_empty());
+        assert_eq!(idle_players.len(), 1);
     }
 
     #[test]

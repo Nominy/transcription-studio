@@ -109,6 +109,9 @@ const TIMELINE_AUTOSCROLL_DEAD_ZONE_SECONDS: f64 = 0.025;
 const TIMELINE_AUTOSCROLL_SPEED_MULTIPLIER: f64 = 4.0;
 const DEFAULT_FRAME_CADENCE_TRACE_FRAMES: usize = 120;
 const TRANSPORT_STRIP_CACHE_CAPACITY: usize = 4;
+// User-driven review/backend work is retained until its callback. Keep both
+// queued and in-flight request collections within this hard limit.
+pub(super) const REVIEW_BACKEND_REQUEST_LIMIT: usize = 16;
 const STARTUP_PLAYBACK_SMOKE_ENV: &str = "STUDIO_SMOKE_PLAYBACK_ON_START";
 const STARTUP_PLAYBACK_SMOKE_DELAY_FRAMES_ENV: &str = "STUDIO_SMOKE_PLAYBACK_DELAY_FRAMES";
 pub(super) const BABEL_TRACK_CELL_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
@@ -1585,9 +1588,15 @@ impl StudioState {
     }
 
     fn reset_reviewer_workspace_state(&mut self) {
+        // Queued requests have not produced futures yet and belong only to the
+        // workspace that queued them. Dispatched requests, however, remain
+        // owned by running `Task::perform` futures and must stay accounted for
+        // until their callbacks arrive.
         self.review_backend_requests.clear();
-        self.dispatched_review_backend_requests.clear();
-        self.dispatched_review_backend_request_tokens.clear();
+        self.clear_reviewer_workspace_previews();
+    }
+
+    fn clear_reviewer_workspace_previews(&mut self) {
         self.native_capability_panel_open = false;
         self.native_capability_modal_tab = NativeCapabilityModalTab::Reviewer;
         self.reviewer_session_id.clear();
@@ -1607,6 +1616,11 @@ impl StudioState {
         self.reviewer_finalize_preview = None;
         self.reviewer_session_preview = None;
         self.reviewer_template_results.clear();
+        self.draft_row_previews.clear();
+        self.draft_summary_preview = None;
+        self.draft_transcription_preview = None;
+        self.draft_redistribution_previews.clear();
+        self.draft_audio_guard = None;
         self.native_capability_last_response = None;
         self.native_capability_last_error = None;
     }
@@ -1966,26 +1980,18 @@ impl StudioState {
         &mut self,
         mut should_drain: impl FnMut(&ReviewBackendRequest) -> bool,
     ) {
+        // A dispatched request cannot be cancelled by dropping its bookkeeping:
+        // its `Task::perform` future still owns and executes the request. Leave
+        // it counted until its callback acknowledges the matching token.
         self.review_backend_requests
             .retain(|request| !should_drain(request));
-
-        let dispatched_requests = std::mem::take(&mut self.dispatched_review_backend_requests);
-        let dispatched_tokens = std::mem::take(&mut self.dispatched_review_backend_request_tokens);
-        debug_assert_eq!(dispatched_requests.len(), dispatched_tokens.len());
-        for (request, token) in dispatched_requests.into_iter().zip(dispatched_tokens) {
-            if !should_drain(&request) {
-                self.dispatched_review_backend_requests.push(request);
-                self.dispatched_review_backend_request_tokens.push(token);
-            }
-        }
     }
     pub(super) fn acknowledge_review_backend_request(
         &mut self,
         service_request: &ReviewBackendServiceRequest,
     ) -> bool {
-        if service_request.token.workspace_generation != self.workspace_generation {
-            return false;
-        }
+        let is_current_workspace =
+            service_request.token.workspace_generation == self.workspace_generation;
         let Some(index) = self
             .dispatched_review_backend_request_tokens
             .iter()
@@ -1999,14 +2005,15 @@ impl StudioState {
 
         self.dispatched_review_backend_request_tokens.remove(index);
         self.dispatched_review_backend_requests.remove(index);
-        if let Some(index) = self
-            .review_backend_requests
-            .iter()
-            .position(|request| request == &service_request.request)
+        if is_current_workspace
+            && let Some(index) = self
+                .review_backend_requests
+                .iter()
+                .position(|request| request == &service_request.request)
         {
             self.review_backend_requests.remove(index);
         }
-        true
+        is_current_workspace
     }
 
     pub(super) fn dispatch_new_babel_service_requests(&mut self) -> Task<Message> {
@@ -2035,10 +2042,32 @@ impl StudioState {
     }
 
     pub(super) fn dispatch_new_review_backend_requests(&mut self) -> Task<Message> {
+        let queued_excess = self
+            .review_backend_requests
+            .len()
+            .saturating_sub(REVIEW_BACKEND_REQUEST_LIMIT);
+        if queued_excess > 0 {
+            self.review_backend_requests.drain(..queued_excess);
+        }
+        let available = REVIEW_BACKEND_REQUEST_LIMIT
+            .saturating_sub(self.dispatched_review_backend_requests.len());
+        if available == 0 {
+            return Task::none();
+        }
         let new_requests: Vec<_> = self
             .review_backend_requests
             .iter()
-            .filter(|request| !self.dispatched_review_backend_requests.contains(request))
+            .filter(|request| {
+                !self
+                    .dispatched_review_backend_requests
+                    .iter()
+                    .zip(&self.dispatched_review_backend_request_tokens)
+                    .any(|(dispatched, token)| {
+                        token.workspace_generation == self.workspace_generation
+                            && dispatched == *request
+                    })
+            })
+            .take(available)
             .cloned()
             .collect();
 
@@ -3218,6 +3247,7 @@ impl StudioState {
     }
 
     pub(super) fn enter_dashboard(&mut self) {
+        self.advance_babel_payload_request_generation();
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
             matches!(
@@ -3450,6 +3480,15 @@ impl StudioState {
     }
 
     fn advance_babel_payload_request_generation(&mut self) -> BabelPayloadRequestToken {
+        self.drain_babel_service_requests_matching(|request| {
+            matches!(
+                request,
+                BabelServiceRequest::ClaimNextFromQueue(_)
+                    | BabelServiceRequest::ClaimByProcessedTranscription(_)
+                    | BabelServiceRequest::LoadReviewAction(_)
+                    | BabelServiceRequest::LoadLatestReviewAction(_)
+            )
+        });
         self.babel_payload_request_generation = self
             .babel_payload_request_generation
             .checked_add(1)
@@ -6731,4 +6770,78 @@ fn playback_tracks_for(project: &Project, editor: &EditorSession) -> Vec<Playbac
                 .map(|audio| PlaybackTrack::new(lane.id.clone(), audio))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod request_retention_tests {
+    use super::*;
+
+    #[test]
+    fn advancing_payload_generation_drains_all_stale_payload_requests() {
+        let mut state = StudioState::default();
+        let token = BabelPayloadRequestToken {
+            generation: state.babel_payload_request_generation,
+        };
+        state.babel_service_requests = vec![
+            BabelServiceRequest::ClaimNextFromQueue(ClaimNextFromQueueRequest {
+                queue_id: "queue".to_string(),
+                token,
+            }),
+            BabelServiceRequest::ClaimByProcessedTranscription(
+                ClaimByProcessedTranscriptionRequest {
+                    processed_transcription_id: "processed".to_string(),
+                    queue_id: "queue".to_string(),
+                    token,
+                },
+            ),
+            BabelServiceRequest::LoadReviewAction(LoadReviewActionRequest {
+                review_action_id: "review".to_string(),
+                token,
+            }),
+            BabelServiceRequest::LoadLatestReviewAction(LoadLatestReviewActionRequest {
+                processed_transcription_id: "processed".to_string(),
+                queue_id: "queue".to_string(),
+                token,
+            }),
+        ];
+        state.dispatched_babel_service_requests = state.babel_service_requests.clone();
+
+        let next = state.issue_babel_payload_request_token();
+
+        assert!(state.babel_service_requests.is_empty());
+        assert!(state.dispatched_babel_service_requests.is_empty());
+        assert_eq!(next.generation, token.generation + 1);
+    }
+
+    #[test]
+    fn review_dispatch_state_is_bounded_and_keeps_newest_requests() {
+        let mut state = StudioState {
+            review_backend_requests: (0..REVIEW_BACKEND_REQUEST_LIMIT + 4)
+                .map(|index| ReviewBackendRequest::ReviewHistory {
+                    query: vec![("q".to_string(), index.to_string())],
+                })
+                .collect(),
+            ..StudioState::default()
+        };
+
+        let _ = state.dispatch_new_review_backend_requests();
+
+        assert_eq!(
+            state.review_backend_requests.len(),
+            REVIEW_BACKEND_REQUEST_LIMIT
+        );
+        assert_eq!(
+            state.dispatched_review_backend_requests.len(),
+            REVIEW_BACKEND_REQUEST_LIMIT
+        );
+        assert_eq!(
+            state.dispatched_review_backend_request_tokens.len(),
+            REVIEW_BACKEND_REQUEST_LIMIT
+        );
+        assert!(matches!(
+            state.review_backend_requests.first(),
+            Some(ReviewBackendRequest::ReviewHistory { query })
+                if query == &vec![("q".to_string(), "4".to_string())]
+        ));
+    }
 }

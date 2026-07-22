@@ -1,8 +1,13 @@
 use iced::widget::text_editor::{self, Motion};
 
-use super::{SegmentDraft, StudioState};
+use super::{SegmentDraft, StudioState, drafts::push_bounded_history};
 
 const MAX_SUPPORTED_DIGITS: usize = 12;
+// Cross-row moves duplicate snapshots from two segments, so each direction is
+// capped at 32 moves and 2 MiB of retained UTF-8 data. As with segment history,
+// one newest oversized move remains available for immediate undo or redo.
+const CROSS_ROW_HISTORY_MAX_ENTRIES: usize = 32;
+const CROSS_ROW_HISTORY_MAX_RETAINED_BYTES: usize = 2 * 1024 * 1024;
 
 const HUNDREDS: [&str; 9] = [
     "сто",
@@ -100,6 +105,31 @@ pub(super) struct CrossRowTextEdit {
     target_after: String,
     source_before_cursor_chars: usize,
     source_after_cursor_chars: usize,
+}
+
+impl CrossRowTextEdit {
+    fn retained_utf8_bytes(&self) -> usize {
+        [
+            self.source_segment_id.len(),
+            self.target_segment_id.len(),
+            self.source_before.len(),
+            self.source_after.len(),
+            self.target_before.len(),
+            self.target_after.len(),
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add)
+    }
+}
+
+fn push_cross_row_text_history(history: &mut Vec<CrossRowTextEdit>, entry: CrossRowTextEdit) {
+    push_bounded_history(
+        history,
+        entry,
+        CROSS_ROW_HISTORY_MAX_ENTRIES,
+        CROSS_ROW_HISTORY_MAX_RETAINED_BYTES,
+        CrossRowTextEdit::retained_utf8_bytes,
+    );
 }
 
 impl StudioState {
@@ -203,10 +233,10 @@ impl StudioState {
 
         if undo {
             self.cross_row_text_undo_stack.pop();
-            self.cross_row_text_redo_stack.push(history.clone());
+            push_cross_row_text_history(&mut self.cross_row_text_redo_stack, history.clone());
         } else {
             self.cross_row_text_redo_stack.pop();
-            self.cross_row_text_undo_stack.push(history.clone());
+            push_cross_row_text_history(&mut self.cross_row_text_undo_stack, history.clone());
         }
         self.mark_dirty();
         self.clear_tag_suggestion_state_for_segment(&history.source_segment_id);
@@ -376,7 +406,7 @@ impl StudioState {
                 Some(source_cursor_chars),
             );
         }
-        self.cross_row_text_undo_stack.push(history);
+        push_cross_row_text_history(&mut self.cross_row_text_undo_stack, history);
         self.cross_row_text_redo_stack.clear();
 
         self.mark_dirty();
@@ -943,4 +973,71 @@ fn cursor_byte_offset(text: &str, cursor_position: (usize, usize)) -> Option<usi
 
 fn byte_offset_at_column(line: &str, column: usize) -> Option<usize> {
     (column <= line.len() && line.is_char_boundary(column)).then_some(column)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn history(index: usize, snapshot: String) -> CrossRowTextEdit {
+        CrossRowTextEdit {
+            source_segment_id: format!("source-{index}"),
+            target_segment_id: format!("target-{index}"),
+            source_before: snapshot.clone(),
+            source_after: snapshot.clone(),
+            target_before: snapshot.clone(),
+            target_after: snapshot,
+            source_before_cursor_chars: index,
+            source_after_cursor_chars: index,
+        }
+    }
+
+    fn retained_bytes(history: &[CrossRowTextEdit]) -> usize {
+        history
+            .iter()
+            .map(CrossRowTextEdit::retained_utf8_bytes)
+            .sum()
+    }
+
+    #[test]
+    fn cross_row_history_keeps_the_newest_fixed_count() {
+        let mut entries = Vec::new();
+        for index in 0..5_000 {
+            push_cross_row_text_history(&mut entries, history(index, String::new()));
+        }
+
+        assert_eq!(entries.len(), CROSS_ROW_HISTORY_MAX_ENTRIES);
+        assert_eq!(
+            entries.first().unwrap().source_segment_id,
+            format!("source-{}", 5_000 - CROSS_ROW_HISTORY_MAX_ENTRIES)
+        );
+        assert_eq!(entries.last().unwrap().source_segment_id, "source-4999");
+        assert!(retained_bytes(&entries) <= CROSS_ROW_HISTORY_MAX_RETAINED_BYTES);
+    }
+
+    #[test]
+    fn cross_row_history_is_bounded_by_all_retained_utf8_snapshots() {
+        let mut entries = Vec::new();
+        for index in 0..20 {
+            push_cross_row_text_history(&mut entries, history(index, "я".repeat(32 * 1024)));
+        }
+
+        assert!(entries.len() < CROSS_ROW_HISTORY_MAX_ENTRIES);
+        assert!(retained_bytes(&entries) <= CROSS_ROW_HISTORY_MAX_RETAINED_BYTES);
+        assert_eq!(entries.last().unwrap().source_segment_id, "source-19");
+    }
+
+    #[test]
+    fn cross_row_history_keeps_one_newest_oversized_move() {
+        let mut entries = Vec::new();
+        push_cross_row_text_history(&mut entries, history(0, String::new()));
+        push_cross_row_text_history(
+            &mut entries,
+            history(1, "x".repeat(CROSS_ROW_HISTORY_MAX_RETAINED_BYTES)),
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_segment_id, "source-1");
+        assert!(retained_bytes(&entries) > CROSS_ROW_HISTORY_MAX_RETAINED_BYTES);
+    }
 }

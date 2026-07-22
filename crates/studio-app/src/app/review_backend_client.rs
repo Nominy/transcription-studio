@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use iced::Task;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::Value;
@@ -28,7 +29,7 @@ pub(super) struct BackendMultipartAudioTrack {
     pub(super) file_name: String,
     pub(super) mime_type: String,
     pub(super) metadata: Value,
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: Bytes,
 }
 
 #[allow(dead_code)]
@@ -281,7 +282,8 @@ async fn review_backend_payload_for_request(
         for track in parts.audio_tracks {
             let meta_name = format!("audioTrackMeta:{}", track.track_id);
             let audio_name = format!("audioTrack:{}", track.track_id);
-            let part = reqwest::multipart::Part::bytes(track.bytes)
+            let byte_len = track.bytes.len() as u64;
+            let part = reqwest::multipart::Part::stream_with_length(track.bytes, byte_len)
                 .file_name(track.file_name)
                 .mime_str(&track.mime_type)
                 .map_err(|error| format!("failed to attach broker audio: {error}"))?;
@@ -441,11 +443,13 @@ mod tests {
         thread,
     };
 
-    use serde_json::json;
+    use bytes::Bytes;
+    use serde_json::{Value, json};
 
     use super::{
-        BackendHttpMethod, REVIEW_BACKEND_BASE_URL_ENV, ReviewBackendRequest,
-        final_payload_from_sse_stream, review_backend_payload_for_request, review_backend_url,
+        BackendHttpMethod, BackendMultipartAudioTrack, REVIEW_BACKEND_BASE_URL_ENV,
+        ReviewBackendRequest, final_payload_from_sse_stream, review_backend_payload_for_request,
+        review_backend_url,
     };
 
     struct MockHttpResponse {
@@ -816,5 +820,34 @@ mod tests {
             "GET /api/review/sessions/session-1"
         ));
         assert!(!request_contains(&requests[0], "authorization:"));
+    }
+    #[test]
+    fn cloning_audio_requests_shares_the_encoded_payload() {
+        let request = ReviewBackendRequest::DraftGenerateStreamWithAudio {
+            payload: serde_json::json!({"jobId": "job-1"}),
+            audio_tracks: vec![BackendMultipartAudioTrack {
+                track_id: "lane-1".to_string(),
+                file_name: "lane-1.wav".to_string(),
+                mime_type: "audio/wav".to_string(),
+                metadata: Value::Null,
+                bytes: Bytes::from(vec![1_u8; 4096]),
+            }],
+        };
+        let cloned = request.clone();
+
+        let (
+            ReviewBackendRequest::DraftGenerateStreamWithAudio {
+                audio_tracks: original,
+                ..
+            },
+            ReviewBackendRequest::DraftGenerateStreamWithAudio {
+                audio_tracks: cloned,
+                ..
+            },
+        ) = (&request, &cloned)
+        else {
+            panic!("audio drafting request variants");
+        };
+        assert_eq!(original[0].bytes.as_ptr(), cloned[0].bytes.as_ptr());
     }
 }

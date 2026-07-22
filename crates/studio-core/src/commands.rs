@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use serde_json::json;
 use thiserror::Error;
 
@@ -112,13 +114,17 @@ pub enum StudioCoreError {
     NothingToRedo,
 }
 
+/// Undo/redo snapshots, retaining at most [`CommandHistory::MAX_DEPTH`] projects per stack.
 #[derive(Clone, Debug, Default)]
 pub struct CommandHistory {
-    undo_stack: Vec<Project>,
-    redo_stack: Vec<Project>,
+    undo_stack: VecDeque<Project>,
+    redo_stack: VecDeque<Project>,
 }
 
 impl CommandHistory {
+    /// Hard limit for each snapshot stack. The newest project states are retained.
+    pub const MAX_DEPTH: usize = 100;
+
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
@@ -143,7 +149,7 @@ impl CommandHistory {
     ) -> Result<(), StudioCoreError> {
         let previous = project.clone();
         apply_command(project, command, updated_at.as_deref())?;
-        self.undo_stack.push(previous);
+        Self::push_bounded(&mut self.undo_stack, previous);
         self.redo_stack.clear();
         Ok(())
     }
@@ -151,21 +157,28 @@ impl CommandHistory {
     pub fn undo(&mut self, project: &mut Project) -> Result<(), StudioCoreError> {
         let previous = self
             .undo_stack
-            .pop()
+            .pop_back()
             .ok_or(StudioCoreError::NothingToUndo)?;
         let current = std::mem::replace(project, previous);
-        self.redo_stack.push(current);
+        Self::push_bounded(&mut self.redo_stack, current);
         Ok(())
     }
 
     pub fn redo(&mut self, project: &mut Project) -> Result<(), StudioCoreError> {
         let next = self
             .redo_stack
-            .pop()
+            .pop_back()
             .ok_or(StudioCoreError::NothingToRedo)?;
         let current = std::mem::replace(project, next);
-        self.undo_stack.push(current);
+        Self::push_bounded(&mut self.undo_stack, current);
         Ok(())
+    }
+
+    fn push_bounded(stack: &mut VecDeque<Project>, snapshot: Project) {
+        if stack.len() == Self::MAX_DEPTH {
+            stack.pop_front();
+        }
+        stack.push_back(snapshot);
     }
 }
 

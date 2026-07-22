@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::BTreeMap, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 use crate::timeline_model::TimeRange;
 use crate::transcript_model::TranscriptAnnotationKind;
@@ -14,6 +18,10 @@ const TIMELINE_RENDER_WIDTH_PX: f64 = 2_000.0;
 const TIMELINE_RENDER_MODEL_CACHE_CAPACITY: usize = 8;
 const OVERVIEW_RENDER_PEAK_COUNT: usize = 1_024;
 const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;
+// Segment-derived caches retain only the current variant for each stable segment ID.
+// These caps also bound retention when segments are deleted or IDs churn over a long session.
+const SEGMENT_PEAK_CACHE_CAPACITY: usize = 512;
+const WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY: usize = 512;
 
 #[derive(Debug)]
 pub struct LaneWaveform {
@@ -269,6 +277,7 @@ fn retarget_timeline_visible_window(
 #[derive(Clone, Debug, Default)]
 struct SegmentPeakCache {
     entries: BTreeMap<SegmentPeakCacheKey, Arc<[f32]>>,
+    insertion_order: VecDeque<String>,
     stats: WaveformRenderCacheStats,
 }
 
@@ -301,8 +310,26 @@ impl SegmentPeakCache {
             .map(|peak| peak.abs().clamp(0.0, 1.0) as f32)
             .collect::<Vec<_>>();
         let peaks = Arc::<[f32]>::from(peaks);
-        self.entries.insert(key, Arc::clone(&peaks));
+        self.store(key, Arc::clone(&peaks));
         Some(peaks)
+    }
+
+    fn store(&mut self, key: SegmentPeakCacheKey, peaks: Arc<[f32]>) {
+        let segment_id = key.segment_id.clone();
+        self.entries
+            .retain(|cached_key, _| cached_key.segment_id != segment_id);
+        self.insertion_order
+            .retain(|cached_segment_id| cached_segment_id != &segment_id);
+        self.entries.insert(key, peaks);
+        self.insertion_order.push_back(segment_id);
+
+        while self.entries.len() > SEGMENT_PEAK_CACHE_CAPACITY {
+            let Some(evicted_segment_id) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries
+                .retain(|cached_key, _| cached_key.segment_id != evicted_segment_id);
+        }
     }
 }
 
@@ -340,6 +367,7 @@ impl SegmentPeakCacheKey {
 #[derive(Clone, Debug, Default)]
 struct WaveformBlockStaticCache {
     entries: BTreeMap<WaveformBlockStaticCacheKey, WaveformBlockStatic>,
+    insertion_order: VecDeque<String>,
 }
 
 impl WaveformBlockStaticCache {
@@ -356,7 +384,7 @@ impl WaveformBlockStaticCache {
 
         let block =
             WaveformBlockStatic::from_segment_with_peak_cache(source, segment_peak_cache, segment);
-        self.entries.insert(key, block);
+        self.store(key, block);
         true
     }
 
@@ -376,6 +404,24 @@ impl WaveformBlockStaticCache {
             .get(&key)
             .expect("prewarmed static waveform block should be stored")
             .clone()
+    }
+
+    fn store(&mut self, key: WaveformBlockStaticCacheKey, block: WaveformBlockStatic) {
+        let segment_id = key.segment_id.clone();
+        self.entries
+            .retain(|cached_key, _| cached_key.segment_id != segment_id);
+        self.insertion_order
+            .retain(|cached_segment_id| cached_segment_id != &segment_id);
+        self.entries.insert(key, block);
+        self.insertion_order.push_back(segment_id);
+
+        while self.entries.len() > WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY {
+            let Some(evicted_segment_id) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries
+                .retain(|cached_key, _| cached_key.segment_id != evicted_segment_id);
+        }
     }
 }
 
@@ -699,9 +745,15 @@ fn waveform_peaks(seed: &str, count: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use studio_core::Segment;
 
-    use super::{TimeRange, WaveformBlock};
+    use super::{
+        LaneWaveform, SEGMENT_PEAK_CACHE_CAPACITY, SegmentPeakCache, SegmentPeakCacheKey,
+        TimeRange, WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY, WaveformBlock, WaveformBlockStatic,
+        WaveformBlockStaticCache, WaveformBlockStaticCacheKey, WaveformPeakSource,
+    };
 
     #[test]
     fn waveform_block_carries_babel_region_label_and_full_tooltip_text() {
@@ -778,6 +830,139 @@ mod tests {
             assert_eq!(block.left_percent, expected_left);
             assert_eq!(block.width_percent, expected_width);
         }
+    }
+
+    #[test]
+    fn segment_derived_caches_replace_variants_for_the_same_stable_id() {
+        let waveform = LaneWaveform::from_precomputed_peaks(
+            vec![vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.5, 0.25, 0.0]],
+            8.0,
+        )
+        .expect("valid peak source");
+        let mut segment = Segment {
+            id: "stable-segment".to_string(),
+            source_annotation_id: None,
+            speaker_id: "speaker-1".to_string(),
+            lane_id: "track-1".to_string(),
+            start_seconds: 1.0,
+            end_seconds: 4.0,
+            text: "First text".to_string(),
+            metadata: Default::default(),
+        };
+        let viewport = TimeRange {
+            start_seconds: 0.0,
+            end_seconds: 8.0,
+        };
+
+        for edit in 0..32 {
+            segment.start_seconds = 1.0 + f64::from(edit) * 0.01;
+            segment.end_seconds = 4.0 + f64::from(edit) * 0.01;
+            segment.text = format!("Current text {edit}");
+
+            let peaks = waveform
+                .segment_peak_cache
+                .borrow_mut()
+                .peaks_for_segment(
+                    &waveform.source,
+                    &segment,
+                    32 + edit as usize,
+                    10_000.0 + f64::from(edit),
+                )
+                .expect("edited segment should produce peaks");
+            assert_eq!(peaks.len(), 32 + edit as usize);
+
+            let block = waveform.block_for_segment_with_static_source(&segment, &segment, viewport);
+            assert_eq!(block.tooltip, segment.text);
+            assert_eq!(block.start_seconds, segment.start_seconds);
+            assert_eq!(block.end_seconds, segment.end_seconds);
+        }
+
+        let peak_cache = waveform.segment_peak_cache.borrow();
+        assert_eq!(peak_cache.entries.len(), 1);
+        assert_eq!(
+            peak_cache
+                .entries
+                .keys()
+                .next()
+                .expect("current peak variant should remain")
+                .segment_id,
+            segment.id
+        );
+        let block_cache = waveform.block_static_cache.borrow();
+        assert_eq!(block_cache.entries.len(), 1);
+        let current_block = block_cache
+            .entries
+            .values()
+            .next()
+            .expect("current block variant should remain");
+        assert_eq!(current_block.tooltip, segment.text);
+    }
+
+    #[test]
+    fn segment_derived_cache_caps_evict_oldest_ids_and_keep_newest() {
+        let mut peak_cache = SegmentPeakCache::default();
+        let mut block_cache = WaveformBlockStaticCache::default();
+        let total = SEGMENT_PEAK_CACHE_CAPACITY.max(WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY) + 1;
+
+        for index in 0..total {
+            let segment_id = format!("segment-{index}");
+            peak_cache.store(
+                SegmentPeakCacheKey {
+                    segment_id: segment_id.clone(),
+                    start_seconds_bits: 0.0_f64.to_bits(),
+                    end_seconds_bits: 1.0_f64.to_bits(),
+                    count: 1,
+                    precision_bits: 10_000.0_f64.to_bits(),
+                },
+                Arc::from([index as f32]),
+            );
+            block_cache.store(
+                WaveformBlockStaticCacheKey {
+                    segment_id: segment_id.clone(),
+                    start_seconds_bits: 0.0_f64.to_bits(),
+                    end_seconds_bits: 1.0_f64.to_bits(),
+                    text: segment_id.clone(),
+                },
+                WaveformBlockStatic {
+                    segment_id: segment_id.clone(),
+                    label: segment_id.clone(),
+                    tooltip: segment_id,
+                    peaks: Arc::from([index as f32]),
+                    peak_source: WaveformPeakSource::Audio,
+                },
+            );
+        }
+
+        assert_eq!(peak_cache.entries.len(), SEGMENT_PEAK_CACHE_CAPACITY);
+        assert_eq!(
+            block_cache.entries.len(),
+            WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY
+        );
+        assert!(
+            !peak_cache
+                .entries
+                .keys()
+                .any(|key| key.segment_id == "segment-0")
+        );
+        assert!(
+            !block_cache
+                .entries
+                .keys()
+                .any(|key| key.segment_id == "segment-0")
+        );
+        let newest = format!("segment-{}", total - 1);
+        assert!(
+            peak_cache
+                .entries
+                .keys()
+                .any(|key| key.segment_id == newest)
+        );
+        assert!(
+            block_cache
+                .entries
+                .keys()
+                .any(|key| key.segment_id == newest)
+        );
     }
 
     #[test]

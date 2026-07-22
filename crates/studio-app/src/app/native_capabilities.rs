@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 
 use super::review_backend_client::{BackendMultipartAudioTrack, ReviewBackendRequest};
 use super::state::{
-    DraftAudioGuard, NativeCapabilityModalTab, ReviewerPendingFinalize, StudioState,
-    project_review_action_level,
+    DraftAudioGuard, NativeCapabilityModalTab, REVIEW_BACKEND_REQUEST_LIMIT,
+    ReviewerPendingFinalize, StudioState, project_review_action_level,
 };
 
 pub(super) const DRAFT_OPENROUTER_API_KEY_ENV: &str = "STUDIO_DRAFT_OPENROUTER_API_KEY";
@@ -1097,9 +1097,11 @@ impl StudioState {
             self.reviewer_session_preview.as_ref(),
             self.reviewer_generated_review_preview.as_ref(),
         ) {
-            Ok(payload) => self
-                .review_backend_requests
-                .push(ReviewBackendRequest::ReviewSubmitAnalytics(payload)),
+            Ok(payload) => {
+                let _ = self.try_push_review_backend_request(
+                    ReviewBackendRequest::ReviewSubmitAnalytics(payload),
+                );
+            }
             Err(error) => self.native_capability_last_error = Some(error),
         }
     }
@@ -1150,6 +1152,13 @@ impl StudioState {
         let config = self.drafting_request_config();
         match build_draft_generate_payload(&project, &config) {
             Ok(mut payload) => {
+                if audio_mode != DraftGenerateAudioMode::TextOnly
+                    && self.has_pending_audio_draft_generation(&payload)
+                {
+                    self.status = "Gold Drafting row generation is already pending.".to_string();
+                    self.native_capability_last_error = None;
+                    return;
+                }
                 ensure_draft_stream_session_id(&mut payload);
                 let audio_tracks = if audio_mode == DraftGenerateAudioMode::TextOnly {
                     Vec::new()
@@ -1196,6 +1205,11 @@ impl StudioState {
         let config = self.drafting_request_config();
         match build_draft_transcribe_segment_payload(&project, selected_segment_id, &config) {
             Ok(payload) => {
+                if self.has_pending_audio_segment_transcription(&payload) {
+                    self.status = "Selected-segment transcription is already pending.".to_string();
+                    self.native_capability_last_error = None;
+                    return;
+                }
                 let audio_tracks = self.broker_audio_tracks_for_project(&project);
                 if audio_tracks.is_empty() {
                     self.status =
@@ -1723,9 +1737,84 @@ impl StudioState {
         status: impl Into<String>,
         request: ReviewBackendRequest,
     ) {
-        self.status = status.into();
+        let status = status.into();
+        if self.review_backend_request_is_pending(&request) {
+            self.status = format!("{status} Request is already pending.");
+            self.native_capability_last_error = None;
+            return;
+        }
+        if self.pending_review_backend_request_count() >= REVIEW_BACKEND_REQUEST_LIMIT {
+            let error = format!(
+                "review backend already has {REVIEW_BACKEND_REQUEST_LIMIT} pending requests"
+            );
+            self.status = format!("{status} Blocked: {error}.");
+            self.native_capability_last_error = Some(error);
+            return;
+        }
+        self.status = status;
         self.native_capability_last_error = None;
         self.review_backend_requests.push(request);
+    }
+
+    fn try_push_review_backend_request(&mut self, request: ReviewBackendRequest) -> bool {
+        if self.review_backend_request_is_pending(&request)
+            || self.pending_review_backend_request_count() >= REVIEW_BACKEND_REQUEST_LIMIT
+        {
+            return false;
+        }
+        self.review_backend_requests.push(request);
+        true
+    }
+
+    fn review_backend_request_is_pending(&self, request: &ReviewBackendRequest) -> bool {
+        self.review_backend_requests
+            .iter()
+            .chain(self.dispatched_review_backend_requests.iter())
+            .any(|pending| pending == request)
+    }
+
+    fn pending_review_backend_request_count(&self) -> usize {
+        self.review_backend_requests.len()
+            + self
+                .dispatched_review_backend_requests
+                .iter()
+                .filter(|request| !self.review_backend_requests.contains(request))
+                .count()
+    }
+
+    fn has_pending_audio_draft_generation(&self, payload: &Value) -> bool {
+        self.review_backend_requests
+            .iter()
+            .chain(self.dispatched_review_backend_requests.iter())
+            .any(|request| {
+                matches!(
+                    request,
+                    ReviewBackendRequest::DraftGenerateWithAudio {
+                        payload: pending,
+                        ..
+                    }
+                        | ReviewBackendRequest::DraftGenerateStreamWithAudio {
+                            payload: pending,
+                            ..
+                        }
+                        if draft_generate_payloads_are_equivalent(pending, payload)
+                )
+            })
+    }
+
+    fn has_pending_audio_segment_transcription(&self, payload: &Value) -> bool {
+        self.review_backend_requests
+            .iter()
+            .chain(self.dispatched_review_backend_requests.iter())
+            .any(|request| {
+                matches!(
+                    request,
+                    ReviewBackendRequest::DraftBrokerTranscribeSegmentWithAudio {
+                        payload: pending,
+                        ..
+                    } if pending == payload
+                )
+            })
     }
 
     fn show_draft_audio_guard_if_needed(
@@ -2100,11 +2189,31 @@ impl StudioState {
                         "speakerKey": lane.speaker_id,
                         "trackLabel": lane.label,
                     }),
-                    bytes,
+                    bytes: bytes.into(),
                 })
             })
             .collect()
     }
+}
+
+fn draft_generate_payloads_are_equivalent(pending: &Value, requested: &Value) -> bool {
+    if requested
+        .get("draftSessionId")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return pending == requested;
+    }
+    let (Some(pending), Some(requested)) = (pending.as_object(), requested.as_object()) else {
+        return pending == requested;
+    };
+    pending
+        .iter()
+        .filter(|(key, _)| key.as_str() != "draftSessionId")
+        .all(|(key, value)| requested.get(key) == Some(value))
+        && requested
+            .iter()
+            .all(|(key, value)| pending.get(key) == Some(value))
 }
 
 fn encode_decoded_audio_as_pcm16_wav(audio: &DecodedAudio) -> Result<Vec<u8>, String> {
@@ -2930,5 +3039,76 @@ fn compact_number(value: f64) -> String {
         format!("{}", value as i64)
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_draft_session_id_does_not_defeat_pending_equivalence() {
+        let pending = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+            "draftSessionId": "job-1:2026-07-23T10:00:00Z",
+        });
+        let requested = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+        });
+
+        assert!(draft_generate_payloads_are_equivalent(&pending, &requested));
+    }
+
+    #[test]
+    fn explicit_or_changed_draft_inputs_remain_distinct() {
+        let pending = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+            "model": "model-a",
+            "draftSessionId": "session-a",
+        });
+        let changed_model = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+            "model": "model-b",
+        });
+        let changed_session = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+            "model": "model-a",
+            "draftSessionId": "session-b",
+        });
+
+        assert!(!draft_generate_payloads_are_equivalent(
+            &pending,
+            &changed_model
+        ));
+        assert!(!draft_generate_payloads_are_equivalent(
+            &pending,
+            &changed_session
+        ));
+    }
+    #[test]
+    fn queued_audio_generation_is_detected_before_encoding_again() {
+        let mut state = StudioState::default();
+        let pending = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+            "draftSessionId": "job-1:2026-07-23T10:00:00Z",
+        });
+        state
+            .review_backend_requests
+            .push(ReviewBackendRequest::DraftGenerateStreamWithAudio {
+                payload: pending,
+                audio_tracks: Vec::new(),
+            });
+        let requested = json!({
+            "jobId": "job-1",
+            "rows": [{"rowId": "row-1"}],
+        });
+
+        assert!(state.has_pending_audio_draft_generation(&requested));
     }
 }

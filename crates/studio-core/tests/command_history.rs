@@ -1198,3 +1198,56 @@ fn command_history_reports_undo_redo_availability_like_babel_action_state() {
     assert!(history.can_undo());
     assert!(!history.can_redo());
 }
+
+#[test]
+fn command_history_retains_only_the_newest_bounded_snapshots() {
+    const COMMAND_COUNT: usize = 2_000;
+
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    for command_index in 0..COMMAND_COUNT {
+        history
+            .apply(
+                &mut project,
+                EditorCommand::ApplyTextEdit {
+                    segment_id: "segment-1".to_string(),
+                    text: format!("edit-{command_index}"),
+                },
+            )
+            .expect("text edit should apply");
+    }
+
+    for undo_count in 1..=CommandHistory::MAX_DEPTH {
+        history
+            .undo(&mut project)
+            .expect("retained recent edit should undo");
+        assert_eq!(
+            project.segment("segment-1").unwrap().text,
+            format!("edit-{}", COMMAND_COUNT - undo_count - 1)
+        );
+    }
+
+    assert_eq!(
+        history.undo(&mut project),
+        Err(StudioCoreError::NothingToUndo)
+    );
+
+    for redo_count in 1..=CommandHistory::MAX_DEPTH {
+        history
+            .redo(&mut project)
+            .expect("retained recent edit should redo");
+        assert_eq!(
+            project.segment("segment-1").unwrap().text,
+            format!(
+                "edit-{}",
+                COMMAND_COUNT - CommandHistory::MAX_DEPTH + redo_count - 1
+            )
+        );
+    }
+
+    assert_eq!(
+        history.redo(&mut project),
+        Err(StudioCoreError::NothingToRedo)
+    );
+}

@@ -3,6 +3,32 @@ use studio_core::Segment;
 
 use super::formatting::format_seconds_for_edit;
 use super::time_edit::{TimeEditState, TimeField, start_time_cell_edit};
+// Each segment retains at most 100 snapshots in either direction and at most
+// 2 MiB of their UTF-8 contents. A newest snapshot larger than the byte budget
+// is kept by itself so the immediately reversible edit remains available.
+const TEXT_HISTORY_MAX_ENTRIES: usize = 100;
+const TEXT_HISTORY_MAX_RETAINED_BYTES: usize = 2 * 1024 * 1024;
+
+pub(super) fn push_bounded_history<T>(
+    history: &mut Vec<T>,
+    entry: T,
+    max_entries: usize,
+    max_retained_bytes: usize,
+    retained_utf8_bytes: impl Fn(&T) -> usize,
+) {
+    debug_assert!(max_entries > 0);
+    history.push(entry);
+
+    let mut retained_bytes = history
+        .iter()
+        .map(&retained_utf8_bytes)
+        .fold(0usize, usize::saturating_add);
+    while history.len() > 1 && (history.len() > max_entries || retained_bytes > max_retained_bytes)
+    {
+        let removed = history.remove(0);
+        retained_bytes = retained_bytes.saturating_sub(retained_utf8_bytes(&removed));
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct SegmentDraft {
@@ -79,7 +105,7 @@ impl SegmentDraft {
         let before = self.text.clone();
         self.set_text_without_history(text);
         if self.text != before {
-            self.text_undo_stack.push(before);
+            self.push_text_history(before, true);
             self.text_redo_stack.clear();
         }
     }
@@ -90,7 +116,7 @@ impl SegmentDraft {
         self.text_content.perform(action);
         self.text = self.editor_text();
         if is_edit && self.text != before {
-            self.text_undo_stack.push(before);
+            self.push_text_history(before, true);
             self.text_redo_stack.clear();
         }
     }
@@ -121,7 +147,7 @@ impl SegmentDraft {
             return false;
         };
         let current = self.text.clone();
-        self.text_redo_stack.push(current);
+        self.push_text_history(current, false);
         self.set_text_without_history(previous);
         true
     }
@@ -131,7 +157,7 @@ impl SegmentDraft {
             return false;
         };
         let current = self.text.clone();
-        self.text_undo_stack.push(current);
+        self.push_text_history(current, true);
         self.set_text_without_history(next);
         true
     }
@@ -145,6 +171,21 @@ impl SegmentDraft {
         let approximate_wrapped_lines = self.text.chars().count().div_ceil(120).max(1);
         let rows = explicit_lines.max(approximate_wrapped_lines).max(1);
         24.0 + rows.saturating_sub(1) as f32 * 18.0
+    }
+
+    fn push_text_history(&mut self, snapshot: String, undo: bool) {
+        let history = if undo {
+            &mut self.text_undo_stack
+        } else {
+            &mut self.text_redo_stack
+        };
+        push_bounded_history(
+            history,
+            snapshot,
+            TEXT_HISTORY_MAX_ENTRIES,
+            TEXT_HISTORY_MAX_RETAINED_BYTES,
+            String::len,
+        );
     }
 
     fn set_text_without_history(&mut self, text: String) {
@@ -201,4 +242,81 @@ fn normalized_editor_text(content: &text_editor::Content) -> String {
         text.pop();
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft_with_text(text: &str) -> SegmentDraft {
+        let mut draft = SegmentDraft {
+            start_seconds: String::new(),
+            end_seconds: String::new(),
+            split_seconds: String::new(),
+            text: String::new(),
+            text_content: text_editor::Content::new(),
+            text_undo_stack: Vec::new(),
+            text_redo_stack: Vec::new(),
+            time_edit: TimeEditState::default(),
+            track_edit: TrackCellEditState::from_lane("lane"),
+        };
+        draft.replace_text(text.to_string());
+        draft
+    }
+
+    fn retained_bytes(history: &[String]) -> usize {
+        history.iter().map(String::len).sum()
+    }
+
+    #[test]
+    fn thousands_of_edits_keep_only_the_latest_undo_chain_and_redo_it() {
+        let edit_count = TEXT_HISTORY_MAX_ENTRIES + 2_000;
+        let mut draft = draft_with_text("edit-0");
+        for index in 1..=edit_count {
+            draft.replace_text_from_user_edit(format!("edit-{index}"));
+        }
+
+        assert_eq!(draft.text_undo_stack.len(), TEXT_HISTORY_MAX_ENTRIES);
+        assert!(retained_bytes(&draft.text_undo_stack) <= TEXT_HISTORY_MAX_RETAINED_BYTES);
+
+        for expected in (edit_count - TEXT_HISTORY_MAX_ENTRIES..edit_count).rev() {
+            assert!(draft.undo_text_edit());
+            assert_eq!(draft.text, format!("edit-{expected}"));
+        }
+        assert!(!draft.undo_text_edit());
+
+        for expected in edit_count - TEXT_HISTORY_MAX_ENTRIES + 1..=edit_count {
+            assert!(draft.redo_text_edit());
+            assert_eq!(draft.text, format!("edit-{expected}"));
+        }
+        assert!(!draft.redo_text_edit());
+    }
+
+    #[test]
+    fn text_history_is_bounded_by_utf8_bytes() {
+        let mut draft = draft_with_text("initial");
+        for index in 0..80 {
+            draft.replace_text_from_user_edit(format!("{index}:{}", "я".repeat(32 * 1024)));
+        }
+
+        assert!(draft.text_undo_stack.len() < TEXT_HISTORY_MAX_ENTRIES);
+        assert!(retained_bytes(&draft.text_undo_stack) <= TEXT_HISTORY_MAX_RETAINED_BYTES);
+        let expected = draft.text_undo_stack.last().cloned().unwrap();
+        assert!(draft.undo_text_edit());
+        assert_eq!(draft.text, expected);
+    }
+
+    #[test]
+    fn newest_oversized_snapshot_remains_immediately_undoable() {
+        let mut draft = draft_with_text("initial");
+        draft.replace_text_from_user_edit("small edit".to_string());
+        let oversized = "x".repeat(TEXT_HISTORY_MAX_RETAINED_BYTES + 1);
+        draft.replace_text_from_user_edit(oversized.clone());
+        draft.replace_text_from_user_edit("current".to_string());
+
+        assert_eq!(draft.text_undo_stack.len(), 1);
+        assert!(retained_bytes(&draft.text_undo_stack) > TEXT_HISTORY_MAX_RETAINED_BYTES);
+        assert!(draft.undo_text_edit());
+        assert_eq!(draft.text, oversized);
+    }
 }

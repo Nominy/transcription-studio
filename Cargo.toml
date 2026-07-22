@@ -19,6 +19,7 @@ repository = "https://github.com/Nominy/transcription-studio"
 anyhow = "1.0"
 axum = "0.8"
 base64 = "0.22"
+bytes = "1.10"
 iced = { version = "0.13", features = ["tokio", "lazy", "svg", "canvas", "system", "advanced"] }
 httpdate = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
