@@ -20688,7 +20688,7 @@ fn ci_runs_gitleaks_fmt_clippy_and_test_in_one_ordered_self_hosted_job() {
     );
     assert_eq!(
         workflow
-            .matches("cargo test --workspace --all-targets --locked")
+            .matches("cargo nextest run --workspace --all-targets --locked")
             .count(),
         1
     );
@@ -20722,7 +20722,7 @@ fn ci_runs_gitleaks_fmt_clippy_and_test_in_one_ordered_self_hosted_job() {
         .find("cargo clippy --workspace --all-targets --locked -- -D warnings")
         .expect("build-and-test should run clippy");
     let test_pos = build_job
-        .find("cargo test --workspace --all-targets --locked")
+        .find("cargo nextest run --workspace --all-targets --locked")
         .expect("build-and-test should run the workspace test suite");
     assert!(
         gitleaks_pos < fmt_pos && fmt_pos < clippy_pos && clippy_pos < test_pos,

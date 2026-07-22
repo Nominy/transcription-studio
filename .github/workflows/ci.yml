@@ -40,7 +40,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test all workspace targets
-        run: cargo test --workspace --all-targets --locked
+        run: cargo nextest run --workspace --all-targets --locked
 
       - name: Test native Babel authentication
         run: node --test tools/babel-native-auth.test.mjs
