@@ -54,79 +54,24 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-  clippy:
-    name: Clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - macos-latest
+  build-and-test:
+    name: Build, lint, and test (self-hosted VPS)
+    runs-on: [self-hosted, Linux, vps]
 
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
+      RUST_TEST_THREADS: 8
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-clippy-${{ runner.os }}
-          cache-on-failure: true
-          cache-workspace-crates: "true"
 
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - macos-latest
-
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-      RUST_TEST_THREADS: 4
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-test-${{ runner.os }}
-          cache-on-failure: true
-          cache-workspace-crates: "true"
-
-      - name: Install Node.js
-        if: runner.os == 'Windows'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
 
       - name: Test all workspace targets
         run: cargo test --workspace --all-targets --locked
 
       - name: Test native Babel authentication
-        if: runner.os == 'Windows'
         run: node --test tools/babel-native-auth.test.mjs

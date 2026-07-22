@@ -20677,45 +20677,53 @@ fn cargo_dev_profile_keeps_incremental_builds_with_reduced_debug_info() {
 }
 
 #[test]
-fn ci_runs_fmt_clippy_and_test_as_independent_parallel_jobs() {
+fn ci_runs_fmt_on_hosted_and_clippy_test_on_the_self_hosted_vps_runner() {
     let workflow = include_str!("../../../../.github/workflows/ci.yml");
     assert_eq!(workflow.matches("cargo fmt --all --check").count(), 1);
+    assert_eq!(
+        workflow
+            .matches("cargo clippy --workspace --all-targets --locked -- -D warnings")
+            .count(),
+        1
+    );
+    assert_eq!(
+        workflow
+            .matches("cargo test --workspace --all-targets --locked")
+            .count(),
+        1
+    );
 
     let fmt_job = workflow
         .split_once("\n  fmt:\n")
         .expect("CI should define one formatting job")
         .1
-        .split_once("\n  clippy:\n")
-        .expect("formatting should be separate from the clippy job")
+        .split_once("\n  build-and-test:\n")
+        .expect("formatting should be separate from the build-and-test job")
         .0;
     assert!(fmt_job.contains("runs-on: ubuntu-latest"));
     assert!(!fmt_job.contains("needs:"));
 
-    let clippy_job = workflow
-        .split_once("\n  clippy:\n")
-        .expect("CI should define a clippy job")
-        .1
-        .split_once("\n  test:\n")
-        .expect("clippy should be separate from the test job")
-        .0;
-    assert!(!clippy_job.contains("needs:"));
-    assert!(clippy_job.contains("Swatinem/rust-cache@v2"));
-    assert!(clippy_job.contains("shared-key: ci-clippy-${{ runner.os }}"));
-    assert!(clippy_job.contains("cache-on-failure: true"));
-    assert!(clippy_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
-    assert!(!clippy_job.contains("cargo fmt --all --check"));
-    assert!(!clippy_job.contains("cargo test --workspace --all-targets --locked"));
-
-    let test_job = workflow
-        .split_once("\n  test:\n")
-        .expect("CI should define a test job")
+    let build_job = workflow
+        .split_once("\n  build-and-test:\n")
+        .expect("CI should define a build-and-test job")
         .1;
-    assert!(!test_job.contains("needs:"));
-    assert!(test_job.contains("Swatinem/rust-cache@v2"));
-    assert!(test_job.contains("shared-key: ci-test-${{ runner.os }}"));
-    assert!(test_job.contains("cache-on-failure: true"));
-    assert!(test_job.contains("cargo test --workspace --all-targets --locked"));
-    assert!(!test_job.contains("cargo clippy --workspace --all-targets --locked -- -D warnings"));
+    assert!(!build_job.contains("needs:"));
+    assert!(build_job.contains("self-hosted"));
+    assert!(!build_job.contains("windows-latest"));
+    assert!(!build_job.contains("macos-latest"));
+    assert!(!build_job.contains("Swatinem/rust-cache"));
+    assert!(!build_job.contains("cargo fmt --all --check"));
+
+    let clippy_pos = build_job
+        .find("cargo clippy --workspace --all-targets --locked -- -D warnings")
+        .expect("build-and-test should run clippy");
+    let test_pos = build_job
+        .find("cargo test --workspace --all-targets --locked")
+        .expect("build-and-test should run the workspace test suite");
+    assert!(
+        clippy_pos < test_pos,
+        "clippy should run before the (much slower) test suite so lint failures fail fast"
+    );
 }
 
 #[test]
