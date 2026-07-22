@@ -33,7 +33,7 @@ target\velopack\Publish
 
 `Publish` contains only the assets named by `assets.alpha.json`, the current feed metadata, and `publish-manifest.json` with each file's byte count and SHA-256. Historical packages remain in `Releases` for delta generation but are not re-uploaded.
 
-GitHub Actions can run the same package flow from the manual `Windows Alpha Package` workflow. See `docs/release/github-actions.md`.
+GitHub Actions runs this in two jobs instead of one manual invocation: a self-hosted Linux runner cross-compiles `studio-app`/`studio-relay` for `x86_64-pc-windows-msvc` via `cargo xwin build` (`cargo install cargo-xwin`, then `cargo xwin build --release --target x86_64-pc-windows-msvc --locked`, no Windows host needed for this step), and a `windows-latest` job runs only `package-alpha-windows.ps1 -SkipBuild -SourceExe ... -SourceRelayExe ...` against the uploaded binaries. `vpk pack` itself must run on Windows regardless of where the `.exe` was built -- it packages for whatever OS it's invoked from, not an arbitrary target. See `docs/release/github-actions.md`.
 
 ## Publish To VPS
 

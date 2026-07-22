@@ -20847,7 +20847,10 @@ fn windows_alpha_release_scripts_publish_only_atomic_current_payloads() {
     assert!(!workflow.contains("Invoke-RestMethod"));
     assert!(!workflow.contains("foreach ($asset in $feed.Assets)"));
     assert!(workflow.contains("Remove-Item -LiteralPath $releaseDir -Recurse -Force"));
-    assert!(workflow.contains("Swatinem/rust-cache@v2"));
+    assert!(workflow.contains("self-hosted"));
+    assert!(workflow.contains("clean: false"));
+    assert!(package_script.contains("XWIN_ACCEPT_LICENSE"));
+    assert!(package_script.contains("\"xwin\", \"build\""));
     assert!(workflow.contains("STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}"));
     assert!(workflow.contains("path: target/velopack/Publish/"));
     assert!(!workflow.contains("path: target/velopack/Releases/"));

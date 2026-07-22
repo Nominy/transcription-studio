@@ -7,6 +7,7 @@ param(
     [string]$RemoteIncomingRoot = "/var/tmp/transcription-studio-alpha-incoming",
     [string]$OutputDir = "",
     [string]$PublishDir = "",
+    [string]$Target = "",
     [string]$SshKeyPath = "",
     [int]$SshPort = 22,
     [switch]$SkipPackage,
@@ -226,10 +227,10 @@ Assert-NonOverlappingRemotePaths `
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $OutputDir = Join-Path $repoRoot "target\velopack\Releases"
+    $OutputDir = Join-Path $repoRoot "target/velopack/Releases"
 }
 if ([string]::IsNullOrWhiteSpace($PublishDir)) {
-    $PublishDir = Join-Path $repoRoot "target\velopack\Publish"
+    $PublishDir = Join-Path $repoRoot "target/velopack/Publish"
 }
 $releaseDir = [System.IO.Path]::GetFullPath($OutputDir)
 $publishPath = [System.IO.Path]::GetFullPath($PublishDir)
@@ -242,6 +243,9 @@ if (-not $SkipPackage) {
         Channel = $Channel
         OutputDir = $releaseDir
         PublishDir = $publishPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Target)) {
+        $packageArgs.Target = $Target
     }
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
         $packageArgs.Version = $Version

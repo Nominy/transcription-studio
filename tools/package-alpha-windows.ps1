@@ -9,6 +9,7 @@ param(
     [string]$PublishDir = "",
     [string]$SourceExe = "",
     [string]$SourceRelayExe = "",
+    [string]$Target = "",
     [string]$VpkCommand = "",
     [switch]$SkipBuild,
     [switch]$InstallVpk
@@ -264,19 +265,20 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "Version override '$Version' does not match studio-app Cargo version '$cargoVersion'."
 }
 if ([string]::IsNullOrWhiteSpace($StageDir)) {
-    $StageDir = Join-Path $repoRoot "target\velopack\stage"
+    $StageDir = Join-Path $repoRoot "target/velopack/stage"
 }
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $OutputDir = Join-Path $repoRoot "target\velopack\Releases"
+    $OutputDir = Join-Path $repoRoot "target/velopack/Releases"
 }
 if ([string]::IsNullOrWhiteSpace($PublishDir)) {
-    $PublishDir = Join-Path $repoRoot "target\velopack\Publish"
+    $PublishDir = Join-Path $repoRoot "target/velopack/Publish"
 }
+$releaseExeDir = if ([string]::IsNullOrWhiteSpace($Target)) { "target/release" } else { "target/$Target/release" }
 if ([string]::IsNullOrWhiteSpace($SourceExe)) {
-    $SourceExe = Join-Path $repoRoot "target\release\studio-app.exe"
+    $SourceExe = Join-Path $repoRoot "$releaseExeDir/studio-app.exe"
 }
 if ([string]::IsNullOrWhiteSpace($SourceRelayExe)) {
-    $SourceRelayExe = Join-Path $repoRoot "target\release\studio-relay.exe"
+    $SourceRelayExe = Join-Path $repoRoot "$releaseExeDir/studio-relay.exe"
 }
 
 $stagePath = [System.IO.Path]::GetFullPath($StageDir)
@@ -310,7 +312,12 @@ if ([string]::IsNullOrWhiteSpace($VpkCommand)) {
 }
 
 if (-not $SkipBuild) {
-    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "-p", "studio-relay", "--release", "--locked")
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "-p", "studio-relay", "--release", "--locked")
+    } else {
+        $env:XWIN_ACCEPT_LICENSE = "1"
+        Invoke-CheckedCommand -Command "cargo" -Arguments @("xwin", "build", "-p", "studio-app", "-p", "studio-relay", "--release", "--locked", "--target", $Target)
+    }
 }
 
 if (Test-Path -LiteralPath $stagePath) {

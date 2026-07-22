@@ -38,8 +38,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build:
+    name: Cross-compile Windows binaries (self-hosted homeserver)
+    runs-on: [self-hosted, Linux, homeserver]
+
+    env:
+      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
+      TARGET: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          clean: false
+
+      - name: Cross-compile studio-app and studio-relay for Windows
+        run: cargo xwin build -p studio-app -p studio-relay --release --locked --target ${{ env.TARGET }}
+        env:
+          XWIN_ACCEPT_LICENSE: "1"
+
+      - name: Upload cross-compiled binaries
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-cross-build
+          path: |
+            target/${{ env.TARGET }}/release/studio-app.exe
+            target/${{ env.TARGET }}/release/studio-relay.exe
+          if-no-files-found: error
+          retention-days: 1
+
   package:
     name: Package Windows alpha
+    needs: build
     runs-on: windows-latest
 
     env:
@@ -47,20 +77,16 @@ jobs:
       VERSION: ${{ inputs.version }}
       FEED_URL: ${{ inputs.feed_url }}
       REMOTE_PATH: ${{ inputs.remote_path }}
-      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Download cross-compiled binaries
+        uses: actions/download-artifact@v6
         with:
-          shared-key: alpha-win-x64
-          cache-on-failure: true
+          name: windows-cross-build
+          path: windows-cross-build
 
       - name: Install .NET
         uses: actions/setup-dotnet@v5
@@ -74,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $releaseDir = Join-Path $PWD "target\velopack\Releases"
+          $releaseDir = Join-Path $PWD "target/velopack/Releases"
           if (Test-Path -LiteralPath $releaseDir) {
             Remove-Item -LiteralPath $releaseDir -Recurse -Force
           }
@@ -94,6 +120,9 @@ jobs:
         run: |
           $packageArgs = @{
             Channel = $env:CHANNEL
+            SkipBuild = $true
+            SourceExe = (Join-Path $PWD "windows-cross-build\studio-app.exe")
+            SourceRelayExe = (Join-Path $PWD "windows-cross-build\studio-relay.exe")
           }
           if (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
             $packageArgs.Version = $env:VERSION
