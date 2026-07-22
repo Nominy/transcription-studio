@@ -60,6 +60,9 @@ jobs:
       - name: Restore pinned Velopack CLI
         run: dotnet tool restore
 
+      - name: Ensure vpk wrapper is executable
+        run: chmod +x ./tools/vpk-wine-wrapper.sh
+
       - name: Resolve pinned vpk.dll path
         run: |
           vpk_version="$(dotnet tool list | awk '$1=="vpk"{print $2}')"
