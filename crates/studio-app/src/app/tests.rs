@@ -20711,6 +20711,12 @@ fn ci_runs_gitleaks_fmt_clippy_and_test_in_one_ordered_self_hosted_job() {
         !build_job.contains("Install Rust"),
         "the self-hosted runner keeps a persistent toolchain; no per-run install step"
     );
+    assert!(
+        build_job.contains("clean: false"),
+        "checkout must not clean the working tree -- actions/checkout's default `git clean -ffdx` \
+         deletes the gitignored target/ directory on every run, silently forcing a cold rebuild \
+         every time on an otherwise-persistent self-hosted runner"
+    );
 
     let gitleaks_pos = build_job
         .find("gitleaks detect")

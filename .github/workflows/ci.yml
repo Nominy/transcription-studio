@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          clean: false
 
       - name: Scan git history
         run: gitleaks detect --source . --redact --verbose
