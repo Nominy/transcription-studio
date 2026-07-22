@@ -1,6 +1,9 @@
 name: Windows Alpha Package
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       channel:
@@ -11,7 +14,7 @@ on:
         options:
           - alpha
       version:
-        description: Optional version assertion. If set, it must match crates/studio-app/Cargo.toml.
+        description: Optional explicit package version. If omitted, an automatic alpha version is generated.
         required: false
         type: string
       feed_url:
@@ -34,7 +37,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: velopack-${{ inputs.channel }}
+  group: velopack-windows-alpha
   cancel-in-progress: false
 
 jobs:
@@ -43,10 +46,10 @@ jobs:
     runs-on: [self-hosted, Linux, homeserver]
 
     env:
-      CHANNEL: ${{ inputs.channel }}
-      VERSION: ${{ inputs.version }}
-      FEED_URL: ${{ inputs.feed_url }}
-      REMOTE_PATH: ${{ inputs.remote_path }}
+      CHANNEL: ${{ inputs.channel || 'alpha' }}
+      INPUT_VERSION: ${{ inputs.version || '' }}
+      FEED_URL: ${{ inputs.feed_url || 'https://reviewgen.ovh/transcription-studio/alpha/win-x64' }}
+      REMOTE_PATH: ${{ inputs.remote_path || '/var/www/transcription-studio/alpha/win-x64' }}
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
       TARGET: x86_64-pc-windows-msvc
       WINE_DOTNET_EXE: /home/ci-runner/win-dotnet/runtime/dotnet.exe
@@ -56,6 +59,60 @@ jobs:
         uses: actions/checkout@v5
         with:
           clean: false
+      - name: Resolve package and build version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifestPath = Join-Path $PWD "crates/studio-app/Cargo.toml"
+          $manifest = Get-Content -Raw -LiteralPath $manifestPath
+          $package = [regex]::Match(
+            $manifest,
+            '(?ms)^\[package\]\s*(?<body>.*?)(?=^\[|\z)'
+          )
+          if (-not $package.Success) {
+            throw "Could not find the [package] table in $manifestPath"
+          }
+
+          $declaredVersion = [regex]::Match(
+            $package.Groups["body"].Value,
+            '(?m)^\s*version\s*=\s*"(?<version>[^"]+)"\s*(?:#.*)?$'
+          )
+          if (-not $declaredVersion.Success) {
+            throw "Could not read the studio-app package version from $manifestPath"
+          }
+
+          $baseVersion = $declaredVersion.Groups["version"].Value
+          $base = [regex]::Match(
+            $baseVersion,
+            '^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)$'
+          )
+          if (-not $base.Success) {
+            throw "studio-app Cargo version must be a numeric major.minor.patch version; found '$baseVersion'."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_VERSION)) {
+            $nextPatch = [System.Numerics.BigInteger]::Parse($base.Groups["patch"].Value) + 1
+            $resolvedVersion = "$($base.Groups["major"].Value).$($base.Groups["minor"].Value).$nextPatch-alpha.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          } else {
+            $resolvedVersion = $env:INPUT_VERSION
+          }
+
+          function Add-GitHubEnvironmentValue {
+            param(
+              [string]$Name,
+              [string]$Value
+            )
+            $delimiter = "EOF_$([guid]::NewGuid().ToString('N'))"
+            Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Value @(
+              "$Name<<$delimiter"
+              $Value
+              $delimiter
+            )
+          }
+
+          Add-GitHubEnvironmentValue -Name "VERSION" -Value $resolvedVersion
+          Add-GitHubEnvironmentValue -Name "STUDIO_BUILD_VERSION" -Value $resolvedVersion
+          Write-Host "Resolved Windows alpha version: $resolvedVersion"
 
       - name: Restore pinned Velopack CLI
         run: dotnet tool restore
@@ -110,7 +167,7 @@ jobs:
           & ./tools/package-alpha-windows.ps1 @packageArgs
 
       - name: Publish artifacts to VPS
-        if: ${{ inputs.publish_to_vps }}
+        if: ${{ github.event_name == 'push' || inputs.publish_to_vps }}
         shell: pwsh
         env:
           ALPHA_SSH_HOST: ${{ secrets.ALPHA_SSH_HOST }}
@@ -144,7 +201,7 @@ jobs:
       - name: Upload Velopack publish payload
         uses: actions/upload-artifact@v5
         with:
-          name: transcription-studio-${{ inputs.channel }}-windows
+          name: transcription-studio-${{ env.CHANNEL }}-windows
           path: target/velopack/Publish/
           if-no-files-found: error
           compression-level: 0

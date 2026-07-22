@@ -20624,7 +20624,10 @@ fn updater_defaults_to_alpha_feed_and_current_version() {
     let state = StudioState::default();
 
     assert_eq!(state.updater.feed_url, DEFAULT_UPDATE_FEED_URL);
-    assert_eq!(state.updater.current_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        state.updater.current_version,
+        option_env!("STUDIO_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+    );
     assert!(matches!(state.updater.phase, UpdatePhase::Idle));
     assert_eq!(
         state.updater.status_label(),
@@ -20836,8 +20839,56 @@ fn windows_alpha_release_scripts_publish_only_atomic_current_payloads() {
     let publish_script = include_str!("../../../../tools/publish-alpha-windows.ps1");
     let release_doc = include_str!("../../../../docs/release/windows-alpha.md");
     let workflow = include_str!("../../../../.github/workflows/windows-alpha.yml");
+    let macos_workflow = include_str!("../../../../.github/workflows/macos-alpha.yml");
     let tool_manifest = include_str!("../../../../.config/dotnet-tools.json");
 
+    let windows_triggers = workflow
+        .split_once("\non:\n")
+        .expect("Windows alpha workflow should define triggers")
+        .1
+        .split_once("\npermissions:\n")
+        .expect("Windows alpha triggers should precede permissions")
+        .0;
+    assert!(windows_triggers.contains("push:\n    branches:\n      - main"));
+    assert!(windows_triggers.contains("workflow_dispatch:"));
+
+    assert!(workflow.contains(
+        r#"$nextPatch = [System.Numerics.BigInteger]::Parse($base.Groups["patch"].Value) + 1"#
+    ));
+    assert!(workflow.contains(
+        r#"$resolvedVersion = "$($base.Groups["major"].Value).$($base.Groups["minor"].Value).$nextPatch-alpha.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT""#
+    ));
+    assert!(
+        workflow.contains(r#"Add-GitHubEnvironmentValue -Name "VERSION" -Value $resolvedVersion"#)
+    );
+    assert!(workflow.contains(
+        r#"Add-GitHubEnvironmentValue -Name "STUDIO_BUILD_VERSION" -Value $resolvedVersion"#
+    ));
+    assert!(
+        workflow.contains(r#"if: ${{ github.event_name == 'push' || inputs.publish_to_vps }}"#)
+    );
+
+    assert!(package_script.contains(
+        r#"$buildVersion = [Environment]::GetEnvironmentVariable("STUDIO_BUILD_VERSION")"#
+    ));
+    assert!(
+        package_script
+            .contains(r#"-not $Version.Equals($buildVersion, [System.StringComparison]::Ordinal)"#)
+    );
+    assert!(package_script.contains("creates a build/package identity mismatch"));
+
+    let macos_triggers = macos_workflow
+        .split_once("\non:\n")
+        .expect("macOS alpha workflow should define triggers")
+        .1
+        .split_once("\npermissions:\n")
+        .expect("macOS alpha triggers should precede permissions")
+        .0;
+    assert!(macos_triggers.contains("workflow_dispatch:"));
+    assert!(
+        !macos_triggers.lines().any(|line| line.trim() == "push:"),
+        "macOS alpha releases must remain manual-only"
+    );
     assert!(package_script.contains("New-PublishDirectory"));
     assert!(package_script.contains("publish-manifest.json"));
     assert!(package_script.contains("Version override"));

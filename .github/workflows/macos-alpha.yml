@@ -56,9 +56,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          latest_arm64='{"target":"latest-arm64","runner":"macos-26","runtime":"osx-arm64","feed_suffix":"mac-arm64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-arm64"}'
-          latest_amd64='{"target":"latest-amd64","runner":"macos-26-intel","runtime":"osx-x64","feed_suffix":"mac-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-x64"}'
-          sonoma_amd64='{"target":"sonoma-amd64","runner":"macos-14-large","runtime":"osx-x64","feed_suffix":"mac-sonoma-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64"}'
+          latest_arm64='{"target":"latest-arm64","runner":"macos-26","runtime":"osx-arm64","rust_target":"aarch64-apple-darwin","feed_suffix":"mac-arm64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-arm64"}'
+          latest_amd64='{"target":"latest-amd64","runner":"macos-26-intel","runtime":"osx-x64","rust_target":"x86_64-apple-darwin","feed_suffix":"mac-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-x64"}'
+          sonoma_amd64='{"target":"sonoma-amd64","runner":"macos-14-large","runtime":"osx-x64","rust_target":"x86_64-apple-darwin","feed_suffix":"mac-sonoma-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64"}'
 
           case "${{ inputs.target }}" in
             all)
@@ -81,9 +81,48 @@ jobs:
 
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  compile:
+    name: Compile macOS alpha (${{ matrix.target }})
+    needs: select-targets
+    runs-on: [self-hosted, Linux, homeserver]
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
+
+    env:
+      RUNTIME: ${{ matrix.runtime }}
+      CARGO_TARGET_DIR: target/osxcross/${{ matrix.target }}
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      STUDIO_DEFAULT_UPDATE_FEED_URL: ${{ matrix.feed_url }}
+      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          clean: false
+
+      - name: Cross-compile macOS binaries
+        shell: bash
+        run: |
+          chmod +x ./tools/build-alpha-macos-osxcross.sh
+          ./tools/build-alpha-macos-osxcross.sh
+
+      - name: Upload cross-compiled binaries
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-binaries-${{ matrix.target }}
+          path: |
+            target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release/studio-app
+            target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release/studio-relay
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   package:
     name: Package macOS alpha (${{ matrix.target }})
-    needs: select-targets
+    needs: [select-targets, compile]
     runs-on: ${{ matrix.runner }}
 
     strategy:
@@ -100,6 +139,8 @@ jobs:
       FEED_SUFFIX: ${{ matrix.feed_suffix }}
       PUBLISH_DIR: ${{ github.workspace }}/target/velopack/Publish
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
+      SOURCE_DIR: ${{ github.workspace }}/target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release
+      SKIP_BUILD: "1"
       HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
       APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
       APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
@@ -109,14 +150,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
+      - name: Download cross-compiled binaries
+        uses: actions/download-artifact@v5
         with:
-          shared-key: alpha-${{ matrix.runtime }}
-          cache-on-failure: true
+          name: macos-binaries-${{ matrix.target }}
+          path: ${{ env.SOURCE_DIR }}
+
+      - name: Restore executable permissions
+        shell: bash
+        run: chmod +x "$SOURCE_DIR/studio-app" "$SOURCE_DIR/studio-relay"
+
 
       - name: Install .NET
         uses: actions/setup-dotnet@v5

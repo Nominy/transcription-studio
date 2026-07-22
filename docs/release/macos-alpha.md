@@ -39,6 +39,49 @@ APPLE_NOTARY_PROFILE="notarytool-keychain-profile"
 
 GitHub Actions can run the same package flow from the manual `macOS Alpha Package` workflow. See `docs/release/github-actions.md`.
 
+## GitHub Actions Topology
+
+The manual `macOS Alpha Package` workflow separates compilation from packaging for each selected target:
+
+1. A `[self-hosted, Linux, homeserver]` job cross-compiles `studio-app` and `studio-relay` with osxcross into a target-specific Cargo directory.
+2. It uploads the two binaries as `macos-binaries-<logical-target>` (for example, `macos-binaries-latest-arm64`).
+3. The matching macOS runner downloads that artifact and invokes the package helper with `SOURCE_DIR` and `SKIP_BUILD=1`, so it does not compile Rust again.
+
+The macOS runner is still required: the pinned Velopack 1.2.0 CLI host-gates full macOS packaging to macOS. That runner only performs Velopack bundle/feed packaging and, when Apple credentials are present, signing and notarization.
+
+### Homeserver setup
+
+Configure these prerequisites once on the self-hosted Linux runner:
+
+- Legally obtain a macOS 11 or newer SDK that supports arm64.
+- Build one osxcross installation with `ENABLE_ARCHS="arm64 x86_64"`.
+- Add its target `bin` directory to the runner's `PATH`, or set `OSXCROSS_TARGET_DIR` to the osxcross target directory.
+- Ensure `cargo` and `rustup` are on the runner's `PATH`.
+
+The compile helper can be run directly from the repository root:
+
+```bash
+RUNTIME=osx-arm64 \
+OSXCROSS_TARGET_DIR=/opt/osxcross/target \
+CARGO_TARGET_DIR=target/osxcross/latest-arm64 \
+MACOSX_DEPLOYMENT_TARGET=14.0 \
+./tools/build-alpha-macos-osxcross.sh
+```
+
+For Intel, use `RUNTIME=osx-x64` and an Intel logical target directory. The helper maps `osx-arm64` to `aarch64-apple-darwin` and `osx-x64` to `x86_64-apple-darwin`; it uses `osxcross-conf` plus the osxcross linker, `CC`, `CXX`, `AR`, and `SDKROOT`, adds the Rust target with `rustup`, and runs the exact locked release Cargo build.
+
+On the matching macOS host, the downloaded-artifact handoff is:
+
+```bash
+dotnet tool restore
+RUNTIME=osx-arm64 \
+SOURCE_DIR="$PWD/target/osxcross/latest-arm64/aarch64-apple-darwin/release" \
+SKIP_BUILD=1 \
+./tools/package-alpha-macos.sh
+```
+
+`SOURCE_DIR` must contain executable `studio-app` and `studio-relay` files. `SKIP_BUILD=1` tells the package helper to stage those binaries rather than run Cargo. Use the corresponding runtime, logical target, and Rust target path for Intel.
+
 ## GitHub Targets
 
 The manual workflow has a `target` input:

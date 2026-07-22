@@ -11,6 +11,10 @@ pub(super) const DEFAULT_UPDATE_FEED_URL: &str = default_update_feed_url_from(
     PLATFORM_UPDATE_FEED_URL,
 );
 const UPDATE_FEED_URL_ENV: &str = "STUDIO_UPDATE_FEED_URL";
+const CURRENT_VERSION: &str = match option_env!("STUDIO_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpdatePhase {
@@ -67,7 +71,7 @@ impl Default for UpdatePanelState {
     fn default() -> Self {
         Self {
             feed_url: configured_update_feed_url(),
-            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            current_version: CURRENT_VERSION.to_string(),
             build_commit: option_env!("STUDIO_BUILD_GIT_COMMIT")
                 .unwrap_or("unknown")
                 .to_string(),

@@ -21,8 +21,12 @@ the alpha package workflows below.
 
 ## Windows Alpha Package
 
-`Windows Alpha Package` is a manual workflow, entirely on the self-hosted
-home server (no `windows-latest`, no GitHub-hosted runner involved at all):
+`Windows Alpha Package` runs for every push to `main` and is also available
+through manual dispatch. It runs entirely on the self-hosted homeserver
+(`[self-hosted, Linux, homeserver]`; no `windows-latest` or GitHub-hosted
+runner is involved). Each push event produces one release from the checked-out
+head commit, so a push containing multiple commits does not release each commit
+separately.
 
 1. `cargo xwin build --release --target x86_64-pc-windows-msvc` cross-compiles
    `studio-app`/`studio-relay` (`cargo-xwin` downloads the MSVC CRT/Windows
@@ -64,10 +68,20 @@ after `dotnet tool restore`, since the pinned version can change) and
 `WINE_DOTNET_EXE` (points at the extracted `~/win-dotnet/runtime/dotnet.exe`
 above) as environment variables.
 
-No signing secrets are configured for Windows alpha builds today (unlike
-macOS below), so there is no Windows-only signing step blocking this either.
+Windows alpha signing is not currently configured, so there is no
+Windows-only signing step. VPS publication, however, requires the repository
+secrets `ALPHA_SSH_HOST`, `ALPHA_SSH_USER`, and `ALPHA_SSH_PRIVATE_KEY`;
+`ALPHA_SSH_PORT` is optional. Publication is mandatory for push-triggered runs,
+and a push run fails rather than silently retaining an unpublished package when
+the required secrets are missing. Manual dispatch remains available and may
+skip publication with `publish_to_vps: false`.
 
-The package step creates a clean `target/velopack/Publish` directory from `assets.alpha.json`. When VPS publication is enabled, only that directory is uploaded to unserved incoming storage, validated by size and SHA-256, and promoted under a remote lock with feed metadata last. The small publish directory is then retained as a three-day, uncompressed workflow artifact.
+The package step creates a clean `target/velopack/Publish` directory from
+`assets.alpha.json`. It uploads only that directory to unserved incoming
+storage, validates size and SHA-256, and promotes under a remote lock with feed
+metadata last. The small publish directory is then retained as a three-day,
+uncompressed workflow artifact. Workflow concurrency is serialized in the
+`velopack-windows-alpha` group with in-progress runs never cancelled.
 
 Defaults:
 
@@ -75,19 +89,58 @@ Defaults:
 - Feed URL: `https://reviewgen.ovh/transcription-studio/alpha/win-x64`
 - Remote path: `/var/www/transcription-studio/alpha/win-x64`
 
-The package version must equal `crates/studio-app/Cargo.toml`; workflow overrides cannot create a package/application version mismatch.
+When no manual version override is supplied, the workflow reads the Cargo
+`major.minor.patch`, increments the patch, and appends
+`-alpha.<run_number>.<run_attempt>`. It exports that same value as both
+`VERSION` for Velopack and `STUDIO_BUILD_VERSION` for compilation, keeping the
+displayed application build identity and package identity equal. An explicit
+manual version is allowed and is likewise carried through both variables.
+
+The separate `macOS Alpha Package` workflow remains optional and
+`workflow_dispatch`-only; Windows pushes do not trigger a macOS release.
 
 ## macOS Alpha Package
 
-`macOS Alpha Package` is a manual matrix workflow. Each runtime restores its own Rust release cache and the pinned Velopack tool, runs one `vpk pack` pass, and creates the same clean `Publish` payload used by Windows. The former redundant `vpk bundle` pass is not part of the release path.
+`macOS Alpha Package` is a manual two-stage matrix workflow. For every selected logical target, the `compile` job runs on `[self-hosted, Linux, homeserver]` and uses osxcross to build the Rust binaries. It uploads those binaries as `macos-binaries-<logical-target>`. The matching macOS `package` job downloads that artifact, restores the pinned Velopack 1.2.0 CLI, and runs one full `vpk pack` pass without rebuilding Rust. The former redundant `vpk bundle` pass is not part of the release path.
 
-Optional VPS publication uses per-runtime incoming storage, manifest validation, a remote lock, asset-first promotion, feed-last replacement, and rollback metadata. The Sonoma target remains separate until compatibility is proven on a real Sonoma machine.
+The macOS runner remains necessary because Velopack 1.2.0 host-gates full macOS packaging to macOS. It is used only to create the application bundle and release payload and, when credentials are configured, to perform Apple signing and notarization. Optional VPS publication then uses per-runtime incoming storage, manifest validation, a remote lock, asset-first promotion, feed-last replacement, and rollback metadata. The Sonoma target remains separate until compatibility is proven on a real Sonoma machine.
 
 Defaults:
 
 - Channel: `alpha`
 - Target: `all`
 - Remote base path: `/var/www/transcription-studio/alpha`
+
+One-time homeserver prerequisites:
+
+- Obtain a macOS 11 or newer SDK legally; it must include arm64 support.
+- Build osxcross once with `ENABLE_ARCHS="arm64 x86_64"` so both workflow runtimes use the same installation.
+- Put the osxcross target `bin` directory on the self-hosted runner's `PATH`, or set `OSXCROSS_TARGET_DIR` to that target directory in the runner environment.
+- Make `cargo` and `rustup` available on the runner's `PATH`.
+
+To reproduce the compile stage directly from the repository root, use the logical runtime and an isolated Cargo target directory:
+
+```bash
+RUNTIME=osx-arm64 \
+OSXCROSS_TARGET_DIR=/opt/osxcross/target \
+CARGO_TARGET_DIR=target/osxcross/latest-arm64 \
+MACOSX_DEPLOYMENT_TARGET=14.0 \
+./tools/build-alpha-macos-osxcross.sh
+```
+
+Use `RUNTIME=osx-x64` and the appropriate logical target directory for an Intel target. The helper maps these runtimes to `aarch64-apple-darwin` and `x86_64-apple-darwin`, loads `osxcross-conf` when available, configures the target linker plus `CC`, `CXX`, `AR`, and `SDKROOT`, installs the Rust target with `rustup`, and runs the locked release build.
+
+After artifact download, the package-stage interface is:
+
+```bash
+dotnet tool restore
+RUNTIME=osx-arm64 \
+SOURCE_DIR="$PWD/target/osxcross/latest-arm64/aarch64-apple-darwin/release" \
+SKIP_BUILD=1 \
+./tools/package-alpha-macos.sh
+```
+
+`SOURCE_DIR` must contain the downloaded `studio-app` and `studio-relay` executables. `SKIP_BUILD=1` makes the helper consume them instead of invoking Cargo.
 
 Targets:
 
@@ -111,11 +164,14 @@ Optional macOS signing secrets:
 
 ## VPS Publish Secrets
 
-Publishing is disabled by default. To let Actions stage and atomically promote a release on the VPS, add these repository secrets:
+Windows push runs always publish; manual Windows dispatches and macOS runs
+leave publishing disabled by default. To let a manual run stage and atomically
+promote a release on the VPS, add the same repository secrets required by
+automatic Windows publication:
 
 - `ALPHA_SSH_HOST`: VPS host or IP.
 - `ALPHA_SSH_USER`: SSH user with write access to the incoming and release directories.
 - `ALPHA_SSH_PRIVATE_KEY`: private deploy key for that user.
 - `ALPHA_SSH_PORT`: optional SSH port, defaults to `22`.
 
-Package jobs inject `STUDIO_BUILD_GIT_COMMIT=${{ github.sha }}` so installed builds retain exact source identity without making local Cargo builds watch Git refs. Keep `publish_to_vps` off when you only want a downloadable Actions artifact for local testing.
+Package jobs inject `STUDIO_BUILD_GIT_COMMIT=${{ github.sha }}` so installed builds retain exact source identity without making local Cargo builds watch Git refs. For artifact-only testing, use manual dispatch and leave `publish_to_vps` off; push-triggered Windows runs cannot skip publication.

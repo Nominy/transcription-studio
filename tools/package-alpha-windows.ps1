@@ -262,7 +262,18 @@ $cargoVersion = Get-StudioAppVersion -RepoRoot $repoRoot
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = $cargoVersion
 } elseif (-not $Version.Equals($cargoVersion, [System.StringComparison]::Ordinal)) {
-    throw "Version override '$Version' does not match studio-app Cargo version '$cargoVersion'."
+    $buildVersion = [Environment]::GetEnvironmentVariable("STUDIO_BUILD_VERSION")
+    if (
+        [string]::IsNullOrWhiteSpace($buildVersion) -or
+        -not $Version.Equals($buildVersion, [System.StringComparison]::Ordinal)
+    ) {
+        $displayBuildVersion = if ([string]::IsNullOrWhiteSpace($buildVersion)) {
+            "<unset>"
+        } else {
+            $buildVersion
+        }
+        throw "Version override '$Version' creates a build/package identity mismatch: STUDIO_BUILD_VERSION is '$displayBuildVersion'. Rebuild with STUDIO_BUILD_VERSION set exactly to the package version."
+    }
 }
 if ([string]::IsNullOrWhiteSpace($StageDir)) {
     $StageDir = Join-Path $repoRoot "target/velopack/stage"

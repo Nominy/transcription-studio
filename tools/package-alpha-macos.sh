@@ -13,6 +13,7 @@ stage_dir="${STAGE_DIR:-$repo_root/target/velopack/macos-stage}"
 output_dir="${OUTPUT_DIR:-$repo_root/target/velopack/Releases}"
 publish_dir="${PUBLISH_DIR:-$repo_root/target/velopack/Publish}"
 skip_build="${SKIP_BUILD:-0}"
+source_dir="${SOURCE_DIR:-$repo_root/target/release}"
 install_vpk="${INSTALL_VPK:-0}"
 vpk_command="${VPK_COMMAND:-}"
 runtime="${RUNTIME:-}"
@@ -126,8 +127,8 @@ fi
 
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir" "$output_dir"
-cp "$repo_root/target/release/studio-app" "$stage_dir/TranscriptionStudio"
-cp "$repo_root/target/release/studio-relay" "$stage_dir/studio-relay"
+cp "$source_dir/studio-app" "$stage_dir/TranscriptionStudio"
+cp "$source_dir/studio-relay" "$stage_dir/studio-relay"
 chmod +x "$stage_dir/TranscriptionStudio" "$stage_dir/studio-relay"
 
 for file in README.md Cargo.lock; do
