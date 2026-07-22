@@ -3304,26 +3304,7 @@ impl StudioState {
                         "s"
                     }
                 );
-                if self.subaccount_session.is_none()
-                    && !self.subaccount_owner.host_url.trim().is_empty()
-                    && !self.dashboard.projects.is_empty()
-                {
-                    self.subaccount_owner_requests.push(
-                        SubaccountOwnerRequest::PushProjectQueueConfigs {
-                            host_url: self.subaccount_owner.host_url.clone(),
-                            configs: self
-                                .dashboard
-                                .projects
-                                .iter()
-                                .map(|project| ProjectQueueConfig {
-                                    project_id: project.id.clone(),
-                                    chunked_queue_id: project.chunked_queue_id.clone(),
-                                    stitched_queue_id: project.stitched_queue_id.clone(),
-                                })
-                                .collect(),
-                        },
-                    );
-                }
+                self.queue_subaccount_owner_project_queue_configs_sync();
             }
             Err(error) => {
                 self.dashboard.error = Some(error.clone());
@@ -3333,6 +3314,49 @@ impl StudioState {
                     format!("Babel projects load failed: {error}")
                 };
             }
+        }
+    }
+
+    pub(super) fn queue_subaccount_owner_project_queue_configs_sync(&mut self) {
+        if self.subaccount_session.is_some()
+            || self.subaccount_owner.host_url.trim().is_empty()
+            || self.dashboard.projects.is_empty()
+        {
+            return;
+        }
+        self.subaccount_owner_requests
+            .push(SubaccountOwnerRequest::PushProjectQueueConfigs {
+                host_url: self.subaccount_owner.host_url.clone(),
+                configs: self
+                    .dashboard
+                    .projects
+                    .iter()
+                    .map(|project| ProjectQueueConfig {
+                        project_id: project.id.clone(),
+                        chunked_queue_id: project.chunked_queue_id.clone(),
+                        stitched_queue_id: project.stitched_queue_id.clone(),
+                    })
+                    .collect(),
+            });
+    }
+
+    pub(super) fn complete_subaccount_owner_project_queue_configs_sync(
+        &mut self,
+        completed_request: &SubaccountOwnerRequest,
+    ) {
+        if let Some(index) = self
+            .subaccount_owner_requests
+            .iter()
+            .position(|request| request == completed_request)
+        {
+            self.subaccount_owner_requests.remove(index);
+        }
+        if let Some(index) = self
+            .dispatched_subaccount_owner_requests
+            .iter()
+            .position(|request| request == completed_request)
+        {
+            self.dispatched_subaccount_owner_requests.remove(index);
         }
     }
 

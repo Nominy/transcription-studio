@@ -75,7 +75,8 @@ use super::state::{
     PendingLeaveIntent, ReviewerPendingFinalize, TimelineAutoscrollMode,
 };
 use super::subaccounts::{
-    ManagedSubaccount, SubaccountOwnerRequest, SubaccountSession, relay_request_kind,
+    ManagedSubaccount, ProjectQueueConfig, SubaccountOwnerRequest, SubaccountSession,
+    relay_request_kind,
 };
 use super::tag_suggestions::{
     TagSuggestionKeyboardAction, TagSuggestionKind, tag_suggestions_for_draft,
@@ -15295,6 +15296,98 @@ fn dashboard_project_load_pushes_project_queue_configs_for_owner() {
                         })
             ))
     );
+}
+
+#[test]
+fn saving_relay_url_syncs_already_loaded_project_queue_configs() {
+    let mut state = stable_sample_state();
+    assert!(state.subaccount_owner.host_url.is_empty());
+
+    let _ = update(
+        &mut state,
+        Message::DashboardProjectsLoaded(
+            serde_json::json!([
+                {
+                    "projectId": "1c97f55a-3868-4861-9778-d39ee80cda3d",
+                    "name": "RU-tx-gold-dg",
+                    "permissionStatus": "active",
+                    "status": "active",
+                    "chunkedQueueId": "dg-chunked-queue",
+                    "stitchedTxQueueId": "dg-stitched-queue"
+                }
+            ])
+            .to_string(),
+        ),
+    );
+    assert!(state.subaccount_owner_requests.is_empty());
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerHostUrlChanged("https://relay.example.test".to_string()),
+    );
+    let _ = update(&mut state, Message::SaveSubaccountRelayUrl);
+
+    assert!(
+        state
+            .subaccount_owner_requests
+            .iter()
+            .any(|request| matches!(
+                request,
+                SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, configs }
+                    if host_url == "https://relay.example.test"
+                        && configs.iter().any(|config| {
+                            config.project_id == "1c97f55a-3868-4861-9778-d39ee80cda3d"
+                                && config.chunked_queue_id == "dg-chunked-queue"
+                                && config.stitched_queue_id == "dg-stitched-queue"
+                        })
+            ))
+    );
+}
+
+#[test]
+fn completed_project_queue_sync_can_be_queued_again() {
+    let mut state = stable_sample_state();
+    let request = SubaccountOwnerRequest::PushProjectQueueConfigs {
+        host_url: "https://relay.example.test".to_string(),
+        configs: vec![ProjectQueueConfig {
+            project_id: "project-1".to_string(),
+            chunked_queue_id: "chunked-1".to_string(),
+            stitched_queue_id: "stitched-1".to_string(),
+        }],
+    };
+    state.subaccount_owner_requests.push(request.clone());
+    state.subaccount_owner_requests.push(request.clone());
+    state
+        .dispatched_subaccount_owner_requests
+        .push(request.clone());
+
+    let _ = update(
+        &mut state,
+        Message::SubaccountOwnerProjectQueuesPushFinished(
+            request.clone(),
+            Err("temporary network failure".to_string()),
+        ),
+    );
+
+    assert_eq!(state.subaccount_owner_requests, vec![request.clone()]);
+    assert_eq!(state.dispatched_subaccount_owner_requests, vec![request]);
+}
+
+#[test]
+fn invalid_relay_url_does_not_queue_project_metadata_sync() {
+    let mut state = stable_sample_state();
+    state.dashboard.projects.push(DashboardProject {
+        id: "project-1".to_string(),
+        name: "Project One".to_string(),
+        chunked_queue_id: "chunked-1".to_string(),
+        stitched_queue_id: "stitched-1".to_string(),
+    });
+    state.subaccount_owner.host_url = "not a relay URL".to_string();
+
+    let _ = update(&mut state, Message::SaveSubaccountRelayUrl);
+
+    assert!(state.subaccount_owner_requests.is_empty());
+    assert!(state.subaccount_owner.error.is_some());
 }
 
 #[test]

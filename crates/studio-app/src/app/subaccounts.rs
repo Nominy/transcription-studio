@@ -464,41 +464,31 @@ async fn execute_subaccount_owner_request(request: SubaccountOwnerRequest) -> Me
 }
 
 async fn push_project_queue_configs(request: SubaccountOwnerRequest) -> Message {
+    let completed_request = request.clone();
+    let result = push_project_queue_configs_result(request).await;
+    Message::SubaccountOwnerProjectQueuesPushFinished(completed_request, result)
+}
+
+async fn push_project_queue_configs_result(request: SubaccountOwnerRequest) -> Result<(), String> {
     let (host_url, configs) = match request {
         SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, configs } => {
             (host_url, configs)
         }
-        _ => {
-            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(
-                "internal: unexpected request kind".to_string(),
-            ));
-        }
+        _ => return Err("internal: unexpected request kind".to_string()),
     };
-    let host_url = match normalize_relay_host_url(&host_url) {
-        Ok(host_url) => host_url,
-        Err(error) => return Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)),
-    };
-    let authorization = match mint_native_babel_authorization_from_store(
+    let host_url = normalize_relay_host_url(&host_url)?;
+    let authorization = mint_native_babel_authorization_from_store(
         &default_native_auth_store_path(),
         &native_babel_url(),
         &native_clerk_url(),
         OffsetDateTime::now_utc().unix_timestamp(),
     )
     .await
-    {
-        Ok(authorization) => authorization,
-        Err(error) => {
-            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
-                "Main Babel account auth is required for Sub-account controls: {error}"
-            )));
-        }
-    };
-    let headers = match relay_headers(&authorization) {
-        Ok(headers) => headers,
-        Err(error) => return Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)),
-    };
-    let client = reqwest::Client::new();
-    let response = client
+    .map_err(|error| {
+        format!("Main Babel account auth is required for Sub-account controls: {error}")
+    })?;
+    let headers = relay_headers(&authorization)?;
+    let response = reqwest::Client::new()
         .put(api_url(&host_url, OWNER_PROJECT_QUEUES_PATH))
         .headers(headers)
         .json(&json!({
@@ -512,31 +502,20 @@ async fn push_project_queue_configs(request: SubaccountOwnerRequest) -> Message 
                 .collect::<Vec<_>>()
         }))
         .send()
-        .await;
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
-                "Sub-account owner request failed: {error}"
-            )));
-        }
-    };
+        .await
+        .map_err(|error| format!("Sub-account owner request failed: {error}"))?;
     let status = response.status();
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => {
-            return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
-                "failed to read Sub-account owner response: {error}"
-            )));
-        }
-    };
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("failed to read Sub-account owner response: {error}"))?;
     if !status.is_success() {
-        return Message::SubaccountOwnerProjectQueuesPushFinished(Err(format!(
+        return Err(format!(
             "Sub-account owner HTTP {status}: {}",
             response_body_snippet(&body)
-        )));
+        ));
     }
-    Message::SubaccountOwnerProjectQueuesPushFinished(Ok(()))
+    Ok(())
 }
 
 async fn owner_dashboard_payload_for_request(

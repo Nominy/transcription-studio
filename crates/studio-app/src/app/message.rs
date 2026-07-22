@@ -14,7 +14,7 @@ use super::service_callbacks::{
     FeedbackDraftSaveToken, SaveRequestToken, SubmitRequestToken,
 };
 use super::state::{DashboardSection, NativeCapabilityModalTab};
-use super::subaccounts::{SubaccountOwnerDashboard, SubaccountSession};
+use super::subaccounts::{SubaccountOwnerDashboard, SubaccountOwnerRequest, SubaccountSession};
 use super::tag_suggestions::{TagSuggestion, TagSuggestionKeyboardAction};
 use super::time_edit::TimeField;
 use super::updater::UpdateCheckSummary;
@@ -148,7 +148,7 @@ pub(super) enum Message {
     SubaccountOwnerSaveAssignment(String),
     SubaccountOwnerProjectToggled(String, String, bool),
     SubaccountOwnerDashboardLoaded(SubaccountOwnerDashboard),
-    SubaccountOwnerProjectQueuesPushFinished(Result<(), String>),
+    SubaccountOwnerProjectQueuesPushFinished(SubaccountOwnerRequest, Result<(), String>),
     SubaccountOwnerRequestFailed(String),
     DashboardRefreshProjects,
     DashboardRecoverLatestDraft,

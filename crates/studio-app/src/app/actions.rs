@@ -482,7 +482,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         }
         Message::SaveSubaccountRelayUrl => {
             let host_url = state.subaccount_owner.host_url.clone();
-            state.remember_subaccount_relay_host_url(&host_url);
+            if state
+                .remember_subaccount_relay_host_url(&host_url)
+                .is_some()
+            {
+                state.queue_subaccount_owner_project_queue_configs_sync();
+            }
         }
         Message::StartSubaccountRelay | Message::TrayStartRelay => {
             let task = state.begin_subaccount_relay_start();
@@ -549,9 +554,11 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
         Message::SubaccountOwnerDashboardLoaded(dashboard) => {
             state.complete_subaccount_owner_dashboard(dashboard);
         }
-        Message::SubaccountOwnerProjectQueuesPushFinished(Ok(())) => {}
-        Message::SubaccountOwnerProjectQueuesPushFinished(Err(error)) => {
-            state.status = format!("Sub-account project sync failed: {error}");
+        Message::SubaccountOwnerProjectQueuesPushFinished(request, result) => {
+            state.complete_subaccount_owner_project_queue_configs_sync(&request);
+            if let Err(error) = result {
+                state.status = format!("Sub-account project sync failed: {error}");
+            }
         }
         Message::SubaccountOwnerRequestFailed(error) => {
             state.fail_subaccount_owner_request(error);
