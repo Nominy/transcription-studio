@@ -10538,6 +10538,62 @@ fn apply_pending_drafts_commits_multiple_rows_as_one_undo_step() {
 }
 
 #[test]
+fn auto_save_tick_preserves_transcript_draft_caret_and_local_undo_history() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let export_path = temp.path().join("babel-task.json");
+    let mut state = StudioState {
+        export_path: export_path.display().to_string(),
+        ..stable_sample_state()
+    };
+    let segment_id = "annotation-2";
+    let before_edit = "autosave preserves editor";
+    let saved_text = "autosave! preserves editor";
+    {
+        let draft = state.segment_drafts.get_mut(segment_id).unwrap();
+        draft.replace_text(before_edit.to_string());
+        draft.set_cursor_to_char_offset("autosave".chars().count());
+        draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('!')));
+        assert_eq!(draft.text_content.cursor_position(), (0, "autosave!".len()));
+        assert!(draft.can_undo_text_edit_to(before_edit));
+    }
+    state.mark_dirty();
+
+    let _ = update(&mut state, Message::AutoSaveTick);
+
+    let project_segment = state.project().unwrap().segment(segment_id).unwrap();
+    assert_eq!(project_segment.text, saved_text);
+    let draft = state.segment_drafts.get_mut(segment_id).unwrap();
+    assert_eq!(draft.text, saved_text);
+    assert_eq!(draft.editor_text(), saved_text);
+    assert_eq!(draft.text_content.cursor_position(), (0, "autosave!".len()));
+    assert!(draft.can_undo_text_edit_to(before_edit));
+
+    draft.perform_text_edit(TextEditAction::Edit(TextEdit::Insert('?')));
+    assert_eq!(draft.text, "autosave!? preserves editor");
+    assert_eq!(draft.editor_text(), "autosave!? preserves editor");
+    assert_eq!(
+        draft.text_content.cursor_position(),
+        (0, "autosave!?".len())
+    );
+    assert!(draft.can_undo_text_edit_to(saved_text));
+    assert!(draft.undo_text_edit());
+    assert_eq!(draft.text, saved_text);
+    assert!(draft.can_undo_text_edit_to(before_edit));
+    assert!(draft.undo_text_edit());
+    assert_eq!(draft.text, before_edit);
+    assert_eq!(draft.editor_text(), before_edit);
+
+    let exported = std::fs::read_to_string(export_path).unwrap();
+    let package: BabelTaskPackage = serde_json::from_str(&exported).unwrap();
+    let annotation = package
+        .annotations
+        .iter()
+        .find(|annotation| annotation.annotation_id == segment_id)
+        .unwrap();
+    assert_eq!(annotation.text, saved_text);
+}
+
+#[test]
 fn auto_save_tick_flushes_dirty_pending_draft_like_recovered_interval_save() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let export_path = temp.path().join("babel-task.json");

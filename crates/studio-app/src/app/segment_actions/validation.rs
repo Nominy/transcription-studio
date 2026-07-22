@@ -109,7 +109,7 @@ impl StudioState {
                 "{action_name}: applied {update_count} pending draft rows."
             ))
         }) {
-            self.reset_segment_drafts();
+            self.sync_segment_drafts_preserving_existing();
             self.mark_dirty();
             self.invalidate_transcript_layout_cache();
             true
