@@ -21,25 +21,51 @@ the alpha package workflows below.
 
 ## Windows Alpha Package
 
-`Windows Alpha Package` is a manual workflow split across two jobs:
+`Windows Alpha Package` is a manual workflow, entirely on the self-hosted
+home server (no `windows-latest`, no GitHub-hosted runner involved at all):
 
-1. `build` cross-compiles `studio-app`/`studio-relay` for
-   `x86_64-pc-windows-msvc` on the same self-hosted home server as `CI`,
-   using `cargo xwin build` (downloads the MSVC CRT/Windows SDK from
-   Microsoft's redistributable via `cargo-xwin`; no Visual Studio or
-   Windows host required for this step). The resulting `.exe` files are
-   uploaded as a workflow artifact.
-2. `package` runs on `windows-latest` and does only the fast part: download
-   the cross-compiled `.exe`s, `dotnet tool restore` the pinned Velopack
-   CLI, `vpk download http` to prime deltas, and
-   `tools/package-alpha-windows.ps1 -SkipBuild` to run `vpk pack`. This is
-   the one step that genuinely cannot move off Windows -- `vpk pack`
-   packages for whatever OS it runs on, confirmed empirically (tried both
-   the pinned 1.2.0 and the latest 1.2.x prerelease with `--runtime
-   win-x64` on Linux; both refuse: "the target rid must be Linux"). Moving
-   the compile off `windows-latest` cuts that job from several minutes to
-   seconds, since packaging itself is just hashing/zipping already-built
-   files.
+1. `cargo xwin build --release --target x86_64-pc-windows-msvc` cross-compiles
+   `studio-app`/`studio-relay` (`cargo-xwin` downloads the MSVC CRT/Windows
+   SDK from Microsoft's redistributable; no Visual Studio or Windows host
+   needed for this step).
+2. `tools/package-alpha-windows.ps1 -Target x86_64-pc-windows-msvc -VpkCommand
+   tools/vpk-wine-wrapper.sh` runs `vpk pack` through
+   `tools/vpk-wine-wrapper.sh`, which hosts the pinned `vpk.dll` (a portable,
+   framework-dependent .NET assembly) under a genuine **Windows-native**
+   `dotnet.exe` executed via Wine, instead of the Linux-native `dotnet`.
+   This matters because `vpk pack` decides which OS to package for based on
+   which runtime build is executing it, not a `--runtime`/`-r` flag --
+   confirmed empirically: `vpk pack --runtime win-x64` under the Linux-native
+   `dotnet` refuses with "the target rid must be Linux" on both the pinned
+   1.2.0 and the latest 1.2.x prerelease, while the identical `vpk.dll`
+   hosted by a Windows-native `dotnet.exe` under Wine correctly exposes the
+   Windows-only options (`--shortcuts`, `--msi`, `--signParams`) and produces
+   a real `Setup.exe`/`.nupkg`/portable zip. Verified end to end: produced a
+   working, correctly-signed-format `TranscriptionStudio-alpha-Setup.exe`
+   this way and confirmed it as a genuine `PE32 executable for MS Windows`
+   via `file`.
+
+Wine setup on the home server (one-time, mirrors the rust/node/gitleaks
+pattern -- not repeated per run):
+
+```bash
+dpkg --add-architecture i386
+apt-get update && apt-get install -y wine wine64 winetricks
+
+# Windows-native .NET 8 runtime, used only to host vpk.dll under Wine.
+curl -fsSL -o dotnet-runtime-win-x64.zip \
+  https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.20/dotnet-runtime-8.0.20-win-x64.zip
+mkdir -p ~/win-dotnet/runtime
+unzip dotnet-runtime-win-x64.zip -d ~/win-dotnet/runtime
+```
+
+`tools/vpk-wine-wrapper.sh` requires `VPK_DLL` (set from `dotnet tool list`
+after `dotnet tool restore`, since the pinned version can change) and
+`WINE_DOTNET_EXE` (points at the extracted `~/win-dotnet/runtime/dotnet.exe`
+above) as environment variables.
+
+No signing secrets are configured for Windows alpha builds today (unlike
+macOS below), so there is no Windows-only signing step blocking this either.
 
 The package step creates a clean `target/velopack/Publish` directory from `assets.alpha.json`. When VPS publication is enabled, only that directory is uploaded to unserved incoming storage, validated by size and SHA-256, and promoted under a remote lock with feed metadata last. The small publish directory is then retained as a three-day, uncompressed workflow artifact.
 

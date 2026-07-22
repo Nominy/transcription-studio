@@ -38,13 +38,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Cross-compile Windows binaries (self-hosted homeserver)
+  package:
+    name: Package Windows alpha (self-hosted homeserver)
     runs-on: [self-hosted, Linux, homeserver]
 
     env:
+      CHANNEL: ${{ inputs.channel }}
+      VERSION: ${{ inputs.version }}
+      FEED_URL: ${{ inputs.feed_url }}
+      REMOTE_PATH: ${{ inputs.remote_path }}
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
       TARGET: x86_64-pc-windows-msvc
+      WINE_DOTNET_EXE: /home/ci-runner/win-dotnet/runtime/dotnet.exe
 
     steps:
       - name: Check out repository
@@ -52,49 +57,22 @@ jobs:
         with:
           clean: false
 
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
+
+      - name: Resolve pinned vpk.dll path
+        run: |
+          vpk_version="$(dotnet tool list | awk '$1=="vpk"{print $2}')"
+          if [ -z "$vpk_version" ]; then
+            echo "Could not resolve the restored vpk tool version" >&2
+            exit 1
+          fi
+          echo "VPK_DLL=$HOME/.nuget/packages/vpk/$vpk_version/tools/net8.0/any/vpk.dll" >> "$GITHUB_ENV"
+
       - name: Cross-compile studio-app and studio-relay for Windows
         run: cargo xwin build -p studio-app -p studio-relay --release --locked --target ${{ env.TARGET }}
         env:
           XWIN_ACCEPT_LICENSE: "1"
-
-      - name: Upload cross-compiled binaries
-        uses: actions/upload-artifact@v5
-        with:
-          name: windows-cross-build
-          path: |
-            target/${{ env.TARGET }}/release/studio-app.exe
-            target/${{ env.TARGET }}/release/studio-relay.exe
-          if-no-files-found: error
-          retention-days: 1
-
-  package:
-    name: Package Windows alpha
-    needs: build
-    runs-on: windows-latest
-
-    env:
-      CHANNEL: ${{ inputs.channel }}
-      VERSION: ${{ inputs.version }}
-      FEED_URL: ${{ inputs.feed_url }}
-      REMOTE_PATH: ${{ inputs.remote_path }}
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Download cross-compiled binaries
-        uses: actions/download-artifact@v6
-        with:
-          name: windows-cross-build
-          path: windows-cross-build
-
-      - name: Install .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore pinned Velopack CLI
-        run: dotnet tool restore
 
       - name: Prime existing Velopack packages for deltas
         shell: pwsh
@@ -120,14 +98,13 @@ jobs:
         run: |
           $packageArgs = @{
             Channel = $env:CHANNEL
-            SkipBuild = $true
-            SourceExe = (Join-Path $PWD "windows-cross-build\studio-app.exe")
-            SourceRelayExe = (Join-Path $PWD "windows-cross-build\studio-relay.exe")
+            Target = $env:TARGET
+            VpkCommand = (Join-Path $PWD "tools/vpk-wine-wrapper.sh")
           }
           if (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
             $packageArgs.Version = $env:VERSION
           }
-          & .\tools\package-alpha-windows.ps1 @packageArgs
+          & ./tools/package-alpha-windows.ps1 @packageArgs
 
       - name: Publish artifacts to VPS
         if: ${{ inputs.publish_to_vps }}
@@ -149,19 +126,18 @@ jobs:
           $keyPath = Join-Path $env:RUNNER_TEMP "transcription_studio_alpha_deploy_key"
           $keyText = $env:ALPHA_SSH_PRIVATE_KEY -replace "`r`n", "`n"
           [System.IO.File]::WriteAllText($keyPath, $keyText)
-          icacls $keyPath /inheritance:r | Out-Null
-          icacls $keyPath /grant:r "$($env:USERNAME):R" | Out-Null
+          & chmod 600 $keyPath
 
           $publishArgs = @{
             Channel = $env:CHANNEL
             Remote = "$($env:ALPHA_SSH_USER)@$($env:ALPHA_SSH_HOST)"
             RemotePath = $env:REMOTE_PATH
-            PublishDir = (Join-Path $PWD "target\velopack\Publish")
+            PublishDir = (Join-Path $PWD "target/velopack/Publish")
             SshKeyPath = $keyPath
             SshPort = $port
             SkipPackage = $true
           }
-          & .\tools\publish-alpha-windows.ps1 @publishArgs
+          & ./tools/publish-alpha-windows.ps1 @publishArgs
       - name: Upload Velopack publish payload
         uses: actions/upload-artifact@v5
         with:
