@@ -1237,6 +1237,7 @@ struct TimelineLanesCacheEntry {
 #[derive(Debug)]
 struct TimelineSegmentIndexCacheEntry {
     generation: u64,
+    waveform_end_seconds_bits: u64,
     index: Arc<TimelineSegmentIndex>,
     bounds: TimeRange,
 }
@@ -2090,7 +2091,8 @@ impl StudioState {
         }
 
         let strip_blocks = self.prewarm_timeline_static_blocks_for_render(project, editor);
-        let (segment_index, bounds) = self.timeline_segment_index_and_bounds_for_render(project);
+        let (segment_index, bounds) =
+            self.timeline_segment_index_and_bounds_for_render(project, editor);
         let lanes = Arc::<[TimelineLaneView]>::from(
             editor.timeline_lanes_with_segment_index_bounds_and_preview(
                 project,
@@ -2165,28 +2167,36 @@ impl StudioState {
     fn timeline_segment_index_and_bounds_for_render(
         &self,
         project: &Project,
+        editor: &EditorSession,
     ) -> (Arc<TimelineSegmentIndex>, TimeRange) {
         let generation = self.timeline_segment_index_generation;
+        let waveform_end_seconds_bits = editor.timeline_waveform_end_seconds().to_bits();
         let mut cache = self.timeline_segment_index_cache.borrow_mut();
         if let Some(entry) = cache.entry.as_ref()
             && entry.generation == generation
+            && entry.waveform_end_seconds_bits == waveform_end_seconds_bits
         {
             return (Arc::clone(&entry.index), entry.bounds);
         }
-
-        let bounds = TimeRange::for_project(project);
+        let bounds = editor.timeline_bounds(project);
         let index = Arc::new(TimelineSegmentIndex::for_project(project));
         cache.miss_count += 1;
         cache.entry = Some(TimelineSegmentIndexCacheEntry {
             generation,
+            waveform_end_seconds_bits,
             bounds,
             index: Arc::clone(&index),
         });
         (index, bounds)
     }
 
-    fn timeline_project_bounds_for_render(&self, project: &Project) -> TimeRange {
-        self.timeline_segment_index_and_bounds_for_render(project).1
+    fn timeline_project_bounds_for_render(
+        &self,
+        project: &Project,
+        editor: &EditorSession,
+    ) -> TimeRange {
+        self.timeline_segment_index_and_bounds_for_render(project, editor)
+            .1
     }
 
     pub(super) fn overview_waveform_snapshot_for_render(
@@ -2219,7 +2229,7 @@ impl StudioState {
             };
         }
 
-        let bounds = TimeRange::for_project(project);
+        let bounds = editor.timeline_bounds(project);
         let overview = Arc::new(editor.overview_waveform(project));
         cache.miss_count += 1;
         cache.entry = Some(OverviewWaveformCacheEntry {
@@ -2677,13 +2687,16 @@ impl StudioState {
             self.status = "Rewind unavailable: no project loaded.".to_string();
             return;
         };
-        let Some(playhead_seconds) = self.editor.as_ref().map(|editor| editor.playhead_seconds)
-        else {
+        let Some((playhead_seconds, timeline_start_seconds)) = self.editor.as_ref().map(|editor| {
+            (
+                editor.playhead_seconds,
+                editor.timeline_bounds(&project).start_seconds,
+            )
+        }) else {
             self.status = "Rewind unavailable: no editor session.".to_string();
             return;
         };
-        let next_time =
-            (playhead_seconds - 1.0).max(TimeRange::for_project(&project).start_seconds);
+        let next_time = (playhead_seconds - 1.0).max(timeline_start_seconds);
         self.with_editor_mut(|editor| editor.seek_to_time(&project, next_time));
         self.last_transport_tick = None;
         self.restart_audio_playback_if_playing();
@@ -3025,7 +3038,10 @@ impl StudioState {
             self.workflow
                 .as_ref()
                 .ok()
-                .map(|workflow| self.timeline_project_bounds_for_render(workflow.project()))
+                .zip(self.editor.as_ref())
+                .map(|(workflow, editor)| {
+                    self.timeline_project_bounds_for_render(workflow.project(), editor)
+                })
         };
         let Some(editor) = self.editor.as_mut() else {
             self.status = "Playback unavailable: no editor session.".to_string();
@@ -3885,11 +3901,14 @@ impl StudioState {
     }
 
     pub(super) fn toggle_playback(&mut self) {
-        let playback_bounds = self
-            .workflow
-            .as_ref()
-            .ok()
-            .map(|workflow| self.timeline_project_bounds_for_render(workflow.project()));
+        let playback_bounds =
+            self.workflow
+                .as_ref()
+                .ok()
+                .zip(self.editor.as_ref())
+                .map(|(workflow, editor)| {
+                    self.timeline_project_bounds_for_render(workflow.project(), editor)
+                });
         let Some(editor) = &mut self.editor else {
             self.status = "Playback unavailable: no editor session.".to_string();
             return;
@@ -3935,7 +3954,10 @@ impl StudioState {
         let timeline_bounds;
         {
             let project = workflow.project();
-            let bounds = self.timeline_project_bounds_for_render(project);
+            let Some(editor) = self.editor.as_ref() else {
+                return;
+            };
+            let bounds = self.timeline_project_bounds_for_render(project, editor);
             timeline_bounds = bounds;
             if let Some(editor) = self.editor.as_mut() {
                 editor.advance_transport_with_bounds(project, bounds, elapsed_seconds);

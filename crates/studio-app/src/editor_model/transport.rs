@@ -15,11 +15,7 @@ impl EditorSession {
     }
 
     pub fn advance_transport(&mut self, project: &Project, elapsed_seconds: f64) {
-        self.advance_transport_with_bounds(
-            project,
-            TimeRange::for_project(project),
-            elapsed_seconds,
-        );
+        self.advance_transport_with_bounds(project, self.timeline_bounds(project), elapsed_seconds);
     }
 
     pub fn advance_transport_with_bounds(
@@ -57,7 +53,7 @@ impl EditorSession {
     /// the user's current context; an off-screen playhead or one past the
     /// midpoint is centered so playback has room to advance.
     pub fn prepare_viewport_for_playback(&mut self, project: &Project) {
-        self.prepare_viewport_for_playback_with_bounds(TimeRange::for_project(project));
+        self.prepare_viewport_for_playback_with_bounds(self.timeline_bounds(project));
     }
 
     pub fn prepare_viewport_for_playback_with_bounds(&mut self, bounds: TimeRange) {
@@ -92,7 +88,7 @@ impl EditorSession {
     pub fn set_zoom(&mut self, project: &Project, zoom: f32) {
         if zoom.is_finite() {
             self.zoom = zoom.clamp(0.05, 10.0);
-            self.recenter_viewport(TimeRange::for_project(project));
+            self.recenter_viewport(self.timeline_bounds(project));
         }
     }
 
@@ -101,7 +97,7 @@ impl EditorSession {
             return;
         }
 
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let previous_viewport = self.viewport;
         self.zoom = zoom.clamp(0.05, 10.0);
         let visible_duration = visible_duration_for_zoom(bounds, self.zoom);
@@ -131,7 +127,7 @@ impl EditorSession {
         if !delta_pixels.is_finite() || delta_pixels == 0.0 {
             return;
         }
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let duration = self
             .viewport
             .duration_seconds()
@@ -152,7 +148,7 @@ impl EditorSession {
     }
 
     pub fn pan_viewport_by_time_delta(&mut self, project: &Project, delta_seconds: f64) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         self.pan_viewport_by_time_delta_with_bounds(bounds, delta_seconds);
     }
 
@@ -183,7 +179,7 @@ impl EditorSession {
     }
 
     pub fn seek_overview_fraction(&mut self, project: &Project, fraction: f32) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let fraction = if fraction.is_finite() {
             fraction.clamp(0.0, 1.0)
         } else {
@@ -195,7 +191,7 @@ impl EditorSession {
     }
 
     pub fn set_overview_viewport_start_fraction(&mut self, project: &Project, fraction: f32) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let visible_duration = self
             .viewport
             .duration_seconds()
@@ -225,7 +221,7 @@ impl EditorSession {
         pointer_fraction: f32,
         grab_offset_fraction: f32,
     ) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let visible_duration = self
             .viewport
             .duration_seconds()
@@ -249,7 +245,7 @@ impl EditorSession {
     }
 
     pub fn seek_to_time(&mut self, project: &Project, time_seconds: f64) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         self.playhead_seconds =
             finite_seconds(time_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
         self.select_segment_at_playhead(project);
@@ -289,7 +285,7 @@ impl EditorSession {
         if let Some(loop_range) = self.stored_loop_range {
             self.loop_range = loop_range;
         }
-        self.recenter_viewport(TimeRange::for_project(project));
+        self.recenter_viewport(self.timeline_bounds(project));
     }
 
     pub fn toggle_overlay(&mut self, project: &Project) {
@@ -298,7 +294,10 @@ impl EditorSession {
             return;
         }
 
-        self.overlay_range = Some(one_second_overlay_range(project, self.playhead_seconds));
+        self.overlay_range = Some(one_second_overlay_range(
+            self.timeline_bounds(project),
+            self.playhead_seconds,
+        ));
     }
 
     pub fn move_overlay_to_time(&mut self, project: &Project, start_seconds: f64) {
@@ -306,11 +305,14 @@ impl EditorSession {
             return;
         }
 
-        self.overlay_range = Some(one_second_overlay_range(project, start_seconds));
+        self.overlay_range = Some(one_second_overlay_range(
+            self.timeline_bounds(project),
+            start_seconds,
+        ));
     }
 
     pub fn set_overlay_range(&mut self, project: &Project, start_seconds: f64, end_seconds: f64) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let start_seconds =
             finite_seconds(start_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
         let end_seconds =
@@ -368,7 +370,7 @@ impl EditorSession {
         grab_time_seconds: f64,
         current_time_seconds: f64,
     ) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let duration = (original_end_seconds - original_start_seconds)
             .max(MIN_LOOP_DURATION_SECONDS)
             .min(bounds.duration_seconds());
@@ -389,7 +391,7 @@ impl EditorSession {
         anchor_seconds: f64,
         current_seconds: f64,
     ) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let anchor = finite_seconds(anchor_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
         let current =
             finite_seconds(current_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
@@ -406,7 +408,7 @@ impl EditorSession {
     pub fn clear_loop(&mut self, project: &Project) {
         self.loop_enabled = true;
         self.stored_loop_range = None;
-        self.loop_range = TimeRange::for_project(project);
+        self.loop_range = self.timeline_bounds(project);
     }
 
     pub fn loop_label(&self) -> String {
@@ -426,7 +428,7 @@ impl EditorSession {
 
 impl EditorSession {
     pub(super) fn reconcile_loop_range_with_project(&mut self, project: &Project) {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let Some(loop_range) = self.stored_loop_range else {
             self.loop_range = bounds;
             return;
@@ -464,14 +466,13 @@ fn finite_fraction(value: f32) -> f32 {
     }
 }
 
-fn one_second_overlay_range(project: &Project, start_seconds: f64) -> TimeRange {
-    let bounds = TimeRange::for_project(project);
-    let project_end = if bounds.end_seconds > bounds.start_seconds {
+fn one_second_overlay_range(bounds: TimeRange, start_seconds: f64) -> TimeRange {
+    let timeline_end = if bounds.end_seconds > bounds.start_seconds {
         bounds.end_seconds
     } else {
         bounds.start_seconds + BABEL_OVERLAY_DURATION_SECONDS
     };
-    let max_start = (project_end - BABEL_OVERLAY_DURATION_SECONDS).max(bounds.start_seconds);
+    let max_start = (timeline_end - BABEL_OVERLAY_DURATION_SECONDS).max(bounds.start_seconds);
     let start = finite_seconds(start_seconds).clamp(bounds.start_seconds, max_start);
     TimeRange {
         start_seconds: start,

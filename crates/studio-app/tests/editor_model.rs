@@ -2109,6 +2109,49 @@ fn lane_waveform_reuses_timeline_render_cache_across_playhead_only_changes() {
 }
 
 #[test]
+fn lane_waveform_tail_view_beyond_source_preserves_requested_window_on_miss_and_hit() {
+    let project = two_lane_project(vec![segment("canonical-tail", 0.0, 3.0, "tail")]);
+    let audio = DecodedAudio::new(4, vec![vec![0.25, -0.5, 0.75, -1.0]]).expect("valid audio");
+    let waveform = LaneWaveform::from_decoded(audio);
+    let segment_refs = project.segments.iter().collect::<Vec<_>>();
+    let viewport = studio_app::TimeRange {
+        start_seconds: 2.0,
+        end_seconds: 3.0,
+    };
+
+    let first = waveform
+        .render_model(&segment_refs, viewport, 2.25)
+        .expect("first tail render should build");
+    let second = waveform
+        .render_model(&segment_refs, viewport, 2.75)
+        .expect("second tail render should hit the cache");
+    let stats = waveform.render_cache_stats();
+
+    for model in [&first, &second] {
+        assert_eq!(model.visible_start_seconds, 2.0);
+        assert_eq!(model.visible_end_seconds, 3.0);
+        assert_eq!(model.channels[0].peak_start_seconds, 0.0);
+        assert_eq!(model.channels[0].peak_end_seconds, 1.0);
+        assert_eq!(model.channels[0].scroll_strip_start_seconds, 0.0);
+        assert_eq!(model.channels[0].scroll_strip_end_seconds, 1.0);
+        assert!(
+            model.channels[0].scroll_strip_end_seconds <= model.visible_start_seconds,
+            "the shorter source must not be shifted into the canonical tail viewport"
+        );
+    }
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.hits, 1);
+    assert!(std::sync::Arc::ptr_eq(
+        &first.channels[0].peaks,
+        &second.channels[0].peaks
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &first.channels[0].scroll_strip_peaks,
+        &second.channels[0].scroll_strip_peaks
+    ));
+}
+
+#[test]
 fn lane_waveform_reuses_segment_peak_cache_across_timeline_rebuilds() {
     let project = two_lane_project(vec![
         segment("first", 0.0, 1.0, "first"),

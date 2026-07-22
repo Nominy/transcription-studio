@@ -609,7 +609,13 @@ impl StudioState {
         let Some(project) = self.project().cloned() else {
             return;
         };
-        let bounds = studio_app::TimeRange::for_project(&project);
+        let Some(bounds) = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.timeline_bounds(&project))
+        else {
+            return;
+        };
         let current_fraction = self
             .editor
             .as_ref()

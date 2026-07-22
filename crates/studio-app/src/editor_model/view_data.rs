@@ -40,7 +40,7 @@ impl EditorSession {
     }
 
     pub fn timeline_lanes(&self, project: &Project) -> Vec<TimelineLaneView> {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         build_timeline_lanes(
             project,
             TimelineLaneBuildState {
@@ -67,7 +67,7 @@ impl EditorSession {
         self.timeline_lanes_with_segment_index_and_bounds(
             project,
             segment_index,
-            TimeRange::for_project(project),
+            self.timeline_bounds(project),
         )
     }
 
@@ -168,7 +168,7 @@ impl EditorSession {
     }
 
     pub fn overview_waveform(&self, project: &Project) -> OverviewWaveformView {
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         let duration = bounds.duration_seconds();
         let lane_waveform_models = project
             .lanes

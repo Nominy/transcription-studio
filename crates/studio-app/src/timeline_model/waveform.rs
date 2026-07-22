@@ -153,12 +153,10 @@ impl LaneWaveform {
             {
                 return Some(with_cursor(model, playhead_seconds, 1.0));
             }
-            return Some(model.with_visible_window_for_scroll_strip(
-                viewport.start_seconds,
-                viewport.end_seconds,
-                &[],
+            return Some(retarget_timeline_visible_window(
+                model,
+                viewport,
                 playhead_seconds,
-                1.0,
             ));
         }
 
@@ -189,6 +187,7 @@ impl LaneWaveform {
             )
             .ok()?
         };
+        let model = retarget_timeline_visible_window(model, viewport, playhead_seconds);
         self.render_cache
             .borrow_mut()
             .store_timeline_model(key, model.clone());
@@ -251,6 +250,20 @@ impl LaneWaveform {
     pub fn cached_peak_resolution_count(&self) -> usize {
         self.peak_cache.borrow().cached_resolution_count()
     }
+}
+
+fn retarget_timeline_visible_window(
+    model: WaveformRenderModel,
+    viewport: TimeRange,
+    playhead_seconds: f64,
+) -> WaveformRenderModel {
+    model.with_visible_window_for_scroll_strip(
+        viewport.start_seconds,
+        viewport.end_seconds,
+        &[],
+        playhead_seconds,
+        1.0,
+    )
 }
 
 #[derive(Clone, Debug, Default)]

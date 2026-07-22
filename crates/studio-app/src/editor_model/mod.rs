@@ -185,6 +185,20 @@ impl EditorSession {
         }
     }
 
+    pub fn timeline_waveform_end_seconds(&self) -> f64 {
+        self.lane_waveforms
+            .values()
+            .map(LaneWaveform::duration_seconds)
+            .filter(|duration| duration.is_finite() && *duration > 0.0)
+            .fold(0.0, f64::max)
+    }
+
+    pub fn timeline_bounds(&self, project: &Project) -> TimeRange {
+        let mut bounds = TimeRange::for_project(project);
+        bounds.end_seconds = bounds.end_seconds.max(self.timeline_waveform_end_seconds());
+        bounds
+    }
+
     pub fn mark_dirty(&mut self) {
         self.edit_revision = self.edit_revision.saturating_add(1);
         self.invalidate_server_lint_snapshot();

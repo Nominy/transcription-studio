@@ -4462,6 +4462,101 @@ fn submitting_time_cell_edit_preserves_timeline_viewport() {
 }
 
 #[test]
+fn shortening_final_segment_keeps_trailing_loaded_audio_in_timeline_and_overview() {
+    let project = large_two_lane_project(2);
+    let final_segment_id = project
+        .segments
+        .last()
+        .expect("test project should have a final segment")
+        .id
+        .clone();
+    let mut state = stable_sample_state();
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "Loaded trailing-audio regression project.".to_string(),
+    );
+    state.with_editor_mut(|editor| {
+        editor.set_lane_waveform(
+            "track-2",
+            LaneWaveform::from_decoded(decoded_audio_for_duration(40.0)),
+        );
+    });
+
+    let project = state.project().unwrap().clone();
+    {
+        let editor = state.editor.as_ref().unwrap();
+        let _ = state.timeline_lanes_snapshot_for_render(&project, editor);
+        let _ = state.overview_waveform_snapshot_for_render(&project, editor);
+    }
+    let trailing_viewport = TimeRange {
+        start_seconds: 28.0,
+        end_seconds: 38.0,
+    };
+    state.with_editor_mut(|editor| {
+        editor.viewport = trailing_viewport;
+    });
+
+    let _ = update(
+        &mut state,
+        Message::SegmentTimeChanged(
+            final_segment_id.clone(),
+            TimeField::End,
+            "00:21.20".to_string(),
+        ),
+    );
+    let _ = update(
+        &mut state,
+        Message::CommitSegmentTimeEdit {
+            segment_id: final_segment_id.clone(),
+            field: TimeField::End,
+            from_blur: false,
+        },
+    );
+
+    let project = state.project().unwrap().clone();
+    assert_eq!(
+        project.segment(&final_segment_id).unwrap().end_seconds,
+        21.2
+    );
+    let editor = state.editor.as_ref().unwrap();
+    assert_eq!(editor.timeline_bounds(&project).end_seconds, 40.0);
+    assert_eq!(
+        editor.viewport, trailing_viewport,
+        "shortening the last segment must not clamp a viewport already showing trailing audio"
+    );
+
+    let lanes = state.timeline_lanes_snapshot_for_render(&project, editor);
+    let track = lanes
+        .iter()
+        .find(|lane| lane.lane_id == "track-2")
+        .expect("audio-backed track should remain in the timeline");
+    assert!((track.scrollbar.left_percent - 70.0).abs() < 0.001);
+    assert!((track.scrollbar.width_percent - 25.0).abs() < 0.001);
+
+    let overview = state.overview_waveform_snapshot_for_render(&project, editor);
+    assert_eq!(overview.bounds.end_seconds, 40.0);
+    assert!((overview.overview.viewport_left_percent - 70.0).abs() < 0.001);
+    assert!((overview.overview.viewport_width_percent - 25.0).abs() < 0.001);
+
+    let _ = update(
+        &mut state,
+        Message::OverviewPointerMoved {
+            fraction: 0.99,
+            width: 100.0,
+        },
+    );
+    let _ = update(&mut state, Message::OverviewPressed);
+    let _ = update(&mut state, Message::OverviewReleased);
+
+    let editor = state.editor.as_ref().unwrap();
+    assert!((editor.playhead_seconds - 39.6).abs() < 0.001);
+    assert!(
+        (editor.viewport.end_seconds - 40.0).abs() < 0.001,
+        "overview seeking must reach the loaded audio tail"
+    );
+}
+
+#[test]
 fn invalid_time_cell_submit_stays_local_and_reports_babel_error() {
     let mut state = stable_sample_state();
 
@@ -7663,7 +7758,7 @@ fn transport_tick_advances_playback_without_cloning_project() {
     assert!(!advance_transport_tick.contains("self.project().cloned()"));
     assert!(advance_transport_tick.contains("workflow.project()"));
     assert!(advance_transport_tick.contains("self.editor.as_mut()"));
-    assert!(advance_transport_tick.contains("timeline_project_bounds_for_render(project)"));
+    assert!(advance_transport_tick.contains("timeline_project_bounds_for_render(project, editor)"));
     assert!(
         advance_transport_tick
             .contains("editor.advance_transport_with_bounds(project, bounds, elapsed_seconds)")
@@ -19065,6 +19160,101 @@ fn moving_playback_reuses_cached_project_bounds_across_viewport_misses() {
         state.timeline_project_bounds_cache_miss_count(),
         1,
         "viewport-only timeline rebuilds should reuse project bounds instead of scanning every segment"
+    );
+}
+
+#[test]
+fn render_bounds_cache_refreshes_when_loaded_waveform_duration_changes_without_project_edit() {
+    let mut state = stable_sample_state();
+    state.replace_workflow(
+        StudioWorkflow::from_project(large_two_lane_project(2)),
+        "Loaded waveform-duration cache regression project.".to_string(),
+    );
+    state.with_editor_mut(|editor| {
+        editor.viewport = TimeRange {
+            start_seconds: 0.0,
+            end_seconds: 10.0,
+        };
+    });
+    let project = state.project().unwrap().clone();
+
+    let initial_lanes = {
+        let editor = state.editor.as_ref().unwrap();
+        state.timeline_lanes_snapshot_for_render(&project, editor)
+    };
+    let initial_overview = {
+        let editor = state.editor.as_ref().unwrap();
+        state.overview_waveform_snapshot_for_render(&project, editor)
+    };
+    assert_eq!(
+        initial_overview.bounds,
+        TimeRange::for_project(&project),
+        "without loaded audio, render bounds should use the segment extent"
+    );
+    let initial_timeline_misses = state.timeline_lanes_cache_miss_count();
+    let initial_bounds_misses = state.timeline_project_bounds_cache_miss_count();
+    let initial_overview_misses = state.overview_waveform_cache_miss_count();
+
+    state.with_editor_mut(|editor| {
+        editor.set_lane_waveform(
+            "track-2",
+            LaneWaveform::from_decoded(decoded_audio_for_duration(40.0)),
+        );
+    });
+
+    let refreshed_lanes = {
+        let editor = state.editor.as_ref().unwrap();
+        state.timeline_lanes_snapshot_for_render(&project, editor)
+    };
+    let refreshed_overview = {
+        let editor = state.editor.as_ref().unwrap();
+        state.overview_waveform_snapshot_for_render(&project, editor)
+    };
+    let refreshed_track = refreshed_lanes
+        .iter()
+        .find(|lane| lane.lane_id == "track-2")
+        .expect("newly audio-backed lane should render");
+    assert!(!std::sync::Arc::ptr_eq(&initial_lanes, &refreshed_lanes));
+    assert!((refreshed_track.scrollbar.width_percent - 25.0).abs() < 0.001);
+    assert_eq!(refreshed_overview.bounds.end_seconds, 40.0);
+    assert!((refreshed_overview.overview.viewport_width_percent - 25.0).abs() < 0.001);
+    assert_eq!(
+        state.timeline_lanes_cache_miss_count(),
+        initial_timeline_misses + 1
+    );
+    assert_eq!(
+        state.timeline_project_bounds_cache_miss_count(),
+        initial_bounds_misses + 1
+    );
+    assert_eq!(
+        state.overview_waveform_cache_miss_count(),
+        initial_overview_misses + 1
+    );
+
+    let reused_lanes = {
+        let editor = state.editor.as_ref().unwrap();
+        state.timeline_lanes_snapshot_for_render(&project, editor)
+    };
+    let reused_overview = {
+        let editor = state.editor.as_ref().unwrap();
+        state.overview_waveform_snapshot_for_render(&project, editor)
+    };
+    assert!(std::sync::Arc::ptr_eq(&refreshed_lanes, &reused_lanes));
+    assert!(std::sync::Arc::ptr_eq(
+        &refreshed_overview.overview,
+        &reused_overview.overview
+    ));
+    assert_eq!(
+        state.timeline_lanes_cache_miss_count(),
+        initial_timeline_misses + 1
+    );
+    assert_eq!(
+        state.timeline_project_bounds_cache_miss_count(),
+        initial_bounds_misses + 1
+    );
+    assert_eq!(
+        state.overview_waveform_cache_miss_count(),
+        initial_overview_misses + 1
     );
 }
 

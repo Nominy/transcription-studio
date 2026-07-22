@@ -1,7 +1,7 @@
 use iced::mouse;
 use iced::widget::{Space, container, mouse_area, responsive, row, stack, text};
 use iced::{Element, Fill, Length, Size};
-use studio_app::{EditorSession, LoopStripClientMetrics, TimeRange};
+use studio_app::{EditorSession, LoopStripClientMetrics};
 use studio_core::Project;
 
 use super::super::super::Message;
@@ -16,7 +16,7 @@ pub(super) fn view_loop_strip<'a>(
 ) -> Element<'a, Message> {
     let strip = editor.loop_strip(project);
     let viewport = editor.viewport;
-    let duration = TimeRange::for_project(project).duration_seconds();
+    let duration = editor.timeline_bounds(project).duration_seconds();
     let label = text(format_loop_label(strip.has_range, strip.is_enabled)).size(12);
 
     let body = responsive(move |size: Size| {

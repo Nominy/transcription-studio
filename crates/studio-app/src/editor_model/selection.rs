@@ -8,7 +8,7 @@ impl EditorSession {
         if let Some(segment) = project.segment(segment_id) {
             self.selected_segment_id = Some(segment_id.to_string());
             self.playhead_seconds = segment.start_seconds;
-            self.recenter_viewport(TimeRange::for_project(project));
+            self.recenter_viewport(self.timeline_bounds(project));
         }
     }
 
@@ -88,7 +88,7 @@ impl EditorSession {
             .collect::<Vec<_>>();
         visible_segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
 
-        let bounds = TimeRange::for_project(project);
+        let bounds = self.timeline_bounds(project);
         if visible_segments.is_empty() {
             let target = if direction < 0 {
                 bounds.start_seconds
@@ -183,14 +183,14 @@ impl EditorSession {
                 .any(|segment| key.starts_with(&segment.id))
         });
         self.viewport =
-            viewport_preserving_position(previous_viewport, TimeRange::for_project(project));
+            viewport_preserving_position(previous_viewport, self.timeline_bounds(project));
     }
 
     pub fn reconcile_project_preserving_viewport(&mut self, project: &Project) {
         let previous_viewport = self.viewport;
         self.reconcile_project(project);
         self.viewport =
-            viewport_preserving_position(previous_viewport, TimeRange::for_project(project));
+            viewport_preserving_position(previous_viewport, self.timeline_bounds(project));
     }
 
     fn seek_without_active_segment(&mut self, bounds: TimeRange, time_seconds: f64) {
