@@ -20677,7 +20677,7 @@ fn cargo_dev_profile_keeps_incremental_builds_with_reduced_debug_info() {
 }
 
 #[test]
-fn ci_runs_fmt_on_hosted_and_clippy_test_on_the_self_hosted_vps_runner() {
+fn ci_runs_gitleaks_fmt_clippy_and_test_in_one_ordered_self_hosted_job() {
     let workflow = include_str!("../../../../.github/workflows/ci.yml");
     assert_eq!(workflow.matches("cargo fmt --all --check").count(), 1);
     assert_eq!(
@@ -20692,28 +20692,32 @@ fn ci_runs_fmt_on_hosted_and_clippy_test_on_the_self_hosted_vps_runner() {
             .count(),
         1
     );
-
-    let fmt_job = workflow
-        .split_once("\n  fmt:\n")
-        .expect("CI should define one formatting job")
-        .1
-        .split_once("\n  build-and-test:\n")
-        .expect("formatting should be separate from the build-and-test job")
-        .0;
-    assert!(fmt_job.contains("runs-on: ubuntu-latest"));
-    assert!(!fmt_job.contains("needs:"));
+    assert_eq!(workflow.matches("gitleaks detect").count(), 1);
 
     let build_job = workflow
         .split_once("\n  build-and-test:\n")
-        .expect("CI should define a build-and-test job")
+        .expect("CI should define a single build-and-test job")
         .1;
-    assert!(!build_job.contains("needs:"));
+    assert!(
+        !build_job.contains("needs:"),
+        "a single job needs no needs:"
+    );
     assert!(build_job.contains("self-hosted"));
+    assert!(!build_job.contains("ubuntu-latest"));
     assert!(!build_job.contains("windows-latest"));
     assert!(!build_job.contains("macos-latest"));
     assert!(!build_job.contains("Swatinem/rust-cache"));
-    assert!(!build_job.contains("cargo fmt --all --check"));
+    assert!(
+        !build_job.contains("Install Rust"),
+        "the self-hosted runner keeps a persistent toolchain; no per-run install step"
+    );
 
+    let gitleaks_pos = build_job
+        .find("gitleaks detect")
+        .expect("build-and-test should run the secret scan");
+    let fmt_pos = build_job
+        .find("cargo fmt --all --check")
+        .expect("build-and-test should check formatting");
     let clippy_pos = build_job
         .find("cargo clippy --workspace --all-targets --locked -- -D warnings")
         .expect("build-and-test should run clippy");
@@ -20721,8 +20725,8 @@ fn ci_runs_fmt_on_hosted_and_clippy_test_on_the_self_hosted_vps_runner() {
         .find("cargo test --workspace --all-targets --locked")
         .expect("build-and-test should run the workspace test suite");
     assert!(
-        clippy_pos < test_pos,
-        "clippy should run before the (much slower) test suite so lint failures fail fast"
+        gitleaks_pos < fmt_pos && fmt_pos < clippy_pos && clippy_pos < test_pos,
+        "cheap checks (secret scan, formatting) should fail fast before the slower clippy and test steps"
     );
 }
 

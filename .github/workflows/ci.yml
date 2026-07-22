@@ -15,47 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  secrets:
-    name: Secret scan
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Install Gitleaks
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="8.30.1"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" -o gitleaks.tar.gz
-          tar -xzf gitleaks.tar.gz gitleaks
-          sudo install gitleaks /usr/local/bin/gitleaks
-          gitleaks version
-
-      - name: Scan git history
-        run: gitleaks detect --source . --redact --verbose
-
-  fmt:
-    name: Rust formatting
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
   build-and-test:
-    name: Build, lint, and test (self-hosted VPS)
+    name: Secret scan, lint, and test (self-hosted VPS)
     runs-on: [self-hosted, Linux, vps]
 
     env:
@@ -66,6 +27,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan git history
+        run: gitleaks detect --source . --redact --verbose
+
+      - name: Check formatting
+        run: cargo fmt --all --check
 
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
