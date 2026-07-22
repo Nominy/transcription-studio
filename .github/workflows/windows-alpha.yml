@@ -184,8 +184,12 @@ jobs:
 
           $port = if ([string]::IsNullOrWhiteSpace($env:ALPHA_SSH_PORT)) { 22 } else { [int]$env:ALPHA_SSH_PORT }
           $keyPath = Join-Path $env:RUNNER_TEMP "transcription_studio_alpha_deploy_key"
-          $keyText = $env:ALPHA_SSH_PRIVATE_KEY -replace "`r`n", "`n"
-          [System.IO.File]::WriteAllText($keyPath, $keyText)
+          $keyText = ($env:ALPHA_SSH_PRIVATE_KEY -replace "`r`n?", "`n").TrimEnd() + "`n"
+          [System.IO.File]::WriteAllText(
+            $keyPath,
+            $keyText,
+            [System.Text.UTF8Encoding]::new($false)
+          )
           & chmod 600 $keyPath
 
           $publishArgs = @{
