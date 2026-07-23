@@ -22793,7 +22793,8 @@ fn back_to_projects_continues_after_the_requested_save_acknowledges() {
     assert_eq!(state.app_surface, AppSurface::Dashboard);
     assert!(!state.show_exit_confirm_dialog);
     assert!(state.pending_leave.is_none());
-    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.editor.is_none());
+    assert!(state.project().is_none());
 }
 
 #[test]
@@ -22826,9 +22827,30 @@ fn discarding_pending_back_navigation_invalidates_late_save_ack() {
 
     assert_eq!(state.app_surface, AppSurface::Dashboard);
     assert!(state.workspace_generation > previous_generation);
-    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.editor.is_none());
+    assert!(state.project().is_none());
     assert!(!state.complete_save_progress_success(stale_token, "late ack".to_string(), None,));
-    assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
+}
+
+#[test]
+fn back_to_projects_releases_decoded_audio_and_editor_session() {
+    let mut state = stable_sample_state();
+    state.load_bundled_sample_waveforms_for_runtime();
+    assert!(
+        state
+            .editor
+            .as_ref()
+            .is_some_and(|editor| !editor.lane_waveforms.is_empty()),
+        "fixture should load decoded lane waveforms before leave"
+    );
+
+    let _ = update(&mut state, Message::BackToProjects);
+
+    assert_eq!(state.app_surface, AppSurface::Dashboard);
+    assert!(state.editor.is_none());
+    assert!(state.project().is_none());
+    assert!(state.segment_drafts.is_empty());
+    assert_eq!(state.status, "Back to projects requested.");
 }
 
 #[test]

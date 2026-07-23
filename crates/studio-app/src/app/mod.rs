@@ -70,6 +70,11 @@ use state::{
 use time_edit::TimeField;
 
 const RUNTIME_GRAPHICS_INFO_ENV: &str = "STUDIO_LOG_RUNTIME_GRAPHICS";
+const GRAPHICS_ANTIALIASING_ENV: &str = "STUDIO_GRAPHICS_ANTIALIASING";
+const GRAPHICS_BACKEND_ENV: &str = "STUDIO_GRAPHICS_BACKEND";
+const GRAPHICS_ADAPTER_ENV: &str = "STUDIO_GRAPHICS_ADAPTER";
+const WGPU_BACKEND_ENV: &str = "WGPU_BACKEND";
+const WGPU_ADAPTER_NAME_ENV: &str = "WGPU_ADAPTER_NAME";
 
 pub fn run_native_auth_cli_from_args(
     args: impl IntoIterator<Item = impl AsRef<str>>,
@@ -80,8 +85,9 @@ pub fn run_native_auth_cli_from_args(
 pub fn run() -> iced::Result {
     let startup_route = parse_startup_route_config(std::env::args());
     let load_bundled_sample_audio = startup_route == Default::default();
+    apply_runtime_graphics_env();
     iced::application(window_title, update, view)
-        .antialiasing(true)
+        .antialiasing(runtime_graphics_antialiasing_enabled())
         .subscription(hotkeys::subscription)
         .theme(|_| styles::studio_theme())
         .window(window::Settings {
@@ -141,6 +147,86 @@ pub fn run() -> iced::Result {
 
 fn runtime_graphics_info_enabled() -> bool {
     std::env::var_os(RUNTIME_GRAPHICS_INFO_ENV).is_some()
+}
+
+fn runtime_graphics_antialiasing_enabled() -> bool {
+    match std::env::var(GRAPHICS_ANTIALIASING_ENV) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !(normalized.is_empty()
+                || normalized == "0"
+                || normalized == "false"
+                || normalized == "off"
+                || normalized == "no")
+        }
+        // Default on for quality; AMD/driver issues can force-disable via env.
+        Err(_) => true,
+    }
+}
+
+/// Map Studio graphics knobs onto wgpu env vars before the iced compositor boots.
+///
+/// - `STUDIO_GRAPHICS_BACKEND=dx12|vulkan|gl|metal|primary`
+/// - `STUDIO_GRAPHICS_ADAPTER=<substring of GPU name>`
+///
+/// Existing `WGPU_*` values win so power users can still override directly.
+fn apply_runtime_graphics_env() {
+    if std::env::var_os(WGPU_BACKEND_ENV).is_none()
+        && let Ok(raw) = std::env::var(GRAPHICS_BACKEND_ENV)
+    {
+        if let Some(backend) = normalize_graphics_backend(&raw) {
+            // SAFETY: called once during process startup, before iced/wgpu init.
+            unsafe {
+                std::env::set_var(WGPU_BACKEND_ENV, backend);
+            }
+            eprintln!("Transcription Studio graphics backend override: {backend}");
+        } else if !raw.trim().is_empty() {
+            eprintln!(
+                "Transcription Studio ignored unknown {GRAPHICS_BACKEND_ENV}={raw:?}; expected dx12, vulkan, gl, metal, or primary"
+            );
+        }
+    }
+
+    if std::env::var_os(WGPU_ADAPTER_NAME_ENV).is_none()
+        && let Ok(adapter) = std::env::var(GRAPHICS_ADAPTER_ENV)
+    {
+        let adapter = adapter.trim();
+        if !adapter.is_empty() {
+            unsafe {
+                std::env::set_var(WGPU_ADAPTER_NAME_ENV, adapter);
+            }
+            eprintln!("Transcription Studio graphics adapter preference: {adapter}");
+        }
+    }
+}
+
+fn normalize_graphics_backend(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "dx12" | "d3d12" | "directx" | "directx12" => Some("dx12"),
+        "vulkan" | "vk" => Some("vulkan"),
+        "gl" | "opengl" | "gles" => Some("gl"),
+        "metal" => Some("metal"),
+        "primary" | "auto" | "default" => Some("primary"),
+        // Common AMD workaround request: force the more stable Windows path.
+        "amd" | "radeon" => Some("dx12"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod graphics_env_tests {
+    use super::normalize_graphics_backend;
+
+    #[test]
+    fn normalizes_common_backend_aliases_including_amd_to_dx12() {
+        assert_eq!(normalize_graphics_backend("DX12"), Some("dx12"));
+        assert_eq!(normalize_graphics_backend("vulkan"), Some("vulkan"));
+        assert_eq!(normalize_graphics_backend("OpenGL"), Some("gl"));
+        assert_eq!(normalize_graphics_backend("amd"), Some("dx12"));
+        assert_eq!(normalize_graphics_backend("radeon"), Some("dx12"));
+        assert_eq!(normalize_graphics_backend("nope"), None);
+    }
 }
 
 fn window_title(state: &StudioState) -> String {

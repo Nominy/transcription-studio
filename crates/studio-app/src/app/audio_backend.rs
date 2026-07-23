@@ -516,6 +516,11 @@ impl AudioPlaybackBackend {
         self.trim_idle_player_pool();
     }
 
+    pub(super) fn shutdown(&mut self) {
+        self.stop();
+        self.reset_output();
+    }
+
     pub(super) fn set_speed(&mut self, speed: f32) {
         for player in &self.players {
             player.set_speed(speed.max(0.1));
@@ -672,6 +677,15 @@ impl AudioPlaybackBackend {
     pub(super) fn stop(&mut self) {
         self.active = false;
         self.track_count = 0;
+    }
+
+    pub(super) fn shutdown(&mut self) {
+        self.stop();
+        self.prepare_count = 0;
+        self.prepared_player_count = 0;
+        self.last_start_seconds = 0.0;
+        self.last_end_seconds = None;
+        self.last_speed = 0.0;
     }
 
     pub(super) fn set_speed(&mut self, speed: f32) {

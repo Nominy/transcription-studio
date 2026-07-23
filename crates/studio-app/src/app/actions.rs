@@ -1655,6 +1655,7 @@ fn dispatch_pending_services(state: &mut StudioState, task: Task<Message>) -> Ta
 fn execute_leave_intent(state: &mut StudioState, intent: PendingLeaveIntent) -> Task<Message> {
     match intent {
         PendingLeaveIntent::ExitApplication => {
+            state.release_editor_workspace_resources();
             state.stop_subaccount_relay_for_exit();
             iced::exit()
         }

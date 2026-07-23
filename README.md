@@ -47,3 +47,19 @@ cargo run -p studio-app -- --reviewActionId=<review-action-id>
 Studio stores Clerk client cookies under `%APPDATA%\TranscriptionStudio\babel-auth.json`. `STUDIO_BABEL_AUTH_STORE` can point Studio at a different native store, and `STUDIO_BABEL_SERVICE_AUTH_COMMAND`, `STUDIO_BABEL_SERVICE_COOKIE`, or `STUDIO_BABEL_SERVICE_AUTHORIZATION` remain explicit developer overrides. The older `tools/babel-native-auth.mjs` and `tools/babel-live-auth-cookie.mjs` helpers remain only debugging fallbacks; live Studio auth does not attach to Chrome.
 
 For playback smoke checks, set `STUDIO_LOG_AUDIO_PLAYBACK=1` to print the native playback track/start/speed line. Set `STUDIO_SMOKE_PLAYBACK_ON_START=1` as well to auto-start playback from the bundled recovered two-speaker sample during app startup.
+
+## Memory and GPU notes
+
+Leaving the editor (Back to projects, failed claim/load, tray hide after save) now drops the editor session, decoded PCM waveforms, undo snapshots, draft text history, render caches, and the Rodio output graph. RAM should stop climbing across claim → edit → dashboard cycles.
+
+The UI is iced 0.13 over wgpu 0.19. AMD driver stacks sometimes misbehave on Vulkan; force DirectX 12 before launch:
+
+```powershell
+$env:STUDIO_GRAPHICS_BACKEND = "dx12"          # also accepts vulkan, gl, metal, primary, amd
+$env:STUDIO_GRAPHICS_ANTIALIASING = "0"        # optional: reduce canvas MSAA pressure
+$env:STUDIO_GRAPHICS_ADAPTER = "AMD"           # optional: prefer adapter name substring
+$env:STUDIO_LOG_RUNTIME_GRAPHICS = "1"         # log selected backend/adapter
+cargo run -p studio-app
+```
+
+`STUDIO_GRAPHICS_BACKEND` / `STUDIO_GRAPHICS_ADAPTER` map to wgpu's `WGPU_BACKEND` / `WGPU_ADAPTER_NAME` only when those are unset, so direct `WGPU_*` overrides still win.

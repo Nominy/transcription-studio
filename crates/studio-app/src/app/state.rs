@@ -1705,6 +1705,7 @@ impl StudioState {
                 BabelServiceRequest::ClaimNextFromQueue(request) if request.token == token
             )
         });
+        self.release_editor_workspace_resources();
         self.no_work_modal = Some(build_no_work_modal_model(NoWorkModalInput {
             open: true,
             mode: "review".to_string(),
@@ -1856,6 +1857,8 @@ impl StudioState {
         self.drain_babel_service_requests_matching(should_drain);
 
         if babel_payload_needs_audio_preparation(&source) {
+            // Drop any previous editor/audio while the dashboard shows the download state.
+            self.release_editor_workspace_resources();
             self.status = "Downloading Babel audio...".to_string();
             self.app_surface = AppSurface::Dashboard;
             self.dashboard.is_pending = true;
@@ -1891,6 +1894,7 @@ impl StudioState {
         match result {
             Ok(payload) => self.import_prepared_babel_payload(payload, route_metadata, kind),
             Err(error) => {
+                self.release_editor_workspace_resources();
                 self.status = format!("{} failed: {error}", kind.failure_label());
                 self.app_surface = AppSurface::Dashboard;
                 self.dashboard.is_pending = false;
@@ -1914,10 +1918,12 @@ impl StudioState {
                 let loaded = self.load_lane_waveforms_from_base(&payload.audio_base_dir);
                 self.append_waveform_status(loaded);
                 if payload.remote_audio_count > 0 && loaded == 0 {
-                    self.status = format!(
+                    let status = format!(
                         "{} failed: downloaded Babel audio, but no waveform tracks loaded",
                         kind.failure_label()
                     );
+                    self.release_editor_workspace_resources();
+                    self.status = status;
                     self.app_surface = AppSurface::Dashboard;
                     self.dashboard.is_pending = false;
                     self.dashboard.error = Some(self.status.clone());
@@ -1928,6 +1934,7 @@ impl StudioState {
                 self.dashboard.error = None;
             }
             Err(error) => {
+                self.release_editor_workspace_resources();
                 self.status = format!("{} failed: {error}", kind.failure_label());
                 self.app_surface = AppSurface::Dashboard;
                 self.dashboard.is_pending = false;
@@ -1947,6 +1954,7 @@ impl StudioState {
             return;
         }
         self.drain_babel_service_requests_matching(should_drain);
+        self.release_editor_workspace_resources();
         self.status = format!("{failure_label} failed: {error}");
         self.app_surface = AppSurface::Dashboard;
         self.dashboard.is_pending = false;
@@ -3247,6 +3255,19 @@ impl StudioState {
     }
 
     pub(super) fn enter_dashboard(&mut self) {
+        self.release_editor_workspace_resources();
+        self.app_surface = AppSurface::Dashboard;
+        self.dashboard.is_pending = false;
+        self.status = if self.subaccount_session.is_some() {
+            "Sub-account dashboard ready.".to_string()
+        } else {
+            "Babel dashboard ready.".to_string()
+        };
+    }
+
+    /// Drop decoded audio, editor caches, drafts, and the audio graph so RAM
+    /// does not keep growing across claim → edit → back-to-dashboard cycles.
+    pub(super) fn release_editor_workspace_resources(&mut self) {
         self.advance_babel_payload_request_generation();
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
@@ -3266,18 +3287,70 @@ impl StudioState {
         self.feedback_panel = None;
         self.feedback_draft_revision = 0;
         self.reset_reviewer_workspace_state();
-        self.audio_playback.stop();
-        self.with_editor_mut(|editor| editor.is_playing = false);
+        self.audio_playback.shutdown();
+        self.runtime_audio_playback_info = None;
+        self.last_transport_tick = None;
+        self.editor = None;
+        // Keep the last successful workflow error-shaped so `project()` is None
+        // and undo snapshots / decoded lane audio are not retained on dashboard.
+        if self.workflow.is_ok() {
+            self.workflow = Err("Editor workspace released.".to_string());
+        }
         self.held_audition_keys.clear();
         self.audition_key_release_tokens.clear();
         self.release_captured_pointer();
-        self.app_surface = AppSurface::Dashboard;
-        self.dashboard.is_pending = false;
-        self.status = if self.subaccount_session.is_some() {
-            "Sub-account dashboard ready.".to_string()
-        } else {
-            "Babel dashboard ready.".to_string()
-        };
+        self.active_overlay_drag = None;
+        self.active_waveform_drag = None;
+        self.active_waveform_create_drag = None;
+        self.active_timeline_autoscroll = None;
+        self.active_loop_drag = None;
+        self.overview_hover_fraction = None;
+        self.overview_pointer_sample = None;
+        self.overview_drag_capture = None;
+        self.overview_drag_active = false;
+        self.timeline_scrollbar_hover_fraction = None;
+        self.timeline_scrollbar_pointer_sample = None;
+        self.timeline_scrollbar_drag_capture = None;
+        self.lane_vertical_zoom_slider_hover = None;
+        self.lane_vertical_zoom_slider_pointer_sample = None;
+        self.lane_vertical_zoom_slider_drag_capture = None;
+        self.active_lane_vertical_zoom_slider_id = None;
+        self.lane_vertical_zoom_input = None;
+        self.transcript_row_hover_segment_id = None;
+        self.tag_suggestion_state = None;
+        self.helper_focused_segment_id = None;
+        self.helper_focus_restore_pending = None;
+        self.helper_last_focus_restore = None;
+        self.waveform_hit_hover = None;
+        self.loop_strip_hover = None;
+        self.create_region_dialog = None;
+        self.edit_annotation_dialog = None;
+        self.show_submit_dialog = false;
+        self.submit_is_pending = false;
+        self.submit_has_error = false;
+        self.drop_claim_is_pending = false;
+        self.show_skip_chunk_dialog = false;
+        self.skip_is_pending = false;
+        self.show_admin_flag_dialog = false;
+        self.admin_flag_reason.clear();
+        self.admin_flag_is_pending = false;
+        self.no_work_modal = None;
+        self.task_lookup = None;
+        self.task_lookup_last_effect = None;
+        self.show_hotkeys_dialog = false;
+        self.show_exit_confirm_dialog = false;
+        self.pending_leave = None;
+        self.find_bar_open = false;
+        self.find_query.clear();
+        self.playback_followed_segment_id = None;
+        self.copied_submission_id = false;
+        self.acknowledged_low_confidence_words.clear();
+        self.segment_drafts.clear();
+        self.cross_row_text_undo_stack.clear();
+        self.cross_row_text_redo_stack.clear();
+        self.transcript_scroll_offset_y = 0.0;
+        self.transcript_scroll_viewport_height = DEFAULT_TRANSCRIPT_VIEWPORT_HEIGHT;
+        self.invalidate_transcript_rows_cache();
     }
 
     pub(super) fn request_leave(
