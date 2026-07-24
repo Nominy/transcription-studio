@@ -10872,6 +10872,7 @@ fn l2_feedback_bootstrap_state_with_metadata(
         name: "L2 Feedback Project".to_string(),
         chunked_queue_id: "chunked-feedback-queue".to_string(),
         stitched_queue_id: "stitched-feedback-queue".to_string(),
+        ..DashboardProject::default()
     }];
 
     let mut project = state.project().unwrap().clone();
@@ -15223,6 +15224,56 @@ fn dashboard_project_refresh_dispatches_worker_get_projects_callback() {
 }
 
 #[test]
+fn dashboard_project_refresh_parses_babel_daily_task_progress() {
+    let mut state = stable_sample_state();
+
+    let _ = update(
+        &mut state,
+        Message::DashboardProjectsLoaded(
+            serde_json::json!([
+                {
+                    "projectId": "0bf29f0c-371a-506a-8b77-5fffd14e5762",
+                    "name": "RU-tx-gold",
+                    "status": "active",
+                    "chunkedQueueId": "11111111-1111-1111-1111-111111111111",
+                    "stitchedTxQueueId": "22222222-2222-2222-2222-222222222222",
+                    "taskLimit": { "limit": 25 },
+                    "workerStats": { "tasksCompletedToday": 7 }
+                },
+                {
+                    "projectId": "c07a40d3-61e4-4fc6-ace6-2b79b5e66575",
+                    "name": "RU-Emotion-VA",
+                    "status": "active",
+                    "chunkedQueueId": "33333333-3333-3333-3333-333333333333",
+                    "workerStats": { "tasksCompletedToday": 2 }
+                }
+            ])
+            .to_string(),
+        ),
+    );
+
+    assert_eq!(state.dashboard.projects.len(), 2);
+    let find = |name: &str| {
+        state
+            .dashboard
+            .projects
+            .iter()
+            .find(|project| project.name == name)
+            .unwrap_or_else(|| panic!("project `{name}` should be present"))
+    };
+
+    let gold = find("RU-tx-gold");
+    assert_eq!(gold.daily_task_limit, Some(25));
+    assert_eq!(gold.tasks_completed_today, 7);
+
+    // Babel does not always enforce a daily cap; the limit stays absent
+    // rather than being fabricated, while completed-today is still parsed.
+    let emotion = find("RU-Emotion-VA");
+    assert_eq!(emotion.daily_task_limit, None);
+    assert_eq!(emotion.tasks_completed_today, 2);
+}
+
+#[test]
 fn dashboard_project_refresh_merges_discovered_queue_config_for_new_active_projects() {
     let mut state = stable_sample_state();
 
@@ -15386,6 +15437,7 @@ fn invalid_relay_url_does_not_queue_project_metadata_sync() {
         name: "Project One".to_string(),
         chunked_queue_id: "chunked-1".to_string(),
         stitched_queue_id: "stitched-1".to_string(),
+        ..DashboardProject::default()
     });
     state.subaccount_owner.host_url = "not a relay URL".to_string();
 
@@ -18785,7 +18837,11 @@ fn app_window_defaults_to_recovered_babel_workbench_size() {
 fn app_enables_antialiasing_for_native_canvas_rendering_smoothness() {
     let source = include_str!("mod.rs");
 
-    assert!(source.contains(".antialiasing(true)"));
+    assert!(source.contains(".antialiasing(runtime_graphics_antialiasing_enabled())"));
+    assert!(
+        super::runtime_graphics_antialiasing_enabled(),
+        "antialiasing must default to on for smooth native canvas rendering"
+    );
 }
 
 #[test]
@@ -20933,18 +20989,21 @@ fn subaccount_project_access_toggle_saves_selected_loaded_project_ids() {
             name: "Gold Transcription".to_string(),
             chunked_queue_id: "chunk-a".to_string(),
             stitched_queue_id: "stitched-a".to_string(),
+            ..DashboardProject::default()
         },
         DashboardProject {
             id: "project-b".to_string(),
             name: "Podcast Review".to_string(),
             chunked_queue_id: "chunk-b".to_string(),
             stitched_queue_id: "stitched-b".to_string(),
+            ..DashboardProject::default()
         },
         DashboardProject {
             id: "project-c".to_string(),
             name: "QA Pass".to_string(),
             chunked_queue_id: "chunk-c".to_string(),
             stitched_queue_id: "stitched-c".to_string(),
+            ..DashboardProject::default()
         },
     ];
     state.subaccount_owner.host_url = "https://relay.example.test".to_string();
@@ -22793,8 +22852,8 @@ fn back_to_projects_continues_after_the_requested_save_acknowledges() {
     assert_eq!(state.app_surface, AppSurface::Dashboard);
     assert!(!state.show_exit_confirm_dialog);
     assert!(state.pending_leave.is_none());
-    assert!(state.editor.is_none());
-    assert!(state.project().is_none());
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.editor.as_ref().unwrap().lane_waveforms.is_empty());
 }
 
 #[test]
@@ -22827,9 +22886,10 @@ fn discarding_pending_back_navigation_invalidates_late_save_ack() {
 
     assert_eq!(state.app_surface, AppSurface::Dashboard);
     assert!(state.workspace_generation > previous_generation);
-    assert!(state.editor.is_none());
-    assert!(state.project().is_none());
+    assert!(!state.editor.as_ref().unwrap().is_dirty);
+    assert!(state.editor.as_ref().unwrap().lane_waveforms.is_empty());
     assert!(!state.complete_save_progress_success(stale_token, "late ack".to_string(), None,));
+    assert!(state.editor.as_ref().unwrap().last_saved_at.is_none());
 }
 
 #[test]
@@ -22847,9 +22907,15 @@ fn back_to_projects_releases_decoded_audio_and_editor_session() {
     let _ = update(&mut state, Message::BackToProjects);
 
     assert_eq!(state.app_surface, AppSurface::Dashboard);
-    assert!(state.editor.is_none());
-    assert!(state.project().is_none());
-    assert!(state.segment_drafts.is_empty());
+    // The dominant per-task memory cost — decoded PCM plus its derived peak
+    // and render caches — is dropped on every return to the dashboard...
+    assert!(
+        state.editor.as_ref().unwrap().lane_waveforms.is_empty(),
+        "decoded lane audio should be released when leaving the editor"
+    );
+    // ...while the lightweight project/editor state some success flows still
+    // read immediately after navigating to the dashboard stays intact.
+    assert!(state.project().is_some());
     assert_eq!(state.status, "Back to projects requested.");
 }
 

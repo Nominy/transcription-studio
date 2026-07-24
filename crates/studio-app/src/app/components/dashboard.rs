@@ -124,7 +124,14 @@ fn view_dashboard_header(state: &StudioState) -> Element<'_, Message> {
                 .padding([5, 10])
                 .style(warning_pill_style)
         } else {
-            container(text(format!("{} available", state.dashboard.projects.len())).size(12))
+            let (completed_today, daily_limit, limited_project_count) =
+                dashboard_task_progress_totals(&state.dashboard.projects);
+            let readiness_label = if limited_project_count > 0 {
+                format!("{completed_today} of {daily_limit} tasks today")
+            } else {
+                format!("{} available", state.dashboard.projects.len())
+            };
+            container(text(readiness_label).size(12))
                 .padding([5, 10])
                 .style(success_pill_style)
         };
@@ -290,6 +297,14 @@ fn view_projects_screen(state: &StudioState) -> Element<'_, Message> {
                             .spacing(6)
                             .align_y(iced::Alignment::Center),
                         ]
+                        .push_maybe(project.daily_task_limit.map(|limit| {
+                            text(format!(
+                                "{} of {limit} tasks today",
+                                project.tasks_completed_today
+                            ))
+                            .size(11)
+                            .color(Color::from_rgb8(100, 116, 139))
+                        }))
                         .spacing(6),
                         Space::with_width(Fill),
                         button(text("Start task").size(13))
@@ -423,6 +438,27 @@ fn dashboard_project_status(project: &super::super::state::DashboardProject) -> 
     } else {
         "Ready to claim next task"
     }
+}
+
+/// Sums real Babel worker-reported daily task progress across projects that
+/// carry a `daily_task_limit`. Projects without a reported limit are excluded
+/// from both totals so the aggregate never implies a fabricated cap.
+fn dashboard_task_progress_totals(
+    projects: &[super::super::state::DashboardProject],
+) -> (u64, u64, usize) {
+    projects
+        .iter()
+        .filter_map(|project| project.daily_task_limit.map(|limit| (project, limit)))
+        .fold(
+            (0u64, 0u64, 0usize),
+            |(completed, limit_total, count), (project, limit)| {
+                (
+                    completed + project.tasks_completed_today,
+                    limit_total + limit,
+                    count + 1,
+                )
+            },
+        )
 }
 
 fn view_subaccount_section(state: &StudioState) -> Element<'_, Message> {
@@ -973,4 +1009,53 @@ fn view_path_toolbar(state: &StudioState) -> Element<'_, Message> {
     .width(Fill)
     .style(subtle_panel_style)
     .into()
+}
+
+#[cfg(test)]
+mod dashboard_task_progress_tests {
+    use super::super::super::state::DashboardProject;
+    use super::dashboard_task_progress_totals;
+
+    fn project(name: &str, completed_today: u64, limit: Option<u64>) -> DashboardProject {
+        DashboardProject {
+            id: name.to_string(),
+            name: name.to_string(),
+            chunked_queue_id: "queue".to_string(),
+            tasks_completed_today: completed_today,
+            daily_task_limit: limit,
+            ..DashboardProject::default()
+        }
+    }
+
+    #[test]
+    fn sums_only_projects_with_a_reported_daily_limit() {
+        let projects = [
+            project("RU-tx-gold", 7, Some(25)),
+            project("RU-tx-gold-non-bg", 3, Some(20)),
+            project("RU-Emotion-VA", 2, None),
+        ];
+
+        let (completed, limit, limited_count) = dashboard_task_progress_totals(&projects);
+
+        assert_eq!(completed, 10);
+        assert_eq!(limit, 45);
+        assert_eq!(limited_count, 2);
+    }
+
+    #[test]
+    fn reports_no_limited_projects_when_babel_enforces_no_cap() {
+        let projects = [project("RU-Emotion-VA", 2, None)];
+
+        let (completed, limit, limited_count) = dashboard_task_progress_totals(&projects);
+
+        assert_eq!(completed, 0);
+        assert_eq!(limit, 0);
+        assert_eq!(limited_count, 0);
+    }
+
+    #[test]
+    fn empty_project_list_totals_to_zero() {
+        let (completed, limit, limited_count) = dashboard_task_progress_totals(&[]);
+        assert_eq!((completed, limit, limited_count), (0, 0, 0));
+    }
 }

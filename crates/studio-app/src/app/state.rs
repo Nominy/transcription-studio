@@ -207,12 +207,18 @@ pub(super) struct DashboardState {
     pub(super) recovery_drafts: Vec<RecoveryDraft>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct DashboardProject {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) chunked_queue_id: String,
     pub(super) stitched_queue_id: String,
+    /// Tasks the signed-in worker (main account, or a subaccount sharing the
+    /// same Babel worker identity through the relay) has completed today.
+    pub(super) tasks_completed_today: u64,
+    /// Babel's daily task cap for this project, when the worker payload
+    /// reports one. `None` when Babel does not enforce a limit here.
+    pub(super) daily_task_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1705,7 +1711,6 @@ impl StudioState {
                 BabelServiceRequest::ClaimNextFromQueue(request) if request.token == token
             )
         });
-        self.release_editor_workspace_resources();
         self.no_work_modal = Some(build_no_work_modal_model(NoWorkModalInput {
             open: true,
             mode: "review".to_string(),
@@ -1857,8 +1862,6 @@ impl StudioState {
         self.drain_babel_service_requests_matching(should_drain);
 
         if babel_payload_needs_audio_preparation(&source) {
-            // Drop any previous editor/audio while the dashboard shows the download state.
-            self.release_editor_workspace_resources();
             self.status = "Downloading Babel audio...".to_string();
             self.app_surface = AppSurface::Dashboard;
             self.dashboard.is_pending = true;
@@ -1894,7 +1897,6 @@ impl StudioState {
         match result {
             Ok(payload) => self.import_prepared_babel_payload(payload, route_metadata, kind),
             Err(error) => {
-                self.release_editor_workspace_resources();
                 self.status = format!("{} failed: {error}", kind.failure_label());
                 self.app_surface = AppSurface::Dashboard;
                 self.dashboard.is_pending = false;
@@ -1918,12 +1920,10 @@ impl StudioState {
                 let loaded = self.load_lane_waveforms_from_base(&payload.audio_base_dir);
                 self.append_waveform_status(loaded);
                 if payload.remote_audio_count > 0 && loaded == 0 {
-                    let status = format!(
+                    self.status = format!(
                         "{} failed: downloaded Babel audio, but no waveform tracks loaded",
                         kind.failure_label()
                     );
-                    self.release_editor_workspace_resources();
-                    self.status = status;
                     self.app_surface = AppSurface::Dashboard;
                     self.dashboard.is_pending = false;
                     self.dashboard.error = Some(self.status.clone());
@@ -1934,7 +1934,6 @@ impl StudioState {
                 self.dashboard.error = None;
             }
             Err(error) => {
-                self.release_editor_workspace_resources();
                 self.status = format!("{} failed: {error}", kind.failure_label());
                 self.app_surface = AppSurface::Dashboard;
                 self.dashboard.is_pending = false;
@@ -1954,7 +1953,6 @@ impl StudioState {
             return;
         }
         self.drain_babel_service_requests_matching(should_drain);
-        self.release_editor_workspace_resources();
         self.status = format!("{failure_label} failed: {error}");
         self.app_surface = AppSurface::Dashboard;
         self.dashboard.is_pending = false;
@@ -3255,19 +3253,6 @@ impl StudioState {
     }
 
     pub(super) fn enter_dashboard(&mut self) {
-        self.release_editor_workspace_resources();
-        self.app_surface = AppSurface::Dashboard;
-        self.dashboard.is_pending = false;
-        self.status = if self.subaccount_session.is_some() {
-            "Sub-account dashboard ready.".to_string()
-        } else {
-            "Babel dashboard ready.".to_string()
-        };
-    }
-
-    /// Drop decoded audio, editor caches, drafts, and the audio graph so RAM
-    /// does not keep growing across claim → edit → back-to-dashboard cycles.
-    pub(super) fn release_editor_workspace_resources(&mut self) {
         self.advance_babel_payload_request_generation();
         self.workspace_generation = self.workspace_generation.saturating_add(1);
         self.drain_babel_service_requests_matching(|request| {
@@ -3288,69 +3273,35 @@ impl StudioState {
         self.feedback_draft_revision = 0;
         self.reset_reviewer_workspace_state();
         self.audio_playback.shutdown();
-        self.runtime_audio_playback_info = None;
-        self.last_transport_tick = None;
-        self.editor = None;
-        // Keep the last successful workflow error-shaped so `project()` is None
-        // and undo snapshots / decoded lane audio are not retained on dashboard.
-        if self.workflow.is_ok() {
-            self.workflow = Err("Editor workspace released.".to_string());
-        }
+        self.release_decoded_lane_audio();
+        self.with_editor_mut(|editor| editor.is_playing = false);
         self.held_audition_keys.clear();
         self.audition_key_release_tokens.clear();
         self.release_captured_pointer();
-        self.active_overlay_drag = None;
-        self.active_waveform_drag = None;
-        self.active_waveform_create_drag = None;
-        self.active_timeline_autoscroll = None;
-        self.active_loop_drag = None;
-        self.overview_hover_fraction = None;
-        self.overview_pointer_sample = None;
-        self.overview_drag_capture = None;
-        self.overview_drag_active = false;
-        self.timeline_scrollbar_hover_fraction = None;
-        self.timeline_scrollbar_pointer_sample = None;
-        self.timeline_scrollbar_drag_capture = None;
-        self.lane_vertical_zoom_slider_hover = None;
-        self.lane_vertical_zoom_slider_pointer_sample = None;
-        self.lane_vertical_zoom_slider_drag_capture = None;
-        self.active_lane_vertical_zoom_slider_id = None;
-        self.lane_vertical_zoom_input = None;
-        self.transcript_row_hover_segment_id = None;
-        self.tag_suggestion_state = None;
-        self.helper_focused_segment_id = None;
-        self.helper_focus_restore_pending = None;
-        self.helper_last_focus_restore = None;
-        self.waveform_hit_hover = None;
-        self.loop_strip_hover = None;
-        self.create_region_dialog = None;
-        self.edit_annotation_dialog = None;
-        self.show_submit_dialog = false;
-        self.submit_is_pending = false;
-        self.submit_has_error = false;
-        self.drop_claim_is_pending = false;
-        self.show_skip_chunk_dialog = false;
-        self.skip_is_pending = false;
-        self.show_admin_flag_dialog = false;
-        self.admin_flag_reason.clear();
-        self.admin_flag_is_pending = false;
-        self.no_work_modal = None;
-        self.task_lookup = None;
-        self.task_lookup_last_effect = None;
-        self.show_hotkeys_dialog = false;
-        self.show_exit_confirm_dialog = false;
-        self.pending_leave = None;
-        self.find_bar_open = false;
-        self.find_query.clear();
-        self.playback_followed_segment_id = None;
-        self.copied_submission_id = false;
-        self.acknowledged_low_confidence_words.clear();
-        self.segment_drafts.clear();
-        self.cross_row_text_undo_stack.clear();
-        self.cross_row_text_redo_stack.clear();
-        self.transcript_scroll_offset_y = 0.0;
-        self.transcript_scroll_viewport_height = DEFAULT_TRANSCRIPT_VIEWPORT_HEIGHT;
-        self.invalidate_transcript_rows_cache();
+        self.app_surface = AppSurface::Dashboard;
+        self.dashboard.is_pending = false;
+        self.status = if self.subaccount_session.is_some() {
+            "Sub-account dashboard ready.".to_string()
+        } else {
+            "Babel dashboard ready.".to_string()
+        };
+    }
+
+    /// Drops decoded PCM waveforms and their derived peak/render caches for
+    /// the current editor session. This is the dominant per-task memory
+    /// cost — often tens to hundreds of MB of `f32` samples plus cached peaks
+    /// and render models per lane — so it is released every time the
+    /// workspace returns to the dashboard. Unlike a full workspace teardown,
+    /// this intentionally leaves `editor`/`workflow`/drafts/undo history
+    /// intact: several success flows (submit, skip, drop claim, admin flag)
+    /// navigate to the dashboard immediately after writing final metadata
+    /// onto the just-edited project, and still need to read it back.
+    fn release_decoded_lane_audio(&mut self) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.lane_waveforms.clear();
+        }
+        self.invalidate_timeline_lanes_cache();
+        self.invalidate_transcript_layout_cache();
     }
 
     pub(super) fn request_leave(
@@ -6483,12 +6434,29 @@ fn dashboard_project_from_object(
         return None;
     }
 
+    let tasks_completed_today =
+        nested_u64_by_path(value, &["workerStats", "tasksCompletedToday"]).unwrap_or(0);
+    let daily_task_limit = nested_u64_by_path(value, &["taskLimit", "limit"]);
+
     Some(DashboardProject {
         id,
         name,
         chunked_queue_id,
         stitched_queue_id,
+        tasks_completed_today,
+        daily_task_limit,
     })
+}
+
+/// Reads a `u64` from a chain of nested object keys, e.g. `["taskLimit", "limit"]`
+/// for `{"taskLimit": {"limit": 25}}`. Returns `None` if any hop is missing or
+/// the leaf is not a non-negative integer.
+fn nested_u64_by_path(value: &Value, path: &[&str]) -> Option<u64> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_u64()
 }
 
 fn dashboard_project_is_active(value: &Value) -> bool {
