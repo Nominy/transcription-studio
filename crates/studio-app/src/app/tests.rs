@@ -295,9 +295,14 @@ fn reviewer_session_response(
 }
 
 fn activate_review_backend_request(state: &mut StudioState, request: &ReviewBackendRequest) {
-    if !state.review_backend_requests.contains(request)
-        && !state.dispatched_review_backend_requests.contains(request)
-    {
+    let dispatched_in_current_workspace = state
+        .dispatched_review_backend_requests
+        .iter()
+        .zip(&state.dispatched_review_backend_request_tokens)
+        .any(|(dispatched, token)| {
+            dispatched == request && token.workspace_generation == state.workspace_generation
+        });
+    if !state.review_backend_requests.contains(request) && !dispatched_in_current_workspace {
         state.review_backend_requests.push(request.clone());
     }
 }
@@ -14551,7 +14556,25 @@ fn reviewer_workspace_replacement_clears_state_and_ignores_late_backend_success(
     state.replace_workflow(replacement, "loaded workspace B".to_string());
 
     assert!(state.review_backend_requests.is_empty());
-    assert!(state.dispatched_review_backend_requests.is_empty());
+    // Dispatched requests intentionally survive a workspace switch -- their
+    // `Task::perform` futures are still running and must stay accounted for
+    // until a real callback retires them. What must change is that the stale
+    // entry no longer belongs to the *current* workspace generation, so it
+    // can neither block a new identical request nor apply its late result.
+    assert!(
+        state
+            .dispatched_review_backend_requests
+            .contains(&stale_request)
+    );
+    assert_eq!(
+        state.dispatched_review_backend_request_tokens[0].workspace_generation,
+        stale_service_request.token.workspace_generation,
+        "the stale dispatch keeps its original (now-superseded) workspace generation"
+    );
+    assert_ne!(
+        stale_service_request.token.workspace_generation, state.workspace_generation,
+        "replace_workflow must advance past the stale request's workspace generation"
+    );
     assert!(state.reviewer_session_preview.is_none());
     assert!(state.reviewer_generated_review_preview.is_none());
     assert!(state.reviewer_finalize_preview.is_none());

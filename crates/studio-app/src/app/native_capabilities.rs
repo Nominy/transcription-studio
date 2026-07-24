@@ -1766,18 +1766,33 @@ impl StudioState {
         true
     }
 
+    /// Dispatched review-backend requests survive a workspace switch so their
+    /// still-running `Task::perform` futures stay accounted for until a real
+    /// callback (or a mismatched-workspace check) retires them. Deduplication
+    /// against them must therefore only consider entries dispatched in the
+    /// *current* workspace generation -- otherwise a stale entry from a
+    /// replaced workspace can wrongly block an identical-looking new request.
+    fn dispatched_review_backend_requests_in_current_workspace(
+        &self,
+    ) -> impl Iterator<Item = &ReviewBackendRequest> {
+        self.dispatched_review_backend_requests
+            .iter()
+            .zip(&self.dispatched_review_backend_request_tokens)
+            .filter(|(_, token)| token.workspace_generation == self.workspace_generation)
+            .map(|(request, _)| request)
+    }
+
     fn review_backend_request_is_pending(&self, request: &ReviewBackendRequest) -> bool {
         self.review_backend_requests
             .iter()
-            .chain(self.dispatched_review_backend_requests.iter())
+            .chain(self.dispatched_review_backend_requests_in_current_workspace())
             .any(|pending| pending == request)
     }
 
     fn pending_review_backend_request_count(&self) -> usize {
         self.review_backend_requests.len()
             + self
-                .dispatched_review_backend_requests
-                .iter()
+                .dispatched_review_backend_requests_in_current_workspace()
                 .filter(|request| !self.review_backend_requests.contains(request))
                 .count()
     }
@@ -1785,7 +1800,7 @@ impl StudioState {
     fn has_pending_audio_draft_generation(&self, payload: &Value) -> bool {
         self.review_backend_requests
             .iter()
-            .chain(self.dispatched_review_backend_requests.iter())
+            .chain(self.dispatched_review_backend_requests_in_current_workspace())
             .any(|request| {
                 matches!(
                     request,
@@ -1805,7 +1820,7 @@ impl StudioState {
     fn has_pending_audio_segment_transcription(&self, payload: &Value) -> bool {
         self.review_backend_requests
             .iter()
-            .chain(self.dispatched_review_backend_requests.iter())
+            .chain(self.dispatched_review_backend_requests_in_current_workspace())
             .any(|request| {
                 matches!(
                     request,
@@ -2007,7 +2022,7 @@ impl StudioState {
         if self
             .review_backend_requests
             .iter()
-            .chain(self.dispatched_review_backend_requests.iter())
+            .chain(self.dispatched_review_backend_requests_in_current_workspace())
             .any(|request| matches!(request, ReviewBackendRequest::ReviewFinalizeSession { .. }))
         {
             return;
@@ -2029,7 +2044,7 @@ impl StudioState {
     fn has_pending_reviewer_comment_request(&self) -> bool {
         self.review_backend_requests
             .iter()
-            .chain(self.dispatched_review_backend_requests.iter())
+            .chain(self.dispatched_review_backend_requests_in_current_workspace())
             .any(|request| {
                 matches!(
                     request,
