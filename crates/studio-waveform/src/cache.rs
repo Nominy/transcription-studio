@@ -4,9 +4,11 @@ use crate::{PeakExportError, WaveformSource, peaks::bucket_max_already_rounded};
 
 // Resolution entries and their peak-sample payloads are independently bounded. The
 // entry cap also bounds per-entry allocation overhead that is not included in the
-// payload byte count.
+// payload byte count. Together with the application-side timeline render-model byte
+// budget (4 MiB per lane), this keeps a lane's waveform caches at or below ~20 MiB
+// regardless of zoom history.
 const MAX_CACHED_RESOLUTIONS: usize = 8;
-const MAX_CACHED_PEAK_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CACHED_PEAK_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct PeakCache {
@@ -332,7 +334,7 @@ mod tests {
     fn byte_budget_evicts_old_entries_but_keeps_oversized_current_entry() {
         let mut cache = PeakCache::new(source());
         let first_length = 1_500_000;
-        let second_length = 2_800_000;
+        let second_length = 1_800_000;
 
         cache
             .shared_peaks_for_resolution(1, first_length, 100.0)

@@ -93,6 +93,16 @@ impl StudioWorkflow {
         self.pending_boundary_edit_segment_id.get_mut().take();
     }
 
+    /// Drops every retained undo/redo snapshot, freeing the retained project
+    /// clones (up to `CommandHistory::MAX_HISTORY_BYTES` per stack). Called
+    /// when the workspace returns to the dashboard; reopening a project
+    /// always builds a fresh workflow via `replace_workflow`, so no flow can
+    /// observe the cleared history.
+    pub fn clear_history(&mut self) {
+        self.pending_boundary_edit_segment_id.get_mut().take();
+        self.history.clear();
+    }
+
     pub fn mark_review_passed(&mut self) {
         self.clear_pending_boundary_edit();
         self.project

@@ -1,13 +1,17 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
     time::UNIX_EPOCH,
 };
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use super::http_client::shared_http_client;
 use super::platform_paths::application_support_dir_named;
 
 const CLERK_INSTANCE_SUFFIX: &str = "v1aVht_F";
@@ -17,6 +21,96 @@ const DEFAULT_CLERK_URL: &str = "https://clerk.babel.audio";
 const STUDIO_BABEL_AUTH_STORE: &str = "STUDIO_BABEL_AUTH_STORE";
 const STUDIO_BABEL_CLERK_URL: &str = "STUDIO_BABEL_CLERK_URL";
 const NATIVE_AUTH_STORE_FILE_NAME: &str = "babel-auth.json";
+
+/// Stop reusing a cached Clerk session JWT this long before its `exp` so an
+/// in-flight request never carries a token that expires mid-flight. Clerk
+/// session tokens live ~60s, so the margin is small: a 60s margin would make
+/// the cache a permanent miss and re-mint per request again.
+const NATIVE_BABEL_JWT_REUSE_MARGIN_SECONDS: i64 = 10;
+/// When the minted JWT has no parseable `exp` claim, reuse it for at most
+/// this conservative TTL (Clerk session tokens live ~60s).
+const NATIVE_BABEL_JWT_FALLBACK_TTL_SECONDS: i64 = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedNativeBabelJwt {
+    store_path: PathBuf,
+    clerk_url: String,
+    token: String,
+    reuse_until_unix_seconds: i64,
+}
+
+/// Process-wide cache of the last minted Clerk session JWT. Minting costs
+/// two Clerk HTTP round-trips, and the live Babel service path mints per
+/// request, so the token is reused until shortly before its expiry.
+#[derive(Debug, Default)]
+struct NativeBabelJwtCache {
+    entry: Option<CachedNativeBabelJwt>,
+}
+
+impl NativeBabelJwtCache {
+    fn token_for(
+        &self,
+        store_path: &Path,
+        clerk_url: &str,
+        now_unix_seconds: i64,
+    ) -> Option<String> {
+        let entry = self.entry.as_ref()?;
+        if entry.store_path != store_path || entry.clerk_url != clerk_url {
+            return None;
+        }
+        if now_unix_seconds >= entry.reuse_until_unix_seconds {
+            return None;
+        }
+        Some(entry.token.clone())
+    }
+
+    fn store_token(
+        &mut self,
+        store_path: &Path,
+        clerk_url: &str,
+        token: String,
+        now_unix_seconds: i64,
+    ) {
+        let reuse_until_unix_seconds = jwt_exp_unix_seconds(&token)
+            .map(|exp| exp - NATIVE_BABEL_JWT_REUSE_MARGIN_SECONDS)
+            .unwrap_or(now_unix_seconds + NATIVE_BABEL_JWT_FALLBACK_TTL_SECONDS);
+        self.entry = Some(CachedNativeBabelJwt {
+            store_path: store_path.to_path_buf(),
+            clerk_url: clerk_url.to_string(),
+            token,
+            reuse_until_unix_seconds,
+        });
+    }
+
+    fn clear(&mut self) {
+        self.entry = None;
+    }
+}
+
+static NATIVE_BABEL_JWT_CACHE: Mutex<NativeBabelJwtCache> =
+    Mutex::new(NativeBabelJwtCache { entry: None });
+
+fn native_babel_jwt_cache() -> MutexGuard<'static, NativeBabelJwtCache> {
+    NATIVE_BABEL_JWT_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Drop the cached Clerk session JWT. Called on every auth transition
+/// (login start, login verify, auth-store detach) so a stale token from a
+/// previous session is never reused.
+fn clear_native_babel_jwt_cache() {
+    native_babel_jwt_cache().clear();
+}
+
+/// Read the `exp` claim from a JWT without verifying the signature (the
+/// token is minted by Clerk over TLS moments earlier).
+fn jwt_exp_unix_seconds(jwt: &str) -> Option<i64> {
+    let payload = jwt.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    value.get("exp").and_then(Value::as_i64)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NativeAuthCookie {
@@ -178,6 +272,7 @@ fn application_support_native_auth_store_path() -> PathBuf {
 }
 
 pub(super) fn detach_native_auth_store_to_executable() -> Result<PathBuf, String> {
+    clear_native_babel_jwt_cache();
     if let Ok(path) = env::var(STUDIO_BABEL_AUTH_STORE)
         && !path.trim().is_empty()
     {
@@ -240,6 +335,7 @@ pub(super) async fn start_phone_code_login(
     if identifier.is_empty() {
         return Err("phone-code login requires an identifier".to_string());
     }
+    clear_native_babel_jwt_cache();
     let mut store = if reset {
         NativeAuthStore::default()
     } else {
@@ -254,7 +350,7 @@ pub(super) async fn start_phone_code_login(
         return Err("native Babel auth Babel URL is empty".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let sign_in_url = clerk_api_url(clerk_url, "/v1/client/sign_ins");
     let clerk_cookie = cookie_header_for_url(&store, &sign_in_url, now_unix_seconds)?;
     let sign_in_response = request_clerk_json(
@@ -316,6 +412,7 @@ pub(super) async fn verify_phone_code_login(
     if code.is_empty() {
         return Err("phone verification code is empty".to_string());
     }
+    clear_native_babel_jwt_cache();
     let mut store = read_native_auth_store(store_path)?;
     let Some(sign_in_id) = store
         .pending_sign_in_id
@@ -338,7 +435,7 @@ pub(super) async fn verify_phone_code_login(
         return Err("native Babel auth Babel URL is empty".to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let attempt_url = clerk_api_url(
         clerk_url,
         &format!(
@@ -432,7 +529,13 @@ async fn mint_native_babel_jwt_from_store(
         return Err("native Babel auth Babel URL is empty".to_string());
     }
 
-    let client = reqwest::Client::new();
+    if let Some(cached) =
+        native_babel_jwt_cache().token_for(store_path, clerk_url, now_unix_seconds)
+    {
+        return Ok(cached);
+    }
+
+    let client = shared_http_client();
     let client_url = clerk_api_url(clerk_url, "/v1/client");
     let clerk_cookie = cookie_header_for_url(&store, &client_url, now_unix_seconds)?;
     if clerk_cookie.trim().is_empty() {
@@ -491,8 +594,10 @@ async fn mint_native_babel_jwt_from_store(
         .value
         .get("jwt")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Clerk token response did not include jwt".to_string())?;
-    Ok(jwt.to_string())
+        .ok_or_else(|| "Clerk token response did not include jwt".to_string())?
+        .to_string();
+    native_babel_jwt_cache().store_token(store_path, clerk_url, jwt.clone(), now_unix_seconds);
+    Ok(jwt)
 }
 
 pub(super) fn cookie_header_for_url(
@@ -966,6 +1071,126 @@ mod tests {
         );
     }
 
+    fn sample_jwt_with_exp(exp: i64) -> String {
+        let payload = URL_SAFE_NO_PAD.encode(json!({ "exp": exp }).to_string());
+        format!("header.{payload}.signature")
+    }
+
+    #[test]
+    fn jwt_exp_unix_seconds_reads_exp_claim() {
+        assert_eq!(
+            jwt_exp_unix_seconds(&sample_jwt_with_exp(1_900_000_000)),
+            Some(1_900_000_000)
+        );
+        assert_eq!(jwt_exp_unix_seconds("not-a-jwt"), None);
+        assert_eq!(jwt_exp_unix_seconds("header.!!!.signature"), None);
+        assert_eq!(
+            jwt_exp_unix_seconds(&format!(
+                "header.{}.signature",
+                URL_SAFE_NO_PAD.encode(json!({ "sub": "user" }).to_string())
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn native_babel_jwt_cache_reuses_token_until_margin_before_expiry() {
+        let mut cache = NativeBabelJwtCache::default();
+        let store_path = Path::new("store.json");
+        cache.store_token(
+            store_path,
+            "https://clerk.example",
+            sample_jwt_with_exp(1_000),
+            900,
+        );
+
+        // Reuse ends at exp - margin = 990.
+        assert_eq!(
+            cache.token_for(store_path, "https://clerk.example", 989),
+            Some(sample_jwt_with_exp(1_000))
+        );
+        assert!(
+            cache
+                .token_for(store_path, "https://clerk.example", 990)
+                .is_none()
+        );
+        assert!(
+            cache
+                .token_for(store_path, "https://clerk.example", 1_500)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_babel_jwt_cache_falls_back_to_conservative_ttl_without_exp() {
+        let mut cache = NativeBabelJwtCache::default();
+        let store_path = Path::new("store.json");
+        cache.store_token(
+            store_path,
+            "https://clerk.example",
+            "opaque-token".to_string(),
+            1_000,
+        );
+
+        // Fallback reuse window is now + 50s.
+        assert_eq!(
+            cache.token_for(store_path, "https://clerk.example", 1_049),
+            Some("opaque-token".to_string())
+        );
+        assert!(
+            cache
+                .token_for(store_path, "https://clerk.example", 1_050)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_babel_jwt_cache_is_scoped_to_store_path_and_clerk_url() {
+        let mut cache = NativeBabelJwtCache::default();
+        cache.store_token(
+            Path::new("store-a.json"),
+            "https://clerk-a.example",
+            sample_jwt_with_exp(1_000),
+            900,
+        );
+
+        assert!(
+            cache
+                .token_for(Path::new("store-b.json"), "https://clerk-a.example", 900)
+                .is_none()
+        );
+        assert!(
+            cache
+                .token_for(Path::new("store-a.json"), "https://clerk-b.example", 900)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_babel_jwt_cache_clear_invalidates_cached_token() {
+        let mut cache = NativeBabelJwtCache::default();
+        let store_path = Path::new("store.json");
+        cache.store_token(
+            store_path,
+            "https://clerk.example",
+            sample_jwt_with_exp(1_000),
+            900,
+        );
+        assert!(
+            cache
+                .token_for(store_path, "https://clerk.example", 900)
+                .is_some()
+        );
+
+        cache.clear();
+
+        assert!(
+            cache
+                .token_for(store_path, "https://clerk.example", 900)
+                .is_none()
+        );
+    }
+
     #[test]
     fn detach_native_auth_store_copies_current_store_to_executable_target() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1257,6 +1482,55 @@ mod tests {
         let saved = std::fs::read_to_string(&store_path).expect("read refreshed auth store");
         assert!(saved.contains("\"value\": \"refreshed-client\""));
         assert!(!saved.contains("\"value\": \"client-cookie\""));
+    }
+
+    #[tokio::test]
+    async fn mint_native_babel_jwt_reuses_cached_token_within_token_lifetime() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_path = temp.path().join("babel-auth.json");
+        std::fs::write(
+            &store_path,
+            r#"{
+                "version": 1,
+                "cookies": [
+                    {
+                        "name": "__client",
+                        "value": "client-cookie",
+                        "domain": "127.0.0.1",
+                        "path": "/",
+                        "expiresAt": 4102444800000
+                    }
+                ]
+            }"#,
+        )
+        .expect("write auth store");
+        // Exactly two responses: if the second mint re-hit Clerk, the mock
+        // server would be gone and the request would fail.
+        let server = MockClerkServer::start();
+
+        let first = mint_native_babel_jwt_from_store(
+            &store_path,
+            "https://dashboard.babel.audio",
+            &server.base_url,
+            1_782_754_800,
+        )
+        .await
+        .expect("first mint");
+        let second = mint_native_babel_jwt_from_store(
+            &store_path,
+            "https://dashboard.babel.audio",
+            &server.base_url,
+            1_782_754_810,
+        )
+        .await
+        .expect("second mint should be served from the JWT cache");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            server.join().len(),
+            2,
+            "cached mint must not add Clerk HTTP round-trips"
+        );
     }
 
     struct MockClerkServer {

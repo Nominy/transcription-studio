@@ -1251,3 +1251,184 @@ fn command_history_retains_only_the_newest_bounded_snapshots() {
         Err(StudioCoreError::NothingToRedo)
     );
 }
+
+fn sample_project_with_segment_text(text: String) -> Project {
+    let mut project = sample_project();
+    project.segment_mut("segment-1").unwrap().text = text;
+    project
+}
+
+fn apply_segment_text(history: &mut CommandHistory, project: &mut Project, text: String) {
+    history
+        .apply(
+            project,
+            EditorCommand::ApplyTextEdit {
+                segment_id: "segment-1".to_string(),
+                text,
+            },
+        )
+        .expect("text edit should apply");
+}
+
+#[test]
+fn project_estimated_heap_bytes_tracks_text_and_metadata_payloads() {
+    let small = sample_project();
+    let mut large = sample_project();
+    large.segment_mut("segment-1").unwrap().text = "x".repeat(1024 * 1024);
+
+    assert!(small.estimated_heap_bytes() > 0);
+    assert_eq!(
+        large.estimated_heap_bytes() - small.estimated_heap_bytes(),
+        1024 * 1024 - "original one".len()
+    );
+
+    let mut with_metadata = sample_project();
+    with_metadata
+        .metadata
+        .insert("key".to_string(), "value".to_string());
+    assert!(
+        with_metadata.estimated_heap_bytes()
+            >= small.estimated_heap_bytes() + "key".len() + "value".len()
+    );
+}
+
+#[test]
+fn command_history_byte_budget_evicts_oldest_snapshots_below_the_count_cap() {
+    // 40 edits stay well under MAX_DEPTH, but each ~2 MiB snapshot charges
+    // against the 64 MiB byte budget, so most of them must be evicted.
+    const EDITS: usize = 40;
+    const TEXT_BYTES: usize = 2 * 1024 * 1024;
+    const { assert!(EDITS < CommandHistory::MAX_DEPTH) };
+
+    let mut project = sample_project_with_segment_text("x".repeat(TEXT_BYTES));
+    let mut history = CommandHistory::default();
+
+    for edit_index in 0..EDITS {
+        apply_segment_text(
+            &mut history,
+            &mut project,
+            format!("{}{}", "y".repeat(TEXT_BYTES), edit_index),
+        );
+    }
+
+    let mut undo_count = 0usize;
+    while history.undo(&mut project).is_ok() {
+        undo_count += 1;
+    }
+
+    // The byte budget evicted snapshots well before the count cap could.
+    assert!(undo_count < EDITS);
+    assert!(undo_count < CommandHistory::MAX_DEPTH);
+    // Roughly 31 of the ~2 MiB states fit into the 64 MiB budget; allow
+    // slack for the per-item overhead constants in the estimator.
+    assert!((28..=33).contains(&undo_count));
+
+    // The retained snapshots are the newest states: undoing all of them
+    // lands on the state right before the oldest retained edit.
+    let expected_marker = (EDITS - undo_count - 1).to_string();
+    let text = &project.segment("segment-1").unwrap().text;
+    assert!(text.ends_with(&expected_marker));
+    assert_eq!(text.len(), TEXT_BYTES + expected_marker.len());
+}
+
+#[test]
+fn command_history_count_cap_still_bounds_small_edits() {
+    const EXTRA_EDITS: usize = 25;
+
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    for edit_index in 0..CommandHistory::MAX_DEPTH + EXTRA_EDITS {
+        apply_segment_text(
+            &mut history,
+            &mut project,
+            format!("small edit {edit_index}"),
+        );
+    }
+
+    let mut undo_count = 0usize;
+    while history.undo(&mut project).is_ok() {
+        undo_count += 1;
+    }
+    assert_eq!(undo_count, CommandHistory::MAX_DEPTH);
+    // The retained snapshots are the newest: after MAX_DEPTH undos the
+    // project shows the state right before the oldest retained edit.
+    assert_eq!(
+        project.segment("segment-1").unwrap().text,
+        format!("small edit {}", EXTRA_EDITS - 1)
+    );
+}
+
+#[test]
+fn command_history_undo_redo_survive_byte_budget_evictions() {
+    const EDITS: usize = 40;
+    const TEXT_BYTES: usize = 2 * 1024 * 1024;
+
+    let mut project = sample_project_with_segment_text("x".repeat(TEXT_BYTES));
+    let mut history = CommandHistory::default();
+
+    for edit_index in 0..EDITS {
+        apply_segment_text(
+            &mut history,
+            &mut project,
+            format!("{}{}", "y".repeat(TEXT_BYTES), edit_index),
+        );
+    }
+
+    history
+        .undo(&mut project)
+        .expect("newest retained edit should undo");
+    assert!(project.segment("segment-1").unwrap().text.ends_with("38"));
+    history
+        .undo(&mut project)
+        .expect("second newest retained edit should undo");
+    assert!(project.segment("segment-1").unwrap().text.ends_with("37"));
+
+    history.redo(&mut project).expect("undone edit should redo");
+    assert!(project.segment("segment-1").unwrap().text.ends_with("38"));
+    history
+        .redo(&mut project)
+        .expect("second undone edit should redo");
+    assert!(project.segment("segment-1").unwrap().text.ends_with("39"));
+
+    // Applying a fresh edit still clears the redo stack.
+    apply_segment_text(&mut history, &mut project, "z".repeat(TEXT_BYTES));
+    assert!(!history.can_redo());
+    assert_eq!(
+        history.redo(&mut project),
+        Err(StudioCoreError::NothingToRedo)
+    );
+}
+
+#[test]
+fn command_history_clear_empties_both_stacks() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    apply_segment_text(&mut history, &mut project, "first".to_string());
+    apply_segment_text(&mut history, &mut project, "second".to_string());
+    history.undo(&mut project).expect("edit should undo");
+    assert!(history.can_undo());
+    assert!(history.can_redo());
+
+    history.clear();
+
+    assert!(!history.can_undo());
+    assert!(!history.can_redo());
+    assert_eq!(
+        history.undo(&mut project),
+        Err(StudioCoreError::NothingToUndo)
+    );
+    assert_eq!(
+        history.redo(&mut project),
+        Err(StudioCoreError::NothingToRedo)
+    );
+
+    // The history stays usable after a clear.
+    apply_segment_text(&mut history, &mut project, "third".to_string());
+    assert!(history.can_undo());
+    history
+        .undo(&mut project)
+        .expect("post-clear edit should undo");
+    assert_eq!(project.segment("segment-1").unwrap().text, "first");
+}

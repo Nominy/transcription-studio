@@ -27,10 +27,10 @@ use super::super::super::styles::{
 use super::super::drag_capture::view_horizontal_drag_capture_with_cursor;
 use super::super::timed_widget::view_timed;
 use super::super::wavesurfer_canvas::{
-    view_waveform_playhead_canvas, view_waveform_progress_clip, view_waveform_scrollbar_canvas,
-    view_waveform_selected_region_border_canvas, view_wavesurfer_line_waveform_window_canvas,
-    view_wavesurfer_region_fill_window_canvas, view_wavesurfer_segment_waveforms_canvas,
-    view_wavesurfer_unplayed_line_waveform_window_canvas,
+    quantized_window_key, view_waveform_playhead_canvas, view_waveform_progress_clip,
+    view_waveform_scrollbar_canvas, view_waveform_selected_region_border_canvas,
+    view_wavesurfer_line_waveform_window_canvas, view_wavesurfer_region_fill_window_canvas,
+    view_wavesurfer_segment_waveforms_canvas, view_wavesurfer_unplayed_line_waveform_window_canvas,
     view_wavesurfer_unplayed_segment_waveforms_canvas,
 };
 use super::ruler;
@@ -93,6 +93,7 @@ struct EngineWaveformStripDependency {
     source_end_seconds: f64,
     visible_start_seconds: f64,
     visible_end_seconds: f64,
+    strip_pixel_width: f32,
 }
 
 struct EngineWaveformMagnifierDependency {
@@ -104,6 +105,7 @@ struct EngineWaveformMagnifierDependency {
     source_end_seconds: f64,
     visible_start_seconds: f64,
     visible_end_seconds: f64,
+    magnifier_pixel_width: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,6 +123,7 @@ struct EngineRegionFillDependency {
     metrics: WaveformLaneMetrics,
     visible_start_seconds: f64,
     visible_end_seconds: f64,
+    strip_pixel_width: f32,
 }
 
 struct SelectedRegionBorderDependency {
@@ -173,8 +176,13 @@ impl std::hash::Hash for EngineWaveformStripDependency {
         self.metrics.vertical_scale.to_bits().hash(state);
         self.source_start_seconds.to_bits().hash(state);
         self.source_end_seconds.to_bits().hash(state);
-        self.visible_start_seconds.to_bits().hash(state);
-        self.visible_end_seconds.to_bits().hash(state);
+        let (visible_start_bucket, visible_scale_bucket) = quantized_window_key(
+            self.visible_start_seconds,
+            self.visible_end_seconds,
+            f64::from(self.strip_pixel_width),
+        );
+        visible_start_bucket.hash(state);
+        visible_scale_bucket.hash(state);
     }
 }
 
@@ -187,8 +195,13 @@ impl std::hash::Hash for EngineWaveformMagnifierDependency {
         self.vertical_scale.to_bits().hash(state);
         self.source_start_seconds.to_bits().hash(state);
         self.source_end_seconds.to_bits().hash(state);
-        self.visible_start_seconds.to_bits().hash(state);
-        self.visible_end_seconds.to_bits().hash(state);
+        let (visible_start_bucket, visible_scale_bucket) = quantized_window_key(
+            self.visible_start_seconds,
+            self.visible_end_seconds,
+            f64::from(self.magnifier_pixel_width),
+        );
+        visible_start_bucket.hash(state);
+        visible_scale_bucket.hash(state);
     }
 }
 
@@ -202,8 +215,13 @@ impl std::hash::Hash for EngineRegionFillDependency {
         }
         self.color_token.hash(state);
         self.metrics.body_height.to_bits().hash(state);
-        self.visible_start_seconds.to_bits().hash(state);
-        self.visible_end_seconds.to_bits().hash(state);
+        let (visible_start_bucket, visible_scale_bucket) = quantized_window_key(
+            self.visible_start_seconds,
+            self.visible_end_seconds,
+            f64::from(self.strip_pixel_width),
+        );
+        visible_start_bucket.hash(state);
+        visible_scale_bucket.hash(state);
     }
 }
 
@@ -379,6 +397,7 @@ fn view_synthetic_waveform_body<'a>(
                 metrics: data.metrics,
                 visible_start_seconds: viewport.start_seconds,
                 visible_end_seconds: viewport.end_seconds,
+                strip_pixel_width: width,
             },
         ));
         if let Some(selected_segment_id) = selected_segment_id.clone() {
@@ -708,6 +727,7 @@ fn view_engine_waveform_body<'a>(
                 source_end_seconds: engine.scroll_strip_end_seconds,
                 visible_start_seconds: engine.visible_start_seconds,
                 visible_end_seconds: engine.visible_end_seconds,
+                strip_pixel_width: hit_width,
             }),
         ));
         layers.push(view_timed(
@@ -721,6 +741,7 @@ fn view_engine_waveform_body<'a>(
                     source_end_seconds: engine.scroll_strip_end_seconds,
                     visible_start_seconds: engine.visible_start_seconds,
                     visible_end_seconds: engine.visible_end_seconds,
+                    strip_pixel_width: hit_width,
                 }),
                 data.playhead_percent,
             ),
@@ -733,6 +754,7 @@ fn view_engine_waveform_body<'a>(
                 metrics: data.metrics,
                 visible_start_seconds: engine.visible_start_seconds,
                 visible_end_seconds: engine.visible_end_seconds,
+                strip_pixel_width: hit_width,
             }),
         ));
         if let Some(selected_segment_id) = selected_segment_id.clone() {
@@ -795,6 +817,7 @@ fn view_engine_waveform_body<'a>(
                         source_end_seconds: engine.scroll_strip_end_seconds,
                         visible_start_seconds,
                         visible_end_seconds,
+                        magnifier_pixel_width: layout.width_px,
                     },
                 ))
             };

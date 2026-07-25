@@ -9,6 +9,7 @@ use studio_app::{
 };
 
 use super::super::super::Message;
+use super::super::wavesurfer_canvas::quantized_window_key;
 
 pub(super) const RULER_HEIGHT: f32 = 20.0;
 const RULER_TEXT_INDENT_PX: f32 = 3.0;
@@ -75,7 +76,7 @@ impl canvas::Program<Message> for RulerCanvas {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        state.clear_if_key_changed(self.cache_key());
+        state.clear_if_key_changed(self.cache_key(bounds.width));
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             let ruler = build_babel_timeline_ruler_for_viewport(
                 self.viewport,
@@ -129,9 +130,14 @@ impl canvas::Program<Message> for RulerCanvas {
 }
 
 impl RulerCanvas {
-    fn cache_key(&self) -> u64 {
-        let key = hash_u64(0xcbf2_9ce4_8422_2325, self.viewport.start_seconds.to_bits());
-        let key = hash_u64(key, self.viewport.end_seconds.to_bits());
+    fn cache_key(&self, pixel_width: f32) -> u64 {
+        let (viewport_start_bucket, viewport_scale_bucket) = quantized_window_key(
+            self.viewport.start_seconds,
+            self.viewport.end_seconds,
+            f64::from(pixel_width),
+        );
+        let key = hash_u64(0xcbf2_9ce4_8422_2325, viewport_start_bucket);
+        let key = hash_u64(key, viewport_scale_bucket);
         hash_u64(key, self.min_px_per_sec.to_bits())
     }
 }

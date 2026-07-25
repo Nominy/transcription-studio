@@ -28,6 +28,73 @@ impl Project {
     pub fn has_segment(&self, segment_id: &str) -> bool {
         self.segment(segment_id).is_some()
     }
+
+    /// Rough estimate of the heap memory this project retains, in bytes.
+    ///
+    /// Used by [`crate::CommandHistory`] to cap the undo/redo stacks by
+    /// retained bytes in addition to snapshot count. The estimate is
+    /// deliberately cheap — it sums the owned string payloads (ids, labels,
+    /// segment text), charges a flat per-item constant for struct and
+    /// collection overhead, and walks `serde_json` metadata structurally
+    /// instead of serializing it — so it is safe to run on every history
+    /// push, but it must never be treated as an exact measurement.
+    pub fn estimated_heap_bytes(&self) -> usize {
+        // Flat per-item charges for struct fields, discriminant, and the
+        // collection bookkeeping (length/capacity) of each entry.
+        const SPEAKER_OVERHEAD_BYTES: usize = 32;
+        const LANE_OVERHEAD_BYTES: usize = 48;
+        const SEGMENT_OVERHEAD_BYTES: usize = 120;
+        const METADATA_ENTRY_OVERHEAD_BYTES: usize = 48;
+
+        let mut total = self.id.len() + self.name.len();
+        for speaker in &self.speakers {
+            total += SPEAKER_OVERHEAD_BYTES + speaker.id.len() + speaker.label.len();
+        }
+        for lane in &self.lanes {
+            total += LANE_OVERHEAD_BYTES
+                + lane.id.len()
+                + lane.speaker_id.len()
+                + lane.label.len()
+                + lane.source_path.len();
+        }
+        for segment in &self.segments {
+            total += SEGMENT_OVERHEAD_BYTES
+                + segment.id.len()
+                + segment.source_annotation_id.as_deref().map_or(0, str::len)
+                + segment.speaker_id.len()
+                + segment.lane_id.len()
+                + segment.text.len();
+            for (key, value) in &segment.metadata {
+                total +=
+                    METADATA_ENTRY_OVERHEAD_BYTES + key.len() + estimated_json_heap_bytes(value);
+            }
+        }
+        for (key, value) in &self.metadata {
+            total += METADATA_ENTRY_OVERHEAD_BYTES + key.len() + value.len();
+        }
+        total
+    }
+}
+
+/// Rough heap estimate for a [`serde_json::Value`], walking the structure
+/// instead of serializing it. The flat constants approximate the enum
+/// discriminant plus inline storage of each node.
+fn estimated_json_heap_bytes(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Null => 8,
+        serde_json::Value::Bool(_) => 16,
+        serde_json::Value::Number(_) => 24,
+        serde_json::Value::String(text) => 24 + text.len(),
+        serde_json::Value::Array(items) => {
+            24 + items.iter().map(estimated_json_heap_bytes).sum::<usize>()
+        }
+        serde_json::Value::Object(map) => {
+            24 + map
+                .iter()
+                .map(|(key, value)| key.len() + estimated_json_heap_bytes(value))
+                .sum::<usize>()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

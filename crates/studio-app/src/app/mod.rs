@@ -17,6 +17,7 @@ mod helper_lint_autofix;
 mod helper_text;
 mod helper_timeline;
 mod hotkeys;
+mod http_client;
 mod io_actions;
 mod keybinds;
 mod large_project_smoke;

@@ -22,7 +22,7 @@ use studio_app::{
 use studio_core::{AudioLane, Project, Segment};
 use studio_waveform::{WaveformHit, WaveformHitTarget, decode_pcm16_wav};
 
-use super::audio_backend::{AudioPlaybackBackend, PlaybackTrack};
+use super::audio_backend::{AudioPlaybackBackend, PlaybackRestartCoalescer, PlaybackTrack};
 use super::babel_audio::{
     BabelPayloadLoadKind, PreparedBabelAudioPayload, babel_payload_needs_audio_preparation,
     prepare_babel_audio_payload,
@@ -580,6 +580,7 @@ pub(super) struct StudioState {
     pub(super) helper_focus_restore_pending: Option<HelperFocusRestore>,
     pub(super) helper_last_focus_restore: Option<HelperFocusRestore>,
     pub(super) audio_playback: AudioPlaybackBackend,
+    pub(super) playback_restart_coalescer: PlaybackRestartCoalescer,
     pub(super) acknowledged_low_confidence_words: BTreeMap<String, BTreeSet<usize>>,
     pub(super) panel_collapse_storage: PanelCollapseStorage,
     pub(super) script_context_panel_hidden: bool,
@@ -659,6 +660,7 @@ pub(super) struct StudioState {
     pub(super) playback_followed_segment_id: Option<String>,
     pub(super) find_bar_open: bool,
     pub(super) find_query: String,
+    pub(super) find_match_cache: RefCell<FindMatchCache>,
     pub(super) create_region_dialog: Option<CreateRegionDialog>,
     pub(super) edit_annotation_dialog: Option<EditAnnotationDialog>,
     pub(super) transcript_scroll_offset_y: f32,
@@ -761,6 +763,7 @@ impl Default for StudioState {
             helper_focus_restore_pending: None,
             helper_last_focus_restore: None,
             audio_playback: AudioPlaybackBackend::default(),
+            playback_restart_coalescer: PlaybackRestartCoalescer::default(),
             acknowledged_low_confidence_words: BTreeMap::new(),
             panel_collapse_storage,
             script_context_panel_hidden,
@@ -840,6 +843,7 @@ impl Default for StudioState {
             playback_followed_segment_id: None,
             find_bar_open: false,
             find_query: String::new(),
+            find_match_cache: RefCell::new(FindMatchCache::default()),
             create_region_dialog: None,
             edit_annotation_dialog: None,
             transcript_scroll_offset_y: 0.0,
@@ -1228,6 +1232,19 @@ pub(super) struct OverviewWaveformSnapshot {
 struct TranscriptRowsCacheEntry {
     key: TranscriptRowsCacheKey,
     rows: Arc<[TranscriptRowView]>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct FindMatchCache {
+    pub(super) entry: Option<FindMatchCacheEntry>,
+}
+
+#[derive(Debug)]
+pub(super) struct FindMatchCacheEntry {
+    pub(super) query: String,
+    pub(super) rows: Arc<[TranscriptRowView]>,
+    pub(super) drafts_fingerprint: u64,
+    pub(super) matches: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -3163,6 +3180,7 @@ impl StudioState {
                 editor.is_playing = false;
                 self.last_transport_tick = None;
                 self.audio_playback.stop();
+                self.playback_restart_coalescer.clear_pending();
             }
             return;
         }
@@ -3274,6 +3292,7 @@ impl StudioState {
         self.reset_reviewer_workspace_state();
         self.audio_playback.shutdown();
         self.release_decoded_lane_audio();
+        self.release_undo_history_and_drafts();
         self.with_editor_mut(|editor| editor.is_playing = false);
         self.held_audition_keys.clear();
         self.audition_key_release_tokens.clear();
@@ -3292,16 +3311,33 @@ impl StudioState {
     /// cost — often tens to hundreds of MB of `f32` samples plus cached peaks
     /// and render models per lane — so it is released every time the
     /// workspace returns to the dashboard. Unlike a full workspace teardown,
-    /// this intentionally leaves `editor`/`workflow`/drafts/undo history
-    /// intact: several success flows (submit, skip, drop claim, admin flag)
-    /// navigate to the dashboard immediately after writing final metadata
-    /// onto the just-edited project, and still need to read it back.
+    /// this intentionally leaves `editor`/`workflow` intact: several success
+    /// flows (submit, skip, drop claim, admin flag) navigate to the dashboard
+    /// immediately after writing final metadata onto the just-edited project,
+    /// and still need to read it back. Undo history and drafts are dropped
+    /// separately by `release_undo_history_and_drafts`.
     fn release_decoded_lane_audio(&mut self) {
         if let Some(editor) = self.editor.as_mut() {
             editor.lane_waveforms.clear();
         }
         self.invalidate_timeline_lanes_cache();
         self.invalidate_transcript_layout_cache();
+    }
+
+    /// Drops the retained undo/redo project snapshots and the per-segment
+    /// draft editor state on the way back to the dashboard. Together these
+    /// pin up to `2 * CommandHistory::MAX_HISTORY_BYTES` of deep-cloned
+    /// projects plus one editor-state copy per segment, and nothing on the
+    /// dashboard reads them: reopening any project goes through
+    /// `replace_workflow`, which installs a fresh `StudioWorkflow` with an
+    /// empty `CommandHistory` and rebuilds `segment_drafts` via
+    /// `reset_segment_drafts`. The just-edited project itself stays resident
+    /// for the success flows described on `release_decoded_lane_audio`.
+    fn release_undo_history_and_drafts(&mut self) {
+        if let Ok(workflow) = self.workflow.as_mut() {
+            workflow.clear_history();
+        }
+        self.segment_drafts.clear();
     }
 
     pub(super) fn request_leave(
@@ -4112,6 +4148,7 @@ impl StudioState {
         if was_playing {
             self.last_transport_tick = None;
             self.audio_playback.stop();
+            self.playback_restart_coalescer.clear_pending();
             return;
         }
 
@@ -4200,9 +4237,14 @@ impl StudioState {
             }
         }
 
+        if is_playing && self.playback_restart_coalescer.take_pending(now) {
+            self.start_audio_playback();
+        }
+
         if !is_playing && !self.timeline_autoscroll_active() {
             self.last_transport_tick = None;
             self.audio_playback.stop();
+            self.playback_restart_coalescer.clear_pending();
         }
     }
 
@@ -4424,7 +4466,13 @@ impl StudioState {
     }
 
     pub(super) fn restart_audio_playback_if_playing(&mut self) {
-        if self.editor.as_ref().is_some_and(|editor| editor.is_playing) {
+        if !self.editor.as_ref().is_some_and(|editor| editor.is_playing) {
+            return;
+        }
+        // Scrub-rate seeks funnel here. Restarting tears down every player and
+        // rebuilds the pool, so coalesce bursts: the transport tick replays the
+        // newest queued seek once the minimum interval elapses.
+        if self.playback_restart_coalescer.request(Instant::now()) {
             self.start_audio_playback();
         }
     }

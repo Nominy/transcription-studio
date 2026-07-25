@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use iced::widget::{scrollable, text_input};
 use studio_app::{EditorSession, TranscriptRowView};
 use studio_core::Project;
 
 use super::StudioState;
+use super::state::FindMatchCacheEntry;
 
 const FIND_INPUT_ID: &str = "babel-browser-find-input";
 const TRANSCRIPT_SCROLL_ID: &str = "babel-transcript-scroll";
@@ -22,6 +25,7 @@ impl StudioState {
 
     pub(super) fn close_find_bar(&mut self) {
         self.find_bar_open = false;
+        self.find_match_cache.borrow_mut().entry = None;
     }
 
     pub(super) fn update_find_query(&mut self, query: String) {
@@ -30,13 +34,13 @@ impl StudioState {
     }
 
     pub(super) fn select_find_match(&mut self, direction: i32) {
-        let Some(project) = self.project().cloned() else {
+        let Some(project) = self.project() else {
             return;
         };
         let Some(editor) = self.editor.as_ref() else {
             return;
         };
-        let matches = self.find_match_segment_ids(&project, editor);
+        let matches = self.find_match_segment_ids(project, editor);
         if matches.is_empty() {
             return;
         }
@@ -89,12 +93,31 @@ impl StudioState {
             return Vec::new();
         }
 
-        editor
-            .transcript_rows(project)
-            .into_iter()
+        let rows = self.transcript_rows_snapshot_for_render(project, editor);
+        let drafts_fingerprint = self.find_match_drafts_fingerprint();
+        {
+            let cache = self.find_match_cache.borrow();
+            if let Some(entry) = cache.entry.as_ref()
+                && entry.query == query
+                && entry.drafts_fingerprint == drafts_fingerprint
+                && Arc::ptr_eq(&entry.rows, &rows)
+            {
+                return entry.matches.clone();
+            }
+        }
+
+        let matches: Vec<String> = rows
+            .iter()
             .filter(|row| self.row_matches_find_query(row, &query))
-            .map(|row| row.segment_id)
-            .collect()
+            .map(|row| row.segment_id.clone())
+            .collect();
+        self.find_match_cache.borrow_mut().entry = Some(FindMatchCacheEntry {
+            query,
+            rows,
+            drafts_fingerprint,
+            matches: matches.clone(),
+        });
+        matches
     }
 
     #[cfg(test)]
@@ -103,7 +126,7 @@ impl StudioState {
         project: &Project,
         editor: &EditorSession,
     ) -> Option<f32> {
-        let rows = editor.transcript_rows(project);
+        let rows = self.transcript_rows_snapshot_for_render(project, editor);
         let selected_segment_id = editor.selected_segment_id.as_deref()?;
         let selected_index = rows
             .iter()
@@ -128,16 +151,27 @@ impl StudioState {
         editor: &EditorSession,
     ) -> Option<f32> {
         let selected_segment_id = editor.selected_segment_id.as_deref()?;
-        let selected_row = editor
-            .transcript_rows(project)
-            .into_iter()
+        let rows = self.transcript_rows_snapshot_for_render(project, editor);
+        let selected_row = rows
+            .iter()
             .find(|row| row.segment_id == selected_segment_id)?;
         let query = self.find_query.trim().to_lowercase();
-        if query.is_empty() || !self.row_matches_find_query(&selected_row, &query) {
+        if query.is_empty() || !self.row_matches_find_query(selected_row, &query) {
             return None;
         }
 
         self.transcript_scroll_offset_for_segment(project, editor, selected_segment_id)
+    }
+
+    fn find_match_drafts_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (segment_id, draft) in &self.segment_drafts {
+            segment_id.hash(&mut hasher);
+            draft.text.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     fn row_matches_find_query(&self, row: &TranscriptRowView, query: &str) -> bool {
@@ -149,14 +183,14 @@ impl StudioState {
     }
 
     fn select_first_find_match(&mut self) {
-        let Some(project) = self.project().cloned() else {
+        let Some(project) = self.project() else {
             return;
         };
         let Some(editor) = self.editor.as_ref() else {
             return;
         };
         let Some(segment_id) = self
-            .find_match_segment_ids(&project, editor)
+            .find_match_segment_ids(project, editor)
             .first()
             .cloned()
         else {

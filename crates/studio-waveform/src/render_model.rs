@@ -9,6 +9,17 @@ use crate::{
 const MAX_CACHED_RENDER_PEAKS: usize = 1_048_576;
 const PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN: usize = 16_384;
 
+/// A scroll strip only spans this many visible windows' worth of audio around the
+/// current viewport. Scrolling inside the strip reuses the sampled peaks; deeper
+/// jumps resample a fresh bounded strip. Bounding the strip window bounds strip
+/// memory at `SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE * visible_peak_count` samples
+/// regardless of source duration or zoom ratio, while the visible window keeps
+/// full display density at every zoom level.
+const SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE: f64 = 8.0;
+/// Hard ceiling on scroll-strip samples, matching the windowed strip bound. Guards
+/// the strip size even if window sizing and sample sizing ever drift apart.
+const MAX_SCROLL_STRIP_VISIBLE_WINDOWS: usize = SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE as usize;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaveformRenderOptions {
     pub channels: usize,
@@ -716,7 +727,26 @@ fn scroll_strip_window(
         return (visible_start_seconds, visible_end_seconds);
     }
 
-    (peak_start_seconds, peak_end_seconds)
+    let visible_duration = visible_end_seconds - visible_start_seconds;
+    let strip_duration = visible_duration * SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE;
+    if visible_duration <= f64::EPSILON || strip_duration >= peak_duration {
+        return (peak_start_seconds, peak_end_seconds);
+    }
+
+    let margin = (strip_duration - visible_duration) / 2.0;
+    let mut strip_start_seconds = visible_start_seconds - margin;
+    let mut strip_end_seconds = visible_end_seconds + margin;
+    if strip_start_seconds < peak_start_seconds {
+        strip_end_seconds =
+            (strip_end_seconds + (peak_start_seconds - strip_start_seconds)).min(peak_end_seconds);
+        strip_start_seconds = peak_start_seconds;
+    }
+    if strip_end_seconds > peak_end_seconds {
+        strip_start_seconds =
+            (strip_start_seconds - (strip_end_seconds - peak_end_seconds)).max(peak_start_seconds);
+        strip_end_seconds = peak_end_seconds;
+    }
+    (strip_start_seconds, strip_end_seconds)
 }
 
 fn scroll_strip_sample_count(
@@ -729,8 +759,12 @@ fn scroll_strip_sample_count(
     let visible_peak_count = visible_peak_count.max(1);
     let visible_duration = (visible_end_seconds - visible_start_seconds).max(f64::EPSILON);
     let strip_duration = (scroll_strip_end_seconds - scroll_strip_start_seconds).max(f64::EPSILON);
-    ((visible_peak_count as f64 * (strip_duration / visible_duration)).ceil() as usize)
-        .clamp(visible_peak_count, MAX_CACHED_RENDER_PEAKS)
+    let proportional =
+        (visible_peak_count as f64 * (strip_duration / visible_duration)).ceil() as usize;
+    let sample_cap = visible_peak_count
+        .saturating_mul(MAX_SCROLL_STRIP_VISIBLE_WINDOWS)
+        .min(MAX_CACHED_RENDER_PEAKS);
+    proportional.clamp(visible_peak_count.min(sample_cap), sample_cap)
 }
 
 fn peak_window_abs_max(
@@ -990,7 +1024,99 @@ mod tests {
         assert!(sampling_helper.contains("sample_count >= PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN"));
         assert!(
             sampling_helper.contains("into_par_iter()"),
-            "full-duration scroll strips can hit MAX_CACHED_RENDER_PEAKS and must fan bucket sampling across CPU cores"
+            "max-size scroll strips still reach PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN and must fan bucket sampling across CPU cores"
         );
+    }
+
+    #[test]
+    fn scroll_strip_window_is_bounded_and_covers_the_visible_window() {
+        // Deep zoom-in on long audio: the strip stays bounded at a small multiple
+        // of the visible window instead of spanning the whole source.
+        let (start, end) = scroll_strip_window(100.0, 100.5, 0.0, 3_600.0);
+        assert_eq!((start, end), (98.25, 102.25));
+
+        // Near the source start the strip shifts into range without shrinking.
+        let (start, end) = scroll_strip_window(0.25, 0.75, 0.0, 3_600.0);
+        assert_eq!((start, end), (0.0, 4.0));
+
+        // Near the source end the strip shifts the other way.
+        let (start, end) = scroll_strip_window(3_599.0, 3_599.5, 0.0, 3_600.0);
+        assert_eq!((start, end), (3_596.0, 3_600.0));
+
+        // Zoomed out far enough that the multiple covers the peaks: full range.
+        let (start, end) = scroll_strip_window(0.0, 500.0, 0.0, 3_600.0);
+        assert_eq!((start, end), (0.0, 3_600.0));
+
+        // Tiny peak ranges stay fully covered.
+        let (start, end) = scroll_strip_window(0.0, 0.01, 0.0, 0.02);
+        assert_eq!((start, end), (0.0, 0.02));
+
+        // Degenerate inputs keep their legacy behavior.
+        assert_eq!(scroll_strip_window(1.0, 2.0, 5.0, 5.0), (1.0, 2.0));
+        assert_eq!(scroll_strip_window(3.0, 3.0, 0.0, 10.0), (0.0, 10.0));
+    }
+
+    #[test]
+    fn scroll_strip_sample_count_is_hard_capped_at_eight_visible_windows() {
+        // An extreme zoom ratio previously produced ~15M samples (~59MB) for one
+        // strip; it is now hard-capped at eight visible windows of samples.
+        let capped = scroll_strip_sample_count(2_048, 100.0, 100.5, 0.0, 3_600.0);
+        assert_eq!(capped, MAX_SCROLL_STRIP_VISIBLE_WINDOWS * 2_048);
+        assert!(capped <= MAX_CACHED_RENDER_PEAKS);
+
+        // Proportional sizing below the cap is preserved.
+        assert_eq!(
+            scroll_strip_sample_count(2_048, 0.0, 100.0, 0.0, 200.0),
+            4_096
+        );
+
+        // At least one visible window of samples is always kept, so the strip
+        // never renders empty at any zoom level.
+        assert_eq!(
+            scroll_strip_sample_count(2_048, 0.0, 100.0, 0.0, 100.0),
+            2_048
+        );
+        assert_eq!(
+            scroll_strip_sample_count(2_048, 0.0, 200.0, 0.0, 100.0),
+            2_048
+        );
+    }
+
+    #[test]
+    fn full_resolution_strip_stays_bounded_at_extreme_zoom_without_losing_visible_density() {
+        let visible_peak_count = 2_048;
+        let source = WaveformSource::from_precomputed_peaks(vec![vec![0.5; 2_048]], 30.0).unwrap();
+        let mut peak_cache = PeakCache::new(source);
+        let mut viewport = WaveViewport::new(30.0, 2_000.0, 2_000.0 / 0.5, false, 1.0);
+        viewport.set_scroll_time(10.0);
+        let model = WaveformRenderModel::from_peak_cache_full_resolution(
+            &mut peak_cache,
+            viewport,
+            &[],
+            10.25,
+            WaveformRenderOptions {
+                channels: 1,
+                peak_count: visible_peak_count,
+                precision: 10_000.0,
+                ..WaveformRenderOptions::default()
+            },
+        )
+        .unwrap();
+        let channel = model.channels.first().unwrap();
+        let strip_duration = channel.scroll_strip_end_seconds - channel.scroll_strip_start_seconds;
+
+        assert!(
+            channel.scroll_strip_peaks.len()
+                <= MAX_SCROLL_STRIP_VISIBLE_WINDOWS * visible_peak_count,
+            "strip samples must stay bounded regardless of zoom ratio"
+        );
+        assert!(channel.scroll_strip_start_seconds <= 10.0);
+        assert!(channel.scroll_strip_end_seconds >= 10.5);
+        assert!(strip_duration <= 0.5 * SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE + 1e-9);
+
+        // The visible window still receives a full window's worth of samples, so
+        // the strip renders at full display density at every zoom level.
+        let visible_samples = channel.scroll_strip_peaks.len() as f64 * (0.5 / strip_duration);
+        assert!(visible_samples >= visible_peak_count as f64 - 1.0);
     }
 }

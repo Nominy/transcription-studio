@@ -5,6 +5,7 @@ use serde_json::Value;
 use url::form_urlencoded::byte_serialize;
 
 use super::Message;
+use super::http_client::shared_http_client;
 
 pub(super) const REVIEW_BACKEND_BASE_URL_ENV: &str = "STUDIO_REVIEW_BACKEND_BASE_URL";
 pub(super) const DEFAULT_REVIEW_BACKEND_BASE_URL: &str = "https://reviewgen.ovh";
@@ -262,7 +263,7 @@ async fn review_backend_payload_for_request(
 
     let base_url = review_backend_base_url_from_env();
     let url = review_backend_url(&base_url, &parts.path);
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let builder = match parts.method {
         BackendHttpMethod::Get => client.get(&url),
         BackendHttpMethod::Post => client.post(&url),

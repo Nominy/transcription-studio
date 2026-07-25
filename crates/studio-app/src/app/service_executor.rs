@@ -12,6 +12,7 @@ use studio_app::{LintSeverity, ServerLintIssue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::Message;
+use super::http_client::shared_http_client;
 use super::native_auth::{
     default_native_auth_store_path, mint_native_babel_authorization_from_store, native_clerk_url,
 };
@@ -1212,7 +1213,7 @@ async fn execute_live_trpc_request(parts: LiveTrpcRequestParts) -> Result<String
         );
     }
 
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let request = match parts.method {
         LiveTrpcMethod::Get => client.get(parts.url).headers(headers),
         LiveTrpcMethod::Post => client
@@ -1527,7 +1528,7 @@ async fn discover_live_dashboard_project_configs(
         return Ok(Vec::new());
     }
 
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     for route in routes {
         let html = fetch_live_text(&client, &format!("{}{}", live_base_url(), route), parts).await;
         let Ok(html) = html else {

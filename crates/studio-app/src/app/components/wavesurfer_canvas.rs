@@ -512,7 +512,7 @@ impl canvas::Program<Message> for WaveformWindowCanvas {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        state.clear_if_key_changed(self.cache_key());
+        state.clear_if_key_changed(self.cache_key(bounds.width));
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             let waveform_path = canvas::Path::new(|builder| {
                 append_wavesurfer_line_points_f32_window(
@@ -532,12 +532,17 @@ impl canvas::Program<Message> for WaveformWindowCanvas {
 }
 
 impl WaveformWindowCanvas {
-    fn cache_key(&self) -> u64 {
+    fn cache_key(&self, pixel_width: f32) -> u64 {
         let peaks_key = WaveformPeaks::F32(Arc::clone(&self.peaks)).cache_key();
         let mut key = hash_u64(peaks_key, self.time_window.source_start_seconds.to_bits());
         key = hash_u64(key, self.time_window.source_end_seconds.to_bits());
-        key = hash_u64(key, self.time_window.visible_start_seconds.to_bits());
-        key = hash_u64(key, self.time_window.visible_end_seconds.to_bits());
+        let (visible_start_bucket, visible_scale_bucket) = quantized_window_key(
+            self.time_window.visible_start_seconds,
+            self.time_window.visible_end_seconds,
+            f64::from(pixel_width),
+        );
+        key = hash_u64(key, visible_start_bucket);
+        key = hash_u64(key, visible_scale_bucket);
         key = hash_color(key, &self.color);
         hash_u32(key, self.vertical_scale.to_bits())
     }
@@ -570,7 +575,7 @@ impl canvas::Program<Message> for RegionFillCanvas {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        state.clear_if_key_changed(self.cache_key());
+        state.clear_if_key_changed(self.cache_key(bounds.width));
         let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             draw_region_fills_for_time_window(
                 frame,
@@ -588,10 +593,15 @@ impl canvas::Program<Message> for RegionFillCanvas {
 }
 
 impl RegionFillCanvas {
-    fn cache_key(&self) -> u64 {
+    fn cache_key(&self, pixel_width: f32) -> u64 {
         let mut key = hash_u64(0xa6d3_4b92_c0de_f111, self.blocks.len() as u64);
-        key = hash_u64(key, self.time_window.start_seconds.to_bits());
-        key = hash_u64(key, self.time_window.end_seconds.to_bits());
+        let (window_start_bucket, window_scale_bucket) = quantized_window_key(
+            self.time_window.start_seconds,
+            self.time_window.end_seconds,
+            f64::from(pixel_width),
+        );
+        key = hash_u64(key, window_start_bucket);
+        key = hash_u64(key, window_scale_bucket);
         for block in self.blocks.iter() {
             key = hash_str(key, block.segment_id.as_str());
             key = hash_u64(key, block.start_seconds.to_bits());
@@ -862,6 +872,50 @@ fn hash_optional_str(key: u64, value: Option<&str>) -> u64 {
         Some(value) => hash_str(hash_u64(key, 1), value),
         None => hash_u64(key, 0),
     }
+}
+
+/// Quantizes a visible time window into integer cache-key buckets at the
+/// granularity that actually changes rendered pixels: the window position is
+/// bucketed one bucket per pixel of `pixel_width` (the window is stretched
+/// across that many pixels when drawn), and the zoom scale is bucketed
+/// logarithmically at the same one-pixel granularity — a relative duration
+/// change of `1 / pixel_width` is exactly what moves the window's right edge
+/// by one pixel. Two viewports that render to identical pixels — e.g.
+/// sub-pixel scroll or zoom drift between frames — produce identical keys, so
+/// the canvas caches survive; any pan or zoom change of at least one pixel
+/// moves at least one bucket and therefore produces a different key.
+///
+/// Bucketing the end offset instead of the scale would be useless: it is
+/// always exactly `start_bucket + pixel_width`, so it carries no zoom
+/// information at all and every window anchored at `0.0` would key
+/// identically at every zoom level.
+///
+/// Degenerate inputs (non-finite values, an empty window, or a pixel width
+/// below one) fall back to the raw `f64` bits so callers still get a correct —
+/// merely conservative — key instead of a panic.
+pub(super) fn quantized_window_key(
+    visible_start_seconds: f64,
+    visible_end_seconds: f64,
+    pixel_width: f64,
+) -> (u64, u64) {
+    let duration_seconds = visible_end_seconds - visible_start_seconds;
+    if !visible_start_seconds.is_finite()
+        || !visible_end_seconds.is_finite()
+        || !pixel_width.is_finite()
+        || !duration_seconds.is_finite()
+        || duration_seconds <= 0.0
+        || pixel_width < 1.0
+    {
+        return (
+            visible_start_seconds.to_bits(),
+            visible_end_seconds.to_bits(),
+        );
+    }
+    let seconds_per_pixel = duration_seconds / pixel_width;
+    (
+        (visible_start_seconds / seconds_per_pixel).round() as i64 as u64,
+        (duration_seconds.ln() * pixel_width).round() as i64 as u64,
+    )
 }
 
 fn hash_str(key: u64, value: &str) -> u64 {
@@ -1310,9 +1364,9 @@ mod tests {
 
     use super::{
         RegionFillTimeWindow, overview_block_widths, overview_playhead_style, overview_window_rect,
-        synthetic_waveform_block_widths, time_window_waveform_block_widths, waveform_color,
-        waveform_playhead_style, waveform_progress_clip_bounds, waveform_scrollbar_thumb_rect,
-        waveform_unplayed_color,
+        quantized_window_key, synthetic_waveform_block_widths, time_window_waveform_block_widths,
+        waveform_color, waveform_playhead_style, waveform_progress_clip_bounds,
+        waveform_scrollbar_thumb_rect, waveform_unplayed_color,
     };
 
     #[test]
@@ -1438,6 +1492,80 @@ mod tests {
         );
         assert!(widths.iter().all(|width| width.width_px > 0.0));
         assert!(widths[1].left_px > widths[0].left_px + widths[0].width_px);
+    }
+
+    #[test]
+    fn quantized_window_key_reuses_buckets_for_sub_pixel_viewport_drift() {
+        // A 10s window across a 500px strip means 0.02s per pixel.
+        let base = quantized_window_key(100.0, 110.0, 500.0);
+
+        assert_eq!(base, quantized_window_key(100.0, 110.0, 500.0));
+        assert_eq!(
+            base,
+            quantized_window_key(100.004, 110.004, 500.0),
+            "a 0.2px pan must reuse the cached tessellation"
+        );
+        assert_eq!(
+            base,
+            quantized_window_key(100.0, 110.0002, 500.0),
+            "a 0.01px zoom drift must reuse the cached tessellation"
+        );
+    }
+
+    #[test]
+    fn quantized_window_key_changes_for_one_pixel_viewport_moves() {
+        let base = quantized_window_key(100.0, 110.0, 500.0);
+
+        assert_ne!(
+            base,
+            quantized_window_key(100.02, 110.02, 500.0),
+            "a full-pixel pan (0.02s at 500px over 10s) must invalidate the cache"
+        );
+        assert_ne!(
+            base,
+            quantized_window_key(100.0, 110.02, 500.0),
+            "a full-pixel zoom change must invalidate the cache"
+        );
+        assert_ne!(
+            base,
+            quantized_window_key(100.0, 110.0, 501.0),
+            "a strip resize changes the seconds-per-pixel granularity and must invalidate"
+        );
+    }
+
+    #[test]
+    fn quantized_window_key_distinguishes_zoom_levels_anchored_at_the_timeline_start() {
+        // `TimeRange::for_project` always anchors at 0.0 and `viewport_centered_on`
+        // clamps to it, so zooming with the playhead near the start only moves the
+        // window's end. A key that bucketed the end offset would be constant here —
+        // the end bucket is always `start_bucket + pixel_width` — and the region-fill
+        // overlays, whose dependency hash carries no other zoom-dependent input,
+        // would stay tessellated at the previous zoom's pixel geometry.
+        let keys = [60.0_f64, 30.0, 7.5, 3.1234, 0.5]
+            .map(|end_seconds| quantized_window_key(0.0, end_seconds, 900.0));
+
+        for (index, key) in keys.iter().enumerate() {
+            for other in &keys[index + 1..] {
+                assert_ne!(key, other, "each zoom level must produce a distinct key");
+            }
+        }
+    }
+
+    #[test]
+    fn quantized_window_key_survives_degenerate_inputs_without_panicking() {
+        let _ = quantized_window_key(0.0, 0.0, 500.0);
+        let _ = quantized_window_key(20.0, 10.0, 500.0);
+        let _ = quantized_window_key(10.0, 20.0, 0.0);
+        let _ = quantized_window_key(10.0, 20.0, -3.0);
+        let _ = quantized_window_key(10.0, 20.0, f64::NAN);
+        let _ = quantized_window_key(f64::NAN, 20.0, 500.0);
+        let _ = quantized_window_key(10.0, f64::INFINITY, 500.0);
+
+        assert_ne!(
+            quantized_window_key(1.0, 2.0, 0.0),
+            quantized_window_key(1.0, 3.0, 0.0),
+            "the degenerate fallback must keep distinct windows distinct"
+        );
     }
 
     #[test]

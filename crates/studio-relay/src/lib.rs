@@ -69,7 +69,10 @@ impl RelayState {
         })
     }
 
-    async fn save(&self, store: &RelayStore) -> Result<(), RelayError> {
+    async fn save(&self, store: &mut RelayStore) -> Result<(), RelayError> {
+        // Sweep on every save so persisted `active_claims` can never grow
+        // across restarts, even if a claim is never completed.
+        store.sweep_expired_claims((self.config.now_millis)());
         store.save(&self.config.store_path).await
     }
 
@@ -219,6 +222,16 @@ impl RelayStore {
         fs::write(path, format!("{payload}\n")).await?;
         Ok(())
     }
+
+    /// Drop expired claims and enforce the per-sub-account cap across every
+    /// sub-account. Runs on every persisted save so the on-disk map stays
+    /// bounded across restarts.
+    fn sweep_expired_claims(&mut self, now: i64) {
+        for subaccount in &mut self.subaccounts {
+            sweep_expired_claims(subaccount, now);
+            enforce_active_claims_cap(subaccount);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -242,6 +255,8 @@ struct SubaccountRecord {
     allowed_project_ids: Vec<String>,
     #[serde(default)]
     analytics: AnalyticsRecord,
+    // review-action id -> claimed-at millis. Bounded by TTL sweep
+    // (ACTIVE_CLAIM_TTL_MILLIS) and hard cap (MAX_ACTIVE_CLAIMS).
     #[serde(default)]
     active_claims: BTreeMap<String, i64>,
 }
@@ -343,7 +358,7 @@ async fn login(
         created_at: (state.config.now_millis)(),
         last_seen_at: 0,
     });
-    state.save(&store).await?;
+    state.save(&mut store).await?;
     Ok(Json(json!({
         "session": {
             "token": token,
@@ -382,7 +397,7 @@ async fn owner_create(
         analytics: AnalyticsRecord::default(),
         active_claims: BTreeMap::new(),
     });
-    state.save(&store).await?;
+    state.save(&mut store).await?;
     Ok(Json(dashboard_payload(&store)))
 }
 
@@ -404,7 +419,7 @@ async fn owner_revoke(
     store
         .sessions
         .retain(|session| session.subaccount_id != subaccount_id);
-    state.save(&store).await?;
+    state.save(&mut store).await?;
     Ok(Json(dashboard_payload(&store)))
 }
 
@@ -431,7 +446,7 @@ async fn owner_assign_projects(
         .filter(|project_id| !project_id.is_empty())
         .filter(|project_id| seen.insert(project_id.clone()))
         .collect();
-    state.save(&store).await?;
+    state.save(&mut store).await?;
     Ok(Json(dashboard_payload(&store)))
 }
 
@@ -462,7 +477,7 @@ async fn owner_upsert_project_queue_configs(
         }
         stored_project_ids.push(project_id);
     }
-    state.save(&store).await?;
+    state.save(&mut store).await?;
     Ok(Json(json!({ "storedProjectIds": stored_project_ids })))
 }
 
@@ -531,7 +546,7 @@ async fn babel_service(
         should_save = true;
     }
     if should_save {
-        state.save(&store).await?;
+        state.save(&mut store).await?;
     }
     Ok(Json(json!({ "payload": payload })))
 }
@@ -866,14 +881,56 @@ fn attach_known_project_queue_configs(
     }
 }
 
+/// Claims older than this are treated as abandoned and swept. A
+/// submitReviewAction may never arrive (or may carry an id shape that
+/// resolves differently), so this bounds how long a stranded entry can live.
+const ACTIVE_CLAIM_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
+
+/// Hard cap on tracked claims per sub-account; the oldest claims are evicted
+/// first. Belt-and-braces bound on top of the TTL sweep.
+const MAX_ACTIVE_CLAIMS: usize = 256;
+
+/// Canonical claim-id resolution shared by BOTH the claim path (claim
+/// response payload) and the submit path (submitReviewAction request
+/// envelope), using the same key priority at both sites so a completed task
+/// always removes the entry its claim inserted.
+fn claim_review_action_id(value: &Value) -> Option<String> {
+    find_string_by_keys(value, &["actionId", "reviewActionId", "id"])
+}
+
+/// Drop claims older than ACTIVE_CLAIM_TTL_MILLIS. Claims whose timestamp is
+/// missing/legacy (0) are older than any real cutoff and are swept too.
+fn sweep_expired_claims(subaccount: &mut SubaccountRecord, now: i64) {
+    let cutoff = now.saturating_sub(ACTIVE_CLAIM_TTL_MILLIS);
+    subaccount
+        .active_claims
+        .retain(|_, claimed_at| *claimed_at >= cutoff);
+}
+
+/// Belt-and-braces bound: never track more than MAX_ACTIVE_CLAIMS per
+/// sub-account, evicting the oldest claims first.
+fn enforce_active_claims_cap(subaccount: &mut SubaccountRecord) {
+    while subaccount.active_claims.len() > MAX_ACTIVE_CLAIMS {
+        let Some(oldest_id) = subaccount
+            .active_claims
+            .iter()
+            .min_by_key(|(_, claimed_at)| **claimed_at)
+            .map(|(id, _)| id.clone())
+        else {
+            break;
+        };
+        subaccount.active_claims.remove(&oldest_id);
+    }
+}
+
 fn remember_claim_start(subaccount: &mut SubaccountRecord, payload: &str, now: i64) {
+    sweep_expired_claims(subaccount, now);
     let Ok(value) = serde_json::from_str::<Value>(payload.trim()) else {
         return;
     };
-    if let Some(review_action_id) =
-        find_string_by_keys(&value, &["actionId", "reviewActionId", "id"])
-    {
+    if let Some(review_action_id) = claim_review_action_id(&value) {
         subaccount.active_claims.insert(review_action_id, now);
+        enforce_active_claims_cap(subaccount);
     }
 }
 
@@ -883,13 +940,20 @@ fn record_completed_task(
     now: i64,
     task_cents: i64,
 ) {
-    let review_action_id = envelope
-        .get("payload")
-        .and_then(|payload| payload.get("reviewActionId"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     subaccount.analytics.completed_tasks += 1;
-    if let Some(started_at) = subaccount.active_claims.remove(review_action_id) {
+    // Resolve with the same canonical function and key priority as the claim
+    // path; fall back to the explicit payload.reviewActionId in case the
+    // envelope nests a higher-priority key the claim response did not have.
+    let started_at = claim_review_action_id(envelope)
+        .and_then(|id| subaccount.active_claims.remove(&id))
+        .or_else(|| {
+            envelope
+                .get("payload")
+                .and_then(|payload| payload.get("reviewActionId"))
+                .and_then(Value::as_str)
+                .and_then(|id| subaccount.active_claims.remove(id))
+        });
+    if let Some(started_at) = started_at {
         let seconds = ((now - started_at).max(0) / 1000) as u64;
         subaccount.analytics.worked_seconds += seconds;
     }
@@ -1125,6 +1189,147 @@ mod tests {
             &json!({ "payload": { "queueId": "queue-blocked" } }),
             &store
         ));
+    }
+
+    #[test]
+    fn completed_submit_removes_claim_with_mismatched_id_shapes() {
+        let mut subaccount = SubaccountRecord {
+            id: "sub-1".to_string(),
+            label: "Tester".to_string(),
+            code: "CODE".to_string(),
+            allowed_project_ids: Vec::new(),
+            revoked: false,
+            analytics: AnalyticsRecord::default(),
+            active_claims: BTreeMap::new(),
+        };
+        let now = 1_783_425_600_000;
+        // Claim response carries the id under "actionId" in tRPC nesting.
+        remember_claim_start(
+            &mut subaccount,
+            &json!({
+                "result": { "data": { "json": { "actionId": "review-action-9" } } }
+            })
+            .to_string(),
+            now,
+        );
+        assert!(subaccount.active_claims.contains_key("review-action-9"));
+
+        // Submit envelope carries the same id under "reviewActionId", nested
+        // deeper than the historical direct payload.reviewActionId lookup saw.
+        record_completed_task(
+            &mut subaccount,
+            &json!({
+                "operation": "transcriptions.submitTranscriptReviewAction",
+                "payload": { "submission": { "reviewActionId": "review-action-9" } }
+            }),
+            now + 60_000,
+            125,
+        );
+
+        assert!(subaccount.active_claims.is_empty());
+        assert_eq!(subaccount.analytics.completed_tasks, 1);
+        assert_eq!(subaccount.analytics.worked_seconds, 60);
+    }
+
+    #[test]
+    fn expired_claims_are_swept_on_insert_and_save() {
+        let mut subaccount = SubaccountRecord {
+            id: "sub-1".to_string(),
+            label: "Tester".to_string(),
+            code: "CODE".to_string(),
+            allowed_project_ids: Vec::new(),
+            revoked: false,
+            analytics: AnalyticsRecord::default(),
+            active_claims: BTreeMap::new(),
+        };
+        let now = 1_783_425_600_000_i64;
+        subaccount
+            .active_claims
+            .insert("stale".to_string(), now - ACTIVE_CLAIM_TTL_MILLIS - 1);
+        subaccount
+            .active_claims
+            .insert("boundary".to_string(), now - ACTIVE_CLAIM_TTL_MILLIS);
+        subaccount
+            .active_claims
+            .insert("fresh".to_string(), now - 1_000);
+
+        // The claim-insertion path sweeps expired entries.
+        remember_claim_start(
+            &mut subaccount,
+            &json!({ "actionId": "new-claim" }).to_string(),
+            now,
+        );
+        assert!(!subaccount.active_claims.contains_key("stale"));
+        assert!(subaccount.active_claims.contains_key("boundary"));
+        assert!(subaccount.active_claims.contains_key("fresh"));
+        assert!(subaccount.active_claims.contains_key("new-claim"));
+
+        // The store-level sweep (run on every save) drops the rest once they
+        // age past the TTL.
+        let mut store = RelayStore::default();
+        store.subaccounts.push(subaccount);
+        store.sweep_expired_claims(now + ACTIVE_CLAIM_TTL_MILLIS + 1);
+        assert!(store.subaccounts[0].active_claims.is_empty());
+    }
+
+    #[test]
+    fn active_claims_cap_evicts_oldest() {
+        let mut subaccount = SubaccountRecord {
+            id: "sub-1".to_string(),
+            label: "Tester".to_string(),
+            code: "CODE".to_string(),
+            allowed_project_ids: Vec::new(),
+            revoked: false,
+            analytics: AnalyticsRecord::default(),
+            active_claims: BTreeMap::new(),
+        };
+        let base = 1_783_425_600_000_i64;
+        for index in 0..(MAX_ACTIVE_CLAIMS + 10) {
+            remember_claim_start(
+                &mut subaccount,
+                &json!({ "actionId": format!("claim-{index}") }).to_string(),
+                base + index as i64,
+            );
+        }
+        assert_eq!(subaccount.active_claims.len(), MAX_ACTIVE_CLAIMS);
+        assert!(!subaccount.active_claims.contains_key("claim-0"));
+        assert!(!subaccount.active_claims.contains_key("claim-9"));
+        assert!(subaccount.active_claims.contains_key("claim-10"));
+        assert!(
+            subaccount
+                .active_claims
+                .contains_key(&format!("claim-{}", MAX_ACTIVE_CLAIMS + 9))
+        );
+    }
+
+    #[test]
+    fn legacy_store_json_without_claim_timestamps_still_deserializes() {
+        // Stores written before activeClaims existed must keep loading.
+        let without_claims: SubaccountRecord = serde_json::from_value(json!({
+            "id": "sub-1",
+            "label": "Tester",
+            "code": "CODE",
+            "revoked": false,
+            "allowedProjectIds": []
+        }))
+        .expect("subaccount without activeClaims");
+        assert!(without_claims.active_claims.is_empty());
+
+        // Existing stores carry plain id -> claimed-at-millis entries.
+        let mut with_claims: SubaccountRecord = serde_json::from_value(json!({
+            "id": "sub-2",
+            "label": "Tester",
+            "code": "CODE",
+            "activeClaims": { "legacy-claim": 0, "tracked": 1_783_425_600_000_i64 }
+        }))
+        .expect("subaccount with legacy activeClaims");
+        assert_eq!(with_claims.active_claims.len(), 2);
+
+        // A legacy entry without a meaningful timestamp (0) is older than any
+        // TTL cutoff and is swept instead of lingering forever.
+        sweep_expired_claims(&mut with_claims, 1_783_425_600_000);
+        assert!(!with_claims.active_claims.contains_key("legacy-claim"));
+        assert!(with_claims.active_claims.contains_key("tracked"));
     }
 
     #[test]

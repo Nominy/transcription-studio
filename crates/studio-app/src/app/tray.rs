@@ -42,7 +42,11 @@ pub(super) fn create() -> Result<TrayController, String> {
 }
 
 pub(super) fn subscription() -> Subscription<Message> {
-    Subscription::run_with_id("transcription-studio-tray-events", tray_event_stream())
+    // NOTE: keep the lazy `Subscription::run` builder form here. Passing
+    // `tray_event_stream()` eagerly (e.g. via `run_with_id`) would spawn the
+    // blocking menu-event thread on every subscription re-evaluation, leaking
+    // one thread per app message.
+    Subscription::run(tray_event_stream)
 }
 
 fn tray_event_stream() -> impl iced::futures::Stream<Item = Message> {

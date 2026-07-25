@@ -114,16 +114,35 @@ pub enum StudioCoreError {
     NothingToRedo,
 }
 
-/// Undo/redo snapshots, retaining at most [`CommandHistory::MAX_DEPTH`] projects per stack.
+/// Undo/redo snapshots, retaining at most [`CommandHistory::MAX_DEPTH`] projects and
+/// at most [`CommandHistory::MAX_HISTORY_BYTES`] estimated heap bytes per stack.
 #[derive(Clone, Debug, Default)]
 pub struct CommandHistory {
-    undo_stack: VecDeque<Project>,
-    redo_stack: VecDeque<Project>,
+    undo_stack: VecDeque<HistorySnapshot>,
+    redo_stack: VecDeque<HistorySnapshot>,
+    undo_stack_bytes: usize,
+    redo_stack_bytes: usize,
+}
+
+/// A retained project state plus the heap estimate charged for it, so that
+/// byte-budget eviction of the oldest entry stays O(1).
+#[derive(Clone, Debug)]
+struct HistorySnapshot {
+    project: Project,
+    estimated_bytes: usize,
 }
 
 impl CommandHistory {
     /// Hard limit for each snapshot stack. The newest project states are retained.
     pub const MAX_DEPTH: usize = 100;
+
+    /// Hard limit on the total estimated heap bytes retained by each snapshot
+    /// stack (see [`Project::estimated_heap_bytes`]). A real project is
+    /// 0.5–5 MiB, so the count cap alone could pin hundreds of megabytes of
+    /// deep clones during normal editing; 64 MiB bounds that per stack. The
+    /// newest snapshot is always kept, even if it alone exceeds the budget,
+    /// so at least one undo/redo step remains available.
+    pub const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
@@ -149,8 +168,9 @@ impl CommandHistory {
     ) -> Result<(), StudioCoreError> {
         let previous = project.clone();
         apply_command(project, command, updated_at.as_deref())?;
-        Self::push_bounded(&mut self.undo_stack, previous);
+        Self::push_bounded(&mut self.undo_stack, &mut self.undo_stack_bytes, previous);
         self.redo_stack.clear();
+        self.redo_stack_bytes = 0;
         Ok(())
     }
 
@@ -159,8 +179,11 @@ impl CommandHistory {
             .undo_stack
             .pop_back()
             .ok_or(StudioCoreError::NothingToUndo)?;
-        let current = std::mem::replace(project, previous);
-        Self::push_bounded(&mut self.redo_stack, current);
+        self.undo_stack_bytes = self
+            .undo_stack_bytes
+            .saturating_sub(previous.estimated_bytes);
+        let current = std::mem::replace(project, previous.project);
+        Self::push_bounded(&mut self.redo_stack, &mut self.redo_stack_bytes, current);
         Ok(())
     }
 
@@ -169,16 +192,45 @@ impl CommandHistory {
             .redo_stack
             .pop_back()
             .ok_or(StudioCoreError::NothingToRedo)?;
-        let current = std::mem::replace(project, next);
-        Self::push_bounded(&mut self.undo_stack, current);
+        self.redo_stack_bytes = self.redo_stack_bytes.saturating_sub(next.estimated_bytes);
+        let current = std::mem::replace(project, next.project);
+        Self::push_bounded(&mut self.undo_stack, &mut self.undo_stack_bytes, current);
         Ok(())
     }
 
-    fn push_bounded(stack: &mut VecDeque<Project>, snapshot: Project) {
-        if stack.len() == Self::MAX_DEPTH {
-            stack.pop_front();
+    /// Drops every retained snapshot from both stacks, freeing the retained
+    /// project clones. Used when the workspace is torn down (e.g. on the
+    /// return to the dashboard) so history memory is not pinned while the
+    /// project is no longer being edited.
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.undo_stack_bytes = 0;
+        self.redo_stack_bytes = 0;
+    }
+
+    fn push_bounded(
+        stack: &mut VecDeque<HistorySnapshot>,
+        stack_bytes: &mut usize,
+        snapshot: Project,
+    ) {
+        let estimated_bytes = snapshot.estimated_heap_bytes();
+        stack.push_back(HistorySnapshot {
+            project: snapshot,
+            estimated_bytes,
+        });
+        *stack_bytes += estimated_bytes;
+        // Evict the oldest snapshots while either budget is exceeded. The
+        // newest snapshot is never evicted, so a single project larger than
+        // the byte budget still leaves one undo/redo step available.
+        while stack.len() > Self::MAX_DEPTH
+            || (*stack_bytes > Self::MAX_HISTORY_BYTES && stack.len() > 1)
+        {
+            let evicted = stack
+                .pop_front()
+                .expect("over-budget snapshot stack is non-empty");
+            *stack_bytes = stack_bytes.saturating_sub(evicted.estimated_bytes);
         }
-        stack.push_back(snapshot);
     }
 }
 

@@ -2543,6 +2543,37 @@ fn audio_playback_startup_does_not_clone_project_or_editor() {
 }
 
 #[test]
+fn dashboard_return_releases_undo_history_and_segment_drafts() {
+    let state_source = include_str!("state.rs");
+    let workflow_history_source = include_str!("../workflow/history.rs");
+    let commands_source = include_str!("../../../studio-core/src/commands.rs");
+
+    let enter_dashboard = state_source
+        .split("pub(super) fn enter_dashboard")
+        .nth(1)
+        .expect("state should define enter_dashboard")
+        .split("fn release_decoded_lane_audio")
+        .next()
+        .expect("enter_dashboard should appear before release_decoded_lane_audio");
+    let release_history_and_drafts = state_source
+        .split("fn release_undo_history_and_drafts")
+        .nth(1)
+        .expect("state should define release_undo_history_and_drafts")
+        .split("pub(super) fn request_leave")
+        .next()
+        .expect("release_undo_history_and_drafts should appear before request_leave");
+
+    assert!(enter_dashboard.contains("self.release_undo_history_and_drafts();"));
+    assert!(release_history_and_drafts.contains("workflow.clear_history();"));
+    assert!(release_history_and_drafts.contains("self.segment_drafts.clear();"));
+    assert!(workflow_history_source.contains("pub fn clear_history(&mut self)"));
+    assert!(workflow_history_source.contains("self.history.clear();"));
+    assert!(commands_source.contains("pub const MAX_HISTORY_BYTES: usize"));
+    assert!(commands_source.contains("pub fn clear(&mut self)"));
+    assert!(commands_source.contains("estimated_heap_bytes"));
+}
+
+#[test]
 fn audio_playback_startup_trace_reports_frontend_and_backend_boundaries() {
     let state_source = include_str!("state.rs");
     let backend_source = include_str!("audio_backend.rs");
@@ -5027,6 +5058,85 @@ fn waveform_segment_click_restarts_active_playback_from_hit_time() {
     assert_eq!(state.audio_playback.last_start_seconds, 1.5);
     assert_eq!(state.audio_playback.last_end_seconds, None);
     assert!(state.active_waveform_drag.is_none());
+}
+
+#[test]
+fn scrub_rate_seeks_coalesce_audio_restarts_and_transport_tick_applies_pending() {
+    let mut state = imported_audio_state_for_audition(1.0, 3.0);
+    state.with_editor_mut(|editor| editor.playhead_seconds = 0.25);
+    let _ = update(&mut state, Message::TogglePlayback);
+    assert!(state.audio_playback.is_active());
+    let plays_after_start = state.audio_playback.play_count();
+
+    // Pointer-rate seeks while playing: only the first may restart the backend
+    // immediately; the rest must queue behind the restart coalescer.
+    for step in 0..10 {
+        let _ = update(&mut state, Message::SeekToTime(0.5 + f64::from(step) * 0.1));
+    }
+
+    let plays_after_scrub = state.audio_playback.play_count();
+    assert!(
+        plays_after_scrub <= plays_after_start + 1,
+        "rapid seeks should coalesce backend restarts: before={plays_after_start} after={plays_after_scrub}"
+    );
+    assert!(
+        state.playback_restart_coalescer.has_pending(),
+        "coalesced seeks should queue a pending restart so the newest position is not lost"
+    );
+
+    // Once the minimum restart interval elapses, the transport tick replays
+    // the queued restart at the newest playhead.
+    state.advance_transport_tick(Instant::now() + Duration::from_millis(150));
+
+    assert_eq!(state.audio_playback.play_count(), plays_after_scrub + 1);
+    assert!(!state.playback_restart_coalescer.has_pending());
+    assert_eq!(
+        state.audio_playback.last_start_seconds,
+        state.editor.as_ref().unwrap().playhead_seconds
+    );
+}
+
+#[test]
+fn restart_audio_playback_if_playing_coalesces_scrub_rate_restarts() {
+    let state_source = include_str!("state.rs");
+    let backend_source = include_str!("audio_backend.rs");
+
+    assert!(backend_source.contains("struct PlaybackRestartCoalescer"));
+    assert!(backend_source.contains("PLAYBACK_RESTART_MIN_INTERVAL"));
+
+    let restart_body = state_source
+        .split("pub(super) fn restart_audio_playback_if_playing")
+        .nth(1)
+        .expect("state should define restart_audio_playback_if_playing")
+        .split("pub(super) fn")
+        .next()
+        .expect("restart body should precede the next state method");
+    assert!(restart_body.contains("playback_restart_coalescer.request("));
+    assert!(restart_body.contains("start_audio_playback()"));
+
+    let tick_body = state_source
+        .split("pub(super) fn advance_transport_tick")
+        .nth(1)
+        .expect("state should define the transport tick hot path")
+        .split("fn advance_large_project_live_pan_smoke")
+        .next()
+        .expect("tick body should extend to the pan smoke helper");
+    assert!(tick_body.contains("playback_restart_coalescer.take_pending("));
+    assert!(tick_body.contains("playback_restart_coalescer.clear_pending("));
+
+    for stop_path in ["fn toggle_playback", "fn set_playback_paused"] {
+        let body = state_source
+            .split(stop_path)
+            .nth(1)
+            .expect("state should define the playback stop path")
+            .split("pub(super) fn")
+            .next()
+            .expect("stop path body should precede the next state method");
+        assert!(
+            body.contains("playback_restart_coalescer.clear_pending("),
+            "{stop_path} should drop queued restarts when playback stops"
+        );
+    }
 }
 
 #[test]
@@ -8569,13 +8679,13 @@ fn timeline_scroll_across_new_segments_uses_prewarmed_segment_blocks() {
 }
 
 #[test]
-fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
+fn decoded_waveform_far_scroll_replaces_bounded_strip_while_near_scroll_reuses_it() {
     let project = long_sparse_waveform_project();
     let duration_seconds = studio_app::TimeRange::for_project(&project).end_seconds + 1.0;
     let mut state = stable_sample_state();
     state.replace_workflow(
         StudioWorkflow::from_project(project),
-        "Loaded full chunk waveform scroll project.".to_string(),
+        "Loaded bounded waveform scroll project.".to_string(),
     );
     state.with_editor_mut(|editor| {
         editor.set_lane_waveform(
@@ -8585,12 +8695,15 @@ fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
     });
 
     let project = state.project().unwrap().clone();
-    let mut initial_scroll_strip = None;
-    let mut initial_strip_range = None;
+    let mut strip_snapshots = Vec::new();
     for viewport in [
         TimeRange {
             start_seconds: 30.0,
             end_seconds: 35.0,
+        },
+        TimeRange {
+            start_seconds: 33.0,
+            end_seconds: 38.0,
         },
         TimeRange {
             start_seconds: 620.0,
@@ -8619,28 +8732,49 @@ fn decoded_waveform_far_scroll_reuses_full_chunk_strip() {
             .channels
             .first()
             .expect("decoded model should have a channel");
-
-        if let Some(initial_scroll_strip) = &initial_scroll_strip {
-            assert!(
-                std::sync::Arc::ptr_eq(initial_scroll_strip, &channel.scroll_strip_peaks),
-                "far timeline scrolling should reuse one full in-memory waveform strip instead of replacing strip peaks"
-            );
-        } else {
-            initial_scroll_strip = Some(std::sync::Arc::clone(&channel.scroll_strip_peaks));
-            initial_strip_range = Some((
-                channel.scroll_strip_start_seconds,
-                channel.scroll_strip_end_seconds,
-            ));
-        }
+        strip_snapshots.push((
+            std::sync::Arc::clone(&channel.scroll_strip_peaks),
+            channel.scroll_strip_start_seconds,
+            channel.scroll_strip_end_seconds,
+            viewport,
+        ));
     }
 
-    let (strip_start_seconds, strip_end_seconds) =
-        initial_strip_range.expect("first render should record strip range");
-    assert_eq!(strip_start_seconds, 0.0);
+    for (strip_peaks, strip_start, strip_end, viewport) in &strip_snapshots {
+        assert!(
+            strip_peaks.len() <= 8 * 2_048,
+            "strip peaks must stay bounded regardless of source duration or zoom"
+        );
+        assert!(
+            strip_end - strip_start <= 8.0 * viewport.duration_seconds() + 1e-9,
+            "the strip window must stay a small multiple of the visible window"
+        );
+        assert!(
+            *strip_start <= viewport.start_seconds && *strip_end >= viewport.end_seconds,
+            "the strip must always cover the visible window so it never renders empty"
+        );
+    }
+
+    let (initial_strip, _, _, _) = &strip_snapshots[0];
+    let (near_scroll_strip, _, _, _) = &strip_snapshots[1];
     assert!(
-        strip_end_seconds >= duration_seconds,
-        "full in-memory strip should cover the whole project audio chunk"
+        std::sync::Arc::ptr_eq(initial_strip, near_scroll_strip),
+        "scrolling inside the cached strip should reuse its peaks instead of resampling"
     );
+
+    let (first_far_strip, first_far_start, first_far_end, _) = &strip_snapshots[2];
+    assert!(
+        !std::sync::Arc::ptr_eq(initial_strip, first_far_strip),
+        "far jumps beyond the strip window should resample a fresh bounded strip"
+    );
+    assert_eq!((*first_far_start, *first_far_end), (602.5, 642.5));
+
+    let (second_far_strip, second_far_start, second_far_end, _) = &strip_snapshots[3];
+    assert!(
+        !std::sync::Arc::ptr_eq(first_far_strip, second_far_strip),
+        "each far jump should resample a fresh bounded strip"
+    );
+    assert_eq!((*second_far_start, *second_far_end), (982.5, 1022.5));
 }
 
 #[test]
@@ -10068,6 +10202,47 @@ fn browser_find_scrolls_transcript_pane_to_selected_match() {
     assert!(actions_source.contains("scrollable::scroll_to"));
     assert!(actions_source.contains("find::transcript_scroll_id()"));
     assert!(actions_source.contains("find_scroll_offset_for_selected_match"));
+}
+
+#[test]
+fn find_path_reuses_cached_transcript_rows_snapshot() {
+    let find_source = include_str!("find.rs");
+
+    assert!(!find_source.contains("project().cloned()"));
+    assert!(!find_source.contains("editor.transcript_rows("));
+    assert!(find_source.contains("transcript_rows_snapshot_for_render"));
+    assert!(find_source.contains("find_match_cache"));
+}
+
+#[test]
+fn browser_find_matches_track_live_draft_text_edits() {
+    let project = large_two_lane_project(6);
+    let mut state = stable_sample_state();
+    state.replace_workflow(
+        StudioWorkflow::from_project(project),
+        "Loaded Babel-like project.".to_string(),
+    );
+
+    let _ = update(&mut state, Message::OpenFind);
+    let _ = update(
+        &mut state,
+        Message::FindQueryChanged("draft-only-token".to_string()),
+    );
+    let project = state.project().unwrap().clone();
+    assert_eq!(
+        state.find_match_summary(&project, state.editor.as_ref().unwrap()),
+        Some("No matches".to_string())
+    );
+
+    state
+        .segment_drafts
+        .get_mut("annotation-0001")
+        .unwrap()
+        .replace_text("draft-only-token".to_string());
+    assert_eq!(
+        state.find_match_summary(&project, state.editor.as_ref().unwrap()),
+        Some("1 of 1".to_string())
+    );
 }
 
 #[test]
@@ -18905,6 +19080,23 @@ fn transport_subscription_uses_sixteen_millisecond_cadence_for_smooth_playhead()
 }
 
 #[test]
+fn tray_subscription_uses_lazy_stream_builder_to_avoid_leaking_threads() {
+    let tray_source = include_str!("tray.rs");
+
+    assert!(
+        tray_source.contains("Subscription::run(tray_event_stream)"),
+        "tray subscription must use the lazy `Subscription::run` builder form"
+    );
+    assert!(
+        !tray_source
+            .contains("run_with_id(\"transcription-studio-tray-events\", tray_event_stream())"),
+        "tray subscription must not pass `tray_event_stream()` eagerly; \
+         `run_with_id` evaluates the stream on every subscription re-evaluation \
+         and leaks one blocked menu-event thread per app message"
+    );
+}
+
+#[test]
 fn app_keeps_iced_wgpu_renderer_enabled_for_native_canvas_acceleration() {
     let workspace_manifest = include_str!("../../../../Cargo.toml");
     let lockfile = include_str!("../../../../Cargo.lock");
@@ -19011,9 +19203,9 @@ fn timeline_ruler_canvas_caches_static_geometry_across_playhead_ticks() {
     assert!(source.contains("struct RulerCanvasState"));
     assert!(source.contains("cache: canvas::Cache"));
     assert!(source.contains("state.cache.draw("));
-    assert!(source.contains("state.clear_if_key_changed(self.cache_key())"));
+    assert!(source.contains("state.clear_if_key_changed(self.cache_key(bounds.width))"));
     assert!(source.contains("type State = RulerCanvasState"));
-    assert!(source.contains("self.viewport.start_seconds.to_bits()"));
+    assert!(source.contains("quantized_window_key("));
     assert!(source.contains("self.min_px_per_sec.to_bits()"));
     assert!(!source.contains("type State = ();"));
     assert!(!source.contains("let mut frame = canvas::Frame::new(renderer, bounds.size());"));
@@ -19032,6 +19224,33 @@ fn timeline_ruler_uses_shared_canvas_cache_group_for_moving_viewport_redraws() {
         !source.contains("cache: canvas::Cache::new()"),
         "moving viewport ruler redraws should use a bounded viewport canvas instead of laying out a full-duration strip"
     );
+}
+
+#[test]
+fn timeline_canvas_cache_keys_quantize_visible_windows_to_pixel_buckets() {
+    let canvas_source = include_str!("components/wavesurfer_canvas.rs");
+    let ruler_source = include_str!("components/timeline/ruler.rs");
+    let waveform_source = include_str!("components/timeline/waveform.rs");
+
+    // All per-frame canvas cache keys and lazy dependency hashes must route
+    // the visible window through the shared pixel-bucket quantizer so
+    // sub-pixel scroll/zoom frames reuse cached tessellation.
+    assert!(canvas_source.contains("pub(super) fn quantized_window_key("));
+    assert!(canvas_source.contains("quantized_window_key("));
+    assert!(ruler_source.contains("quantized_window_key("));
+    assert!(waveform_source.contains("quantized_window_key("));
+
+    // Raw f64 visible-window bits must never feed these keys again: every
+    // sub-pixel scroll frame would change the key, clear the canvas caches,
+    // and force full lyon re-tessellation across the stacked lane canvases.
+    assert!(!canvas_source.contains("self.time_window.visible_start_seconds.to_bits()"));
+    assert!(!canvas_source.contains("self.time_window.visible_end_seconds.to_bits()"));
+    assert!(!canvas_source.contains("self.time_window.start_seconds.to_bits()"));
+    assert!(!canvas_source.contains("self.time_window.end_seconds.to_bits()"));
+    assert!(!ruler_source.contains("self.viewport.start_seconds.to_bits()"));
+    assert!(!ruler_source.contains("self.viewport.end_seconds.to_bits()"));
+    assert!(!waveform_source.contains("self.visible_start_seconds.to_bits()"));
+    assert!(!waveform_source.contains("self.visible_end_seconds.to_bits()"));
 }
 
 #[test]
@@ -23680,6 +23899,11 @@ fn autoresearch_polish_score() {
             == live_seek_state.editor.as_ref().unwrap().playhead_seconds
     );
     let _ = update(&mut live_seek_state, Message::PreviousSegment);
+    // Back-to-back segment seeks coalesce: the transport tick replays the
+    // newest queued restart once the minimum restart interval elapses.
+    if live_seek_state.playback_restart_coalescer.has_pending() {
+        live_seek_state.advance_transport_tick(Instant::now() + Duration::from_millis(150));
+    }
     transition_check!(
         "audio_navigation",
         "audio.previous_boundary_seek_restarts_backend",
@@ -24196,4 +24420,60 @@ fn starting_bundled_relay_preserves_configured_remote_url() {
 
     assert_eq!(state.subaccount_owner.host_url, "http://93.127.223.38:8787");
     assert_eq!(state.relay_process.url, "http://127.0.0.1:8787");
+}
+
+#[test]
+fn http_clients_are_shared_process_wide_and_clerk_jwt_is_cached() {
+    let http_client_source = include_str!("http_client.rs");
+    let review_backend_source = include_str!("review_backend_client.rs");
+    let service_executor_source = include_str!("service_executor.rs");
+    let native_auth_source = include_str!("native_auth.rs");
+
+    // One shared client for the default configuration, process-wide.
+    assert!(
+        http_client_source.contains("static SHARED_HTTP_CLIENT: LazyLock<reqwest::Client>"),
+        "the shared HTTP client helper should hold one process-wide reqwest::Client"
+    );
+    for (name, source) in [
+        ("review_backend_client.rs", review_backend_source),
+        ("service_executor.rs", service_executor_source),
+        ("native_auth.rs", native_auth_source),
+    ] {
+        assert!(
+            !source.contains("reqwest::Client::new()"),
+            "{name} must not build a fresh reqwest::Client per request; use shared_http_client()"
+        );
+        assert!(
+            source.contains("shared_http_client()"),
+            "{name} should use the process-wide shared HTTP client"
+        );
+    }
+
+    // The Clerk session JWT mint (two HTTP round-trips) is cached per token
+    // lifetime instead of per live service request.
+    assert!(
+        native_auth_source.contains("static NATIVE_BABEL_JWT_CACHE"),
+        "native_auth.rs should cache the minted Clerk session JWT"
+    );
+    assert!(
+        native_auth_source.contains("jwt_exp_unix_seconds"),
+        "native_auth.rs should derive the JWT cache reuse window from the exp claim"
+    );
+
+    // The JWT cache is invalidated on every auth transition: login start,
+    // login verify, and the auth-store detach (logout) path.
+    for function in [
+        "fn start_phone_code_login(",
+        "fn verify_phone_code_login(",
+        "fn detach_native_auth_store_to_executable(",
+    ] {
+        let start = native_auth_source
+            .find(function)
+            .unwrap_or_else(|| panic!("native_auth.rs should contain {function}"));
+        let window = &native_auth_source[start..(start + 800).min(native_auth_source.len())];
+        assert!(
+            window.contains("clear_native_babel_jwt_cache();"),
+            "{function} must invalidate the cached Clerk JWT on the auth transition"
+        );
+    }
 }

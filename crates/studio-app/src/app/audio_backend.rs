@@ -1,7 +1,8 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
-
-#[cfg(not(test))]
-use std::time::Instant;
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use rodio::{ChannelCount, Sample, SampleRate, Source};
 use studio_waveform::DecodedAudio;
@@ -13,6 +14,61 @@ const AUDIO_PREWARMED_PLAYER_POOL_SIZE: usize = 4;
 // stalled, drop the entire output graph so mixer-owned sources cannot accumulate.
 const AUDIO_DRAINING_PLAYER_LIMIT: usize = 16;
 const AUDIO_PLAYBACK_CONTROL_INTERVAL_MILLIS: usize = 20;
+// Seek-while-playing restarts stop every player and rebuild the pool. Rodio
+// stops are flag-based, so a scrub-rate burst of restarts overflows
+// AUDIO_DRAINING_PLAYER_LIMIT and forces a synchronous output-device reset on
+// the UI thread. Coalesce restarts to at most one per interval; the newest
+// queued request wins so no scrub position is lost.
+pub(super) const PLAYBACK_RESTART_MIN_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Default, Debug)]
+pub(super) struct PlaybackRestartCoalescer {
+    last_restart: Option<Instant>,
+    pending: bool,
+}
+
+impl PlaybackRestartCoalescer {
+    // Records a restart request. Returns true when it may run immediately;
+    // otherwise the request stays queued until take_pending finds the minimum
+    // interval elapsed.
+    pub(super) fn request(&mut self, now: Instant) -> bool {
+        if self.restart_due(now) {
+            self.last_restart = Some(now);
+            self.pending = false;
+            return true;
+        }
+        self.pending = true;
+        false
+    }
+
+    // Consumes the queued restart once the minimum interval elapsed.
+    pub(super) fn take_pending(&mut self, now: Instant) -> bool {
+        if !self.pending || !self.restart_due(now) {
+            return false;
+        }
+        self.last_restart = Some(now);
+        self.pending = false;
+        true
+    }
+
+    // Drops a queued restart when playback stops before it was applied.
+    pub(super) fn clear_pending(&mut self) {
+        self.pending = false;
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_pending(&self) -> bool {
+        self.pending
+    }
+
+    fn restart_due(&self, now: Instant) -> bool {
+        // A missing or backwards clock sample fails open: restart rather than
+        // wedge the queue behind an interval that never seems to elapse.
+        self.last_restart
+            .and_then(|last| now.checked_duration_since(last))
+            .is_none_or(|elapsed| elapsed >= PLAYBACK_RESTART_MIN_INTERVAL)
+    }
+}
 
 fn playback_control_span_samples(
     samples_remaining: usize,
@@ -627,6 +683,7 @@ pub(super) struct AudioPlaybackBackend {
     active: bool,
     track_count: usize,
     prepare_count: usize,
+    play_count: usize,
     prepared_player_count: usize,
     pub(super) last_start_seconds: f64,
     pub(super) last_end_seconds: Option<f64>,
@@ -659,6 +716,7 @@ impl AudioPlaybackBackend {
         end_seconds: Option<f64>,
         speed: f32,
     ) -> Result<usize, String> {
+        self.play_count += 1;
         self.track_count = tracks
             .iter()
             .filter(|track| {
@@ -704,6 +762,10 @@ impl AudioPlaybackBackend {
         self.prepare_count
     }
 
+    pub(super) fn play_count(&self) -> usize {
+        self.play_count
+    }
+
     pub(super) fn prepared_player_count(&self) -> usize {
         self.prepared_player_count
     }
@@ -712,12 +774,17 @@ impl AudioPlaybackBackend {
 #[cfg(test)]
 mod tests {
     use rodio::{ChannelCount, Player, SampleRate, Source};
-    use std::{collections::VecDeque, sync::Arc, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use studio_waveform::DecodedAudio;
 
     use super::{
         AUDIO_DRAINING_PLAYER_LIMIT, DecodedAudioPlaybackSource, MixedDecodedAudioPlaybackSource,
+        PLAYBACK_RESTART_MIN_INTERVAL, PlaybackRestartCoalescer,
         audio_backend_prepare_runtime_trace_line, audio_backend_startup_runtime_trace_line,
         playback_control_span_samples, reclaim_draining_players,
     };
@@ -754,6 +821,119 @@ mod tests {
                 Duration::from_millis(0),
             ),
             "Transcription Studio audio backend prepare: outcome=error sink_ms=6.000 player_pool_ms=0.000"
+        );
+    }
+
+    #[test]
+    fn playback_restart_coalescer_applies_first_request_immediately() {
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        let now = Instant::now();
+
+        assert!(coalescer.request(now));
+        assert!(!coalescer.has_pending());
+        assert!(!coalescer.take_pending(now));
+    }
+
+    #[test]
+    fn playback_restart_coalescer_queues_requests_inside_min_interval() {
+        let start = Instant::now();
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        assert!(coalescer.request(start));
+
+        for step in 1..10 {
+            let now = start + Duration::from_millis(step * 10);
+            assert!(
+                !coalescer.request(now),
+                "request {}ms after a restart should queue instead",
+                step * 10
+            );
+            assert!(coalescer.has_pending());
+        }
+
+        assert!(
+            !coalescer
+                .take_pending(start + PLAYBACK_RESTART_MIN_INTERVAL - Duration::from_millis(1)),
+            "queued restart must wait for the full interval"
+        );
+        assert!(coalescer.has_pending());
+        assert!(coalescer.take_pending(start + PLAYBACK_RESTART_MIN_INTERVAL));
+        assert!(!coalescer.has_pending());
+        assert!(
+            !coalescer.take_pending(start + PLAYBACK_RESTART_MIN_INTERVAL * 2),
+            "a consumed queued restart must not restart twice"
+        );
+    }
+
+    #[test]
+    fn playback_restart_coalescer_applies_request_after_interval_without_pending() {
+        let start = Instant::now();
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        assert!(coalescer.request(start));
+
+        let after_interval = start + PLAYBACK_RESTART_MIN_INTERVAL + Duration::from_millis(20);
+        assert!(coalescer.request(after_interval));
+        assert!(!coalescer.has_pending());
+    }
+
+    #[test]
+    fn playback_restart_coalescer_clear_pending_drops_queue_but_keeps_rate_limit() {
+        let start = Instant::now();
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        assert!(coalescer.request(start));
+        assert!(!coalescer.request(start + Duration::from_millis(10)));
+
+        coalescer.clear_pending();
+
+        assert!(!coalescer.has_pending());
+        assert!(
+            !coalescer.take_pending(start + PLAYBACK_RESTART_MIN_INTERVAL * 2),
+            "a cleared queue must not restart after playback stops"
+        );
+        assert!(
+            !coalescer.request(start + Duration::from_millis(50)),
+            "rate limiting still applies while stopped and re-seeking"
+        );
+        assert!(coalescer.request(start + PLAYBACK_RESTART_MIN_INTERVAL));
+    }
+
+    #[test]
+    fn playback_restart_coalescer_caps_scrub_restart_rate_without_losing_position() {
+        let start = Instant::now();
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        let mut restarts = 0;
+
+        // One second of pointer-rate scrub events (5ms cadence), with the
+        // transport tick draining the queue after each event.
+        for step in 0..200 {
+            let now = start + Duration::from_millis(step * 5);
+            if coalescer.request(now) {
+                restarts += 1;
+            }
+            if coalescer.take_pending(now) {
+                restarts += 1;
+            }
+        }
+
+        assert_eq!(
+            restarts, 10,
+            "one second of scrubbing must cap backend restarts at ~10/sec"
+        );
+        assert!(
+            coalescer.has_pending(),
+            "the newest scrub position stays queued so it is never lost"
+        );
+        assert!(coalescer.take_pending(start + Duration::from_millis(1100)));
+    }
+
+    #[test]
+    fn playback_restart_coalescer_fails_open_on_backwards_clock_sample() {
+        let start = Instant::now();
+        let mut coalescer = PlaybackRestartCoalescer::default();
+        assert!(coalescer.request(start + Duration::from_millis(50)));
+
+        assert!(
+            coalescer.request(start),
+            "a backwards clock sample must restart rather than wedge the queue"
         );
     }
 
