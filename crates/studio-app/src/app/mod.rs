@@ -29,6 +29,7 @@ mod native_capabilities;
 mod navigation;
 mod panel_persistence;
 mod platform_paths;
+mod preferences;
 mod recovery;
 mod relay;
 mod renderer_capture;
@@ -106,6 +107,10 @@ pub fn run() -> iced::Result {
             }
             apply_startup_route_config(&mut state, startup_route);
             state.open_native_auth_gate_from_store();
+            // Dev/smoke: jump straight into the bundled demo editor (no network, no claim).
+            if std::env::var("STUDIO_OPEN_DEMO_ON_START").is_ok_and(|value| value != "0") {
+                state.load_bundled_demo();
+            }
             let diff_smoke_mode = diff_workbench_smoke_mode();
             if annotation_mutation_smoke_enabled() {
                 run_annotation_mutation_smoke(&mut state);

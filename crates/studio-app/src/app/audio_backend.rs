@@ -610,7 +610,12 @@ impl AudioPlaybackBackend {
             .sink
             .as_ref()
             .expect("sink is initialized before connecting players");
-        rodio::Player::connect_new(sink.mixer())
+        let player = rodio::Player::connect_new(sink.mixer());
+        // Dev/smoke runs on shared machines: keep the full playback path but emit silence.
+        if std::env::var("STUDIO_AUDIO_SILENT").is_ok_and(|value| value != "0") {
+            player.set_volume(0.0);
+        }
+        player
     }
 
     fn reclaim_drained_players(&mut self) {

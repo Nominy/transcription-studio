@@ -22,6 +22,7 @@ httpdate.workspace = true
 iced.workspace = true
 reqwest.workspace = true
 rodio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 studio-babel = { path = "../studio-babel" }
 studio-core = { path = "../studio-core" }

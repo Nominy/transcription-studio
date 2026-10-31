@@ -39,6 +39,7 @@ use super::native_capabilities::{
     ReviewerSessionPreview, ReviewerTemplatePreview,
 };
 use super::panel_persistence::PanelCollapseStorage;
+use super::preferences::{PREFERENCES_STORAGE_KEY, Preferences};
 use super::recovery::RecoveryDraft;
 use super::relay::{
     RelayLaunchConfig, RelayProcessState, RelayProcessStatus, start_relay_process,
@@ -583,6 +584,7 @@ pub(super) struct StudioState {
     pub(super) playback_restart_coalescer: PlaybackRestartCoalescer,
     pub(super) acknowledged_low_confidence_words: BTreeMap<String, BTreeSet<usize>>,
     pub(super) panel_collapse_storage: PanelCollapseStorage,
+    pub(super) preferences: Preferences,
     pub(super) script_context_panel_hidden: bool,
     pub(super) original_script_panel_hidden: bool,
     pub(super) copied_submission_id: bool,
@@ -707,6 +709,8 @@ impl Default for StudioState {
             panel_collapse_storage.is_collapsed(ORIGINAL_SCRIPT_STORAGE_KEY);
         let hotkey_bindings =
             HotkeyBindings::from_storage(panel_collapse_storage.value(HOTKEY_STORAGE_KEY));
+        let preferences =
+            Preferences::from_storage(panel_collapse_storage.value(PREFERENCES_STORAGE_KEY));
         let mut state = Self {
             app_surface: AppSurface::Dashboard,
             workspace_generation: 0,
@@ -765,6 +769,7 @@ impl Default for StudioState {
             audio_playback: AudioPlaybackBackend::default(),
             playback_restart_coalescer: PlaybackRestartCoalescer::default(),
             acknowledged_low_confidence_words: BTreeMap::new(),
+            preferences,
             panel_collapse_storage,
             script_context_panel_hidden,
             original_script_panel_hidden,
@@ -908,6 +913,22 @@ impl StudioState {
             .set_value(HOTKEY_STORAGE_KEY, self.hotkey_bindings.to_storage())
         {
             self.status = format!("Hotkey preference could not be saved: {error}");
+        }
+    }
+
+    /// The single write path for preferences: mutate, then persist the whole record.
+    pub(super) fn update_preferences(&mut self, change: impl FnOnce(&mut Preferences)) {
+        let mut next = self.preferences.clone();
+        change(&mut next);
+        if next == self.preferences {
+            return;
+        }
+        self.preferences = next;
+        if let Err(error) = self
+            .panel_collapse_storage
+            .set_value(PREFERENCES_STORAGE_KEY, self.preferences.to_storage())
+        {
+            self.status = format!("Settings could not be saved: {error}");
         }
     }
 }
