@@ -4785,6 +4785,7 @@ dependencies = [
  "iced",
  "reqwest",
  "rodio",
+ "serde",
  "serde_json",
  "studio-babel",
  "studio-core",
