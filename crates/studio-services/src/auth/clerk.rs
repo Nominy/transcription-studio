@@ -276,7 +276,8 @@ async fn mint_babel_jwt(
     clerk_url: &str,
     now_unix_seconds: i64,
 ) -> Result<String> {
-    let mut store = read_store(store_path)?;
+    // No store file yet means the user never signed in: same as an empty store.
+    let mut store = read_store_or_default(store_path)?;
     let (babel_url, clerk_url) = validated_urls(babel_url, clerk_url)?;
 
     if let Some(cached) = jwt_cache().token_for(store_path, clerk_url, now_unix_seconds) {

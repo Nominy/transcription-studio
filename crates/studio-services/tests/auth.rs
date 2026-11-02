@@ -318,6 +318,23 @@ async fn mint_without_cookies_explains_how_to_log_in() {
     assert!(format!("{error:#}").contains("--babel-auth-start-login"));
 }
 
+#[tokio::test]
+async fn mint_without_an_auth_store_needs_sign_in() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let error = auth::mint_babel_authorization(
+        &temp.path().join("babel-auth.json"),
+        "https://dashboard.babel.audio",
+        "https://clerk.invalid",
+        NOW,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.downcast_ref::<auth::NeedsSignIn>().is_some(),
+        "{error:#}"
+    );
+}
+
 #[test]
 fn cli_parses_start_login_with_reset() {
     assert_eq!(
