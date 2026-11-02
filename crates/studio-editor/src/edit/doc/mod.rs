@@ -1,0 +1,542 @@
+//! [`EditorDoc`]: the per-task editing facade the UI owns. It wraps the workflow (project +
+//! undo history), the editor session (selection, transport, loop, zoom, viewport), per-row
+//! drafts, find state, dialogs, helper focus, pointer drags and a transcript-row cache.
+//!
+//! Every operation is synchronous and returns an [`EditResult`]: `Ok(Outcome)` carries a status
+//! line and [`Effect`]s the UI must perform (audio, scrolling, focus); `Err(EditError)` explains a
+//! refusal. Rendering reads accessors (`project()`, `session()`, `drafts()`, `transcript_rows()`).
+
+mod actions;
+mod dialogs;
+mod navigation;
+mod structure;
+mod text;
+mod timeline;
+
+pub use text::TagSuggestionList;
+
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+use studio_core::Project;
+use studio_waveform::WaveformHit;
+
+use super::annotation::{EditAnnotationDialog, EditAnnotationError};
+use super::create_region::{CreateRegionDialog, CreateRegionError};
+use super::draft::{DraftError, Drafts, SegmentDraft, TextSelection};
+use super::find::FindState;
+use super::navigate::{self, HelperFocusRestore};
+use super::structure::{
+    AuditionKey, LoopStripDrag, OverlayDrag, SplitError, TimelineAutoscroll, WaveformCreateDrag,
+    WaveformDrag,
+};
+use super::text::TextMoveError;
+use super::time::TimeEditError;
+use crate::editor_model::{EditorSession, ProblemCounts};
+use crate::linter::LintSeverity;
+use crate::timeline_model::LoopStripHit;
+use crate::transcript_model::TranscriptRowView;
+use crate::workflow::StudioWorkflow;
+
+/// Side effects the UI performs after an operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// Playback started (`session().is_playing` became true): start audio at the playhead.
+    StartPlayback,
+    /// Playback stopped: stop audio.
+    StopPlayback,
+    /// The playhead jumped (seek, loop wrap, selection) while playing: restart audio at the
+    /// playhead. The UI may coalesce bursts.
+    RestartPlayback,
+    /// One-shot audition of `start..end` (playback state unchanged, not playing).
+    PlayRange {
+        start_seconds: f64,
+        end_seconds: f64,
+    },
+    /// Playback speed changed; update the audio engine.
+    SpeedChanged(f32),
+    /// Scroll the transcript to the row: `center` = always center it, otherwise only if hidden.
+    RevealSegment { segment_id: String, center: bool },
+    /// Focus a row's text editor with the caret at `caret` (`char` offset).
+    FocusText { segment_id: String, caret: usize },
+    /// Remove keyboard focus from transcript text editors.
+    BlurText,
+    /// A row's draft text/selection changed programmatically: reload the row's input from
+    /// [`EditorDoc::draft`].
+    DraftChanged { segment_id: String },
+}
+
+/// Successful operation result.
+#[must_use]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Outcome {
+    /// Status-bar message, if any.
+    pub status: Option<String>,
+    pub effects: Vec<Effect>,
+}
+
+impl Outcome {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn status(status: impl Into<String>) -> Self {
+        Self {
+            status: Some(status.into()),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn with(mut self, effect: Effect) -> Self {
+        self.effects.push(effect);
+        self
+    }
+
+    pub fn with_status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    pub fn extend(mut self, effects: impl IntoIterator<Item = Effect>) -> Self {
+        self.effects.extend(effects);
+        self
+    }
+
+    pub fn has_effect(&self, effect: &Effect) -> bool {
+        self.effects.contains(effect)
+    }
+}
+
+/// Why an operation was refused. `Display` is the status-bar message.
+#[derive(Debug, thiserror::Error)]
+pub enum EditError {
+    #[error("{action} unavailable: project is read-only.")]
+    ReadOnly { action: &'static str },
+    #[error("Segment `{0}` was not found.")]
+    SegmentNotFound(String),
+    #[error("Segment `{0}` has no editable draft.")]
+    NoDraft(String),
+    #[error("{action}: select a transcript segment first.")]
+    NoSelection { action: &'static str },
+    #[error(
+        "{action} blocked: use the focused text editor's local undo or save transcript edits first."
+    )]
+    PendingDrafts { action: &'static str },
+    #[error("{action} blocked: {source}")]
+    Draft {
+        action: &'static str,
+        source: DraftError,
+    },
+    #[error("{0}")]
+    Time(#[from] TimeEditError),
+    #[error("{0}")]
+    Split(#[from] SplitError),
+    #[error("{0}")]
+    TextMove(#[from] TextMoveError),
+    #[error("{0}")]
+    CreateRegion(#[from] CreateRegionError),
+    #[error("{0}")]
+    Annotation(#[from] EditAnnotationError),
+    #[error("{action} failed: {source}")]
+    Workflow {
+        action: &'static str,
+        source: anyhow::Error,
+    },
+    /// Precondition not met (no overlay, no decoded audio, nothing to do...).
+    #[error("{0}")]
+    Unavailable(String),
+}
+
+pub type EditResult = Result<Outcome, EditError>;
+
+/// Keyboard modifiers relevant to pointer gestures on the timeline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PointerModifiers {
+    pub shift: bool,
+    pub alt: bool,
+    /// Platform command modifier (ctrl on Windows/Linux, cmd on macOS).
+    pub secondary: bool,
+}
+
+/// Pointer over a lane waveform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaveformHover {
+    pub lane_id: String,
+    pub hit: WaveformHit,
+    /// Position inside the visible viewport (0..1).
+    pub fraction: f32,
+}
+
+/// Transient pointer/keyboard gesture state.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PointerState {
+    pub modifiers: PointerModifiers,
+    pub held_audition_keys: BTreeSet<AuditionKey>,
+    pub waveform_hover: Option<WaveformHover>,
+    pub overlay_drag: Option<OverlayDrag>,
+    pub waveform_drag: Option<WaveformDrag>,
+    pub create_drag: Option<WaveformCreateDrag>,
+    pub autoscroll: Option<TimelineAutoscroll>,
+    pub loop_hover: Option<LoopStripHit>,
+    pub loop_drag: Option<LoopStripDrag>,
+}
+
+/// Helper-mode focus tracking (which row owns the caret around playback toggles).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HelperFocus {
+    /// Row whose text editor currently holds focus via the helper workflow.
+    pub focused_segment_id: Option<String>,
+    /// Where the caret returns when playback pauses (ghost cursor while playing).
+    pub pending: Option<HelperFocusRestore>,
+    /// Last applied restore (its row is the one to focus).
+    pub last: Option<HelperFocusRestore>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagSuggestionUi {
+    segment_id: String,
+    text: String,
+    selection: TextSelection,
+    highlighted: usize,
+    dismissed: bool,
+}
+
+impl TagSuggestionUi {
+    fn matches(&self, segment_id: &str, draft: &SegmentDraft) -> bool {
+        self.segment_id == segment_id
+            && self.text == draft.text()
+            && self.selection == draft.selection()
+    }
+}
+
+/// Inputs of `EditorSession::transcript_rows` that change without bumping the doc generation
+/// (playback moves the selection).
+#[derive(Debug, Clone, PartialEq)]
+struct RowsCacheKey {
+    generation: u64,
+    selected_segment_id: Option<String>,
+}
+
+impl RowsCacheKey {
+    fn matches(&self, generation: u64, session: &EditorSession) -> bool {
+        self.generation == generation && self.selected_segment_id == session.selected_segment_id
+    }
+}
+
+/// Per-task editing document. Not `Sync`; owned by the UI thread.
+#[derive(Debug)]
+pub struct EditorDoc {
+    workflow: StudioWorkflow,
+    session: EditorSession,
+    drafts: Drafts,
+    tag_ui: Option<TagSuggestionUi>,
+    find: FindState,
+    create_region: Option<CreateRegionDialog>,
+    edit_annotation: Option<EditAnnotationDialog>,
+    helper: HelperFocus,
+    pointer: PointerState,
+    low_confidence_acks: BTreeMap<String, BTreeSet<usize>>,
+    playback_followed_segment_id: Option<String>,
+    generation: u64,
+    rows_cache: RefCell<Option<(RowsCacheKey, Rc<[TranscriptRowView]>)>>,
+    problem_counts_cache: Cell<Option<(u64, ProblemCounts)>>,
+}
+
+impl EditorDoc {
+    /// Opens a document, restoring timeline defaults (zoom, speed, filter, collapsed/muted
+    /// lanes, lane heights) persisted in project metadata.
+    pub fn new(workflow: StudioWorkflow) -> Self {
+        let session = EditorSession::for_project(workflow.project());
+        let drafts = Drafts::for_project(workflow.project());
+        let mut doc = Self {
+            workflow,
+            session,
+            drafts,
+            tag_ui: None,
+            find: FindState::default(),
+            create_region: None,
+            edit_annotation: None,
+            helper: HelperFocus::default(),
+            pointer: PointerState::default(),
+            low_confidence_acks: BTreeMap::new(),
+            playback_followed_segment_id: None,
+            generation: 0,
+            rows_cache: RefCell::new(None),
+            problem_counts_cache: Cell::new(None),
+        };
+        doc.hydrate_timeline_defaults();
+        doc
+    }
+
+    pub fn from_project(project: Project) -> Self {
+        Self::new(StudioWorkflow::from_project(project))
+    }
+
+    pub fn project(&self) -> &Project {
+        self.workflow.project()
+    }
+
+    pub fn workflow(&self) -> &StudioWorkflow {
+        &self.workflow
+    }
+
+    /// Direct workflow access for non-editing operations (lint snapshot metadata, diff compare,
+    /// admin flags, save/export). Drafts are re-synced and the session reconciled afterwards.
+    pub fn with_workflow<T>(&mut self, change: impl FnOnce(&mut StudioWorkflow) -> T) -> T {
+        let value = change(&mut self.workflow);
+        self.drafts
+            .sync_preserving_existing(self.workflow.project());
+        self.prune_tag_ui();
+        self.reconcile(true);
+        value
+    }
+
+    pub fn session(&self) -> &EditorSession {
+        &self.session
+    }
+
+    /// Mutable session access for view-only state the doc does not wrap (overview/scrollbar
+    /// dragging, lane heights, diff view, save bookkeeping). Invalidates the row cache.
+    pub fn session_mut(&mut self) -> &mut EditorSession {
+        self.touch();
+        &mut self.session
+    }
+
+    pub fn drafts(&self) -> &Drafts {
+        &self.drafts
+    }
+
+    pub fn draft(&self, segment_id: &str) -> Option<&SegmentDraft> {
+        self.drafts.get(segment_id)
+    }
+
+    pub fn find_state(&self) -> &FindState {
+        &self.find
+    }
+
+    pub fn helper(&self) -> &HelperFocus {
+        &self.helper
+    }
+
+    pub fn pointer(&self) -> &PointerState {
+        &self.pointer
+    }
+
+    pub fn create_region(&self) -> Option<&CreateRegionDialog> {
+        self.create_region.as_ref()
+    }
+
+    pub fn edit_annotation(&self) -> Option<&EditAnnotationDialog> {
+        self.edit_annotation.as_ref()
+    }
+
+    /// Acknowledged low-confidence word indices of a row.
+    pub fn low_confidence_acks(&self, segment_id: &str) -> Option<&BTreeSet<usize>> {
+        self.low_confidence_acks.get(segment_id)
+    }
+
+    /// Whether the task is read-only (every edit is refused).
+    pub fn is_read_only(&self) -> bool {
+        crate::babel_metadata::project_is_read_only(self.workflow.project())
+    }
+
+    /// Counter bumped by every change that can affect rendered rows.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.workflow.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.workflow.can_redo()
+    }
+
+    /// Transcript rows under the track filter, cached until the project, drafts, selection or
+    /// any session state change. A cache hit builds nothing.
+    pub fn transcript_rows(&self) -> Rc<[TranscriptRowView]> {
+        if let Some((key, rows)) = self.rows_cache.borrow().as_ref()
+            && key.matches(self.generation, &self.session)
+        {
+            return Rc::clone(rows);
+        }
+        let rows: Rc<[TranscriptRowView]> =
+            self.session.transcript_rows(self.workflow.project()).into();
+        let key = RowsCacheKey {
+            generation: self.generation,
+            selected_segment_id: self.session.selected_segment_id.clone(),
+        };
+        *self.rows_cache.borrow_mut() = Some((key, Rc::clone(&rows)));
+        rows
+    }
+
+    /// Error/warning counts behind the problem summary, cached per generation (linting every
+    /// row is far too slow to repeat on each rendered frame).
+    pub fn problem_counts(&self) -> ProblemCounts {
+        if let Some((generation, counts)) = self.problem_counts_cache.get()
+            && generation == self.generation
+        {
+            return counts;
+        }
+        let counts = self.session.problem_counts(self.workflow.project());
+        self.problem_counts_cache
+            .set(Some((self.generation, counts)));
+        counts
+    }
+
+    /// Lint shown for a row: the draft's validation state when pending/invalid, else the
+    /// project lint of the row.
+    pub fn row_lint(&self, row: &TranscriptRowView) -> (LintSeverity, String) {
+        self.workflow
+            .project()
+            .segment(&row.segment_id)
+            .and_then(|segment| self.drafts.draft_lint(segment))
+            .map_or_else(
+                || (row.lint.severity, row.lint.message.clone()),
+                |lint| (lint.severity, lint.message),
+            )
+    }
+
+    /// Installs decoded audio / peaks for a lane.
+    pub fn set_lane_waveform(
+        &mut self,
+        lane_id: impl Into<String>,
+        waveform: crate::timeline_model::LaneWaveform,
+    ) {
+        self.session.set_lane_waveform(lane_id, waveform);
+        self.touch();
+    }
+
+    // ---- shared internals -------------------------------------------------------------
+
+    fn touch(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn guard(&self, action: &'static str) -> Result<(), EditError> {
+        if self.is_read_only() {
+            Err(EditError::ReadOnly { action })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Runs a workflow mutation (read-only guarded), then re-syncs drafts.
+    fn apply<T>(
+        &mut self,
+        action: &'static str,
+        change: impl FnOnce(&mut StudioWorkflow) -> anyhow::Result<T>,
+    ) -> Result<T, EditError> {
+        self.guard(action)?;
+        let value =
+            change(&mut self.workflow).map_err(|source| EditError::Workflow { action, source })?;
+        self.drafts
+            .sync_preserving_existing(self.workflow.project());
+        self.prune_tag_ui();
+        self.touch();
+        Ok(value)
+    }
+
+    /// Records an edit: bumps the edit revision and drops a stale server lint snapshot.
+    fn mark_dirty(&mut self) {
+        let had_snapshot = self.session.server_lint_snapshot().is_some();
+        self.session.mark_dirty();
+        if had_snapshot {
+            self.workflow.clear_babel_lint_snapshot_metadata();
+        }
+        self.touch();
+    }
+
+    fn reconcile(&mut self, preserve_viewport: bool) {
+        let project = self.workflow.project();
+        if preserve_viewport {
+            self.session.reconcile_project_preserving_viewport(project);
+        } else {
+            self.session.reconcile_project(project);
+        }
+        self.reconcile_helper_focus_to_visible();
+        self.touch();
+    }
+
+    fn reconcile_selection_to_visible(&mut self) {
+        self.session
+            .reconcile_selection_to_visible(self.workflow.project());
+        self.reconcile_helper_focus_to_visible();
+        self.touch();
+    }
+
+    fn reconcile_helper_focus_to_visible(&mut self) {
+        let project = self.workflow.project();
+        let session = &self.session;
+        let visible = |segment_id: &str| {
+            project
+                .segment(segment_id)
+                .is_some_and(|segment| navigate::segment_is_visible(session, segment))
+        };
+        if self
+            .helper
+            .focused_segment_id
+            .as_deref()
+            .is_some_and(|id| !visible(id))
+        {
+            self.helper.focused_segment_id = None;
+        }
+        if self
+            .helper
+            .pending
+            .as_ref()
+            .is_some_and(|restore| !visible(&restore.segment_id))
+        {
+            self.helper.pending = None;
+        }
+        if self
+            .helper
+            .last
+            .as_ref()
+            .is_some_and(|restore| !visible(&restore.segment_id))
+        {
+            self.helper.last = None;
+        }
+    }
+
+    fn prune_tag_ui(&mut self) {
+        if self
+            .tag_ui
+            .as_ref()
+            .is_some_and(|ui| self.drafts.get(&ui.segment_id).is_none())
+        {
+            self.tag_ui = None;
+        }
+    }
+
+    fn clear_tag_ui_for(&mut self, segment_id: &str) {
+        if self
+            .tag_ui
+            .as_ref()
+            .is_some_and(|ui| ui.segment_id == segment_id)
+        {
+            self.tag_ui = None;
+        }
+    }
+
+    fn segment(&self, segment_id: &str) -> Result<studio_core::Segment, EditError> {
+        self.workflow
+            .project()
+            .segment(segment_id)
+            .cloned()
+            .ok_or_else(|| EditError::SegmentNotFound(segment_id.to_string()))
+    }
+
+    fn selected_segment_id(&self, action: &'static str) -> Result<String, EditError> {
+        self.session
+            .selected_segment_id
+            .clone()
+            .ok_or(EditError::NoSelection { action })
+    }
+
+    fn restart_if_playing(&self) -> Option<Effect> {
+        self.session.is_playing.then_some(Effect::RestartPlayback)
+    }
+}

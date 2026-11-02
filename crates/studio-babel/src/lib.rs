@@ -5,21 +5,6 @@ use serde_json::{Value, json};
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use thiserror::Error;
 
-mod supporting_adapters;
-
-pub use supporting_adapters::{
-    ANALYTICS_ADAPTER_NAMES, AnalyticsAdapterNames, AnalyticsValue,
-    BROWSER_ONLY_ANALYTICS_POLICIES, BrowserOnlyAnalyticsPolicy, DebugAnalyticsLog, GtmPush,
-    IntercomCall, NativeAdapterPolicy, NormalizedPresignedUrlQueryResult,
-    PRESIGNED_URL_STALE_TIME_MS, PresignedUrlQueryConfig, PresignedUrlQueryOptions,
-    PresignedUrlQueryVariables, RECOVERED_RUNTIME_ADAPTER_POLICIES, RecoveredRuntimeAdapterPolicy,
-    browser_only_analytics_policies, build_debug_analytics_log, build_gtm_identify_push,
-    build_gtm_page_push, build_gtm_reset_push, build_gtm_track_pushes,
-    build_intercom_identify_call, build_intercom_page_call, build_intercom_reset_call,
-    build_intercom_track_call, build_presigned_url_query_options,
-    normalize_presigned_url_query_result, recovered_runtime_adapter_policies,
-};
-
 const META_PROJECT_PRESET: &str = "project_preset";
 const META_FORMAT: &str = "babel.format";
 const META_REVIEW_ACTION_ENVELOPE: &str = "babel.review_action.envelope";

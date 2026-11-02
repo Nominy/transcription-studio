@@ -1,0 +1,203 @@
+//! Applying drafting results to the project as undoable workflow edits.
+
+use anyhow::{Result, anyhow, bail};
+use studio_core::SegmentUpdate;
+use studio_editor::workflow::StudioWorkflow;
+
+use super::model::{DraftRow, RedistributionAllocation, RedistributionMove, RedistributionPreview};
+use super::payload::META_REVIEWER_SELECTED_SESSION_ID;
+
+/// Result of applying rows: updated segment ids (one undo step) and row ids not in the project.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppliedRows {
+    pub applied: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+/// Applies every `rewritten` row as one undoable multi-segment edit, keeping segment timings.
+/// Errors when no row is rewritten or none exists in the project.
+pub fn apply_draft_rows(workflow: &mut StudioWorkflow, rows: &[DraftRow]) -> Result<AppliedRows> {
+    let rewritten = rows
+        .iter()
+        .filter(|row| row.status == "rewritten")
+        .map(|row| (row.row_id.as_str(), row.rewritten_text.as_str()))
+        .collect::<Vec<_>>();
+    if rewritten.is_empty() {
+        bail!("Apply drafting found no rewritten rows.");
+    }
+    let outcome = apply_texts(workflow, rewritten)?;
+    if outcome.applied.is_empty() {
+        bail!("Apply drafting found no rows present in this project.");
+    }
+    Ok(outcome)
+}
+
+/// Applies one previewed row (must be `rewritten` and present).
+pub fn apply_draft_row(workflow: &mut StudioWorkflow, row: &DraftRow) -> Result<()> {
+    if row.status != "rewritten" {
+        bail!("`{}` has status `{}`.", row.row_id, row.status);
+    }
+    let outcome = apply_texts(
+        workflow,
+        [(row.row_id.as_str(), row.rewritten_text.as_str())],
+    )?;
+    if outcome.applied.is_empty() {
+        bail!("`{}` was not found.", row.row_id);
+    }
+    Ok(())
+}
+
+/// Replaces one segment's text (broker transcription), keeping its timing; undoable.
+pub fn apply_segment_text(
+    workflow: &mut StudioWorkflow,
+    segment_id: &str,
+    text: &str,
+) -> Result<()> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("transcription response did not include text");
+    }
+    let segment = workflow
+        .project()
+        .segment(segment_id)
+        .ok_or_else(|| anyhow!("selected segment `{segment_id}` was not found"))?;
+    let (start, end) = (segment.start_seconds, segment.end_seconds);
+    workflow.apply_segment_edit(segment_id, start, end, text.to_string())
+}
+
+/// Applies a redistribution group: accepted drafts use the request allocations as-is, otherwise
+/// the model moves are applied to them. One undo step.
+pub fn apply_redistribution(
+    workflow: &mut StudioWorkflow,
+    preview: &RedistributionPreview,
+) -> Result<AppliedRows> {
+    if let Some(error) = &preview.error {
+        bail!("{error}");
+    }
+    let allocations = if preview.accept_draft {
+        preview.allocations.clone()
+    } else if preview.moves.is_empty() {
+        bail!(
+            "group `{}` was not accepted and has no model moves.",
+            preview.group_id
+        );
+    } else {
+        apply_redistribution_moves(&preview.allocations, &preview.moves)?
+    };
+    let outcome = apply_texts(
+        workflow,
+        allocations
+            .iter()
+            .map(|allocation| (allocation.segment_id.as_str(), allocation.text.as_str())),
+    )?;
+    if outcome.applied.is_empty() {
+        bail!("group `{}` has no project rows.", preview.group_id);
+    }
+    Ok(outcome)
+}
+
+/// Moves whole sentences between adjacent allocations (1-based indexes). Moving forward takes
+/// the source's trailing sentences to the target's front; moving back takes leading sentences
+/// to the target's end. Sentences end at `.`, `?`, `!` or `…`.
+pub fn apply_redistribution_moves(
+    allocations: &[RedistributionAllocation],
+    moves: &[RedistributionMove],
+) -> Result<Vec<RedistributionAllocation>> {
+    let mut next = allocations.to_vec();
+    for item in moves {
+        if item.from_index == 0
+            || item.to_index == 0
+            || item.sentence_count == 0
+            || item.from_index.abs_diff(item.to_index) != 1
+        {
+            bail!(
+                "invalid model move {}->{} x{}.",
+                item.from_index,
+                item.to_index,
+                item.sentence_count
+            );
+        }
+        let (from, to) = (item.from_index - 1, item.to_index - 1);
+        if from >= next.len() || to >= next.len() {
+            bail!(
+                "model move {}->{} is outside {} allocations.",
+                item.from_index,
+                item.to_index,
+                next.len()
+            );
+        }
+        let mut source = split_sentences(&next[from].text);
+        let mut target = split_sentences(&next[to].text);
+        if source.len() < item.sentence_count {
+            bail!(
+                "allocation {} has only {} sentence(s), cannot move {}.",
+                item.from_index,
+                source.len(),
+                item.sentence_count
+            );
+        }
+        if to > from {
+            let mut moved = source.split_off(source.len() - item.sentence_count);
+            moved.append(&mut target);
+            target = moved;
+        } else {
+            target.extend(source.drain(..item.sentence_count));
+        }
+        next[from].text = source.join(" ");
+        next[to].text = target.join(" ");
+    }
+    Ok(next)
+}
+
+/// Persists the selected reviewer session id in project metadata (survives save/reload).
+pub fn persist_reviewer_session_id(workflow: &mut StudioWorkflow, session_id: &str) {
+    workflow.merge_project_metadata([(
+        META_REVIEWER_SELECTED_SESSION_ID.to_string(),
+        session_id.trim().to_string(),
+    )]);
+}
+
+fn apply_texts<'a>(
+    workflow: &mut StudioWorkflow,
+    rows: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<AppliedRows> {
+    let mut outcome = AppliedRows::default();
+    let mut updates = Vec::new();
+    for (row_id, text) in rows {
+        let Some(segment) = workflow.project().segment(row_id) else {
+            outcome.missing.push(row_id.to_string());
+            continue;
+        };
+        updates.push(SegmentUpdate {
+            segment_id: row_id.to_string(),
+            start_seconds: segment.start_seconds,
+            end_seconds: segment.end_seconds,
+            text: text.to_string(),
+        });
+        outcome.applied.push(row_id.to_string());
+    }
+    if !updates.is_empty() {
+        workflow.apply_segment_edits(updates)?;
+    }
+    Ok(outcome)
+}
+
+fn split_sentences(value: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    for (index, ch) in value.char_indices() {
+        if matches!(ch, '.' | '?' | '!' | '…') {
+            let end = index + ch.len_utf8();
+            let sentence = value[start..end].trim();
+            if !sentence.is_empty() {
+                sentences.push(sentence.to_string());
+            }
+            start = end;
+        }
+    }
+    let tail = value[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_string());
+    }
+    sentences
+}

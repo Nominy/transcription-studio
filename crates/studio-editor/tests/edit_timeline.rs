@@ -1,0 +1,1353 @@
+//! Timeline / transport / helper-focus behaviour of `EditorDoc`: decoded-audio trim,
+//! auto-insert and auto-segmentation, cut preview commit/loop, transport ticks and playback
+//! follow, helper focus + ghost cursor (Space/Escape/Tab), row and problem navigation, find,
+//! speed/rewind/speaker workflow, timeline-default persistence, window unfocus and Escape
+//! precedence.
+#![allow(unused_must_use)]
+
+mod edit_support;
+
+use edit_support::*;
+use studio_editor::edit::draft::parse_draft_times;
+use studio_editor::edit::find::FindSummary;
+use studio_editor::edit::structure::AuditionKey;
+use studio_editor::edit::{
+    EditError, EditorAction, EditorDoc, Effect, Outcome, PointerModifiers, TextSelection,
+};
+use studio_editor::timeline_model::{LoopStripHit, LoopStripHitTarget, TimeRange};
+use studio_editor::track_filter::TrackFilter;
+use studio_waveform::WaveformHitTarget;
+
+// ---- helpers ----------------------------------------------------------------------------
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 0.0001,
+        "expected {expected}, got {actual}"
+    );
+}
+
+fn selected(doc: &EditorDoc) -> Option<&str> {
+    doc.session().selected_segment_id.as_deref()
+}
+
+fn pending_segment(doc: &EditorDoc) -> Option<&str> {
+    doc.helper()
+        .pending
+        .as_ref()
+        .map(|restore| restore.segment_id.as_str())
+}
+
+fn set_draft_with_caret_at_end(doc: &mut EditorDoc, segment_id: &str, text: &str) {
+    let caret = text.chars().count();
+    ok(doc.edit_text(segment_id, text.to_string(), TextSelection::caret(caret)));
+}
+
+fn set_playhead(doc: &mut EditorDoc, seconds: f64) {
+    doc.session_mut().playhead_seconds = seconds;
+}
+
+fn perform(doc: &mut EditorDoc, action: EditorAction) -> Outcome {
+    ok(doc
+        .perform(action, None)
+        .unwrap_or_else(|| panic!("{action:?} should be handled by the document")))
+}
+
+fn has_reveal(outcome: &Outcome) -> bool {
+    outcome
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::RevealSegment { .. }))
+}
+
+fn segment_start(doc: &EditorDoc, segment_id: &str) -> f64 {
+    doc.project().segment(segment_id).unwrap().start_seconds
+}
+
+/// Old `large_two_lane_project`: a long opening row on `lane-1`, then rows alternating
+/// `lane-2`/`lane-1` every second from 21s, each 0.72s long.
+fn large_two_lane_doc(segment_count: usize) -> EditorDoc {
+    let mut segments = vec![seg(
+        "annotation-0000",
+        "lane-1",
+        0.0,
+        12.0,
+        "large project opening segment keeps playback inside one selected row",
+    )];
+    for index in 1..segment_count {
+        let lane = if index % 2 == 0 { "lane-1" } else { "lane-2" };
+        let start = 20.0 + index as f64;
+        segments.push(seg(
+            &format!("annotation-{index:04}"),
+            lane,
+            start,
+            start + 0.72,
+            &format!("large project row {index} with unique transcript text"),
+        ));
+    }
+    doc(segments)
+}
+
+// ---- helper focus navigation (Shift+Left/Right) ------------------------------------------
+
+#[test]
+fn focus_adjacent_segment_focuses_next_row_from_start_without_seeking() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-1");
+    set_playhead(&mut doc, 42.0);
+
+    let outcome = ok(doc.focus_adjacent_segment(1));
+
+    assert_eq!(selected(&doc), Some("annotation-2"));
+    assert_eq!(doc.session().playhead_seconds, 42.0);
+    assert_eq!(
+        doc.helper()
+            .last
+            .as_ref()
+            .map(|restore| (restore.segment_id.as_str(), restore.restore_offset)),
+        Some(("annotation-2", 0))
+    );
+    assert!(outcome.has_effect(&Effect::FocusText {
+        segment_id: "annotation-2".to_string(),
+        caret: 0,
+    }));
+    assert_eq!(
+        doc.draft("annotation-2").unwrap().selection(),
+        TextSelection::caret(0)
+    );
+}
+
+#[test]
+fn focus_adjacent_segment_refuses_at_transcript_edge() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 1.0, "first"),
+        seg("b", "lane-1", 2.0, 3.0, "second"),
+    ]);
+    let _ = doc.select_segment_without_seek("b");
+
+    let error = doc.focus_adjacent_segment(1).unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(selected(&doc), Some("b"));
+}
+
+// ---- cut preview ----------------------------------------------------------------------
+
+#[test]
+fn cut_preview_commit_smart_splits_middle_segment_and_clears_overlay() {
+    let mut doc = doc(vec![seg(
+        "annotation-1",
+        "lane-1",
+        1.0,
+        6.0,
+        "one two three four five six",
+    )]);
+    let _ = doc.select_segment("annotation-1");
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 2.5,
+        end_seconds: 4.0,
+    });
+
+    ok(doc.commit_cut_preview(true));
+
+    let project = doc.project();
+    let left = project.segment("annotation-1").unwrap();
+    let right = project.segment("annotation-1__studio_1").unwrap();
+    assert_eq!(left.start_seconds, 1.0);
+    assert_eq!(left.end_seconds, 2.5);
+    assert_eq!(left.text, "one two three");
+    assert_eq!(right.start_seconds, 4.0);
+    assert_eq!(right.end_seconds, 6.0);
+    assert_eq!(right.text, "four five six");
+    assert!(doc.session().overlay_range.is_none());
+    assert_eq!(selected(&doc), Some("annotation-1__studio_1"));
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn cut_preview_commit_without_overlay_is_unavailable() {
+    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "text")]);
+    let _ = doc.select_segment("annotation-1");
+
+    let error = doc.commit_cut_preview(true).unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(ids(&doc), vec!["annotation-1".to_string()]);
+}
+
+#[test]
+fn cut_preview_commit_rejects_overlay_shorter_than_one_second() {
+    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "text")]);
+    let _ = doc.select_segment("annotation-1");
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 2.0,
+        end_seconds: 2.5,
+    });
+    let before = doc.project().segments.clone();
+
+    let error = doc.commit_cut_preview(false).unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(doc.project().segments, before);
+}
+
+#[test]
+fn cut_preview_commit_is_refused_on_read_only_task() {
+    let mut doc = read_only_doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "text")]);
+    let _ = doc.select_segment("annotation-1");
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 2.0,
+        end_seconds: 4.0,
+    });
+
+    let error = doc.commit_cut_preview(true).unwrap_err();
+
+    assert!(matches!(error, EditError::ReadOnly { .. }));
+    assert_eq!(ids(&doc), vec!["annotation-1".to_string()]);
+}
+
+#[test]
+fn cut_preview_loop_sets_loop_range_without_editing_project() {
+    let mut doc = stable_sample_doc();
+    let before = doc.project().segments.clone();
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 2.0,
+        end_seconds: 5.0,
+    });
+
+    ok(doc.loop_cut_preview());
+
+    assert!(doc.session().loop_enabled);
+    assert_eq!(
+        doc.session().stored_loop_range,
+        Some(TimeRange {
+            start_seconds: 2.0,
+            end_seconds: 5.0,
+        })
+    );
+    assert_eq!(doc.project().segments, before);
+}
+
+// ---- decoded-audio timing -------------------------------------------------------------
+
+#[test]
+fn auto_segment_visible_silences_splits_long_silence_then_trims_segments() {
+    let mut doc = doc(vec![seg(
+        "annotation-1",
+        "lane-1",
+        1.0,
+        4.0,
+        "first island second island",
+    )]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(6.0, 100, &[(1.20, 1.60), (3.20, 3.60)]),
+    );
+
+    ok(doc.auto_segment_visible_silences());
+
+    let mut lane_segments: Vec<_> = doc
+        .project()
+        .segments
+        .iter()
+        .filter(|segment| segment.lane_id == "lane-1")
+        .collect();
+    lane_segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+    assert_eq!(lane_segments.len(), 2);
+    assert_eq!(lane_segments[0].id, "annotation-1");
+    assert_eq!(lane_segments[1].id, "annotation-1__studio_1");
+    assert_close(lane_segments[0].start_seconds, 1.195);
+    assert_close(lane_segments[0].end_seconds, 1.595);
+    assert_close(lane_segments[1].start_seconds, 3.195);
+    assert_close(lane_segments[1].end_seconds, 3.595);
+    assert_eq!(lane_segments[0].text, "first island");
+    assert_eq!(lane_segments[1].text, "second island");
+    assert_eq!(draft_text(&doc, "annotation-1"), "first island");
+    assert_eq!(draft_text(&doc, "annotation-1__studio_1"), "second island");
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn auto_segment_visible_silences_without_long_silence_is_unavailable() {
+    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 4.0, "speech")]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(6.0, 100, &[(0.0, 6.0)]),
+    );
+    let before = doc.project().segments.clone();
+
+    let error = doc.auto_segment_visible_silences().unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(doc.project().segments, before);
+}
+
+#[test]
+fn auto_insert_at_playhead_creates_padded_empty_segment_around_nearest_uncovered_speech() {
+    let mut doc = stable_sample_doc();
+    let original_count = doc.project().segments.len();
+    set_playhead(&mut doc, 8.5);
+    install_audio(
+        &mut doc,
+        "track-speaker-1",
+        audio_with_speech(12.0, 100, &[(8.4, 8.8)]),
+    );
+
+    ok(doc.auto_insert_segment_at_playhead());
+
+    let project = doc.project();
+    assert_eq!(project.segments.len(), original_count + 1);
+    let created = project
+        .segments
+        .iter()
+        .find(|segment| segment.id.starts_with("track-speaker-1__studio_"))
+        .expect("auto-insert should create a derived segment in the decoded lane");
+    assert_eq!(created.lane_id, "track-speaker-1");
+    assert_eq!(created.speaker_id, "speaker-1");
+    assert_eq!(created.text, "");
+    assert_close(created.start_seconds, 8.35);
+    assert_close(created.end_seconds, 8.85);
+    assert_eq!(selected(&doc), Some(created.id.as_str()));
+    assert_eq!(doc.session().playhead_seconds, 8.5);
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn auto_insert_at_playhead_skips_speech_already_covered_by_visible_row() {
+    let mut doc = stable_sample_doc();
+    let original_count = doc.project().segments.len();
+    set_playhead(&mut doc, 2.0);
+    install_audio(
+        &mut doc,
+        "track-speaker-1",
+        audio_with_speech(8.0, 100, &[(1.8, 2.2)]),
+    );
+
+    let error = doc.auto_insert_segment_at_playhead().unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(doc.project().segments.len(), original_count);
+}
+
+#[test]
+fn auto_insert_at_playhead_merges_adjacent_same_lane_rows_and_selects_result() {
+    let mut doc = doc(vec![
+        seg("annotation-1", "lane-1", 1.0, 1.5, "before"),
+        seg("annotation-next", "lane-1", 2.5, 3.0, "after"),
+    ]);
+    set_playhead(&mut doc, 2.0);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(4.0, 100, &[(1.55, 2.45)]),
+    );
+
+    ok(doc.auto_insert_segment_at_playhead());
+
+    let lane_segments: Vec<_> = doc
+        .project()
+        .segments
+        .iter()
+        .filter(|segment| segment.lane_id == "lane-1")
+        .collect();
+    assert_eq!(lane_segments.len(), 1);
+    let merged = lane_segments[0];
+    assert_eq!(merged.id, "lane-1__studio_1");
+    assert_eq!(merged.start_seconds, 1.0);
+    assert_eq!(merged.end_seconds, 3.0);
+    assert_eq!(merged.text, "before after");
+    assert_eq!(selected(&doc), Some("lane-1__studio_1"));
+    assert_eq!(draft_text(&doc, "lane-1__studio_1"), "before after");
+}
+
+#[test]
+fn trim_current_segment_to_audio_moves_boundaries_with_padding_and_refreshes_draft() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-1");
+    install_audio(
+        &mut doc,
+        "track-speaker-1",
+        audio_with_speech(10.0, 100, &[(1.50, 2.90)]),
+    );
+
+    ok(doc.trim_current_segment_to_audio());
+
+    let segment = doc.project().segment("annotation-1").unwrap();
+    assert_close(segment.start_seconds, 1.495);
+    assert_close(segment.end_seconds, 2.895);
+    let (draft_start, draft_end) =
+        parse_draft_times(segment, doc.draft("annotation-1").unwrap()).unwrap();
+    assert_close(draft_start, segment.start_seconds);
+    assert_close(draft_end, segment.end_seconds);
+    assert!(!doc.has_pending_drafts());
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn trim_current_segment_extends_outward_then_trims_to_speech_edges() {
+    let mut doc = doc(vec![seg(
+        "annotation-1",
+        "lane-1",
+        2.0,
+        3.0,
+        "continuous speech",
+    )]);
+    let _ = doc.select_segment("annotation-1");
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(5.0, 1000, &[(1.397, 3.603)]),
+    );
+
+    ok(doc.trim_current_segment_to_audio());
+
+    let segment = doc.project().segment("annotation-1").unwrap();
+    assert_close(segment.start_seconds, 1.392);
+    assert_close(segment.end_seconds, 3.607);
+    assert_eq!(segment.text, "continuous speech");
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn trim_current_segment_outward_pass_respects_same_lane_neighbor_guards() {
+    let mut doc = doc(vec![
+        seg("annotation-1", "lane-1", 2.0, 3.0, "middle"),
+        seg("annotation-prev", "lane-1", 1.0, 1.35, "previous"),
+        seg("annotation-next", "lane-1", 3.70, 4.0, "next"),
+    ]);
+    let _ = doc.select_segment("annotation-1");
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(5.0, 1000, &[(1.0, 4.2)]),
+    );
+
+    ok(doc.trim_current_segment_to_audio());
+
+    let segment = doc.project().segment("annotation-1").unwrap();
+    assert_close(segment.start_seconds, 1.36);
+    assert_close(segment.end_seconds, 3.69);
+}
+
+#[test]
+fn trim_visible_segments_uses_decoded_audio_and_skips_lanes_without_audio() {
+    let mut doc = stable_sample_doc();
+    install_audio(
+        &mut doc,
+        "track-speaker-1",
+        audio_with_speech(10.0, 100, &[(1.50, 2.90), (5.70, 7.05)]),
+    );
+
+    ok(doc.trim_visible_segments_to_audio());
+
+    let project = doc.project();
+    let first = project.segment("annotation-1").unwrap();
+    let third = project.segment("annotation-3").unwrap();
+    assert_close(first.start_seconds, 1.495);
+    assert_close(first.end_seconds, 2.895);
+    assert_close(third.start_seconds, 5.695);
+    assert_close(third.end_seconds, 7.045);
+    assert_eq!(
+        project.segment("annotation-2").unwrap().start_seconds,
+        3.5,
+        "lanes without decoded audio are skipped"
+    );
+}
+
+// ---- window unfocus -------------------------------------------------------------------
+
+#[test]
+fn window_unfocus_cancels_captured_pointer_drags_and_audition_holds() {
+    let mut doc = stable_sample_doc();
+    doc.set_modifiers(PointerModifiers {
+        secondary: true,
+        ..PointerModifiers::default()
+    });
+    doc.hover_loop_strip(LoopStripHit {
+        target: LoopStripHitTarget::Empty,
+        time_seconds: 2.0,
+    });
+    doc.press_loop_strip();
+    doc.hover_waveform(
+        "track-speaker-2",
+        hit(WaveformHitTarget::Waveform, None, 2.0),
+    );
+    doc.press_autoscroll("track-speaker-2");
+    doc.set_audition_key(AuditionKey::BeforeStart, true);
+
+    assert!(doc.pointer().loop_drag.is_some());
+    assert!(doc.pointer().autoscroll.is_some());
+    assert!(
+        doc.pointer()
+            .held_audition_keys
+            .contains(&AuditionKey::BeforeStart)
+    );
+    assert!(doc.pointer().modifiers.secondary);
+
+    ok(doc.window_unfocused());
+
+    assert!(doc.pointer().loop_drag.is_none());
+    assert!(doc.pointer().autoscroll.is_none());
+    assert!(doc.pointer().held_audition_keys.is_empty());
+    assert_eq!(doc.pointer().modifiers, PointerModifiers::default());
+}
+
+// ---- row navigation -------------------------------------------------------------------
+
+#[test]
+fn adjacent_segment_navigation_skips_collapsed_lanes() {
+    let mut doc = stable_sample_doc();
+    doc.toggle_lane_collapse("track-speaker-2");
+    let _ = doc.select_segment("annotation-1");
+
+    let _ = doc.select_adjacent_segment(1);
+
+    let selected_id = selected(&doc).expect("a row stays selected").to_string();
+    assert_eq!(
+        doc.project().segment(&selected_id).unwrap().lane_id,
+        "track-speaker-1"
+    );
+}
+
+#[test]
+fn adjacent_segment_navigation_seeks_to_timeline_bounds_past_first_and_last_rows() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-1");
+
+    let _ = doc.select_adjacent_segment(-1);
+
+    assert_eq!(doc.session().playhead_seconds, 0.0);
+    assert_eq!(selected(&doc), None);
+
+    let last_segment_id = doc
+        .transcript_rows()
+        .last()
+        .expect("sample should contain rows")
+        .segment_id
+        .clone();
+    let _ = doc.select_segment(&last_segment_id);
+    let project_end = TimeRange::for_project(doc.project()).end_seconds;
+
+    let _ = doc.select_adjacent_segment(1);
+
+    assert_eq!(doc.session().playhead_seconds, project_end);
+    assert_eq!(selected(&doc), None);
+}
+
+#[test]
+fn selected_segment_navigation_recenters_next_row_even_when_visible() {
+    let mut doc = large_two_lane_doc(80);
+    let _ = doc.select_segment_without_seek("annotation-0018");
+    let start = segment_start(&doc, "annotation-0018");
+    set_playhead(&mut doc, start);
+
+    let outcome = doc.select_adjacent_segment(1);
+
+    assert_eq!(selected(&doc), Some("annotation-0019"));
+    assert!(outcome.has_effect(&Effect::RevealSegment {
+        segment_id: "annotation-0019".to_string(),
+        center: true,
+    }));
+}
+
+// ---- transport ------------------------------------------------------------------------
+
+#[test]
+fn tick_advances_playhead_only_while_playing_and_honours_speed() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-2");
+    let _ = doc.set_speed(2.0);
+
+    let _ = doc.tick(0.016);
+    assert_eq!(doc.session().playhead_seconds, 3.5);
+    assert!(!doc.needs_ticks());
+
+    let outcome = doc.toggle_playback();
+    assert!(outcome.has_effect(&Effect::StartPlayback));
+    assert!(doc.needs_ticks());
+    let _ = doc.tick(0.016);
+
+    assert!((doc.session().playhead_seconds - 3.532).abs() < 1e-9);
+}
+
+#[test]
+fn tick_uses_elapsed_frame_time() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-2");
+    let _ = doc.toggle_playback();
+
+    let _ = doc.tick(0.016);
+    let first = doc.session().playhead_seconds;
+    let _ = doc.tick(0.048);
+    let second = doc.session().playhead_seconds;
+
+    assert!((first - 3.516).abs() < 1e-9);
+    assert!((second - 3.564).abs() < 1e-9);
+    assert!(second - first < 0.05);
+}
+
+#[test]
+fn playback_start_only_recenters_when_playhead_is_outside_or_past_midpoint() {
+    let mut doc = stable_sample_doc();
+    let viewport = TimeRange {
+        start_seconds: 20.0,
+        end_seconds: 25.0,
+    };
+    doc.session_mut().viewport = viewport;
+    set_playhead(&mut doc, 21.0);
+
+    let _ = doc.toggle_playback();
+    assert_eq!(doc.session().viewport, viewport);
+
+    let outcome = doc.toggle_playback();
+    assert!(outcome.has_effect(&Effect::StopPlayback));
+    doc.session_mut().viewport = viewport;
+    set_playhead(&mut doc, 24.0);
+    let _ = doc.toggle_playback();
+
+    let viewport = doc.session().viewport;
+    assert!((viewport.start_seconds - 21.5).abs() < 0.000_001);
+    assert!((viewport.end_seconds - 26.5).abs() < 0.000_001);
+}
+
+#[test]
+fn playback_follow_reveals_row_under_playhead_once_per_row() {
+    let mut doc = large_two_lane_doc(300);
+    let far_segment_id = doc.transcript_rows()[200].segment_id.clone();
+    let _ = doc.select_segment(&far_segment_id);
+    let _ = doc.toggle_playback();
+
+    let first = doc.tick(0.016);
+
+    assert!(first.has_effect(&Effect::RevealSegment {
+        segment_id: far_segment_id.clone(),
+        center: false,
+    }));
+    assert_eq!(selected(&doc), Some(far_segment_id.as_str()));
+
+    let second = doc.tick(0.016);
+    assert!(
+        !has_reveal(&second),
+        "follow must not re-reveal while playback stays within the same row"
+    );
+}
+
+// ---- helper focus: Escape / Space / ghost cursor ------------------------------------------
+
+#[test]
+fn helper_focus_escape_workflow_matches_four_state_toggle() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, 0.30);
+    doc.session_mut().is_playing = true;
+
+    // Focused row + playing: Escape pauses only.
+    let outcome = ok(doc.transcript_escape("annotation-1"));
+    assert!(!doc.session().is_playing);
+    assert!(outcome.has_effect(&Effect::StopPlayback));
+    assert_eq!(selected(&doc), Some("annotation-1"));
+
+    // Focused row + paused: Escape blurs, leaves a ghost cursor and resumes.
+    let outcome = ok(doc.transcript_escape("annotation-1"));
+    assert!(doc.session().is_playing);
+    assert!(outcome.has_effect(&Effect::BlurText));
+    assert!(outcome.has_effect(&Effect::StartPlayback));
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+
+    // Unfocused + playing: Escape restores the caret into the row under the playhead.
+    set_playhead(&mut doc, 3.75);
+    set_draft_with_caret_at_end(&mut doc, "annotation-2", "a bcdefghi");
+    let outcome = doc.escape();
+    assert!(!doc.session().is_playing);
+    assert!(outcome.has_effect(&Effect::StopPlayback));
+    assert!(outcome.has_effect(&Effect::FocusText {
+        segment_id: "annotation-2".to_string(),
+        caret: 2,
+    }));
+    assert_eq!(selected(&doc), Some("annotation-2"));
+    assert_eq!(
+        doc.helper()
+            .last
+            .as_ref()
+            .map(|restore| (restore.segment_id.as_str(), restore.restore_offset)),
+        Some(("annotation-2", 2))
+    );
+    assert_eq!(
+        doc.draft("annotation-2").unwrap().selection(),
+        TextSelection::caret(2)
+    );
+
+    // Unfocused + paused: Escape bootstraps a synthetic ghost cursor and resumes.
+    let outcome = doc.escape();
+    assert!(doc.session().is_playing);
+    assert!(outcome.has_effect(&Effect::StartPlayback));
+    assert_eq!(selected(&doc), Some("annotation-2"));
+    assert_eq!(
+        doc.helper()
+            .pending
+            .as_ref()
+            .map(|restore| restore.synthetic),
+        Some(true)
+    );
+}
+
+#[test]
+fn space_toggles_helper_playback_and_ghost_cursor_like_escape() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, 2.0);
+
+    let outcome = perform(&mut doc, EditorAction::PlayPause);
+    assert!(
+        doc.session().is_playing,
+        "space from paused resumes playback"
+    );
+    assert!(outcome.has_effect(&Effect::StartPlayback));
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+    assert!(doc.ghost_cursor("annotation-1").is_some());
+
+    set_playhead(&mut doc, 3.75);
+    set_draft_with_caret_at_end(&mut doc, "annotation-2", "a bcdefghi");
+    let outcome = perform(&mut doc, EditorAction::PlayPause);
+
+    assert!(!doc.session().is_playing, "space while playing pauses");
+    assert!(outcome.has_effect(&Effect::StopPlayback));
+    assert!(outcome.has_effect(&Effect::FocusText {
+        segment_id: "annotation-2".to_string(),
+        caret: 2,
+    }));
+    assert_eq!(
+        doc.helper().focused_segment_id.as_deref(),
+        Some("annotation-2")
+    );
+    assert!(doc.helper().pending.is_none());
+}
+
+#[test]
+fn helper_ghost_cursor_renders_only_on_pending_row_at_restore_offset_while_paused() {
+    let mut doc = stable_sample_doc();
+    set_draft_with_caret_at_end(&mut doc, "annotation-2", "abcdefghij");
+    let _ = doc.select_segment_without_seek("annotation-2");
+    set_playhead(&mut doc, 3.75);
+    ok(doc.transcript_escape("annotation-2"));
+    let _ = doc.toggle_playback();
+    assert!(!doc.session().is_playing);
+
+    let restore_offset = doc.helper().pending.as_ref().unwrap().restore_offset;
+    let ghost = doc
+        .ghost_cursor("annotation-2")
+        .expect("pending helper restore exposes a ghost cursor");
+
+    assert_eq!(ghost.segment_id, "annotation-2");
+    assert_eq!(ghost.char_offset, restore_offset);
+    assert!(
+        doc.ghost_cursor("annotation-1").is_none(),
+        "ghost cursor only renders on the pending restore row"
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_is_hidden_on_the_focused_row() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment_without_seek("annotation-2");
+    set_playhead(&mut doc, 3.75);
+    ok(doc.transcript_escape("annotation-2"));
+    assert!(doc.ghost_cursor("annotation-2").is_some());
+
+    doc.set_text_focus(Some("annotation-2"));
+
+    assert!(doc.ghost_cursor("annotation-2").is_none());
+}
+
+#[test]
+fn helper_ghost_cursor_tracks_playhead_while_playing() {
+    let mut doc = stable_sample_doc();
+    set_draft_with_caret_at_end(&mut doc, "annotation-2", "abcdefghij");
+    let segment = doc.project().segment("annotation-2").unwrap().clone();
+    set_playhead(&mut doc, segment.start_seconds);
+    ok(doc.transcript_escape("annotation-2"));
+    assert!(doc.session().is_playing);
+
+    let first = doc
+        .ghost_cursor("annotation-2")
+        .expect("playing restore exposes a ghost cursor");
+    set_playhead(
+        &mut doc,
+        segment.start_seconds + (segment.end_seconds - segment.start_seconds) * 0.6,
+    );
+    let second = doc
+        .ghost_cursor("annotation-2")
+        .expect("playing restore keeps exposing a ghost cursor");
+
+    assert!(
+        second.char_offset > first.char_offset,
+        "playing ghost cursor moves with the live playhead"
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_snaps_playback_offset_to_word_boundary() {
+    let mut doc = stable_sample_doc();
+    set_draft_with_caret_at_end(&mut doc, "annotation-2", "alpha beta gamma");
+    let segment = doc.project().segment("annotation-2").unwrap().clone();
+    set_playhead(&mut doc, segment.start_seconds);
+    ok(doc.transcript_escape("annotation-2"));
+    set_playhead(
+        &mut doc,
+        segment.start_seconds + (segment.end_seconds - segment.start_seconds) * 0.5,
+    );
+
+    let ghost = doc
+        .ghost_cursor("annotation-2")
+        .expect("playing restore exposes a ghost cursor");
+
+    assert_eq!(
+        ghost.char_offset, 6,
+        "raw proportional offset inside `beta` snaps to the nearest word start"
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_advances_to_active_row_during_playback() {
+    let mut doc = stable_sample_doc();
+    let start = segment_start(&doc, "annotation-1");
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, start);
+    ok(doc.transcript_escape("annotation-1"));
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+    set_playhead(&mut doc, 4.0);
+
+    let _ = doc.tick(0.016);
+
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-2"),
+        "the ghost cursor switches rows when playback exits its original row"
+    );
+    assert_eq!(selected(&doc), Some("annotation-2"));
+    assert!(doc.ghost_cursor("annotation-1").is_none());
+    assert!(doc.ghost_cursor("annotation-2").is_some());
+}
+
+#[test]
+fn helper_ghost_cursor_parks_on_latest_lane_row_during_playback_gaps() {
+    let mut doc = stable_sample_doc();
+    let start = segment_start(&doc, "annotation-1");
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, start);
+    ok(doc.transcript_escape("annotation-1"));
+    set_playhead(&mut doc, 7.5);
+
+    let _ = doc.tick(0.016);
+
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-3"),
+        "a gap after speech leaves the ghost at the latest row in its tracked lane"
+    );
+    let ghost = doc
+        .ghost_cursor("annotation-3")
+        .expect("the latest same-lane row renders the ghost cursor");
+    assert_eq!(
+        ghost.char_offset,
+        draft_text(&doc, "annotation-3").chars().count(),
+        "the cursor clamps to the completed row's end while playback is in the gap"
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_pending_target_follows_segment_navigation() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-1");
+    let _ = doc.helper_toggle_playback();
+    let _ = doc.toggle_playback();
+    assert!(!doc.session().is_playing);
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+
+    let _ = doc.select_adjacent_segment(1);
+
+    assert_eq!(pending_segment(&doc), Some("annotation-2"));
+    assert!(
+        doc.ghost_cursor("annotation-2").is_some(),
+        "navigation moves the ghost cursor to the newly selected row"
+    );
+}
+
+#[test]
+fn helper_ghost_cursor_row_moves_on_tab_while_paused_and_playing() {
+    let mut doc = stable_sample_doc();
+    let start = segment_start(&doc, "annotation-1");
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, start);
+    let _ = doc.helper_toggle_playback();
+    let _ = doc.toggle_playback();
+    assert!(!doc.session().is_playing);
+
+    let outcome = perform(&mut doc, EditorAction::GhostCursorNext);
+    assert_eq!(pending_segment(&doc), Some("annotation-2"));
+    assert_eq!(selected(&doc), Some("annotation-2"));
+    assert!(doc.ghost_cursor("annotation-2").is_some());
+    assert!(outcome.has_effect(&Effect::RevealSegment {
+        segment_id: "annotation-2".to_string(),
+        center: true,
+    }));
+
+    let _ = doc.toggle_playback();
+    assert!(doc.session().is_playing);
+    let outcome = perform(&mut doc, EditorAction::GhostCursorNext);
+    assert_eq!(pending_segment(&doc), Some("annotation-3"));
+    assert!(
+        doc.session().is_playing,
+        "tab ghost cursor row moves must not interrupt playback"
+    );
+    assert!(!outcome.has_effect(&Effect::StopPlayback));
+
+    let _ = perform(&mut doc, EditorAction::GhostCursorPrevious);
+    assert_eq!(pending_segment(&doc), Some("annotation-2"));
+}
+
+#[test]
+fn helper_ghost_cursor_tab_navigation_skips_hidden_lane_rows() {
+    let mut doc = stable_sample_doc();
+    ok(doc.switch_speaker_workflow_lane("Speaker 1"));
+    let start = segment_start(&doc, "annotation-1");
+    let _ = doc.select_segment_without_seek("annotation-1");
+    set_playhead(&mut doc, start);
+    let _ = doc.helper_toggle_playback();
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+
+    ok(doc.move_ghost_cursor(1));
+
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-3"),
+        "tab skips rows on collapsed/filtered lanes"
+    );
+}
+
+#[test]
+fn ghost_cursor_move_without_pending_restore_is_unavailable() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment_without_seek("annotation-1");
+
+    let error = doc.move_ghost_cursor(1).unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(selected(&doc), Some("annotation-1"));
+}
+
+#[test]
+fn helper_playhead_row_deduction_only_considers_visible_lanes() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment_without_seek("annotation-3");
+    set_playhead(&mut doc, 4.0);
+
+    let _ = doc.escape();
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-2"),
+        "with all lanes visible the playhead row wins"
+    );
+
+    let _ = doc.toggle_playback();
+    assert!(!doc.session().is_playing);
+    ok(doc.switch_speaker_workflow_lane("Speaker 1"));
+    assert!(
+        doc.helper().pending.is_none(),
+        "hiding the pending row's lane drops its ghost cursor"
+    );
+    let _ = doc.select_segment_without_seek("annotation-3");
+    set_playhead(&mut doc, 4.0);
+
+    let _ = doc.escape();
+
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-3"),
+        "rows on hidden lanes must not capture the ghost cursor"
+    );
+}
+
+// ---- warnings / problems --------------------------------------------------------------
+
+#[test]
+fn active_warning_hotkey_toggles_selected_warning_assertion() {
+    let mut doc = stable_sample_doc();
+    let warning_segment_id = doc
+        .transcript_rows()
+        .iter()
+        .find(|row| row.lint.is_assertable_warning())
+        .expect("sample should include an assertable warning")
+        .segment_id
+        .clone();
+    let _ = doc.select_segment(&warning_segment_id);
+
+    let _ = perform(&mut doc, EditorAction::ToggleActiveWarningAssertion);
+
+    let asserted = doc
+        .transcript_rows()
+        .iter()
+        .find(|row| row.segment_id == warning_segment_id)
+        .map(|row| row.has_asserted_warning)
+        .expect("selected warning row still exists");
+    assert!(asserted);
+}
+
+#[test]
+fn navigate_problem_rows_delegates_to_session_problem_navigation() {
+    let mut doc = stable_sample_doc();
+    let mut expected = doc.session().clone();
+    expected.navigate_problem_rows(doc.project(), 1);
+
+    let outcome = doc.navigate_problem_rows(1);
+
+    assert_eq!(
+        doc.session().selected_segment_id,
+        expected.selected_segment_id
+    );
+    if let Some(selected_id) = expected.selected_segment_id {
+        assert_eq!(
+            outcome.effects.first(),
+            Some(&Effect::RevealSegment {
+                segment_id: selected_id,
+                center: false,
+            })
+        );
+    }
+}
+
+// ---- find -----------------------------------------------------------------------------
+
+#[test]
+fn find_query_selects_transcript_matches_and_wraps() {
+    let mut doc = large_two_lane_doc(6);
+
+    let _ = perform(&mut doc, EditorAction::OpenFind);
+    assert!(doc.find_state().open);
+
+    let outcome = doc.set_find_query("large project row".to_string());
+    assert_eq!(doc.find_state().query, "large project row");
+    assert_eq!(selected(&doc), Some("annotation-0001"));
+    assert!(outcome.has_effect(&Effect::RevealSegment {
+        segment_id: "annotation-0001".to_string(),
+        center: true,
+    }));
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 1,
+            total: 5,
+        })
+    );
+
+    let _ = doc.find_previous();
+    assert_eq!(selected(&doc), Some("annotation-0005"));
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 5,
+            total: 5,
+        })
+    );
+
+    let _ = doc.find_next();
+    assert_eq!(selected(&doc), Some("annotation-0001"));
+
+    let _ = doc.set_find_query("row 3".to_string());
+    assert_eq!(selected(&doc), Some("annotation-0003"));
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 1,
+            total: 1,
+        })
+    );
+
+    let _ = doc.set_find_query("not in transcript".to_string());
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 0,
+            total: 0,
+        })
+    );
+}
+
+#[test]
+fn find_next_and_previous_shortcuts_move_between_matches() {
+    let mut doc = large_two_lane_doc(6);
+    let _ = doc.open_find();
+    let _ = doc.set_find_query("large project row".to_string());
+
+    let outcome = perform(&mut doc, EditorAction::FindNext);
+    assert_eq!(selected(&doc), Some("annotation-0002"));
+    assert!(outcome.has_effect(&Effect::RevealSegment {
+        segment_id: "annotation-0002".to_string(),
+        center: true,
+    }));
+
+    let _ = perform(&mut doc, EditorAction::FindPrevious);
+    assert_eq!(selected(&doc), Some("annotation-0001"));
+}
+
+#[test]
+fn find_matches_track_live_draft_text_edits() {
+    let mut doc = large_two_lane_doc(6);
+    let _ = doc.open_find();
+    let _ = doc.set_find_query("draft-only-token".to_string());
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 0,
+            total: 0,
+        })
+    );
+
+    set_draft_with_caret_at_end(&mut doc, "annotation-0001", "draft-only-token");
+
+    assert_eq!(doc.find_matches(), vec!["annotation-0001".to_string()]);
+    assert_eq!(
+        doc.find_summary(),
+        Some(FindSummary {
+            current: 1,
+            total: 1,
+        })
+    );
+}
+
+// ---- speed / rewind / speaker workflow ------------------------------------------------
+
+#[test]
+fn playback_speed_rewind_and_speaker_workflow_update_session() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.set_speed(1.0);
+    set_playhead(&mut doc, 3.75);
+
+    let outcome = perform(&mut doc, EditorAction::IncreasePlaybackSpeed);
+    assert_eq!(doc.session().speed, 1.5);
+    assert_eq!(doc.session().playhead_seconds, 3.75);
+    assert!(outcome.has_effect(&Effect::SpeedChanged(1.5)));
+
+    let outcome = perform(&mut doc, EditorAction::DecreasePlaybackSpeed);
+    assert_eq!(doc.session().speed, 1.0);
+    assert_eq!(doc.session().playhead_seconds, 3.75);
+    assert!(outcome.has_effect(&Effect::SpeedChanged(1.0)));
+
+    let _ = perform(&mut doc, EditorAction::RewindPlaybackOneSecond);
+    assert_eq!(doc.session().playhead_seconds, 2.75);
+
+    let _ = perform(&mut doc, EditorAction::SwitchSpeakerWorkflowLane1);
+    let lane_id = |doc: &EditorDoc, label: &str| {
+        doc.project()
+            .lanes
+            .iter()
+            .find(|lane| lane.label == label)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let speaker_one = lane_id(&doc, "Speaker 1");
+    let speaker_two = lane_id(&doc, "Speaker 2");
+    let session = doc.session();
+    assert!(matches!(
+        &session.track_filter,
+        TrackFilter::Lane { label, .. } if label == "Speaker 1"
+    ));
+    assert!(!session.muted_lane_ids.contains(&speaker_one));
+    assert!(session.muted_lane_ids.contains(&speaker_two));
+    assert!(!session.collapsed_lane_ids.contains(&speaker_one));
+    assert!(session.collapsed_lane_ids.contains(&speaker_two));
+
+    let _ = perform(&mut doc, EditorAction::ResetSpeakerWorkflow);
+    let session = doc.session();
+    assert_eq!(session.track_filter, TrackFilter::All);
+    assert!(!session.muted_lane_ids.contains(&speaker_one));
+    assert!(!session.muted_lane_ids.contains(&speaker_two));
+    assert!(!session.collapsed_lane_ids.contains(&speaker_one));
+    assert!(!session.collapsed_lane_ids.contains(&speaker_two));
+}
+
+// ---- timeline defaults ----------------------------------------------------------------
+
+#[test]
+fn timeline_defaults_persist_in_project_metadata_and_hydrate_on_reload() {
+    let mut doc = stable_sample_doc();
+    doc.set_zoom(2.0);
+    let _ = doc.set_speed(1.5);
+    doc.set_track_filter(TrackFilter::lane("track-speaker-2", "Speaker 2"));
+    doc.toggle_lane_collapse("track-speaker-2");
+    let _ = doc.toggle_lane_mute("track-speaker-1");
+    doc.set_lane_vertical_zoom("track-speaker-2", 2.5);
+    let expected_vertical_zoom = *doc
+        .session()
+        .lane_vertical_zoom
+        .get("track-speaker-2")
+        .expect("vertical zoom is set before reload");
+
+    let reloaded = EditorDoc::from_project(doc.project().clone());
+
+    let session = reloaded.session();
+    assert!((session.zoom - 2.0).abs() < f32::EPSILON);
+    assert!((session.speed - 1.5).abs() < f32::EPSILON);
+    assert_eq!(
+        session.track_filter,
+        TrackFilter::lane("track-speaker-2", "Speaker 2")
+    );
+    assert!(session.collapsed_lane_ids.contains("track-speaker-2"));
+    assert!(session.muted_lane_ids.contains("track-speaker-1"));
+    assert_eq!(
+        session.lane_vertical_zoom.get("track-speaker-2").copied(),
+        Some(expected_vertical_zoom)
+    );
+}
+
+// ---- Escape precedence ----------------------------------------------------------------
+
+fn stable_doc_with_loop() -> EditorDoc {
+    let mut doc = stable_sample_doc();
+    let project = doc.project().clone();
+    doc.session_mut()
+        .set_loop_range_from_drag(&project, 3.5, 5.1);
+    assert!(doc.session().stored_loop_range.is_some());
+    doc
+}
+
+#[test]
+fn escape_closes_create_region_dialog_before_clearing_timeline_loop() {
+    let mut doc = stable_doc_with_loop();
+    doc.open_create_region("track-speaker-1", 12.0, 12.8);
+
+    let _ = perform(&mut doc, EditorAction::EscapePressed);
+
+    assert!(doc.create_region().is_none());
+    assert!(doc.session().loop_enabled);
+    assert!(doc.session().stored_loop_range.is_some());
+
+    let _ = perform(&mut doc, EditorAction::EscapePressed);
+
+    let project = doc.project().clone();
+    assert!(doc.session().loop_enabled);
+    assert!(doc.session().stored_loop_range.is_none());
+    assert!(!doc.session().loop_strip(&project).has_range);
+}
+
+#[test]
+fn escape_dismisses_edit_annotation_then_create_region_then_loop() {
+    let mut doc = stable_doc_with_loop();
+    doc.open_create_region("track-speaker-1", 12.0, 12.8);
+    ok(doc.open_edit_annotation("annotation-1"));
+
+    let _ = doc.escape();
+    assert!(doc.edit_annotation().is_none());
+    assert!(doc.create_region().is_some());
+    assert!(doc.session().stored_loop_range.is_some());
+
+    let _ = doc.escape();
+    assert!(doc.create_region().is_none());
+    assert!(doc.session().stored_loop_range.is_some());
+
+    let _ = doc.escape();
+    assert!(doc.session().stored_loop_range.is_none());
+}
+
+#[test]
+fn escape_closes_find_bar_before_dialogs_and_loop() {
+    let mut doc = stable_doc_with_loop();
+    doc.open_create_region("track-speaker-1", 12.0, 12.8);
+    let _ = doc.open_find();
+
+    let _ = doc.escape();
+
+    assert!(!doc.find_state().open);
+    assert!(doc.create_region().is_some());
+    assert!(doc.session().stored_loop_range.is_some());
+}
+
+#[test]
+fn captured_escape_closes_find_bar_before_create_region_input_reset() {
+    let mut doc = stable_sample_doc();
+    doc.open_create_region("track-speaker-1", 12.0, 12.8);
+    let _ = doc.open_find();
+    assert!(doc.find_state().open);
+    assert!(doc.create_region().is_some());
+
+    let _ = perform(&mut doc, EditorAction::CreateRegionEscape);
+
+    assert!(!doc.find_state().open);
+    assert!(doc.create_region().is_some());
+}
+
+#[test]
+fn escape_cancels_autoscroll_before_closing_find_bar() {
+    let mut doc = stable_doc_with_loop();
+    let _ = doc.open_find();
+    doc.hover_waveform(
+        "track-speaker-1",
+        hit(WaveformHitTarget::Waveform, None, 2.0),
+    );
+    doc.press_autoscroll("track-speaker-1");
+    assert!(doc.pointer().autoscroll.is_some());
+    assert!(doc.needs_ticks());
+
+    let _ = doc.escape();
+
+    assert!(doc.pointer().autoscroll.is_none());
+    assert!(doc.find_state().open);
+    assert!(doc.session().stored_loop_range.is_some());
+
+    let _ = doc.escape();
+    assert!(!doc.find_state().open);
+    assert!(doc.session().stored_loop_range.is_some());
+}
+
+#[test]
+fn transcript_rows_cache_hit_returns_same_rows_until_selection_or_session_changes() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "first"),
+        seg("b", "lane-1", 2.0, 4.0, "second"),
+    ]);
+    doc.select_segment("a");
+    let first = doc.transcript_rows();
+    assert!(std::rc::Rc::ptr_eq(&first, &doc.transcript_rows()));
+
+    doc.toggle_playback();
+    let playing = doc.transcript_rows();
+    doc.tick(0.1);
+    assert!(
+        std::rc::Rc::ptr_eq(&playing, &doc.transcript_rows()),
+        "ticks inside the selected row must reuse the cached rows"
+    );
+
+    // 0.1s + 8 × 0.25s puts the playhead at 2.1s, inside row `b`.
+    for _ in 0..8 {
+        doc.tick(0.25);
+    }
+    assert_eq!(doc.session().selected_segment_id.as_deref(), Some("b"));
+    let after_boundary = doc.transcript_rows();
+    assert!(!std::rc::Rc::ptr_eq(&playing, &after_boundary));
+    assert!(
+        after_boundary
+            .iter()
+            .any(|row| row.segment_id == "b" && row.is_selected)
+    );
+
+    doc.select_segment_without_seek("a");
+    let reselected = doc.transcript_rows();
+    assert!(!std::rc::Rc::ptr_eq(&after_boundary, &reselected));
+    assert!(
+        reselected
+            .iter()
+            .any(|row| row.segment_id == "a" && row.is_selected)
+    );
+
+    let diff_view = doc.session().diff_view;
+    doc.session_mut().diff_view = !diff_view;
+    let after_session_change = doc.transcript_rows();
+    assert!(!std::rc::Rc::ptr_eq(&reselected, &after_session_change));
+    assert!(std::rc::Rc::ptr_eq(
+        &after_session_change,
+        &doc.transcript_rows()
+    ));
+}

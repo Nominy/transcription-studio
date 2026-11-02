@@ -1,0 +1,972 @@
+//! Rendering of one transcript row: id, track, times, reviewer, text, lint and actions cells,
+//! plus read-only diff rows.
+
+use std::ops::Range;
+
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, Textarea};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Theme, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+use studio_editor::edit::EditorDoc;
+use studio_editor::edit::draft::byte_offset;
+use studio_editor::edit::time::TimeField;
+use studio_editor::editor_model::EditorSession;
+use studio_editor::linter::LintSeverity;
+use studio_editor::transcript_model::{
+    AnnotationDiffStatus, TranscriptActionCommand, TranscriptActionMenuEntry,
+    TranscriptDiffCellKind, TranscriptDiffView, TranscriptRowKind, TranscriptRowView,
+    TranscriptWordDiffStatus,
+};
+
+use super::TranscriptView;
+use super::layout::{
+    ACTIONS_W, CELL_PX, DIFF_BADGE_W, ID_W, LINT_W, REVIEWER_W, ROW_PY, SMALL_LINE_H, TEXT_PX,
+    TEXT_PY, TIME_W, TRACK_W, TextMetrics, WRAP_MARGIN, diff_display_text, display_text,
+    has_review_chips,
+};
+
+/// Per-row inputs gathered by the view before rendering.
+pub(super) struct RowParams<'a> {
+    pub row: &'a TranscriptRowView,
+    pub doc: &'a EditorDoc,
+    pub height: Pixels,
+    pub metrics: TextMetrics,
+    pub lane_color: Hsla,
+    pub is_find_match: bool,
+    pub is_playing: bool,
+    /// The pooled text editor is mounted in this row.
+    pub text_editing: bool,
+    /// The pooled time editor is mounted in this row's start/end cell.
+    pub time_editing: Option<TimeField>,
+}
+
+impl TranscriptView {
+    pub(super) fn render_row(&self, params: RowParams, cx: &Context<Self>) -> AnyElement {
+        if params.row.row_kind == TranscriptRowKind::Annotation {
+            self.render_annotation_row(params, cx)
+        } else {
+            render_diff_only_row(params, cx)
+        }
+    }
+
+    fn render_annotation_row(&self, params: RowParams, cx: &Context<Self>) -> AnyElement {
+        let RowParams {
+            row,
+            doc,
+            height,
+            metrics,
+            lane_color,
+            is_find_match,
+            is_playing,
+            text_editing,
+            time_editing,
+        } = params;
+        let theme = cx.theme();
+        let cells = row.visible_cells;
+        let highlighted = row.is_selected
+            || doc.session().selected_segment_id.as_deref() == Some(row.segment_id.as_str());
+        let segment_id: SharedString = row.segment_id.clone().into();
+
+        let background = if highlighted && is_playing {
+            theme.accent.opacity(0.9)
+        } else if highlighted {
+            theme.list_active
+        } else if is_find_match {
+            theme.warning.opacity(0.10)
+        } else {
+            theme.background
+        };
+        h_flex()
+            .id(SharedString::from(format!(
+                "transcript-row:{}",
+                row.segment_id
+            )))
+            .relative()
+            .w_full()
+            .h(height)
+            .items_start()
+            .py(ROW_PY)
+            .overflow_hidden()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(background)
+            .when(!highlighted, |row| {
+                row.hover(|style| style.bg(cx.theme().list_hover))
+            })
+            .when(highlighted, |row| {
+                row.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(2.))
+                        .bg(theme.primary),
+                )
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let segment_id = segment_id.clone();
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.press_row(&segment_id, event.click_count, window, cx);
+                })
+            })
+            .when(cells.id, |el| el.child(id_cell(row, metrics, theme)))
+            .when(cells.track, |el| {
+                el.child(self.track_cell(row, doc, metrics, lane_color, cx))
+            })
+            .when(cells.start, |el| {
+                el.child(self.time_cell(row, doc, TimeField::Start, time_editing, metrics, cx))
+            })
+            .when(cells.end, |el| {
+                el.child(self.time_cell(row, doc, TimeField::End, time_editing, metrics, cx))
+            })
+            .when(cells.reviewer, |el| {
+                el.child(reviewer_cell(row, metrics, theme))
+            })
+            .when(cells.text, |el| {
+                el.child(self.text_cell(row, doc, metrics, text_editing, cx))
+            })
+            .when(cells.linter, |el| {
+                el.child(self.lint_cell(row, doc, metrics, cx))
+            })
+            .when(cells.actions, |el| {
+                el.child(self.actions_cell(row, metrics, cx))
+            })
+            .into_any_element()
+    }
+
+    fn track_cell(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        metrics: TextMetrics,
+        lane_color: Hsla,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let segment_id: SharedString = row.segment_id.clone().into();
+        let picker_open = !row.is_read_only
+            && doc
+                .draft(&row.segment_id)
+                .is_some_and(|draft| draft.track_edit().is_editing);
+
+        let label = div()
+            .id(SharedString::from(format!(
+                "transcript-track:{}",
+                row.segment_id
+            )))
+            .text_sm()
+            .line_height(metrics.line_height)
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(lane_color)
+            .truncate()
+            .child(row.speaker_label.clone())
+            .when(!row.is_read_only, |label| {
+                label.cursor_pointer().on_mouse_down(MouseButton::Left, {
+                    let segment_id = segment_id.clone();
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.press_track_cell(&segment_id, event.click_count, window, cx);
+                    })
+                })
+            });
+
+        v_flex()
+            .w(TRACK_W)
+            .flex_none()
+            .px(CELL_PX)
+            .child(label)
+            .when(!row.annotation_kind.is_transcription(), |cell| {
+                cell.child(
+                    div()
+                        .text_xs()
+                        .line_height(SMALL_LINE_H)
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .child(row.annotation_type_label.clone()),
+                )
+            })
+            .when_some(row.annotation_diff.as_ref(), |cell, diff| {
+                let (label, color) = annotation_diff_status(diff.status, theme);
+                cell.child(
+                    div()
+                        .text_xs()
+                        .line_height(SMALL_LINE_H)
+                        .text_color(color)
+                        .child(label),
+                )
+            })
+            .when(picker_open, |cell| cell.child(self.track_picker(row, cx)))
+            .into_any_element()
+    }
+
+    fn track_picker(&self, row: &TranscriptRowView, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let segment_id: SharedString = row.segment_id.clone().into();
+        let options = row.track_options.iter().map(|option| {
+            let is_current = option.lane_id == row.lane_id;
+            let lane_id: SharedString = option.lane_id.clone().into();
+            div()
+                .id(SharedString::from(format!(
+                    "transcript-track-option:{}:{}",
+                    row.segment_id, option.lane_id
+                )))
+                .px_2()
+                .py_1()
+                .rounded(theme.radius)
+                .text_sm()
+                .when(is_current, |item| item.bg(theme.list_active))
+                .hover(|style| style.bg(theme.accent))
+                .cursor_pointer()
+                .child(option.label.clone())
+                .on_click({
+                    let segment_id = segment_id.clone();
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.change_track(&segment_id, &lane_id, window, cx);
+                    })
+                })
+        });
+
+        deferred(
+            anchored().snap_to_window_with_margin(px(8.)).child(
+                v_flex()
+                    .id(SharedString::from(format!(
+                        "transcript-track-picker:{}",
+                        row.segment_id
+                    )))
+                    .occlude()
+                    .mt_1()
+                    .min_w(rems(10.))
+                    .p_1()
+                    .gap_0p5()
+                    .bg(theme.popover)
+                    .text_color(theme.popover_foreground)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(theme.radius)
+                    .shadow_md()
+                    .children(options)
+                    .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                        this.close_track_picker(&segment_id, window, cx);
+                    })),
+            ),
+        )
+        .with_priority(1)
+    }
+
+    fn time_cell(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        field: TimeField,
+        editing: Option<TimeField>,
+        metrics: TextMetrics,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let draft = doc.draft(&row.segment_id);
+        let value: SharedString = match (draft, field) {
+            (Some(draft), field) => draft.time_value(field).to_string().into(),
+            (None, TimeField::Start) => row.start_time.clone().into(),
+            (None, TimeField::End) => row.end_time.clone().into(),
+        };
+        let error = draft.and_then(|draft| draft.time_error(field));
+
+        let content = if editing == Some(field) {
+            div()
+                .w_full()
+                .h(metrics.line_height)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Input::new(&self.time_input).xsmall().h(metrics.line_height))
+                .into_any_element()
+        } else {
+            let segment_id: SharedString = row.segment_id.clone().into();
+            div()
+                .id(SharedString::from(format!(
+                    "transcript-time:{}:{}",
+                    row.segment_id,
+                    field_key(field)
+                )))
+                .w_full()
+                .px_1()
+                .text_xs()
+                .line_height(metrics.line_height)
+                .text_color(theme.foreground.opacity(0.85))
+                .child(value)
+                .when(!row.is_read_only, |cell| {
+                    cell.cursor_text()
+                        .rounded(theme.radius)
+                        .hover(|style| style.bg(theme.secondary))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_time(&segment_id, field, window, cx);
+                            }),
+                        )
+                })
+                .into_any_element()
+        };
+
+        v_flex()
+            .w(TIME_W)
+            .flex_none()
+            .px(rems(CELL_PX.0 - 0.25))
+            .child(content)
+            .when_some(error, |cell, error| {
+                cell.child(
+                    div()
+                        .px_1()
+                        .text_xs()
+                        .line_height(SMALL_LINE_H)
+                        .text_color(theme.danger)
+                        .truncate()
+                        .child(error),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn text_cell(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        metrics: TextMetrics,
+        text_editing: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let review_chips = has_review_chips(row, doc);
+        let reviewing = !row.is_read_only && !row.word_views.is_empty();
+
+        let text = if text_editing {
+            div()
+                .relative()
+                .w_full()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Textarea::new(&self.text_input).appearance(false).small())
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().ring.opacity(0.6)),
+                )
+                .into_any_element()
+        } else if reviewing {
+            self.low_confidence_text(row, doc, metrics, cx)
+        } else {
+            self.static_text(row, doc, metrics, cx)
+        };
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .child(text)
+            .when(review_chips, |cell| {
+                cell.child(self.review_chips(row, doc, cx))
+            })
+            .when_some(row.diff.as_ref(), |cell, diff| {
+                cell.child(
+                    div()
+                        .mt_1()
+                        .pl(TEXT_PX)
+                        .pr(TEXT_PX + WRAP_MARGIN)
+                        .child(diff_cell(row, diff, metrics, cx.theme())),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Read-only rendering of a row's text; a click mounts the editor at the clicked caret.
+    fn static_text(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        metrics: TextMetrics,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let text = display_text(row, doc);
+        let editable = !row.is_read_only && !doc.is_read_only();
+        let segment_id: SharedString = row.segment_id.clone().into();
+
+        let body = if text.is_empty() {
+            div()
+                .text_color(theme.muted_foreground)
+                .child(if row.annotation_kind.is_transcription() {
+                    "What was said…"
+                } else {
+                    "Annotation…"
+                })
+                .into_any_element()
+        } else {
+            let styled = StyledText::new(SharedString::from(text.to_string()));
+            let layout = styled.layout().clone();
+            let ghost = doc
+                .ghost_cursor(&row.segment_id)
+                .map(|ghost| byte_offset(text, ghost.char_offset));
+            let caret_layout = layout.clone();
+            let ghost_color = theme.warning;
+            let line_height = metrics.line_height;
+
+            div()
+                .id(SharedString::from(format!(
+                    "transcript-text:{}",
+                    row.segment_id
+                )))
+                .relative()
+                .child(styled)
+                .when_some(ghost, |el, ghost| {
+                    el.child(
+                        canvas(
+                            |_, _, _| {},
+                            move |_, _, window, _| {
+                                if let Some(origin) = caret_layout.position_for_index(ghost) {
+                                    window.paint_quad(fill(
+                                        Bounds::new(origin, size(px(2.), line_height)),
+                                        ghost_color,
+                                    ));
+                                }
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                })
+                .when(editable, |el| {
+                    el.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let byte = match layout.index_for_position(event.position) {
+                                Ok(index) | Err(index) => index,
+                            };
+                            this.activate_text_at_byte(&segment_id, byte, window, cx);
+                        }),
+                    )
+                })
+                .into_any_element()
+        };
+
+        let segment_id: SharedString = row.segment_id.clone().into();
+        div()
+            .id(SharedString::from(format!(
+                "transcript-text-cell:{}",
+                row.segment_id
+            )))
+            .w_full()
+            .pl(TEXT_PX)
+            .pr(TEXT_PX + WRAP_MARGIN)
+            .py(TEXT_PY)
+            .text_sm()
+            .line_height(metrics.line_height)
+            .text_color(theme.foreground)
+            .when(editable, |el| {
+                el.cursor_text().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.activate_text_at_end(&segment_id, window, cx);
+                    }),
+                )
+            })
+            .child(body)
+            .into_any_element()
+    }
+
+    /// Text of a row with unreviewed low-confidence words: words are underlined and seek on
+    /// click; editing resumes once every word is reviewed.
+    fn low_confidence_text(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        metrics: TextMetrics,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let text = display_text(row, doc);
+        let acks = doc.low_confidence_acks(&row.segment_id);
+        let tokens = word_ranges(text);
+        let mut ranges = Vec::new();
+        let mut seeks = Vec::new();
+        let mut highlights = Vec::new();
+        for word in row.word_views.iter().filter(|word| word.is_low_confidence) {
+            let Some(range) = tokens.get(word.index).cloned() else {
+                continue;
+            };
+            let acknowledged = acks.is_some_and(|acks| acks.contains(&word.index));
+            if !acknowledged {
+                highlights.push((
+                    range.clone(),
+                    HighlightStyle {
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: Some(theme.warning),
+                            wavy: true,
+                        }),
+                        ..Default::default()
+                    },
+                ));
+            }
+            if let Some(start) = word.start_seconds {
+                ranges.push(range);
+                seeks.push(start);
+            }
+        }
+        highlights.sort_by_key(|(range, _)| range.start);
+        let styled =
+            StyledText::new(SharedString::from(text.to_string())).with_highlights(highlights);
+        let model = self.model.clone();
+
+        div()
+            .w_full()
+            .pl(TEXT_PX)
+            .pr(TEXT_PX + WRAP_MARGIN)
+            .py(TEXT_PY)
+            .text_sm()
+            .line_height(metrics.line_height)
+            .text_color(theme.foreground)
+            .child(
+                InteractiveText::new(
+                    SharedString::from(format!("transcript-lowconf:{}", row.segment_id)),
+                    styled,
+                )
+                .on_click(ranges, move |index, _, cx| {
+                    let Some(&start) = seeks.get(index) else {
+                        return;
+                    };
+                    model.update(cx, |model, cx| model.run(cx, |doc| doc.seek(start)));
+                }),
+            )
+            .into_any_element()
+    }
+
+    fn review_chips(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let acks = doc.low_confidence_acks(&row.segment_id);
+        let segment_id: SharedString = row.segment_id.clone().into();
+        let chips = row
+            .word_views
+            .iter()
+            .filter(|word| {
+                word.is_low_confidence && !acks.is_some_and(|acks| acks.contains(&word.index))
+            })
+            .map(|word| {
+                let index = word.index;
+                let segment_id = segment_id.clone();
+                Button::new(SharedString::from(format!(
+                    "transcript-ack:{}:{}",
+                    row.segment_id, word.index
+                )))
+                .label(word.text.clone())
+                .icon(IconName::Check)
+                .xsmall()
+                .outline()
+                .tooltip("Mark word reviewed")
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.acknowledge_word(&segment_id, index, cx);
+                }))
+            });
+
+        h_flex()
+            .pl(TEXT_PX)
+            .pt_1()
+            .gap_1()
+            .overflow_hidden()
+            .children(chips)
+    }
+
+    fn lint_cell(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        metrics: TextMetrics,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let (severity, message) = doc.row_lint(row);
+        let color = lint_color(severity, theme);
+        let can_toggle = !row.is_read_only
+            && (row.lint.is_assertable_warning() || row.has_asserted_warning)
+            && row.lint.message == message;
+        let segment_id: SharedString = row.segment_id.clone().into();
+        let tooltip: SharedString = message.into();
+
+        let dot = div()
+            .id(SharedString::from(format!(
+                "transcript-lint:{}",
+                row.segment_id
+            )))
+            .size(rems(0.625))
+            .rounded_full()
+            .map(|dot| {
+                if row.has_asserted_warning {
+                    dot.border_2().border_color(color)
+                } else {
+                    dot.bg(color)
+                }
+            })
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .when(can_toggle, |dot| {
+                dot.cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_warning_assertion(&segment_id, cx);
+                    }))
+            });
+
+        h_flex()
+            .w(LINT_W)
+            .flex_none()
+            .h(metrics.line_height + TEXT_PY * 2.)
+            .justify_center()
+            .child(dot)
+            .into_any_element()
+    }
+
+    fn actions_cell(
+        &self,
+        row: &TranscriptRowView,
+        metrics: TextMetrics,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let cell = h_flex()
+            .w(ACTIONS_W)
+            .flex_none()
+            .h(metrics.line_height + TEXT_PY * 2.)
+            .justify_center();
+        if row.is_read_only {
+            return cell.into_any_element();
+        }
+        let entries = EditorSession::transcript_action_menu(row);
+        let segment_id: SharedString = row.segment_id.clone().into();
+        let view = cx.entity().downgrade();
+
+        cell.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new(SharedString::from(format!(
+                    "transcript-actions:{}",
+                    row.segment_id
+                )))
+                .icon(IconName::EllipsisVertical)
+                .ghost()
+                .xsmall()
+                .dropdown_menu(move |mut menu, _, _| {
+                    for entry in &entries {
+                        menu = match *entry {
+                            TranscriptActionMenuEntry::Separator => menu.separator(),
+                            TranscriptActionMenuEntry::Item { command, enabled } => {
+                                let view = view.clone();
+                                let segment_id = segment_id.clone();
+                                menu.item(
+                                    PopupMenuItem::new(command_label(command))
+                                        .icon(command_icon(command))
+                                        .disabled(!enabled)
+                                        .on_click(move |_, window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.run_row_command(
+                                                    command,
+                                                    &segment_id,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .ok();
+                                        }),
+                                )
+                            }
+                        };
+                    }
+                    menu
+                }),
+            )
+            .into_any_element()
+    }
+}
+
+/// Diff rows of the compare version (added/deleted/removed annotations): read-only.
+fn render_diff_only_row(params: RowParams, cx: &Context<TranscriptView>) -> AnyElement {
+    let RowParams {
+        row,
+        height,
+        metrics,
+        ..
+    } = params;
+    let theme = cx.theme();
+    let cells = row.visible_cells;
+    let added = row.row_kind == TranscriptRowKind::ModifiedAdded;
+    let tone = if added { theme.success } else { theme.danger };
+    let dash = || {
+        div()
+            .text_xs()
+            .line_height(metrics.line_height)
+            .text_color(theme.muted_foreground)
+            .child("–")
+    };
+
+    h_flex()
+        .w_full()
+        .h(height)
+        .items_start()
+        .py(ROW_PY)
+        .overflow_hidden()
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(tone.opacity(0.06))
+        .when(cells.id, |el| el.child(id_cell(row, metrics, theme)))
+        .when(cells.track, |el| {
+            el.child(
+                div()
+                    .w(TRACK_W)
+                    .flex_none()
+                    .px(CELL_PX)
+                    .text_sm()
+                    .line_height(metrics.line_height)
+                    .text_color(tone)
+                    .truncate()
+                    .child(row.speaker_label.clone()),
+            )
+        })
+        .when(cells.start, |el| {
+            el.child(static_time(row.start_time.clone(), metrics, theme))
+        })
+        .when(cells.end, |el| {
+            el.child(static_time(row.end_time.clone(), metrics, theme))
+        })
+        .when(cells.reviewer, |el| {
+            el.child(reviewer_cell(row, metrics, theme))
+        })
+        .when(cells.text, |el| {
+            let content = match &row.diff {
+                Some(diff) => diff_cell(row, diff, metrics, theme).into_any_element(),
+                None => div()
+                    .text_sm()
+                    .line_height(metrics.line_height)
+                    .text_color(theme.muted_foreground)
+                    .child(row.text.clone())
+                    .into_any_element(),
+            };
+            el.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .pl(TEXT_PX)
+                    .pr(TEXT_PX + WRAP_MARGIN)
+                    .py(TEXT_PY)
+                    .child(content),
+            )
+        })
+        .when(cells.linter, |el| {
+            el.child(
+                h_flex()
+                    .w(LINT_W)
+                    .flex_none()
+                    .justify_center()
+                    .child(dash()),
+            )
+        })
+        .when(cells.actions, |el| {
+            el.child(
+                h_flex()
+                    .w(ACTIONS_W)
+                    .flex_none()
+                    .justify_center()
+                    .child(dash()),
+            )
+        })
+        .into_any_element()
+}
+
+fn id_cell(row: &TranscriptRowView, metrics: TextMetrics, theme: &Theme) -> impl IntoElement {
+    div()
+        .w(ID_W)
+        .flex_none()
+        .px(CELL_PX)
+        .text_xs()
+        .line_height(metrics.line_height)
+        .text_color(theme.muted_foreground)
+        .child(row.display_id.clone())
+}
+
+fn static_time(value: String, metrics: TextMetrics, theme: &Theme) -> impl IntoElement {
+    div()
+        .w(TIME_W)
+        .flex_none()
+        .px(CELL_PX)
+        .text_xs()
+        .line_height(metrics.line_height)
+        .text_color(theme.muted_foreground)
+        .child(value)
+}
+
+fn reviewer_cell(row: &TranscriptRowView, metrics: TextMetrics, theme: &Theme) -> impl IntoElement {
+    let color = row
+        .reviewer
+        .as_ref()
+        .map_or(theme.muted_foreground, |reviewer| {
+            reviewer.color_hue.map_or(theme.foreground, |hue| {
+                let lightness = if theme.is_dark() { 0.72 } else { 0.30 };
+                hsla(f32::from(hue) / 360., 0.70, lightness, 1.)
+            })
+        });
+    div()
+        .w(REVIEWER_W)
+        .flex_none()
+        .px(CELL_PX)
+        .text_xs()
+        .line_height(metrics.line_height)
+        .text_color(color)
+        .truncate()
+        .children(row.reviewer.as_ref().map(|reviewer| reviewer.label.clone()))
+}
+
+fn diff_cell(
+    row: &TranscriptRowView,
+    diff: &TranscriptDiffView,
+    metrics: TextMetrics,
+    theme: &Theme,
+) -> impl IntoElement {
+    let (label, tone) = diff_badge(diff, theme);
+    let text = diff_display_text(row);
+    let words: AnyElement = if diff.words.is_empty() {
+        div()
+            .italic()
+            .text_color(theme.muted_foreground)
+            .child(text)
+            .into_any_element()
+    } else {
+        let mut highlights = Vec::with_capacity(diff.words.len());
+        let mut offset = 0;
+        for (index, word) in diff.words.iter().enumerate() {
+            if index > 0 {
+                offset += 1;
+            }
+            let range = offset..offset + word.value.len();
+            offset = range.end;
+            let style = match word.status {
+                TranscriptWordDiffStatus::Unchanged => continue,
+                TranscriptWordDiffStatus::Added => HighlightStyle {
+                    color: Some(theme.success),
+                    background_color: Some(theme.success.opacity(0.16)),
+                    ..Default::default()
+                },
+                TranscriptWordDiffStatus::Removed => HighlightStyle {
+                    color: Some(theme.danger),
+                    background_color: Some(theme.danger.opacity(0.16)),
+                    strikethrough: Some(StrikethroughStyle {
+                        thickness: px(1.),
+                        color: Some(theme.danger),
+                    }),
+                    ..Default::default()
+                },
+                TranscriptWordDiffStatus::Unknown => HighlightStyle {
+                    color: Some(theme.muted_foreground),
+                    ..Default::default()
+                },
+            };
+            highlights.push((range, style));
+        }
+        StyledText::new(SharedString::from(text))
+            .with_highlights(highlights)
+            .into_any_element()
+    };
+
+    h_flex()
+        .items_start()
+        .text_sm()
+        .line_height(metrics.line_height)
+        .child(
+            div().w(DIFF_BADGE_W).flex_none().child(
+                div()
+                    .px_1p5()
+                    .w(rems(DIFF_BADGE_W.0 - 0.5))
+                    .rounded(theme.radius)
+                    .bg(tone.opacity(0.16))
+                    .text_color(tone)
+                    .text_xs()
+                    .text_center()
+                    .child(label),
+            ),
+        )
+        .child(div().flex_1().min_w_0().child(words))
+}
+
+fn diff_badge(diff: &TranscriptDiffView, theme: &Theme) -> (SharedString, Hsla) {
+    match diff.kind {
+        TranscriptDiffCellKind::New => ("New".into(), theme.info),
+        TranscriptDiffCellKind::ModifiedAdded => ("Added".into(), theme.success),
+        TranscriptDiffCellKind::ModifiedDeleted => ("Deleted".into(), theme.danger),
+        TranscriptDiffCellKind::Diff => match diff.change_count {
+            0 => ("No changes".into(), theme.muted_foreground),
+            1 => ("1 change".into(), theme.warning),
+            count => (format!("{count} changes").into(), theme.warning),
+        },
+    }
+}
+
+fn annotation_diff_status(status: AnnotationDiffStatus, theme: &Theme) -> (&'static str, Hsla) {
+    match status {
+        AnnotationDiffStatus::Matched => ("Unchanged", theme.muted_foreground),
+        AnnotationDiffStatus::LabelMismatch => ("Label changed", theme.warning),
+        AnnotationDiffStatus::SubcategoryMismatch => ("Subcategory changed", theme.warning),
+        AnnotationDiffStatus::IntensityMismatch => ("Intensity changed", theme.warning),
+        AnnotationDiffStatus::UnmatchedReference => ("Removed", theme.danger),
+    }
+}
+
+pub(super) fn lint_color(severity: LintSeverity, theme: &Theme) -> Hsla {
+    match severity {
+        LintSeverity::Pass => theme.success,
+        LintSeverity::Warning => theme.warning,
+        LintSeverity::Error => theme.danger,
+    }
+}
+
+fn command_label(command: TranscriptActionCommand) -> &'static str {
+    match command {
+        TranscriptActionCommand::Edit => "Edit",
+        TranscriptActionCommand::CreateBefore => "Add Segment Above",
+        TranscriptActionCommand::CreateAfter => "Add Segment Below",
+        TranscriptActionCommand::MergeAbove => "Merge With Above",
+        TranscriptActionCommand::MergeBelow => "Merge With Below",
+        TranscriptActionCommand::Delete => "Delete",
+    }
+}
+
+fn command_icon(command: TranscriptActionCommand) -> Icon {
+    match command {
+        TranscriptActionCommand::Edit => gpui_kit::assets::IconName::SquarePen.into(),
+        TranscriptActionCommand::CreateBefore | TranscriptActionCommand::CreateAfter => {
+            IconName::Plus.into()
+        }
+        TranscriptActionCommand::MergeAbove => IconName::ArrowUp.into(),
+        TranscriptActionCommand::MergeBelow => IconName::ArrowDown.into(),
+        TranscriptActionCommand::Delete => IconName::Delete.into(),
+    }
+}
+
+fn field_key(field: TimeField) -> &'static str {
+    match field {
+        TimeField::Start => "start",
+        TimeField::End => "end",
+    }
+}
+
+/// Byte ranges of whitespace-separated words, in order (the indexing of
+/// `TranscriptWordView::index`).
+fn word_ranges(text: &str) -> Vec<Range<usize>> {
+    text.split_whitespace()
+        .map(|word| {
+            let start = word.as_ptr() as usize - text.as_ptr() as usize;
+            start..start + word.len()
+        })
+        .collect()
+}

@@ -1,65 +1,56 @@
 # Transcription Studio
 
-Native Rust/Iced editor for Babel-shaped transcription correction.
+Native Rust desktop editor for Babel transcription correction, built with [gpui](https://gpui.rs) via `gpui-kit`.
 
-The current editor establishes the standalone workspace, Babel-shaped core model, local project materialization, Babel package round trip, recovered Babel review-action import, and a Babel-like native correction workspace. The native shell now opens on a dashboard with project input/settings, then jumps into a zoom/speed toolbar, overview waveform, multi-track waveform timeline, transcript grid editing, track filters, draft-aware lint status, save/export/review controls, OS clipboard support ID copy, keyboard shortcuts, loop/diff state, and command-backed segment actions.
+## Crates
 
-Imports accept both the Studio task-package fixture and the recovered Babel `result.data.json` review-action envelope exported from the live editor bundle. Exports preserve unmodeled Babel fields through sidecar metadata so Studio can round trip task/speaker/track/annotation payloads it does not edit yet. The app has PCM16 WAV decoding, waveform peak modeling, and a native Rodio playback backend, but the full target is now tracked as recovered Babel We Edit parity rather than a first-slice editor.
+| Crate | Role |
+|---|---|
+| `studio-app` | gpui application (`studio-app.exe`): auth, dashboard, settings, editor UI |
+| `studio-editor` | UI-free editor domain: workflow + undo, linter + project lint/tag profiles (`assets/project-profiles.json`), transcript/timeline models, `edit::EditorDoc` editing operations, keymap, startup routes |
+| `studio-services` | UI-free services on a shared tokio runtime: Babel client, native Clerk auth, review/drafting backend, feedback, sub-accounts, relay launcher, updater, preferences, recovery |
+| `studio-audio` | rodio playback engine (multi-lane mix, seek, loop, audition) |
+| `studio-core`, `studio-project`, `studio-babel`, `studio-waveform` | core model, project folders, Babel package import/export, waveform peaks/geometry |
+| `studio-relay` | sub-account relay server |
 
-Full parity tracking lives in:
-
-- `docs/superpowers/specs/2026-06-22-babel-we-edit-full-parity-design.md`
-- `docs/parity/babel-we-edit-parity-map.md`
+The toolchain is pinned in `rust-toolchain.toml` (gpui needs a current stable Rust).
 
 ## Commands
 
 ```powershell
 cargo fmt --all -- --check
-cargo test --workspace
-cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace
 cargo run -p studio-app
 ```
 
-Enable the local pre-push gate once per clone so a failing `cargo fmt`/`cargo clippy` never reaches CI (or main) in the first place:
+Enable the local pre-push gate once per clone:
 
 ```powershell
 git config core.hooksPath .githooks
 ```
 
-## Native Babel Service Bridge
+`STUDIO_OPEN_DEMO_ON_START=1` opens the bundled two-speaker sample task (no network); `STUDIO_AUDIO_SILENT=1` mutes output.
 
-Set `STUDIO_BABEL_SERVICE_COMMAND` to a command line such as `node bridge.js` or `"C:\path with spaces\bridge.cmd" --profile local` to connect load/claim/submit/skip/drop/admin/feedback actions to an adapter. Studio sends a JSON envelope on stdin with `operation` and `payload`, and accepts either a raw JSON response, `{ "data": ... }`, or `{ "result": { "data": ... } }` on stdout.
+## Babel service
 
-For direct live Babel backend calls without Chrome cookie reuse, initialize Studio's native Clerk auth store once with the app-owned phone-code flow:
+Studio talks to Babel directly with its own Clerk session. Initialize the native auth store once with the phone-code flow (also available in the app's sign-in screen):
 
 ```powershell
 cargo run -p studio-app -- --babel-auth-start-login "+15555550123" --babel-auth-reset
 cargo run -p studio-app -- --babel-auth-verify-login "123456"
 ```
 
-Then run Studio in live mode. Studio reads the native auth store directly, mints a fresh Babel backend session cookie through Clerk for each live request, and does not need a Chrome cookie bridge:
+The store lives at `%APPDATA%\TranscriptionStudio\babel-auth.json` (or next to the executable after "Make installation portable"); `STUDIO_BABEL_AUTH_STORE` overrides it. Startup routes open a task directly, e.g. `--review-action-id=<id>`, `--processed-transcription-id=<id> --stitched-queue-id=<id>`, `--chunked-queue-id=<id>`, `--task-lookup`.
 
-```powershell
-$env:STUDIO_BABEL_SERVICE_MODE = "live"
-cargo run -p studio-app -- --reviewActionId=<review-action-id>
-```
+Developer overrides:
 
-Studio stores Clerk client cookies under `%APPDATA%\TranscriptionStudio\babel-auth.json`. `STUDIO_BABEL_AUTH_STORE` can point Studio at a different native store, and `STUDIO_BABEL_SERVICE_AUTH_COMMAND`, `STUDIO_BABEL_SERVICE_COOKIE`, or `STUDIO_BABEL_SERVICE_AUTHORIZATION` remain explicit developer overrides. The older `tools/babel-native-auth.mjs` and `tools/babel-live-auth-cookie.mjs` helpers remain only debugging fallbacks; live Studio auth does not attach to Chrome.
+- `STUDIO_BABEL_SERVICE_COMMAND`: route every Babel request through an external command (JSON envelope `{operation, payload}` on stdin; raw JSON, `{ "data": … }` or `{ "result": { "data": … } }` on stdout).
+- `STUDIO_BABEL_SERVICE_FIXTURE_JSON` / `STUDIO_BABEL_SERVICE_FIXTURE_PATH`: answer every request with a fixed payload.
+- `STUDIO_BABEL_SERVICE_BASE_URL`, `STUDIO_BABEL_CLERK_URL`, `STUDIO_BABEL_SERVICE_COOKIE`, `STUDIO_BABEL_SERVICE_AUTHORIZATION`, `STUDIO_BABEL_SERVICE_AUTH_COMMAND`, `STUDIO_BABEL_SERVICE_MODE=live`.
+- `STUDIO_REVIEW_BACKEND_BASE_URL`, `STUDIO_DRAFT_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` for the reviewer/drafting assistant.
+- `STUDIO_SUBACCOUNT_*` for sub-account sessions and the relay; `STUDIO_UPDATE_FEED_URL` for the update feed.
 
-For playback smoke checks, set `STUDIO_LOG_AUDIO_PLAYBACK=1` to print the native playback track/start/speed line. Set `STUDIO_SMOKE_PLAYBACK_ON_START=1` as well to auto-start playback from the bundled recovered two-speaker sample during app startup.
+## Memory
 
-## Memory and GPU notes
-
-Leaving the editor (Back to projects, failed claim/load, tray hide after save) now drops the editor session, decoded PCM waveforms, undo snapshots, draft text history, render caches, and the Rodio output graph. RAM should stop climbing across claim → edit → dashboard cycles.
-
-The UI is iced 0.13 over wgpu 0.19. AMD driver stacks sometimes misbehave on Vulkan; force DirectX 12 before launch:
-
-```powershell
-$env:STUDIO_GRAPHICS_BACKEND = "dx12"          # also accepts vulkan, gl, metal, primary, amd
-$env:STUDIO_GRAPHICS_ANTIALIASING = "0"        # optional: reduce canvas MSAA pressure
-$env:STUDIO_GRAPHICS_ADAPTER = "AMD"           # optional: prefer adapter name substring
-$env:STUDIO_LOG_RUNTIME_GRAPHICS = "1"         # log selected backend/adapter
-cargo run -p studio-app
-```
-
-`STUDIO_GRAPHICS_BACKEND` / `STUDIO_GRAPHICS_ADAPTER` map to wgpu's `WGPU_BACKEND` / `WGPU_ADAPTER_NAME` only when those are unset, so direct `WGPU_*` overrides still win.
+Leaving the editor (back to projects, task switch, hide to tray) unloads the audio engine, decoded PCM and waveforms of the task.

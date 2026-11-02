@@ -11,45 +11,11 @@ fn load_fixture() -> BabelTaskPackage {
 }
 
 #[test]
-fn recovered_fixture_inventory_matches_rebuild_verify_fixtures() {
+fn recovered_final_json_round_trips_review_action_payload() {
     let fixture_dir =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recovered");
-    let required_assets = [
-        "final.json",
-        "babel-fixture/speaker_1.wav",
-        "babel-fixture/speaker_2.wav",
-        "artifacts/audio-segments.json",
-        "artifacts/oracle-segments.json",
-        "artifacts/predicted.json",
-        "artifacts/solver-input.json",
-    ];
-
-    for relative_path in required_assets {
-        assert!(
-            fixture_dir.join(relative_path).is_file(),
-            "{relative_path} should be present"
-        );
-    }
-
     let final_json =
         std::fs::read_to_string(fixture_dir.join("final.json")).expect("recovered final json");
-    let final_value: Value = serde_json::from_str(&final_json).expect("valid recovered final json");
-    assert_eq!(
-        final_value
-            .pointer("/0/result/data/json/annotations")
-            .and_then(Value::as_array)
-            .expect("annotations")
-            .len(),
-        24
-    );
-    assert_eq!(
-        final_value
-            .pointer("/0/result/data/json/transcriptionChunkProcessedRecordings")
-            .and_then(Value::as_array)
-            .expect("processed recordings")
-            .len(),
-        2
-    );
 
     let project = import_json(&final_json).expect("recovered final json should import");
     assert_eq!(project.segments.len(), 24);
@@ -67,29 +33,6 @@ fn recovered_fixture_inventory_matches_rebuild_verify_fixtures() {
         exported.pointer("/0/result/data/json/success"),
         Some(&json!(true))
     );
-    assert_eq!(
-        std::fs::metadata(fixture_dir.join("babel-fixture/speaker_1.wav"))
-            .expect("speaker 1 wav metadata")
-            .len(),
-        41_041_710
-    );
-    assert_eq!(
-        std::fs::metadata(fixture_dir.join("babel-fixture/speaker_2.wav"))
-            .expect("speaker 2 wav metadata")
-            .len(),
-        41_041_710
-    );
-
-    for relative_path in [
-        "artifacts/audio-segments.json",
-        "artifacts/oracle-segments.json",
-        "artifacts/predicted.json",
-        "artifacts/solver-input.json",
-    ] {
-        let source =
-            std::fs::read_to_string(fixture_dir.join(relative_path)).expect("artifact json");
-        serde_json::from_str::<Value>(&source).expect("artifact should be valid json");
-    }
 }
 
 #[test]

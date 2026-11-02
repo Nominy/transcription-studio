@@ -1,38 +1,28 @@
 [package]
 name = "studio-app"
-version = "0.1.12"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-default-run = "transcription-studio"
 
 [[bin]]
 name = "studio-app"
-path = "src/studio_app.rs"
-
-[[bin]]
-name = "transcription-studio"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-base64.workspace = true
-bytes.workspace = true
-httpdate.workspace = true
-iced.workspace = true
-reqwest.workspace = true
-rodio.workspace = true
+async-channel = "2.5"
+gpui-kit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-studio-babel = { path = "../studio-babel" }
-studio-core = { path = "../studio-core" }
-studio-project = { path = "../studio-project" }
-studio-waveform = { path = "../studio-waveform" }
-tempfile.workspace = true
-time.workspace = true
-tokio.workspace = true
-url.workspace = true
-velopack.workspace = true
+studio-audio.workspace = true
+studio-babel.workspace = true
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-services.workspace = true
+studio-waveform.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
 tray-icon = "0.21.0"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

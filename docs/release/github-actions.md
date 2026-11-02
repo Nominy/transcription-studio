@@ -8,8 +8,8 @@ The private GitHub repository is expected to build and package the alpha channel
 self-hosted runner (a dedicated home server, label `[self-hosted, Linux,
 homeserver]`): Gitleaks scans the full git history, then `cargo fmt --all
 --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`,
-`cargo nextest run --workspace --all-targets --locked`, and the native Babel
-auth Node test run in that order, cheapest checks first. The checkout step
+`cargo nextest run --workspace --all-targets --locked` run in that order,
+cheapest checks first. The checkout step
 uses `clean: false` so `target/` persists across runs instead of being wiped
 by `actions/checkout`'s default `git clean -ffdx` -- that persistence, plus
 `cargo nextest` running every test binary concurrently instead of the
@@ -31,7 +31,13 @@ separately.
 1. `cargo xwin build --release --target x86_64-pc-windows-msvc` cross-compiles
    `studio-app`/`studio-relay` (`cargo-xwin` downloads the MSVC CRT/Windows
    SDK from Microsoft's redistributable; no Visual Studio or Windows host
-   needed for this step).
+   needed for this step). gpui's DirectX renderer embeds HLSL bytecode that
+   only `fxc.exe` on a Windows host can compile, so the workspace patches
+   `gpui-pre-windows` with `vendor/gpui-pre-windows`, whose build script copies
+   `prebuilt/shaders_bytes.rs` on non-Windows hosts. That file is the fxc output
+   for the pinned crate version; when upgrading gpui, re-vendor the crate and
+   regenerate it from a Windows release build
+   (`target/release/build/gpui-pre-windows-*/out/shaders_bytes.rs`).
 2. `tools/package-alpha-windows.ps1 -Target x86_64-pc-windows-msvc -VpkCommand
    tools/vpk-wine-wrapper.sh` runs `vpk pack` through
    `tools/vpk-wine-wrapper.sh`, which hosts the pinned `vpk.dll` (a portable,

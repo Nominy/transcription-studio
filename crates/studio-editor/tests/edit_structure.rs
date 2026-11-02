@@ -1,0 +1,1614 @@
+//! Structural edits and waveform pointer semantics of `studio_editor::edit`: split/merge/delete/
+//! insert rows, waveform press/drag/release (boundary resize, create-by-drag, cut-preview overlay
+//! drags), audition, the add-region and edit-annotation dialogs, the track cell, annotation type
+//! changes and transcript row clicks.
+#![allow(unused_must_use)]
+
+mod edit_support;
+
+use edit_support::*;
+use serde_json::json;
+use studio_core::Project;
+use studio_editor::edit::annotation::EditAnnotationError;
+use studio_editor::edit::create_region::{
+    BACKGROUND_NOISE_ANNOTATION_PROJECT_ID, CreateRegionDialog, CreateRegionError,
+    CreateRegionMode, CreateRegionTimeField, secondary_category_options, track_options,
+};
+use studio_editor::edit::format::format_time;
+use studio_editor::edit::structure::{AuditionKey, CREATE_PREVIEW_SEGMENT_ID, SplitError};
+use studio_editor::edit::time::{TimeEditError, TimeField};
+use studio_editor::edit::{EditError, EditorDoc, Effect, PointerModifiers, TextSelection};
+use studio_editor::timeline_model::TimeRange;
+use studio_waveform::WaveformHitTarget;
+
+const SHIFT: PointerModifiers = PointerModifiers {
+    shift: true,
+    alt: false,
+    secondary: false,
+};
+const ALT: PointerModifiers = PointerModifiers {
+    shift: false,
+    alt: true,
+    secondary: false,
+};
+const SECONDARY: PointerModifiers = PointerModifiers {
+    shift: false,
+    alt: false,
+    secondary: true,
+};
+
+fn lane_of(doc: &EditorDoc, segment_id: &str) -> String {
+    doc.project()
+        .segment(segment_id)
+        .unwrap_or_else(|| panic!("segment {segment_id} exists"))
+        .lane_id
+        .clone()
+}
+
+fn selected(doc: &EditorDoc) -> Option<String> {
+    doc.session().selected_segment_id.clone()
+}
+
+fn segment_count(doc: &EditorDoc) -> usize {
+    doc.project().segments.len()
+}
+
+fn set_viewport(doc: &mut EditorDoc, start_seconds: f64, end_seconds: f64) {
+    doc.session_mut().viewport = TimeRange {
+        start_seconds,
+        end_seconds,
+    };
+}
+
+fn has_play_range(effects: &[Effect]) -> bool {
+    effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::PlayRange { .. }))
+}
+
+/// Drags across empty waveform on `lane_id` from `start_seconds` to `end_seconds` (viewport
+/// framed 1s around the range), i.e. the old `open_create_region_dialog_from_waveform` helper.
+fn open_create_region_from_waveform(
+    doc: &mut EditorDoc,
+    lane_id: &str,
+    start_seconds: f64,
+    end_seconds: f64,
+) {
+    let viewport_start = start_seconds.min(end_seconds) - 1.0;
+    let viewport_end = (start_seconds.max(end_seconds) + 1.0).max(viewport_start + 0.001);
+    set_viewport(doc, viewport_start, viewport_end);
+    doc.hover_waveform(
+        lane_id,
+        hit(WaveformHitTarget::Waveform, None, start_seconds),
+    );
+    let _ = ok(doc.press_waveform(lane_id));
+    doc.hover_waveform(lane_id, hit(WaveformHitTarget::Waveform, None, end_seconds));
+    let _ = ok(doc.release_waveform(lane_id));
+}
+
+/// Single-lane annotation project (`studio.babel.mode = annotation`).
+fn annotation_mode_project() -> Project {
+    let mut annotation_project = project(vec![seg("annotation-1", "lane-1", 0.0, 1.0, "")]);
+    annotation_project
+        .metadata
+        .insert("studio.babel.mode".to_string(), "annotation".to_string());
+    annotation_project
+}
+
+fn hierarchical_annotation_doc() -> EditorDoc {
+    let mut annotation_project = annotation_mode_project();
+    annotation_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
+    EditorDoc::from_project(annotation_project)
+}
+
+/// Stable sample project as a hierarchical background-noise task whose `annotation-2` is a
+/// `background-noise / {secondary_label}` annotation with intensity 3.
+fn annotation_edit_doc(secondary_label: &str) -> EditorDoc {
+    let mut stable_project = stable_sample_doc().project().clone();
+    stable_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
+    let segment = stable_project
+        .segment_mut("annotation-2")
+        .expect("annotation-2 exists");
+    segment.text = format!("background-noise / {secondary_label}");
+    segment
+        .metadata
+        .insert("type".to_string(), json!("background_noise"));
+    segment.metadata.insert("intensity".to_string(), json!(3));
+    segment.metadata.insert(
+        "content".to_string(),
+        json!({
+            "primaryLabel": "background-noise",
+            "secondaryLabel": secondary_label,
+        }),
+    );
+    EditorDoc::from_project(stable_project)
+}
+
+// ---- read-only ------------------------------------------------------------------------
+
+#[test]
+fn read_only_project_refuses_structure_edits() {
+    let mut doc = read_only_doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one two"),
+        seg("b", "lane-1", 2.5, 4.0, "three"),
+    ]);
+    let before = doc.project().clone();
+
+    let err = doc.delete_segment("a").unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly { .. }));
+    let err = doc.split_segment_at("a", 1.0).unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly { .. }));
+    let err = doc.merge_below("a").unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly { .. }));
+    let err = doc.create_segment_before("b").unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly { .. }));
+    let err = doc.change_segment_track("a", "lane-2").unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly { .. }));
+
+    assert_eq!(doc.project(), &before);
+    assert!(!doc.session().is_dirty);
+}
+
+// ---- audition -------------------------------------------------------------------------
+
+#[test]
+fn waveform_shift_click_auditions_full_region_without_starting_drag() {
+    let mut doc = doc(vec![seg("a", "lane-1", 1.0, 3.0, "hello")]);
+    doc.set_modifiers(SHIFT);
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::RegionBody, Some("a"), 1.5));
+
+    let outcome = ok(doc.press_waveform("lane-1"));
+
+    assert!(outcome.has_effect(&Effect::PlayRange {
+        start_seconds: 1.0,
+        end_seconds: 3.0,
+    }));
+    assert!(!doc.session().is_playing);
+    assert_eq!(doc.session().playhead_seconds, 1.0);
+    assert!(doc.pointer().waveform_drag.is_none());
+    assert!(doc.pointer().create_drag.is_none());
+    assert_eq!(selected(&doc).as_deref(), Some("a"));
+}
+
+#[test]
+fn waveform_held_audition_keys_play_500ms_boundary_windows() {
+    let cases = [
+        (AuditionKey::BeforeStart, 0.5, 1.0),
+        (AuditionKey::AfterStart, 1.0, 1.5),
+        (AuditionKey::BeforeEnd, 2.5, 3.0),
+        (AuditionKey::AfterEnd, 3.0, 3.5),
+    ];
+
+    for (key, expected_start, expected_end) in cases {
+        let mut doc = doc(vec![seg("a", "lane-1", 1.0, 3.0, "hello")]);
+        doc.set_audition_key(key, true);
+        doc.hover_waveform("lane-1", hit(WaveformHitTarget::RegionBody, Some("a"), 2.0));
+
+        let outcome = ok(doc.press_waveform("lane-1"));
+
+        assert!(
+            outcome.has_effect(&Effect::PlayRange {
+                start_seconds: expected_start,
+                end_seconds: expected_end,
+            }),
+            "{key:?} should audition {expected_start}..{expected_end}, got {:?}",
+            outcome.effects
+        );
+        assert!(doc.pointer().waveform_drag.is_none());
+    }
+}
+
+#[test]
+fn repeated_waveform_region_click_does_not_audition_region() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+
+    for _ in 0..2 {
+        doc.hover_waveform(
+            &lane_id,
+            hit(WaveformHitTarget::RegionBody, Some("annotation-1"), 1.5),
+        );
+        let pressed = ok(doc.press_waveform(&lane_id));
+        let released = ok(doc.release_waveform(&lane_id));
+        assert!(!has_play_range(&pressed.effects));
+        assert!(!has_play_range(&released.effects));
+    }
+
+    assert!(!doc.session().is_playing);
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+// ---- split ----------------------------------------------------------------------------
+
+#[test]
+fn split_at_time_leaves_babel_gap_around_split_point() {
+    let mut doc = stable_sample_doc();
+
+    let _ = ok(doc.split_segment_at("annotation-1", 2.0));
+
+    let left = doc.project().segment("annotation-1").unwrap();
+    let right = doc.project().segment("annotation-1__studio_1").unwrap();
+    assert_eq!(left.end_seconds, 1.95);
+    assert_eq!(right.start_seconds, 2.05);
+}
+
+#[test]
+fn split_uses_given_time_even_when_playhead_is_inside_the_segment() {
+    let mut doc = stable_sample_doc();
+    let _ = doc.select_segment("annotation-1");
+    doc.session_mut().playhead_seconds = 2.75;
+
+    let _ = ok(doc.split_segment_at("annotation-1", 2.0));
+
+    let left = doc.project().segment("annotation-1").unwrap();
+    let right = doc.project().segment("annotation-1__studio_1").unwrap();
+    assert_eq!(left.end_seconds, 1.95);
+    assert_eq!(right.start_seconds, 2.05);
+}
+
+#[test]
+fn split_allocates_text_by_word_ratio_and_selects_right_row() {
+    let mut stable_project = stable_sample_doc().project().clone();
+    stable_project
+        .segments
+        .retain(|segment| segment.id == "annotation-1");
+    let segment = stable_project.segment_mut("annotation-1").unwrap();
+    segment.start_seconds = 0.0;
+    segment.end_seconds = 4.0;
+    segment.text = "one two three four five".to_string();
+    let mut doc = EditorDoc::from_project(stable_project);
+
+    let outcome = ok(doc.split_segment_at("annotation-1", 2.0));
+
+    assert_eq!(text_of(&doc, "annotation-1"), "one two three");
+    assert_eq!(text_of(&doc, "annotation-1__studio_1"), "four five");
+    assert_eq!(draft_text(&doc, "annotation-1"), "one two three");
+    assert_eq!(draft_text(&doc, "annotation-1__studio_1"), "four five");
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-1__studio_1"));
+    assert!(outcome.has_effect(&Effect::DraftChanged {
+        segment_id: "annotation-1".to_string(),
+    }));
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn split_rejects_tail_guard_before_workflow_mutation() {
+    let mut doc = stable_sample_doc();
+    let before = doc.project().segment("annotation-1").unwrap().clone();
+
+    let err = doc.split_segment_at("annotation-1", 3.31).unwrap_err();
+
+    assert!(matches!(err, EditError::Split(SplitError::TooCloseToEnd)));
+    assert_eq!(doc.project().segment("annotation-1").unwrap(), &before);
+    assert!(doc.project().segment("annotation-1__studio_1").is_none());
+    assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn split_rejects_points_outside_the_segment() {
+    let mut doc = stable_sample_doc();
+    let before = doc.project().clone();
+
+    let err = doc.split_segment_at("annotation-1", 0.5).unwrap_err();
+
+    assert!(matches!(err, EditError::Split(SplitError::OutsideSegment)));
+    assert_eq!(doc.project(), &before);
+}
+
+#[test]
+fn waveform_secondary_press_splits_at_hit_time() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    doc.set_modifiers(SECONDARY);
+    doc.hover_waveform(
+        &lane_id,
+        hit(WaveformHitTarget::RegionBody, Some("annotation-1"), 2.85),
+    );
+
+    let _ = ok(doc.press_waveform(&lane_id));
+
+    let left = doc.project().segment("annotation-1").unwrap();
+    let right = doc.project().segment("annotation-1__studio_1").unwrap();
+    assert!((left.end_seconds - 2.8).abs() < f64::EPSILON * 8.0);
+    assert!((right.start_seconds - 2.9).abs() < f64::EPSILON * 8.0);
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-1__studio_1"));
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+// ---- merge / insert -------------------------------------------------------------------
+
+#[test]
+fn row_action_merge_closes_menu_and_dirties_task() {
+    let mut doc = stable_sample_doc();
+    let original_count = segment_count(&doc);
+    doc.session_mut().open_actions_segment_id = Some("annotation-1".to_string());
+
+    let _ = ok(doc.merge_below("annotation-1"));
+
+    assert_eq!(segment_count(&doc), original_count - 1);
+    assert!(doc.session().open_actions_segment_id.is_none());
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn create_segment_before_fills_previous_lane_gap_and_selects_new_segment() {
+    let mut doc = stable_sample_doc();
+    let anchor = doc.project().segment("annotation-3").unwrap().clone();
+
+    let _ = ok(doc.create_segment_before("annotation-3"));
+
+    let created = doc.project().segment("annotation-3__studio_1").unwrap();
+    assert_eq!(created.lane_id, anchor.lane_id);
+    assert_eq!(created.speaker_id, anchor.speaker_id);
+    assert!((created.start_seconds - 3.4).abs() < f64::EPSILON * 8.0);
+    assert_eq!(created.end_seconds, 5.4);
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-3__studio_1"));
+}
+
+// ---- row clicks -----------------------------------------------------------------------
+
+#[test]
+fn transcript_row_click_selects_without_moving_playhead() {
+    let mut doc = stable_sample_doc();
+    doc.session_mut().playhead_seconds = 8.75;
+    let before_viewport = doc.session().viewport;
+
+    let outcome = doc.press_row("annotation-1", 1);
+
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-1"));
+    assert_eq!(doc.session().playhead_seconds, 8.75);
+    assert_eq!(doc.session().viewport, before_viewport);
+    assert!(!doc.session().is_playing);
+    assert!(!outcome.has_effect(&Effect::StartPlayback));
+    assert!(!outcome.has_effect(&Effect::RestartPlayback));
+}
+
+#[test]
+fn transcript_row_double_click_moves_playhead_to_segment_start() {
+    let mut doc = stable_sample_doc();
+    doc.session_mut().playhead_seconds = 8.75;
+    let segment_start = doc.project().segment("annotation-1").unwrap().start_seconds;
+
+    let _ = doc.press_row("annotation-1", 1);
+    assert_eq!(doc.session().playhead_seconds, 8.75);
+
+    let _ = doc.press_row("annotation-1", 2);
+
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-1"));
+    assert_eq!(doc.session().playhead_seconds, segment_start);
+}
+
+// ---- waveform region press / boundary drags --------------------------------------------
+
+#[test]
+fn waveform_segment_click_selects_and_seeks_to_hit_time_without_dragging() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    let lane_id = original.lane_id.clone();
+    let hit_time = (original.start_seconds + original.end_seconds) / 2.0;
+    doc.session_mut().playhead_seconds = 8.75;
+    let _ = doc.select_segment_without_seek("annotation-2");
+    let before_viewport = doc.session().viewport;
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            hit_time,
+        ),
+    );
+    let pressed = ok(doc.press_waveform(&lane_id));
+
+    assert_eq!(selected(&doc).as_deref(), Some(original.id.as_str()));
+    assert_eq!(doc.session().playhead_seconds, hit_time);
+    assert_eq!(doc.session().viewport, before_viewport);
+    assert!(doc.pointer().waveform_drag.is_none());
+    assert!(!doc.session().is_playing);
+    assert!(!has_play_range(&pressed.effects));
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            hit_time + 0.4,
+        ),
+    );
+    let during_hover = doc.project().segment(&original.id).unwrap();
+    assert_eq!(during_hover.start_seconds, original.start_seconds);
+    assert_eq!(during_hover.end_seconds, original.end_seconds);
+    assert!(!doc.session().is_dirty);
+    assert!(doc.pointer().waveform_drag.is_none());
+
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let released = doc.project().segment(&original.id).unwrap();
+    assert_eq!(released.start_seconds, original.start_seconds);
+    assert_eq!(released.end_seconds, original.end_seconds);
+    assert_eq!(doc.session().playhead_seconds, hit_time);
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+#[test]
+fn waveform_segment_click_restarts_active_playback_from_hit_time() {
+    let mut doc = doc(vec![seg("a", "lane-1", 1.0, 3.0, "hello")]);
+    doc.session_mut().playhead_seconds = 0.25;
+    let _ = doc.toggle_playback();
+    assert!(doc.session().is_playing);
+
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::RegionBody, Some("a"), 1.5));
+    let pressed = ok(doc.press_waveform("lane-1"));
+    let released = ok(doc.release_waveform("lane-1"));
+
+    assert!(pressed.has_effect(&Effect::RestartPlayback));
+    assert!(!has_play_range(&pressed.effects));
+    assert!(!has_play_range(&released.effects));
+    assert!(doc.session().is_playing);
+    assert_eq!(selected(&doc).as_deref(), Some("a"));
+    assert_eq!(doc.session().playhead_seconds, 1.5);
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+#[test]
+fn waveform_start_handle_drag_previews_then_commits_boundary_keeping_text_draft() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    let lane_id = original.lane_id.clone();
+    let moved_start = original.start_seconds + 0.25;
+    let before_viewport = doc.session().viewport;
+    let before_edit = "edge drag preserves editor";
+    let edited_text = "edge! drag preserves editor";
+    let _ = ok(doc.edit_text(
+        &original.id,
+        before_edit.to_string(),
+        TextSelection::new(4, 4),
+    ));
+    let _ = ok(doc.edit_text(
+        &original.id,
+        edited_text.to_string(),
+        TextSelection::new(5, 5),
+    ));
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionStartHandle,
+            Some(original.id.as_str()),
+            original.start_seconds,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+
+    let drag = doc
+        .pointer()
+        .waveform_drag
+        .as_ref()
+        .expect("pressing a start handle activates a resize drag");
+    assert_eq!(drag.target, WaveformHitTarget::RegionStartHandle);
+    assert_eq!(drag.preview_start_seconds, original.start_seconds);
+    assert_eq!(drag.preview_end_seconds, original.end_seconds);
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            moved_start,
+        ),
+    );
+
+    let drag = doc.pointer().waveform_drag.as_ref().unwrap();
+    assert_eq!(drag.preview_start_seconds, moved_start);
+    assert_eq!(drag.preview_end_seconds, original.end_seconds);
+    assert!(drag.has_moved);
+    let preview = doc.timeline_preview().expect("resize preview");
+    assert_eq!(preview.segment_id, original.id);
+    assert_eq!(preview.start_seconds, moved_start);
+    assert_eq!(preview.end_seconds, original.end_seconds);
+    assert_eq!(
+        doc.project().segment(&original.id).unwrap().start_seconds,
+        original.start_seconds,
+        "dragging previews instead of mutating the project on every pointer move"
+    );
+
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let segment = doc.project().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, moved_start);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert_eq!(selected(&doc).as_deref(), Some(original.id.as_str()));
+    assert_eq!(doc.session().playhead_seconds, original.start_seconds);
+    assert_eq!(doc.session().viewport, before_viewport);
+    assert!(doc.session().is_dirty);
+    assert!(doc.pointer().waveform_drag.is_none());
+    assert!(doc.timeline_preview().is_none());
+    let draft = doc.draft(&original.id).unwrap();
+    assert_eq!(draft.text(), edited_text);
+    assert_eq!(draft.selection(), TextSelection::new(5, 5));
+    assert_eq!(draft.time_value(TimeField::Start), format_time(moved_start));
+    assert!(draft.can_undo());
+
+    let _ = ok(doc.undo_text(&original.id));
+    assert_eq!(draft_text(&doc, &original.id), before_edit);
+}
+
+#[test]
+fn waveform_end_handle_drag_commits_segment_boundary() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    let lane_id = original.lane_id.clone();
+    let moved_end = original.end_seconds + 0.25;
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionEndHandle,
+            Some(original.id.as_str()),
+            original.end_seconds,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    assert_eq!(
+        doc.pointer().waveform_drag.as_ref().map(|drag| drag.target),
+        Some(WaveformHitTarget::RegionEndHandle)
+    );
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, moved_end));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let segment = doc.project().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, moved_end);
+    assert!(doc.session().is_dirty);
+    assert!(doc.can_undo());
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+#[test]
+fn waveform_segment_handle_click_seeks_without_trimming_or_recentering_viewport() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    set_viewport(&mut doc, 1.0, 6.0);
+    doc.session_mut().playhead_seconds = 80.0;
+    let before_viewport = doc.session().viewport;
+
+    doc.hover_waveform(
+        &original.lane_id,
+        hit(
+            WaveformHitTarget::RegionStartHandle,
+            Some(original.id.as_str()),
+            original.start_seconds,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&original.lane_id));
+    let _ = ok(doc.release_waveform(&original.lane_id));
+
+    let segment = doc.project().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert_eq!(doc.session().playhead_seconds, original.start_seconds);
+    assert_eq!(doc.session().viewport, before_viewport);
+    assert!(!doc.session().is_dirty);
+    assert!(!doc.can_undo());
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+#[test]
+fn global_pointer_release_after_waveform_body_press_does_not_commit_move() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    let lane_id = original.lane_id.clone();
+    let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            grab_time,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            grab_time + 0.25,
+        ),
+    );
+    assert!(doc.pointer().waveform_drag.is_none());
+
+    let _ = ok(doc.release_pointer());
+
+    let segment = doc.project().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert!(!doc.session().is_dirty);
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+#[test]
+fn waveform_region_body_press_hover_release_does_not_create_boundary_undo_step() {
+    let mut doc = stable_sample_doc();
+    let original = doc.project().segment("annotation-1").unwrap().clone();
+    let lane_id = original.lane_id.clone();
+    let grab_time = (original.start_seconds + original.end_seconds) / 2.0;
+    assert!(!doc.can_undo());
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::RegionBody,
+            Some(original.id.as_str()),
+            grab_time,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    for move_time in [grab_time + 0.2, grab_time + 0.4, grab_time + 0.6] {
+        doc.hover_waveform(
+            &lane_id,
+            hit(
+                WaveformHitTarget::RegionBody,
+                Some(original.id.as_str()),
+                move_time,
+            ),
+        );
+    }
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let segment = doc.project().segment(&original.id).unwrap();
+    assert_eq!(segment.start_seconds, original.start_seconds);
+    assert_eq!(segment.end_seconds, original.end_seconds);
+    assert!(!doc.can_undo());
+    assert!(doc.pointer().waveform_drag.is_none());
+}
+
+// ---- cut-preview overlay drags --------------------------------------------------------
+
+#[test]
+fn waveform_body_drag_inside_active_cut_preview_locks_without_editing_project() {
+    let mut doc = stable_sample_doc();
+    let lane_id = doc.project().lanes[0].id.clone();
+    let original_count = segment_count(&doc);
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.toggle_overlay();
+    let initial = doc.session().overlay_range.expect("T opens an overlay");
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::Waveform,
+            None,
+            initial.start_seconds + 0.4,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::Waveform,
+            None,
+            initial.start_seconds + 2.0,
+        ),
+    );
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    assert_eq!(doc.session().overlay_range, Some(initial));
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_none());
+    assert!(doc.pointer().overlay_drag.is_none());
+    assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn secondary_waveform_body_drag_inside_active_overlay_moves_overlay_without_editing_project() {
+    let mut doc = stable_sample_doc();
+    let lane_id = doc.project().lanes[0].id.clone();
+    let original_count = segment_count(&doc);
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.toggle_overlay();
+    let initial = doc.session().overlay_range.expect("T opens an overlay");
+    doc.set_modifiers(SECONDARY);
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::Waveform,
+            None,
+            initial.start_seconds + 0.4,
+        ),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(
+        &lane_id,
+        hit(
+            WaveformHitTarget::Waveform,
+            None,
+            initial.start_seconds + 2.0,
+        ),
+    );
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let overlay = doc.session().overlay_range.unwrap();
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_none());
+    assert!(!doc.session().is_dirty);
+    assert!((overlay.start_seconds - (initial.start_seconds + 1.6)).abs() < 0.001);
+    assert!(
+        (overlay.duration_seconds() - initial.duration_seconds()).abs() < 0.001,
+        "moving keeps the overlay length"
+    );
+}
+
+#[test]
+fn cut_preview_overlay_edge_drag_resizes_with_one_second_floor() {
+    let mut doc = stable_sample_doc();
+    let lane_id = doc.project().lanes[0].id.clone();
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 2.0,
+        end_seconds: 4.0,
+    });
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.6));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let overlay = doc.session().overlay_range.unwrap();
+    assert!((overlay.start_seconds - 2.6).abs() < 0.001);
+    assert!((overlay.end_seconds - 4.0).abs() < 0.001);
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 4.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.8));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let overlay = doc.session().overlay_range.unwrap();
+    assert!((overlay.start_seconds - 2.6).abs() < 0.001);
+    assert!((overlay.end_seconds - 3.6).abs() < 0.001);
+    assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn alt_waveform_drag_creates_cut_preview_overlay_without_editing_project() {
+    let mut doc = stable_sample_doc();
+    let lane_id = doc.project().lanes[0].id.clone();
+    let original_count = segment_count(&doc);
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.session_mut().overlay_range = Some(TimeRange {
+        start_seconds: 1.0,
+        end_seconds: 2.0,
+    });
+    doc.set_modifiers(ALT);
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    assert!(doc.session().overlay_range.is_none());
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 5.25));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let overlay = doc.session().overlay_range.unwrap();
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_none());
+    assert!(!doc.session().is_dirty);
+    assert!((overlay.start_seconds - 3.0).abs() < 0.001);
+    assert!((overlay.end_seconds - 5.25).abs() < 0.001);
+}
+
+#[test]
+fn alt_waveform_tiny_drag_keeps_cut_preview_unmaterialized() {
+    let mut doc = stable_sample_doc();
+    let lane_id = doc.project().lanes[0].id.clone();
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.session_mut().overlay_range = None;
+    doc.set_modifiers(ALT);
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.02));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    assert!(doc.session().overlay_range.is_none());
+    assert!(doc.pointer().overlay_drag.is_none());
+}
+
+// ---- create by drag -------------------------------------------------------------------
+
+#[test]
+fn empty_waveform_drag_creates_segment_and_opens_attached_add_region_card() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    set_viewport(&mut doc, 11.0, 14.0);
+    doc.session_mut().playhead_seconds = 80.0;
+    let before_viewport = doc.session().viewport;
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.8));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let dialog = doc
+        .create_region()
+        .expect("empty waveform drag opens Add Region");
+    assert_eq!(dialog.mode, CreateRegionMode::Transcription);
+    let created_id = dialog
+        .created_segment_id
+        .clone()
+        .expect("the blank segment is created before the card opens");
+    assert_eq!(dialog.selected_lane_id, lane_id);
+    assert_eq!(dialog.start_seconds, 12.0);
+    assert_eq!(dialog.end_seconds, 12.8);
+    assert_eq!(dialog.start_draft, "00:12.00");
+    assert_eq!(dialog.end_draft, "00:12.80");
+    assert!(dialog.text.is_empty());
+    let created = doc
+        .project()
+        .segment(&created_id)
+        .expect("created segment is in the project immediately");
+    assert_eq!(created.lane_id, lane_id);
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    assert!(created.text.is_empty());
+    assert!(doc.pointer().create_drag.is_none());
+    assert!(doc.session().is_dirty);
+    assert_eq!(doc.session().playhead_seconds, 80.0);
+    assert_eq!(doc.session().viewport, before_viewport);
+    assert_eq!(selected(&doc), Some(created_id));
+}
+
+#[test]
+fn attached_create_region_text_populates_created_row_draft_immediately() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let created_id = doc
+        .create_region()
+        .and_then(|dialog| dialog.created_segment_id.clone())
+        .expect("attached card tracks the created segment");
+
+    let outcome = doc.set_create_region_text("new segment text".to_string());
+
+    let dialog = doc.create_region().expect("card stays open while typing");
+    assert_eq!(dialog.text, "new segment text");
+    assert_eq!(draft_text(&doc, &created_id), "new segment text");
+    assert!(outcome.has_effect(&Effect::DraftChanged {
+        segment_id: created_id,
+    }));
+}
+
+#[test]
+fn empty_waveform_drag_previews_created_segment_before_release() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    set_viewport(&mut doc, 11.0, 14.0);
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.8));
+
+    assert_eq!(
+        segment_count(&doc),
+        original_count,
+        "the create preview does not commit a segment before release"
+    );
+    let preview = doc
+        .timeline_preview()
+        .expect("dragging over empty waveform shows a live create preview");
+    assert_eq!(preview.segment_id, CREATE_PREVIEW_SEGMENT_ID);
+    assert_eq!(preview.lane_id, lane_id);
+    assert!((preview.start_seconds - 12.0).abs() < 0.000_001);
+    assert!((preview.end_seconds - 12.8).abs() < 0.000_001);
+    assert!(doc.pointer().create_drag.is_some());
+}
+
+#[test]
+fn empty_waveform_click_seeks_on_release_without_creating_region() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    let target_time = 12.35;
+    doc.session_mut().playhead_seconds = 80.0;
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(WaveformHitTarget::Waveform, None, target_time),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+
+    assert_eq!(doc.session().playhead_seconds, 80.0);
+    assert!(doc.pointer().create_drag.is_some());
+
+    let released = doc.release_waveform(&lane_id);
+
+    assert!(released.is_ok(), "a click is not a too-short region");
+    assert_eq!(doc.session().playhead_seconds, target_time);
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_none());
+    assert!(doc.pointer().create_drag.is_none());
+}
+
+#[test]
+fn empty_waveform_tiny_pointer_jitter_stays_click_not_create_drag() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    let target_time = 12.0;
+    set_viewport(&mut doc, 11.0, 14.0);
+
+    doc.hover_waveform(
+        &lane_id,
+        hit(WaveformHitTarget::Waveform, None, target_time),
+    );
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(
+        &lane_id,
+        hit(WaveformHitTarget::Waveform, None, target_time + 0.01),
+    );
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    assert_eq!(doc.session().playhead_seconds, target_time);
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_none());
+    assert!(doc.pointer().create_drag.is_none());
+}
+
+#[test]
+fn empty_waveform_reverse_drag_normalizes_create_region_range() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    set_viewport(&mut doc, 13.0, 15.0);
+
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 14.0));
+    let _ = ok(doc.press_waveform(&lane_id));
+    doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 13.2));
+    let _ = ok(doc.release_waveform(&lane_id));
+
+    let dialog = doc.create_region().unwrap();
+    assert_eq!(dialog.start_seconds, 13.2);
+    assert_eq!(dialog.end_seconds, 14.0);
+    assert_eq!(dialog.start_draft, "00:13.20");
+    assert_eq!(dialog.end_draft, "00:14.00");
+}
+
+// ---- add-region dialog ----------------------------------------------------------------
+
+#[test]
+fn create_region_speaker_picker_uses_lane_labels() {
+    let doc = doc(Vec::new());
+
+    let options = track_options(doc.project());
+
+    assert_eq!(
+        options
+            .iter()
+            .map(|option| (option.lane_id.as_str(), option.label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("lane-1", "Speaker 1"), ("lane-2", "Speaker 2")]
+    );
+}
+
+#[test]
+fn create_region_transcription_enablement_rules() {
+    let mut dialog = CreateRegionDialog::new("lane-1".to_string(), 12.0, 12.8);
+    assert!(dialog.is_create_enabled());
+
+    dialog.selected_lane_id = String::new();
+    assert!(!dialog.is_create_enabled());
+
+    dialog.selected_lane_id = "lane-1".to_string();
+    dialog.start_error = Some(TimeEditError::InvalidFormat);
+    assert!(!dialog.is_create_enabled());
+
+    dialog.start_error = None;
+    dialog.end_error = Some(TimeEditError::InvalidFormat);
+    assert!(!dialog.is_create_enabled());
+
+    dialog.end_error = None;
+    dialog.start_seconds = 12.8;
+    assert!(!dialog.is_create_enabled());
+}
+
+#[test]
+fn create_region_annotation_enablement_follows_category_rules() {
+    let mut dialog = CreateRegionDialog::new_annotation("lane-1".to_string(), 12.0, 12.8);
+    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
+    assert!(!dialog.is_create_enabled());
+
+    dialog.intensity = Some(3);
+    dialog.primary_selection = "background-noise".to_string();
+    assert!(!dialog.is_create_enabled());
+
+    dialog.secondary_selection = "rustle".to_string();
+    assert!(dialog.is_create_enabled());
+
+    dialog.secondary_selection = "other".to_string();
+    assert!(!dialog.is_create_enabled());
+
+    dialog.custom_description = "chair scrape".to_string();
+    assert!(dialog.is_create_enabled());
+}
+
+#[test]
+fn create_region_annotation_requires_explicit_secondary_choice() {
+    let mut dialog = CreateRegionDialog::new_annotation("lane-1".to_string(), 12.0, 12.8);
+    dialog.intensity = Some(3);
+    dialog.primary_selection = "background-speech".to_string();
+    assert_eq!(
+        secondary_category_options("background-speech"),
+        vec!["background speech", "other"]
+    );
+    assert!(!dialog.is_create_enabled());
+
+    let mut doc = hierarchical_annotation_doc();
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, "lane-1", 12.0, 12.8);
+    let dialog = doc.create_region_mut().expect("annotation dialog opens");
+    dialog.set_primary_category("background-speech".to_string());
+    dialog.set_intensity_label("3");
+
+    let err = doc.submit_create_region().unwrap_err();
+
+    assert!(matches!(
+        err,
+        EditError::CreateRegion(CreateRegionError::IncompleteAnnotation)
+    ));
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(doc.create_region().is_some());
+    assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn annotation_project_drag_opens_dialog_without_creating_segment() {
+    let mut doc = EditorDoc::from_project(annotation_mode_project());
+    let original_count = segment_count(&doc);
+
+    open_create_region_from_waveform(&mut doc, "lane-1", 12.0, 12.8);
+
+    let dialog = doc.create_region().expect("annotation dialog opens");
+    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
+    assert!(dialog.created_segment_id.is_none());
+    assert_eq!(dialog.start_seconds, 12.0);
+    assert_eq!(dialog.end_seconds, 12.8);
+    assert_eq!(segment_count(&doc), original_count);
+    assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn create_region_secondary_options_end_with_other() {
+    assert_eq!(
+        secondary_category_options("background-noise")
+            .last()
+            .copied(),
+        Some("other")
+    );
+}
+
+#[test]
+fn create_region_secondary_changes_preserve_description_except_other() {
+    let mut doc = hierarchical_annotation_doc();
+    doc.open_create_region("lane-1", 12.0, 12.8);
+    {
+        let dialog = doc.create_region_mut().unwrap();
+        dialog.set_primary_category("background-noise".to_string());
+        dialog.set_secondary_category("other".to_string());
+        dialog.set_custom_description("custom wind".to_string());
+    }
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_secondary_category("wind".to_string());
+
+    let dialog = doc.create_region().unwrap();
+    assert_eq!(dialog.secondary_selection, "wind");
+    assert_eq!(dialog.custom_description, "custom wind");
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_secondary_category("other".to_string());
+
+    let dialog = doc.create_region().unwrap();
+    assert_eq!(dialog.secondary_selection, "other");
+    assert_eq!(dialog.custom_description, "");
+}
+
+#[test]
+fn create_region_intensity_change_accepts_numeric_zero_and_clears_on_empty() {
+    let mut doc = hierarchical_annotation_doc();
+    doc.open_create_region("lane-1", 12.0, 12.8);
+
+    doc.create_region_mut().unwrap().set_intensity_label("0");
+    assert_eq!(doc.create_region().unwrap().intensity, Some(0));
+
+    doc.create_region_mut().unwrap().set_intensity_label("");
+    assert_eq!(doc.create_region().unwrap().intensity, None);
+}
+
+#[test]
+fn create_region_annotation_category_rules_are_project_id_gated() {
+    let mut fallback_project = annotation_mode_project();
+    fallback_project.id = "ordinary-project".to_string();
+    let mut fallback =
+        CreateRegionDialog::new_for_project(&fallback_project, "lane-1".to_string(), 12.0, 12.8);
+
+    assert_eq!(fallback.mode, CreateRegionMode::Annotation);
+    assert!(!fallback.uses_hierarchical_labels);
+    fallback.intensity = Some(2);
+    assert!(fallback.is_create_enabled());
+
+    let mut background_noise_project = fallback_project;
+    background_noise_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
+    let mut hierarchical = CreateRegionDialog::new_for_project(
+        &background_noise_project,
+        "lane-1".to_string(),
+        12.0,
+        12.8,
+    );
+
+    assert!(hierarchical.uses_hierarchical_labels);
+    hierarchical.intensity = Some(2);
+    hierarchical.primary_selection = "background-noise".to_string();
+    assert!(!hierarchical.is_create_enabled());
+    hierarchical.secondary_selection = "rustle".to_string();
+    assert!(hierarchical.is_create_enabled());
+}
+
+#[test]
+fn submitting_annotation_create_region_creates_annotation_metadata() {
+    let mut stable_project = stable_sample_doc().project().clone();
+    stable_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
+    stable_project.segments[0]
+        .metadata
+        .insert("type".to_string(), json!("background_noise"));
+    let lane_id = stable_project.segments[0].lane_id.clone();
+    let mut doc = EditorDoc::from_project(stable_project);
+    let original_count = segment_count(&doc);
+
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let dialog = doc.create_region_mut().unwrap();
+    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
+    dialog.set_primary_category("background-noise".to_string());
+    dialog.set_secondary_category("rustle".to_string());
+    dialog.set_intensity_label("3");
+
+    let _ = ok(doc.submit_create_region());
+
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created_id = selected(&doc).expect("created annotation is selected");
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.lane_id, lane_id);
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    assert_eq!(
+        created.metadata.get("type"),
+        Some(&json!("background_noise"))
+    );
+    assert_eq!(created.metadata.get("intensity"), Some(&json!(3)));
+    assert_eq!(
+        created.metadata.get("content"),
+        Some(&json!({
+            "primaryLabel": "background-noise",
+            "secondaryLabel": "rustle"
+        }))
+    );
+    assert!(doc.create_region().is_none());
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn submitting_attached_create_region_saves_text_on_created_segment_and_closes() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let speaker_id = doc
+        .project()
+        .segment("annotation-1")
+        .unwrap()
+        .speaker_id
+        .clone();
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+
+    let _ = doc.set_create_region_text("hello new region".to_string());
+    let _ = ok(doc.submit_create_region());
+
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created_id = selected(&doc).expect("created segment is selected");
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.lane_id, lane_id);
+    assert_eq!(created.speaker_id, speaker_id);
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    assert_eq!(created.text, "hello new region");
+    assert_eq!(draft_text(&doc, &created_id), "hello new region");
+    assert!(doc.create_region().is_none());
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn attached_create_region_keeps_drag_created_segment_lane() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let other_lane_id = lane_of(&doc, "annotation-2");
+    assert_ne!(lane_id, other_lane_id);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+
+    doc.create_region_mut().unwrap().selected_lane_id = other_lane_id;
+    let _ = ok(doc.submit_create_region());
+
+    let created_id = selected(&doc).unwrap();
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.lane_id, lane_id);
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+}
+
+#[test]
+fn create_region_start_enter_updates_attached_dialog_without_creating_another_segment() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let created_id = doc
+        .create_region()
+        .unwrap()
+        .created_segment_id
+        .clone()
+        .unwrap();
+    assert_eq!(segment_count(&doc), original_count + 1);
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_start_draft("00:12.20".to_string());
+    let _ = ok(doc.commit_create_region_time(CreateRegionTimeField::Start));
+
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    let dialog = doc.create_region().unwrap();
+    assert!((dialog.start_seconds - 12.2).abs() < 1e-9);
+    assert_eq!(dialog.end_seconds, 12.8);
+    assert_eq!(dialog.start_draft, "00:12.20");
+    assert_eq!(dialog.end_draft, "00:12.80");
+    assert_eq!(dialog.start_error, None);
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn create_region_end_enter_reports_invalid_range_without_creating_another_segment() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let created_id = doc
+        .create_region()
+        .unwrap()
+        .created_segment_id
+        .clone()
+        .unwrap();
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_end_draft("00:11.90".to_string());
+    let err = doc
+        .commit_create_region_time(CreateRegionTimeField::End)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EditError::Time(TimeEditError::EndNotAfterStart)
+    ));
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    let dialog = doc.create_region().unwrap();
+    assert_eq!(dialog.start_seconds, 12.0);
+    assert_eq!(dialog.end_seconds, 12.8);
+    assert_eq!(dialog.end_draft, "00:11.90");
+    assert_eq!(dialog.end_error, Some(TimeEditError::EndNotAfterStart));
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn create_region_start_blur_resets_invalid_draft_and_keeps_error() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let created_id = doc
+        .create_region()
+        .unwrap()
+        .created_segment_id
+        .clone()
+        .unwrap();
+
+    let dialog = doc.create_region_mut().unwrap();
+    dialog.set_start_draft("00:12.90".to_string());
+    let committed = dialog.blur_time_field(CreateRegionTimeField::Start);
+
+    assert!(!committed);
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    let dialog = doc.create_region().unwrap();
+    assert_eq!(dialog.start_seconds, 12.0);
+    assert_eq!(dialog.end_seconds, 12.8);
+    assert_eq!(dialog.start_draft, "00:12.00");
+    assert_eq!(dialog.start_error, Some(TimeEditError::StartNotBeforeEnd));
+    assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn create_region_escape_resets_active_time_draft_without_closing_dialog() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_start_draft("00:12.90".to_string());
+    assert!(
+        doc.commit_create_region_time(CreateRegionTimeField::Start)
+            .is_err()
+    );
+    assert!(doc.reset_create_region_time());
+
+    let dialog = doc
+        .create_region()
+        .expect("escape in a field keeps the dialog");
+    assert_eq!(dialog.start_seconds, 12.0);
+    assert_eq!(dialog.start_draft, "00:12.00");
+    assert_eq!(dialog.start_error, None);
+}
+
+#[test]
+fn attached_add_region_submit_ignores_hidden_time_drafts() {
+    let mut doc = stable_sample_doc();
+    let lane_id = lane_of(&doc, "annotation-1");
+    let original_count = segment_count(&doc);
+    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    let created_id = doc
+        .create_region()
+        .unwrap()
+        .created_segment_id
+        .clone()
+        .unwrap();
+
+    doc.create_region_mut()
+        .unwrap()
+        .set_start_draft("00:12.90".to_string());
+    let _ = ok(doc.submit_create_region());
+
+    assert_eq!(segment_count(&doc), original_count + 1);
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 12.0);
+    assert_eq!(created.end_seconds, 12.8);
+    assert!(doc.create_region().is_none());
+    assert_eq!(selected(&doc), Some(created_id));
+    assert!(doc.session().is_dirty);
+}
+
+// ---- track cell -----------------------------------------------------------------------
+
+#[test]
+fn track_change_updates_segment_lane_and_speaker() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
+
+    let _ = ok(doc.change_segment_track("a", "lane-2"));
+
+    let segment = doc.project().segment("a").unwrap();
+    assert_eq!(segment.lane_id, "lane-2");
+    assert_eq!(segment.speaker_id, "speaker-2");
+    assert!(doc.session().is_dirty);
+    assert!(doc.can_undo());
+}
+
+#[test]
+fn track_cell_edit_state_opens_closes_and_selects() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
+
+    doc.begin_track_edit("a");
+    let track = doc.draft("a").unwrap().track_edit();
+    assert!(track.is_editing);
+    assert_eq!(track.draft_lane_id, "lane-1");
+
+    doc.set_track_select_open("a", false);
+    let track = doc.draft("a").unwrap().track_edit();
+    assert!(!track.is_editing);
+    assert_eq!(track.draft_lane_id, "lane-1");
+
+    doc.begin_track_edit("a");
+    let _ = ok(doc.change_segment_track("a", "lane-2"));
+
+    let segment = doc.project().segment("a").unwrap();
+    assert_eq!(segment.lane_id, "lane-2");
+    assert_eq!(segment.speaker_id, "speaker-2");
+    let track = doc.draft("a").unwrap().track_edit();
+    assert!(!track.is_editing);
+    assert_eq!(track.draft_lane_id, "lane-2");
+}
+
+#[test]
+fn track_cell_double_click_opens_picker_but_single_click_only_selects() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 1.0, "one"),
+        seg("b", "lane-2", 1.5, 2.5, "two"),
+    ]);
+
+    let _ = ok(doc.press_track_cell("b", 1));
+
+    assert_eq!(selected(&doc).as_deref(), Some("b"));
+    assert!(!doc.draft("b").unwrap().track_edit().is_editing);
+
+    let _ = ok(doc.press_track_cell("b", 2));
+
+    let track = doc.draft("b").unwrap().track_edit();
+    assert!(track.is_editing);
+    assert_eq!(track.draft_lane_id, "lane-2");
+}
+
+#[test]
+fn track_cell_separate_single_clicks_do_not_open_picker() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
+
+    let _ = ok(doc.press_track_cell("a", 1));
+    let _ = ok(doc.press_track_cell("a", 1));
+
+    assert!(!doc.draft("a").unwrap().track_edit().is_editing);
+}
+
+// ---- annotation type ------------------------------------------------------------------
+
+#[test]
+fn annotation_type_change_updates_segment_metadata_and_dirties() {
+    let mut doc = stable_sample_doc();
+
+    let _ = ok(doc.set_segment_annotation_type("annotation-2", "non-transcription"));
+
+    let segment = doc.project().segment("annotation-2").unwrap();
+    assert_eq!(
+        segment.metadata.get("type"),
+        Some(&json!("non-transcription"))
+    );
+    assert!(doc.session().is_dirty);
+}
+
+// ---- edit-annotation dialog -----------------------------------------------------------
+
+#[test]
+fn edit_annotation_dialog_hydrates_metadata() {
+    let mut doc = annotation_edit_doc("rustle");
+
+    let _ = ok(doc.open_edit_annotation("annotation-2"));
+
+    let dialog = doc.edit_annotation().expect("edit annotation opens");
+    assert_eq!(dialog.segment_id, "annotation-2");
+    assert!(!dialog.is_new(), "a labelled segment is edited, not added");
+    assert_eq!(dialog.primary_selection, "background-noise");
+    assert_eq!(dialog.secondary_selection, "rustle");
+    assert_eq!(dialog.custom_description, "");
+    assert_eq!(dialog.intensity, Some(3));
+    assert!(dialog.error.is_none());
+    assert!(dialog.is_save_enabled());
+    assert_eq!(selected(&doc).as_deref(), Some("annotation-2"));
+}
+
+#[test]
+fn edit_annotation_dialog_hydrates_unknown_secondary_as_other_description() {
+    let mut doc = annotation_edit_doc("chair scrape");
+
+    let _ = ok(doc.open_edit_annotation("annotation-2"));
+
+    let dialog = doc.edit_annotation().unwrap();
+    assert_eq!(dialog.primary_selection, "background-noise");
+    assert_eq!(dialog.secondary_selection, "other");
+    assert_eq!(dialog.custom_description, "chair scrape");
+    assert!(dialog.is_save_enabled());
+}
+
+#[test]
+fn edit_annotation_other_secondary_requires_description() {
+    let mut doc = annotation_edit_doc("rustle");
+    let _ = ok(doc.open_edit_annotation("annotation-2"));
+    doc.edit_annotation_mut()
+        .unwrap()
+        .set_secondary_selection("other".to_string());
+
+    let err = doc.submit_edit_annotation().unwrap_err();
+
+    assert!(matches!(
+        err,
+        EditError::Annotation(EditAnnotationError::CategoryRequired)
+    ));
+    let dialog = doc.edit_annotation().expect("dialog stays open on error");
+    assert_eq!(dialog.error, Some(EditAnnotationError::CategoryRequired));
+    assert_eq!(
+        doc.project()
+            .segment("annotation-2")
+            .unwrap()
+            .metadata
+            .get("content"),
+        Some(&json!({
+            "primaryLabel": "background-noise",
+            "secondaryLabel": "rustle"
+        }))
+    );
+}
+
+#[test]
+fn edit_annotation_primary_change_requires_explicit_secondary_choice() {
+    let mut doc = annotation_edit_doc("rustle");
+    let _ = ok(doc.open_edit_annotation("annotation-2"));
+
+    doc.edit_annotation_mut()
+        .unwrap()
+        .set_primary_selection("background-speech".to_string());
+
+    let dialog = doc.edit_annotation().unwrap();
+    assert_eq!(dialog.primary_selection, "background-speech");
+    assert_eq!(dialog.secondary_selection, "");
+    assert!(!dialog.is_save_enabled());
+
+    let err = doc.submit_edit_annotation().unwrap_err();
+
+    assert!(matches!(
+        err,
+        EditError::Annotation(EditAnnotationError::CategoryRequired)
+    ));
+    assert_eq!(
+        doc.edit_annotation().unwrap().error,
+        Some(EditAnnotationError::CategoryRequired)
+    );
+    assert_eq!(
+        doc.project()
+            .segment("annotation-2")
+            .unwrap()
+            .metadata
+            .get("content"),
+        Some(&json!({
+            "primaryLabel": "background-noise",
+            "secondaryLabel": "rustle"
+        }))
+    );
+}
+
+#[test]
+fn saving_edit_annotation_dialog_updates_metadata_and_text() {
+    let mut doc = annotation_edit_doc("rustle");
+    let _ = ok(doc.open_edit_annotation("annotation-2"));
+    {
+        let dialog = doc.edit_annotation_mut().unwrap();
+        dialog.set_secondary_selection("other".to_string());
+        dialog.set_custom_description("chair scrape".to_string());
+        dialog.set_intensity_label("4");
+    }
+
+    let outcome = ok(doc.submit_edit_annotation());
+
+    assert!(doc.edit_annotation().is_none());
+    assert!(doc.session().is_dirty);
+    let segment = doc.project().segment("annotation-2").unwrap();
+    assert_eq!(segment.text, "background-noise / chair scrape");
+    assert_eq!(segment.metadata.get("intensity"), Some(&json!(4)));
+    assert_eq!(
+        segment.metadata.get("content"),
+        Some(&json!({
+            "primaryLabel": "background-noise",
+            "secondaryLabel": "chair scrape"
+        }))
+    );
+    assert_eq!(
+        draft_text(&doc, "annotation-2"),
+        "background-noise / chair scrape"
+    );
+    assert!(outcome.has_effect(&Effect::DraftChanged {
+        segment_id: "annotation-2".to_string(),
+    }));
+}

@@ -1,11 +1,5 @@
 /target/
 /.studio-dev/
-tools/babel-editor-playwright/node_modules/
-tools/babel-editor-playwright/playwright-report/
-tools/babel-editor-playwright/test-results/
-/tools/**/__pycache__/
-__pycache__/
-*.py[cod]
 
 # Local credentials and machine-specific auth stores.
 .env

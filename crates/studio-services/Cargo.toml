@@ -1,0 +1,25 @@
+[package]
+name = "studio-services"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bytes.workspace = true
+httpdate.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+studio-babel.workspace = true
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-waveform.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+url.workspace = true
+velopack.workspace = true

@@ -326,7 +326,8 @@ struct BabelRelayRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AudioPresignRequest {
-    s3_urls: Vec<String>,
+    review_action_id: String,
+    chunked_processed_recording_ids: Vec<String>,
 }
 
 async fn login(
@@ -562,8 +563,11 @@ async fn audio_presigned_urls(
     }
     let payload = state
         .execute_envelope(json!({
-            "operation": "audits.getPresignedUrls",
-            "payload": { "s3Urls": request.s3_urls },
+            "operation": "transcriptions.getPresignedChunkUrls",
+            "payload": {
+                "reviewActionId": request.review_action_id,
+                "chunkedProcessedRecordingIds": request.chunked_processed_recording_ids,
+            },
         }))
         .await?;
     Ok(Json(normalize_audio_presign_payload(payload)))
@@ -1338,7 +1342,7 @@ mod tests {
             "result": {
                 "data": {
                     "json": {
-                        "s3://bucket/audio.wav": "https://signed.example/audio.wav"
+                        "chunked-recording-1": "https://signed.example/audio.wav"
                     }
                 }
             }
@@ -1349,7 +1353,7 @@ mod tests {
             normalize_audio_presign_payload(payload),
             json!({
                 "urls": {
-                    "s3://bucket/audio.wav": "https://signed.example/audio.wav"
+                    "chunked-recording-1": "https://signed.example/audio.wav"
                 }
             })
         );

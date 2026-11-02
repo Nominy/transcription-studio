@@ -4,9 +4,13 @@ members = [
   "crates/studio-project",
   "crates/studio-babel",
   "crates/studio-waveform",
+  "crates/studio-editor",
+  "crates/studio-services",
+  "crates/studio-audio",
   "crates/studio-app",
   "crates/studio-relay"
 ]
+exclude = ["vendor/gpui-pre-windows"]
 default-members = ["crates/studio-app"]
 resolver = "2"
 
@@ -20,7 +24,7 @@ anyhow = "1.0"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1.10"
-iced = { version = "0.13", features = ["tokio", "lazy", "svg", "canvas", "system", "advanced"] }
+gpui-kit = "0.8.1"
 httpdate = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
@@ -31,9 +35,16 @@ serde_json = "1.0"
 tempfile = "3.14"
 thiserror = "2.0"
 time = { version = "0.3", features = ["formatting"] }
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync"] }
 url = "2.5"
 velopack = "1.2.0"
+studio-core = { path = "crates/studio-core" }
+studio-project = { path = "crates/studio-project" }
+studio-babel = { path = "crates/studio-babel" }
+studio-waveform = { path = "crates/studio-waveform" }
+studio-editor = { path = "crates/studio-editor" }
+studio-services = { path = "crates/studio-services" }
+studio-audio = { path = "crates/studio-audio" }
 
 [profile.dev]
 debug = 1
@@ -41,3 +52,8 @@ incremental = true
 
 [profile.test]
 debug = 0
+
+# Adds the prebuilt fxc shader bytecode needed to cross-compile Windows release
+# builds from the Linux CI host; see vendor/gpui-pre-windows/build.rs.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

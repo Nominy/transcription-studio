@@ -1,0 +1,119 @@
+//! Dispatch of keymap actions to document operations.
+
+use super::{EditResult, EditorDoc, Outcome};
+use crate::edit::keymap::EditorAction;
+use crate::edit::tags::TagSuggestionKey;
+use crate::workflow::StudioWorkflow;
+
+impl EditorDoc {
+    /// Performs a keyboard action. `focused_segment` is the row whose text editor has focus
+    /// (required by text-context actions). Returns `None` for app-level actions the UI owns
+    /// (back to projects, drafting transcription, default action when no doc dialog is open)
+    /// and for text actions without a focused row.
+    pub fn perform(
+        &mut self,
+        action: EditorAction,
+        focused_segment: Option<&str>,
+    ) -> Option<EditResult> {
+        use EditorAction as A;
+        let ok = |outcome: Outcome| Some(Ok(outcome));
+        match action {
+            A::PlayPause => ok(self.helper_toggle_playback()),
+            A::PreviousSegment => ok(self.select_adjacent_segment(-1)),
+            A::NextSegment => ok(self.select_adjacent_segment(1)),
+            A::FocusPreviousSegment => Some(self.focus_adjacent_segment(-1)),
+            A::FocusNextSegment => Some(self.focus_adjacent_segment(1)),
+            A::Undo => Some(self.undo()),
+            A::Redo => Some(self.redo()),
+            A::OpenFind => ok(self.open_find()),
+            A::FindNext => ok(self.find_next()),
+            A::FindPrevious => ok(self.find_previous()),
+            A::ToggleActiveWarningAssertion => Some(self.toggle_warning_assertion(None)),
+            A::DeleteSelectedSegment => Some(self.delete_selected()),
+            A::ToggleLoop => ok(self.toggle_loop()),
+            A::ToggleOverlay => {
+                self.toggle_overlay();
+                ok(Outcome::none())
+            }
+            A::GhostCursorPrevious => Some(self.move_ghost_cursor(-1)),
+            A::GhostCursorNext => Some(self.move_ghost_cursor(1)),
+            A::CreateRegionSubmit => self
+                .create_region
+                .is_some()
+                .then(|| self.submit_create_region()),
+            A::CreateRegionEscape => {
+                if self.find.open {
+                    self.close_find();
+                } else {
+                    self.reset_create_region_time();
+                }
+                ok(Outcome::none())
+            }
+            A::ResetSpeakerWorkflow => ok(self.reset_speaker_workflow()),
+            A::SwitchSpeakerWorkflowLane1 => Some(self.switch_speaker_workflow_lane("Speaker 1")),
+            A::SwitchSpeakerWorkflowLane2 => Some(self.switch_speaker_workflow_lane("Speaker 2")),
+            A::RewindPlaybackOneSecond => ok(self.rewind_one_second()),
+            A::MoveTextBeforeCaretToPreviousSegment => {
+                focused_segment.map(|id| self.move_text_to_previous_row(id))
+            }
+            A::MoveTextAfterCaretToNextSegment => {
+                focused_segment.map(|id| self.move_text_to_next_row(id))
+            }
+            A::ConvertSelectedNumberToSkaz => Some(self.convert_selection_to_skaz()),
+            A::AutofixCurrentLintRow => Some(self.autofix_current_row()),
+            A::AutofixAllLintRows => Some(self.autofix_all_rows()),
+            A::IncreasePlaybackSpeed => ok(self.step_speed(1)),
+            A::DecreasePlaybackSpeed => ok(self.step_speed(-1)),
+            A::MergeSelectedSegmentAbove => Some(self.merge_selected_above()),
+            A::MergeSelectedSegmentBelow => Some(self.merge_selected_below()),
+            A::TrimCurrentSegmentToAudio => Some(self.trim_current_segment_to_audio()),
+            A::TrimAllVisibleSegmentsToAudio => Some(self.trim_visible_segments_to_audio()),
+            A::AutoInsertSegmentAtCaret => Some(self.auto_insert_segment_at_playhead()),
+            A::AutoSegmentVisibleSilences => Some(self.auto_segment_visible_silences()),
+            A::CommitCutPreviewSmartSplit => Some(self.commit_cut_preview(true)),
+            A::CommitCutPreviewPlainSplit => Some(self.commit_cut_preview(false)),
+            A::LoopCutPreviewOverlay => Some(self.loop_cut_preview()),
+            A::EscapePressed => ok(self.escape()),
+            A::ActivateDefaultSurfaceAction => {
+                if self.edit_annotation.is_some() {
+                    Some(self.submit_edit_annotation())
+                } else if self.create_region.is_some() {
+                    Some(self.submit_create_region())
+                } else if self.find.open {
+                    ok(self.find_next())
+                } else {
+                    None
+                }
+            }
+            A::TextUndo => focused_segment.map(|id| self.undo_text(id)),
+            A::TextRedo => focused_segment.map(|id| self.redo_text(id)),
+            A::TranscriptEscape => focused_segment.map(|id| self.transcript_escape(id)),
+            A::TagSuggestionPrevious => {
+                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Previous))
+            }
+            A::TagSuggestionNext => {
+                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Next))
+            }
+            A::TagSuggestionAccept => {
+                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Accept))
+            }
+            A::TagSuggestionDismiss => {
+                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Dismiss))
+            }
+            A::BackToProjects | A::DraftTranscribeSelectedSegment => None,
+        }
+    }
+
+    /// Applies an edit made outside the doc's own operations (drafting/reviewer suggestions)
+    /// as an undoable, read-only-guarded edit: re-syncs drafts, marks dirty and reconciles.
+    pub fn edit_workflow<T>(
+        &mut self,
+        action: &'static str,
+        change: impl FnOnce(&mut StudioWorkflow) -> anyhow::Result<T>,
+    ) -> Result<T, super::EditError> {
+        let value = self.apply(action, change)?;
+        self.mark_dirty();
+        self.reconcile(true);
+        Ok(value)
+    }
+}
