@@ -5,6 +5,10 @@ use gpui_kit::*;
 
 /// A tray menu command, delivered on the UI thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "only the Windows tray sends commands")
+)]
 pub enum TrayCommand {
     Restore,
     StartRelay,

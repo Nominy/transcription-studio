@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
+# The shipped app is Windows-only; CI cross-compiles it from Linux with cargo xwin.
+targets = ["x86_64-pc-windows-msvc"]
