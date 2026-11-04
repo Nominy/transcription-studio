@@ -1,5 +1,6 @@
 //! Feedback drawer: the required L1 feedback form of L2 review tasks (rubric ratings and
-//! comments, optional other feedback) with autosave to Babel, plus "Magic Review".
+//! comments, optional other feedback) with autosave to Babel, plus "Magic Review" and
+//! "Grade review".
 //!
 //! The form itself lives on [`TaskPanels`] so submit gating and reviewer flows can use it.
 
@@ -11,9 +12,11 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use studio_editor::editor_model::feedback_assessment::FEEDBACK_MAX_COMMENT_LENGTH;
+use studio_editor::editor_model::feedback_assessment::{
+    FEEDBACK_MAX_COMMENT_LENGTH, FeedbackDraftSaveRequest,
+};
 use studio_services::review::{
-    FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback, feedback_is_tts_project,
+    CategoryGrade, FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback, feedback_is_tts_project,
     load_feedback_bootstrap, save_feedback_draft,
 };
 
@@ -107,6 +110,17 @@ impl TaskPanels {
             cx.notify();
             return;
         };
+        self.send_feedback_save(request, window, cx);
+    }
+
+    /// Sends `request`, already marked in flight by the form; a draft changed meanwhile is
+    /// sent next.
+    fn send_feedback_save(
+        &mut self,
+        request: FeedbackDraftSaveRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.status("Saving feedback draft...", cx);
         self.sync_feedback_submit_state(cx);
         let babel = cx.global::<AppServices>().babel.clone();
@@ -136,11 +150,12 @@ impl TaskPanels {
                     }
                 };
                 this.status(message, cx);
-                if next.is_some() {
-                    this.request_feedback_save(window, cx);
-                } else {
-                    this.sync_feedback_submit_state(cx);
-                    cx.notify();
+                match next {
+                    Some(next) => this.send_feedback_save(next, window, cx),
+                    None => {
+                        this.sync_feedback_submit_state(cx);
+                        cx.notify();
+                    }
                 }
             },
         );
@@ -149,36 +164,29 @@ impl TaskPanels {
         cx.notify();
     }
 
-    /// Applies generated/finalized reviewer feedback to the form; opens the drawer and saves
-    /// when anything matched. Returns the number of applied items.
-    pub(super) fn apply_reviewer_feedback(
+    /// Applies Magic Review category feedback and grade scores (scores only: comments stay) to
+    /// the form, opens the drawer and saves. Returns the number of updated categories.
+    pub(super) fn apply_feedback_and_grades(
         &mut self,
         feedback: &[ReviewerFeedback],
+        grades: &[CategoryGrade],
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> usize {
+    ) -> Result<usize, String> {
         let Some(form) = self.feedback.as_mut() else {
-            self.status("Feedback panel is unavailable for this Babel task.", cx);
-            return 0;
+            return Err("Couldn't find the feedback form.".to_string());
         };
-        if form.read_only {
-            self.status(
-                "Feedback panel is read-only; reviewer feedback was not applied.",
-                cx,
-            );
-            return 0;
+        if form.read_only || form.is_loading() || form.bootstrap_error().is_some() {
+            return Err("The feedback form is not editable right now.".to_string());
         }
         let applied = form.apply_reviewer_feedback(feedback);
-        if applied == 0 {
-            self.status(
-                "No matching non-empty reviewer feedback was available to apply.",
-                cx,
-            );
-            return 0;
+        if !feedback.is_empty() && applied == 0 {
+            return Err("Couldn't find the feedback form fields for this feedback.".to_string());
         }
+        let graded = form.apply_grade_scores(grades);
         self.drawer = Drawer::Feedback;
         self.request_feedback_save(window, cx);
-        applied
+        Ok(applied.max(graded))
     }
 }
 
@@ -533,7 +541,8 @@ impl Render for FeedbackPanel {
         let Some(form) = panels.feedback.clone() else {
             return div().into_any_element();
         };
-        let generating = panels.reviewer_is_pending("generate");
+        let generating = panels.review.running;
+        let grading_status = panels.review.grading_status.clone();
         let theme = cx.theme();
         let (title, description) = if form.read_only {
             ("Feedback Received", "Review the feedback provided.")
@@ -558,6 +567,7 @@ impl Render for FeedbackPanel {
         let magic_disabled =
             form.read_only || form.is_loading() || form.bootstrap_error().is_some() || generating;
         let magic = self.panels.clone();
+        let grade = self.panels.clone();
         let close = self.panels.clone();
         v_flex()
             .size_full()
@@ -597,8 +607,18 @@ impl Render for FeedbackPanel {
                                         .disabled(magic_disabled)
                                         .on_click(move |_, window, cx| {
                                             magic.update(cx, |panels, cx| {
-                                                panels.generate_review(window, cx)
+                                                panels.magic_review(window, cx)
                                             });
+                                        }),
+                                )
+                                .child(
+                                    Button::new("feedback-grade-review")
+                                        .small()
+                                        .outline()
+                                        .label("Grade review")
+                                        .disabled(magic_disabled)
+                                        .on_click(move |_, _, cx| {
+                                            grade.update(cx, |panels, cx| panels.open_grader(cx));
                                         }),
                                 )
                             })
@@ -621,9 +641,14 @@ impl Render for FeedbackPanel {
                             .gap_2()
                             .child(muted(autosave, cx))
                             .children(autosave_hint.map(|hint| muted(hint, cx)))
-                            .when(generating, |this| {
-                                this.child(muted("Magic Review is generating feedback.", cx))
-                            }),
+                            .children(grading_status.map(|(status, error)| {
+                                let line = muted(status, cx);
+                                if error {
+                                    line.text_color(theme.danger)
+                                } else {
+                                    line
+                                }
+                            })),
                     ),
             )
             .child(

@@ -40,6 +40,24 @@ target\velopack\Publish
 
 GitHub Actions runs entirely on a self-hosted Linux runner, no `windows-latest`: `cargo xwin build --release --target x86_64-pc-windows-msvc` cross-compiles both binaries (no Windows host needed), then `package-alpha-windows.ps1 -Target x86_64-pc-windows-msvc -VpkCommand tools/vpk-wine-wrapper.sh` runs `vpk pack` through a genuine Windows-native `dotnet.exe` executed via Wine -- `vpk pack` packages for whichever OS build of `dotnet` is actually hosting it, not an arbitrary `--runtime` target, so the Linux-native `dotnet` alone cannot produce a Windows release. See `docs/release/github-actions.md`.
 
+### Gold inference runtime
+
+"This PC" AI runs Gold's own inference runtime, Gold's unpacked host build (`npm run build:backend` in `babel/drafting/gold-drafting-extension`). It is not part of the installer: `crates/studio-inference/gold-inference.json` pins one published build (Gold version, source commit, URL, SHA-256, size, extension id) and Studio downloads it on first local use (or in Settings → Install), verifies size and SHA-256 while streaming, extracts it atomically into `%APPDATA%\Transcription Studio\inference\gold-inference\<version>-<commit>\` and loads it into a hidden WebView2. Installed builds work offline; the active and the previous build are kept.
+
+Publish a Gold commit and update the pin from a clean Gold checkout: a worktree beside the Gold tree (so its `file:` dependencies resolve) with dependencies installed by `npm ci`. Never link `node_modules` into it: `node_modules` holds junctions into the shared packages, so remove those junctions (`rmdir`) before deleting the worktree.
+
+```powershell
+git -C ..\babel\drafting\gold-drafting-extension worktree add --detach ..\gold-build-<commit> <commit>
+Push-Location ..\babel\drafting\gold-build-<commit>; npm ci; Pop-Location
+.\tools\update-gold-inference.ps1 -GoldDir ..\babel\drafting\gold-build-<commit> -Build
+```
+
+The script refuses checkouts with uncommitted changes (and warns when the build regenerates tracked identity files that Gold committed stale), zips the build, uploads it to `https://reviewgen.ovh/gold-inference/<version>-<commit>/gold-inference.zip` (served by the `/gold-inference/` alias in the reviewgen.ovh Apache vhost; immutable: an existing upload must be byte-identical), verifies the public download and rewrites the pin. Then verify end to end on a WebGPU machine (downloads the runtime and, once, the models into the data dir, then runs the GPU sample test, timing, draft, align and enhance on the demo audio; `events.jsonl`/`status.json` in the run dir; `New-Item <run-dir>\stop` stops gracefully, rerunning resumes):
+
+```powershell
+cargo run -p studio-inference --example local_smoke -- <data-dir> <run-dir> demo-task crates\studio-babel\tests\fixtures\recovered\babel-fixture\speaker_1.wav crates\studio-babel\tests\fixtures\recovered\babel-fixture\speaker_2.wav
+```
+
 ## Automatic GitHub Release
 
 Every push to `main` triggers the Windows alpha workflow on the self-hosted

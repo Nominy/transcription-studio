@@ -377,7 +377,7 @@ fn selected_compare_action_id(project: &Project) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn speaker_label(project: &Project, speaker_id: &str) -> String {
+pub(crate) fn speaker_label(project: &Project, speaker_id: &str) -> String {
     project
         .speakers
         .iter()

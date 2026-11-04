@@ -9,7 +9,8 @@ Native Rust desktop editor for Babel transcription correction, built with [gpui]
 | `studio-app` | gpui application (`studio-app.exe`): auth, dashboard, settings, editor UI |
 | `studio-editor` | UI-free editor domain: workflow + undo, linter + project lint/tag profiles (`assets/project-profiles.json`), transcript/timeline models, `edit::EditorDoc` editing operations, keymap, startup routes |
 | `studio-services` | UI-free services on a shared tokio runtime: Babel client, native Clerk auth, review/drafting backend, feedback, sub-accounts, relay launcher, updater, preferences, recovery |
-| `studio-audio` | rodio playback engine (multi-lane mix, seek, loop, audition) |
+| `studio-audio` | rodio playback engine (multi-lane mix, seek, loop, audition, per-lane enhanced PCM blended live with the original) and the enhanced-audio disk cache |
+| `studio-inference` | "This PC" AI: downloads the pinned Gold inference runtime (`gold-inference.json`), hosts its inference page in a hidden WebView2 with WebGPU and implements the shared `InferenceBackend` over it (timing, draft, enhance, align, model install/test) |
 | `studio-core`, `studio-project`, `studio-babel`, `studio-waveform` | core model, project folders, Babel package import/export, waveform peaks/geometry |
 | `studio-relay` | sub-account relay server |
 
@@ -54,3 +55,9 @@ Developer overrides:
 ## Memory
 
 Leaving the editor (back to projects, task switch, hide to tray) unloads the audio engine, decoded PCM and waveforms of the task.
+
+## Denoise
+
+The editor toolbar's **Denoise** button enhances both speaker tracks through the inference backend chosen by the denoise location setting (This PC or Remote GPU; remote uploads the original tracks). The status popover shows the stage, chunk progress and elapsed time and can cancel a run. The **Enhanced ← → Original** slider mixes the two in 10% steps (new tasks start at 90% enhanced); 100% enhanced asks for confirmation once per task per app session. Mixing happens live in the audio engine: playback, waveforms and timings keep the originals' clock, and word timing/drafting always receive the original audio.
+
+Results are cached under `%APPDATA%\Transcription Studio\enhanced-audio`, keyed by task, enhancer model and the SHA-256 of each original track (latest result per task, 24 most recent tasks). Opening a task installs its cached result without inference; with automatic denoise enabled, a miss starts generation once the audio has loaded.

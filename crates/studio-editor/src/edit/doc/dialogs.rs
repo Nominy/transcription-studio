@@ -102,9 +102,10 @@ impl EditorDoc {
             self.mark_dirty();
             self.drafts.refresh(self.workflow.project(), &segment_id);
             self.reconcile(true);
-            return Ok(self
-                .select_segment_without_seek(&segment_id)
-                .with_status(format!("Saved text for `{segment_id}`."))
+            let outcome = self.select_segment_without_seek(&segment_id);
+            let status = format!("Saved text for {}.", self.segment_label(&segment_id));
+            return Ok(outcome
+                .with_status(status)
                 .with(Effect::DraftChanged { segment_id }));
         }
 
@@ -133,9 +134,12 @@ impl EditorDoc {
         };
         self.mark_dirty();
         self.reconcile(true);
-        Ok(self
-            .select_segment_without_seek(&created)
-            .with_status(format!("Created `{created}` at {start:.3}s-{end:.3}s.")))
+        let outcome = self.select_segment_without_seek(&created);
+        let status = format!(
+            "Created {} at {start:.3}s-{end:.3}s.",
+            self.segment_label(&created)
+        );
+        Ok(outcome.with_status(status))
     }
 
     // ---- edit annotation --------------------------------------------------------------
@@ -203,7 +207,10 @@ impl EditorDoc {
             self.edit_annotation = Some(dialog);
             return Err(error);
         }
-        let mut outcome = Outcome::status(format!("Saved annotation `{segment_id}`."));
+        let mut outcome = Outcome::status(format!(
+            "Saved annotation {}.",
+            self.segment_label(&segment_id)
+        ));
         if !has_pending_text
             && let Some(text) = self
                 .workflow

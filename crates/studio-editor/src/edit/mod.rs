@@ -18,11 +18,13 @@ pub mod silence;
 pub mod structure;
 pub mod tags;
 pub mod text;
+pub mod text_placement;
 pub mod time;
 
 pub use doc::{
-    EditError, EditResult, EditorDoc, Effect, HelperFocus, Outcome, PointerModifiers, PointerState,
-    WaveformHover,
+    DraftedRow, EditError, EditResult, EditorDoc, Effect, HelperFocus, Outcome, PointerModifiers,
+    PointerState, RowSnapshot, TranscriptionRefusal, TranscriptionTarget, WaveformHover,
+    remove_word_final_ellipsis,
 };
 pub use draft::{SegmentDraft, TextSelection};
 pub use keymap::{EditorAction, KeyContext, Keymap};

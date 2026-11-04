@@ -70,6 +70,7 @@ pub fn run(route: StartupRoute) {
 
             cx.on_app_quit(|cx| {
                 ShellModels::relay(cx).update(cx, |relay, _| relay.shutdown());
+                cx.global::<AppServices>().inference.local().shutdown();
                 async {}
             })
             .detach();

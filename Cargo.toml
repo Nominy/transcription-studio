@@ -8,6 +8,7 @@ members = [
   "crates/studio-services",
   "crates/studio-audio",
   "crates/studio-app",
+  "crates/studio-inference",
   "crates/studio-relay"
 ]
 exclude = ["vendor/gpui-pre-windows"]
@@ -45,6 +46,7 @@ studio-waveform = { path = "crates/studio-waveform" }
 studio-editor = { path = "crates/studio-editor" }
 studio-services = { path = "crates/studio-services" }
 studio-audio = { path = "crates/studio-audio" }
+studio-inference = { path = "crates/studio-inference" }
 
 [profile.dev]
 debug = 1

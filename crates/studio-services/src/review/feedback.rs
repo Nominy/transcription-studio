@@ -11,7 +11,7 @@ use studio_editor::editor_model::feedback_assessment::{
 };
 use studio_editor::workflow::StudioWorkflow;
 
-use super::model::{ReviewerCard, ReviewerFeedback};
+use super::model::{CategoryGrade, ReviewerFeedback};
 use crate::babel::{BabelClient, FeedbackDraftBootstrap};
 
 const META_FEEDBACK_SHOW_BUTTON: &str = "studio.babel.feedback.showButton";
@@ -392,51 +392,29 @@ impl FeedbackForm {
         applied
     }
 
-    /// Applies one reviewer card (with its matched feedback) to the rubric field for its
-    /// category; returns the field label.
-    pub fn apply_reviewer_card(
-        &mut self,
-        card: &ReviewerCard,
-        feedback: Option<&ReviewerFeedback>,
-    ) -> Result<&'static str> {
+    /// Grader apply: sets only the rating of each grade's rubric field; comments are untouched.
+    /// Returns the number of fields updated.
+    pub fn apply_grade_scores(&mut self, grades: &[CategoryGrade]) -> usize {
         if self.read_only {
-            bail!("Feedback panel is read-only.");
+            return 0;
         }
-        let category = card
-            .categories
-            .iter()
-            .find(|category| !category.trim().is_empty())
-            .cloned()
-            .or_else(|| {
-                feedback
-                    .map(|feedback| feedback.category.trim().to_string())
-                    .filter(|category| !category.is_empty())
-            })
-            .ok_or_else(|| anyhow!("Reviewer card {} has no feedback category.", card.id))?;
-        let field = field_for_category(&self.rubric_fields, &category)
-            .ok_or_else(|| anyhow!("No feedback rubric field matches {category}."))?;
-        let rating = feedback
-            .and_then(|feedback| reviewer_feedback_rating(&feedback.score))
-            .unwrap_or_else(|| self.existing_rating(field.key));
-        let comment = feedback
-            .and_then(|feedback| non_empty_feedback_value(&feedback.note))
-            .or_else(|| {
-                card.opinion_text
-                    .as_deref()
-                    .and_then(non_empty_feedback_value)
-            })
-            .or_else(|| card.rationale.as_deref().and_then(non_empty_feedback_value))
-            .or_else(|| non_empty_feedback_value(&card.evidence))
-            .or_else(|| non_empty_feedback_value(&card.summary))
-            .unwrap_or_else(|| format!("Reviewer card {}", card.id));
-        self.draft.entries.insert(
-            field.key.to_string(),
-            FeedbackRubricEntry {
-                rating,
-                comment: truncate_comment(comment),
-            },
-        );
-        Ok(field.label)
+        let mut applied = 0;
+        for grade in grades {
+            let Some(field) = field_for_category(&self.rubric_fields, grade.category) else {
+                continue;
+            };
+            let entry = self
+                .draft
+                .entries
+                .entry(field.key.to_string())
+                .or_insert_with(|| FeedbackRubricEntry {
+                    rating: 1,
+                    comment: String::new(),
+                });
+            entry.rating = grade.score.clamp(1, 3);
+            applied += 1;
+        }
+        applied
     }
 
     /// Save payload for the current draft (`None` when read-only or no form step response).
@@ -508,24 +486,6 @@ impl FeedbackForm {
             .map(|entry| entry.rating)
             .unwrap_or(1)
     }
-}
-
-/// The feedback item matching one of the card's categories, else the only item.
-pub fn reviewer_feedback_for_card<'a>(
-    card: &ReviewerCard,
-    feedback: &'a [ReviewerFeedback],
-) -> Option<&'a ReviewerFeedback> {
-    card.categories
-        .iter()
-        .find_map(|category| {
-            feedback.iter().find(|feedback| {
-                normalized_feedback_label(&feedback.category) == normalized_feedback_label(category)
-            })
-        })
-        .or(match feedback {
-            [only] => Some(only),
-            _ => None,
-        })
 }
 
 /// Rubric field for a reviewer category: exact (normalized) label/key match, else a unique

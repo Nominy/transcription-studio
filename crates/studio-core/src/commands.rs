@@ -80,11 +80,20 @@ pub enum EditorCommand {
         left_text: String,
         right_text: String,
     },
+    /// Removes `[start, end)` from a lane. A segment covering both edges is split around the
+    /// range: with `split_texts` its halves get those texts (smart split), otherwise both keep
+    /// the full text.
     CutLaneRange {
         lane_id: String,
         start_seconds: f64,
         end_seconds: f64,
-        smart_split: bool,
+        split_texts: Option<(String, String)>,
+    },
+    /// Removes `remove_segment_ids` and adds `segments` as one undo step (Gold Draft writing
+    /// drafted rows over a lane's transcript). Validated before any change.
+    ReplaceSegments {
+        remove_segment_ids: Vec<String>,
+        segments: Vec<Segment>,
     },
 }
 
@@ -344,15 +353,19 @@ fn apply_command(
             lane_id,
             start_seconds,
             end_seconds,
-            smart_split,
+            split_texts,
         } => cut_lane_range(
             project,
             &lane_id,
             start_seconds,
             end_seconds,
-            smart_split,
+            split_texts,
             updated_at,
         ),
+        EditorCommand::ReplaceSegments {
+            remove_segment_ids,
+            segments,
+        } => replace_segments(project, &remove_segment_ids, segments, updated_at),
     }
 }
 
@@ -380,6 +393,35 @@ fn delete_segment(project: &mut Project, segment_id: &str) -> Result<(), StudioC
         .position(|segment| segment.id == segment_id)
         .ok_or(StudioCoreError::SegmentNotFound)?;
     project.segments.remove(index);
+    Ok(())
+}
+
+fn replace_segments(
+    project: &mut Project,
+    remove_segment_ids: &[String],
+    segments: Vec<Segment>,
+    updated_at: Option<&str>,
+) -> Result<(), StudioCoreError> {
+    if remove_segment_ids.iter().any(|id| !project.has_segment(id)) {
+        return Err(StudioCoreError::SegmentNotFound);
+    }
+    let removed = |id: &str| remove_segment_ids.iter().any(|removed| removed == id);
+    for (index, segment) in segments.iter().enumerate() {
+        if (project.has_segment(&segment.id) && !removed(&segment.id))
+            || segments[..index].iter().any(|other| other.id == segment.id)
+        {
+            return Err(StudioCoreError::DuplicateSegmentId);
+        }
+        validate_time_range(segment.start_seconds, segment.end_seconds)?;
+        validate_track(project, &segment.speaker_id, &segment.lane_id)?;
+    }
+    project.segments.retain(|segment| !removed(&segment.id));
+    for mut segment in segments {
+        if let Some(updated_at) = updated_at {
+            stamp_created_if_absent_and_updated(&mut segment, updated_at);
+        }
+        project.segments.push(segment);
+    }
     Ok(())
 }
 
@@ -654,7 +696,7 @@ fn cut_lane_range(
     lane_id: &str,
     start_seconds: f64,
     end_seconds: f64,
-    smart_split: bool,
+    split_texts: Option<(String, String)>,
     updated_at: Option<&str>,
 ) -> Result<(), StudioCoreError> {
     validate_time_range(start_seconds, end_seconds)?;
@@ -686,18 +728,9 @@ fn cut_lane_range(
 
         if covers_left && covers_right {
             let new_segment_id = next_derived_segment_id(project, &segment.id);
-            let (left_text, right_text) = if smart_split {
-                let pivot_seconds = (start_seconds + end_seconds) / 2.0;
-                let duration = segment.end_seconds - segment.start_seconds;
-                let ratio = if duration.is_finite() && duration > 0.0 {
-                    (pivot_seconds - segment.start_seconds) / duration
-                } else {
-                    0.0
-                };
-                split_text_by_babel_word_ratio(&segment.text, ratio)
-            } else {
-                (segment.text.clone(), segment.text.clone())
-            };
+            let (left_text, right_text) = split_texts
+                .clone()
+                .unwrap_or_else(|| (segment.text.clone(), segment.text.clone()));
 
             split_segment_with_text(
                 project,
@@ -767,30 +800,6 @@ fn next_derived_segment_id(project: &Project, base_segment_id: &str) -> String {
     }
 
     unreachable!("failed to allocate derived segment id")
-}
-
-fn split_text_by_babel_word_ratio(text: &str, ratio: f64) -> (String, String) {
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    if words.is_empty() {
-        return (String::new(), String::new());
-    }
-
-    let clamped_ratio = if ratio.is_finite() {
-        ratio.clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let mut split_count = (words.len() as f64 * clamped_ratio).round() as usize;
-    if clamped_ratio > 0.0 && clamped_ratio < 1.0 && words.len() > 1 {
-        split_count = split_count.clamp(1, words.len() - 1);
-    } else {
-        split_count = split_count.min(words.len());
-    }
-
-    (
-        words[..split_count].join(" "),
-        words[split_count..].join(" "),
-    )
 }
 
 fn mark_low_confidence_resolved(segment: &mut Segment, updated_at: Option<&str>) {

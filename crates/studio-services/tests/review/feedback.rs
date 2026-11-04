@@ -6,8 +6,8 @@ use studio_editor::editor_model::feedback_assessment::{
 };
 use studio_services::babel::FeedbackDraftBootstrap;
 use studio_services::review::{
-    FeedbackBootstrap, FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback,
-    parse_generated_review, reviewer_feedback_rating,
+    FeedbackBootstrap, FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback, parse_grade_result,
+    reviewer_feedback_rating,
 };
 
 use super::sample_project;
@@ -420,53 +420,34 @@ fn unknown_ambiguous_or_empty_feedback_is_not_applied() {
 }
 
 #[test]
-fn selected_card_feedback_updates_its_rubric_field() {
+fn grade_scores_change_ratings_and_leave_comments_untouched() {
     let mut form = word_accuracy_form();
-    let generated = parse_generated_review(
-        r#"{"llm":{"feedback":[{"category":"Word Accuracy","score":2,"note":"Wrong-word correction should be reviewed."}]}}"#,
+    form.set_comment("wordAccuracy", "My own note.");
+    let grade = parse_grade_result(
+        &json!({
+            "reviewActionId": "ra-2",
+            "grades": [
+                { "category": "Word Accuracy", "score": 3, "note": "Много ошибок", "scoreCap": 3 },
+                { "category": "Timestamp Accuracy", "score": 1, "note": "" },
+                { "category": "Punctuation & Formatting", "score": 1, "note": "" },
+                { "category": "Tags & Emphasis", "score": 2, "note": "" },
+                { "category": "Segmentation", "score": 1, "note": "" },
+            ],
+        })
+        .to_string(),
     )
     .unwrap();
-    let card = &generated.cards[0];
 
-    let label = form
-        .apply_reviewer_card(card, generated.feedback.first())
-        .unwrap();
+    let applied = form.apply_grade_scores(&grade.grades);
 
-    assert_eq!(label, "Word Accuracy");
-    assert_eq!(form.draft().entries["wordAccuracy"].rating, 2);
-    assert_eq!(
-        form.draft().entries["wordAccuracy"].comment,
-        "Wrong-word correction should be reviewed."
-    );
+    assert!(applied >= 1);
+    assert_eq!(form.draft().entries["wordAccuracy"].rating, 3);
+    assert_eq!(form.draft().entries["wordAccuracy"].comment, "My own note.");
     let request = form.request_save().unwrap();
     assert_eq!(
         response_value(&request.input_responses, "word-rating"),
-        Some("2")
+        Some("3")
     );
-}
-
-#[test]
-fn card_without_feedback_falls_back_to_card_text_and_existing_rating() {
-    let mut form = word_accuracy_form();
-    form.set_rating("wordAccuracy", 3);
-    let mut card = parse_generated_review(
-        r#"{"cards":[{"id":"c1","categories":["Word Accuracy"],"summary":"Summary","rationale":"  Because\nreasons "}]}"#,
-    )
-    .unwrap()
-    .cards
-    .remove(0);
-
-    form.apply_reviewer_card(&card, None).unwrap();
-    assert_eq!(form.draft().entries["wordAccuracy"].rating, 3);
-    assert_eq!(
-        form.draft().entries["wordAccuracy"].comment,
-        "Because reasons"
-    );
-
-    card.categories = vec!["Speaker identity".to_string()];
-    assert!(form.apply_reviewer_card(&card, None).is_err());
-    card.categories.clear();
-    assert!(form.apply_reviewer_card(&card, None).is_err());
 }
 
 #[test]

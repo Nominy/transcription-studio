@@ -302,7 +302,7 @@ impl EditorDoc {
     /// - Alt on empty audio/body: start drawing a cut-preview overlay;
     /// - inside the overlay: resize by an edge, secondary-drag moves it, else locked;
     /// - empty waveform: start a create-region drag;
-    /// - region + secondary: split at the pointer;
+    /// - region + secondary: split at the pointer (with Shift: smart split by word timings);
     /// - region + Shift or held Q/W/E/R: audition the region / boundary window;
     /// - region: select (no seek), move the playhead to the pointer; handles start a resize.
     pub fn press_waveform(&mut self, lane_id: &str) -> EditResult {
@@ -381,7 +381,11 @@ impl EditorDoc {
         let segment = self.segment(&segment_id)?;
 
         if modifiers.secondary {
-            return self.split_segment_at(&segment_id, hit.time_seconds);
+            return if modifiers.shift && !modifiers.alt {
+                self.smart_split_segment_at(&segment_id, hit.time_seconds)
+            } else {
+                self.split_segment_at(&segment_id, hit.time_seconds)
+            };
         }
         let audition = if modifiers.shift {
             Some((segment.start_seconds, segment.end_seconds))
@@ -464,7 +468,8 @@ impl EditorDoc {
             self.mark_dirty();
             self.reconcile(true);
             return Ok(Outcome::status(format!(
-                "Moved `{segment_id}` to {start:.3}s-{end:.3}s."
+                "Moved {} to {start:.3}s-{end:.3}s.",
+                self.segment_label(&segment_id)
             )));
         }
         Ok(Outcome::none())
@@ -663,9 +668,12 @@ impl EditorDoc {
         self.mark_dirty();
         self.reconcile(true);
         self.drafts.refresh(self.workflow.project(), &created);
-        Ok(self
-            .select_segment_without_seek(&created)
-            .with_status(format!("Created `{created}` at {start:.3}s-{end:.3}s.")))
+        let outcome = self.select_segment_without_seek(&created);
+        let status = format!(
+            "Created {} at {start:.3}s-{end:.3}s.",
+            self.segment_label(&created)
+        );
+        Ok(outcome.with_status(status))
     }
 
     // ---- timeline defaults ------------------------------------------------------------

@@ -1,7 +1,12 @@
 //! HTTP client for the Reviewer/Gold Drafting backend (`reviewgen.ovh`).
 //!
-//! The backend has no authentication on its review/draft routes, so requests never carry an
-//! `Authorization` header (also when a Sub-account session is active).
+//! Requests never carry Babel credentials. Paid review routes (generate, session create,
+//! template suggestions, grade) carry the user's own OpenRouter key in `X-OpenRouter-Key`
+//! (plus `X-OpenRouter-Model` when set), only to `https://reviewgen.ovh` or a localhost
+//! backend, without following redirects.
+
+use std::fmt;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
@@ -9,17 +14,107 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::{Value, json};
 use url::form_urlencoded::byte_serialize;
 
+use super::draft_stream::{DraftStreamEvent, DraftStreamStep, SseParser, draft_stream_step};
 use super::model::{
-    BackendHealth, DraftResult, DraftTranscription, FinalizeOutcome, GeneratedReview,
+    BackendHealth, DraftResult, FinalizeOutcome, GeneratedReview, GradeResult,
     RedistributionPreview, ReviewerSession, ReviewerTemplate, parse_backend_health,
-    parse_draft_result, parse_finalize_outcome, parse_generated_review, parse_redistribution,
-    parse_reviewer_session, parse_template_search, parse_transcription,
+    parse_draft_result, parse_finalize_outcome, parse_generated_review, parse_grade_result,
+    parse_redistribution, parse_reviewer_session, parse_template_search,
 };
+use super::snapshot::ReviewSnapshot;
 
 pub const REVIEW_BACKEND_BASE_URL_ENV: &str = "STUDIO_REVIEW_BACKEND_BASE_URL";
 pub const DEFAULT_REVIEW_BACKEND_BASE_URL: &str = "https://reviewgen.ovh";
+pub const OPENROUTER_KEY_HEADER: &str = "X-OpenRouter-Key";
+pub const OPENROUTER_MODEL_HEADER: &str = "X-OpenRouter-Model";
+/// Keyed (paid) requests time out after 180 s, like the Review Helper.
+const KEYED_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+const MAX_KEY_CHARS: usize = 512;
+const MAX_MODEL_CHARS: usize = 128;
 const DRAFT_GENERATE_PATH: &str = "/api/draft/generate";
 const DRAFT_GENERATE_STREAM_PATH: &str = "/api/draft/generate/stream";
+
+/// The user's OpenRouter key and optional model for paid review routes. `Debug` redacts the key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReviewCredentials {
+    api_key: String,
+    model: Option<String>,
+}
+
+impl ReviewCredentials {
+    /// Validates the Review settings: key `sk-or-…` (≤512 chars, no whitespace); model blank
+    /// (backend default) or `provider/model` (≤128 chars).
+    pub fn new(api_key: &str, model: &str) -> Result<Self> {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            bail!("Add your OpenRouter key for Review in Settings.");
+        }
+        if !api_key.starts_with("sk-or-")
+            || api_key.chars().count() > MAX_KEY_CHARS
+            || api_key.chars().any(char::is_whitespace)
+        {
+            bail!(
+                "The Review OpenRouter key in Settings must start with sk-or-, contain no spaces and be at most {MAX_KEY_CHARS} characters."
+            );
+        }
+        let model = model.trim();
+        if !model.is_empty() && !is_valid_model_id(model) {
+            bail!(
+                "The Review model in Settings must look like provider/model (for example cloudflare/clef-omni)."
+            );
+        }
+        Ok(Self {
+            api_key: api_key.to_string(),
+            model: (!model.is_empty()).then(|| model.to_string()),
+        })
+    }
+
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+}
+
+impl fmt::Debug for ReviewCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReviewCredentials")
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .finish()
+    }
+}
+
+/// `^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._:-]*$` (case-insensitive), ≤128 chars.
+fn is_valid_model_id(model: &str) -> bool {
+    let segment = |part: &str, extra: &[char]| {
+        let mut chars = part.chars();
+        chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+    };
+    model.len() <= MAX_MODEL_CHARS
+        && model.split_once('/').is_some_and(|(provider, name)| {
+            segment(provider, &['.', '_', '-']) && segment(name, &['.', '_', ':', '-'])
+        })
+}
+
+/// Keys only go to `https://reviewgen.ovh` or `http://localhost|127.0.0.1[:port]` (bare origin).
+fn key_transport_allowed(base_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+    let bare = url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && matches!(url.path(), "" | "/");
+    let host = url.host_str().unwrap_or_default();
+    bare && match url.scheme() {
+        "https" => host == "reviewgen.ovh" && url.port().is_none(),
+        "http" => host == "localhost" || host == "127.0.0.1",
+        _ => false,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendHttpMethod {
@@ -54,9 +149,8 @@ pub enum ReviewBackendRequest {
     BackendHealth,
     ReviewGenerate(Value),
     ReviewCreateSession(Value),
-    ReviewGetSession {
-        session_id: String,
-    },
+    /// `{ reviewActionId, original, current }`; paid.
+    ReviewGrade(Value),
     ReviewSearchTemplates {
         query: String,
         limit: Option<usize>,
@@ -87,21 +181,11 @@ pub enum ReviewBackendRequest {
         body: Value,
     },
     ReviewSubmitAnalytics(Value),
-    ReviewHistory {
-        query: Vec<(String, String)>,
-    },
-    ReviewHistoryItem {
-        history_id: String,
-    },
     DraftGenerate {
         payload: Value,
         audio_tracks: Vec<AudioTrack>,
     },
     DraftGenerateStream {
-        payload: Value,
-        audio_tracks: Vec<AudioTrack>,
-    },
-    DraftTranscribeSegment {
         payload: Value,
         audio_tracks: Vec<AudioTrack>,
     },
@@ -114,10 +198,7 @@ impl ReviewBackendRequest {
             Self::BackendHealth => get("/health"),
             Self::ReviewGenerate(body) => post("/api/review/generate", Some(body.clone())),
             Self::ReviewCreateSession(body) => post("/api/review/sessions", Some(body.clone())),
-            Self::ReviewGetSession { session_id } => get(format!(
-                "/api/review/sessions/{}",
-                encode_path_segment(session_id)
-            )),
+            Self::ReviewGrade(body) => post("/api/review/grade", Some(body.clone())),
             Self::ReviewSearchTemplates { query, limit } => {
                 let mut params = vec![("q".to_string(), query.clone())];
                 if let Some(limit) = limit {
@@ -188,18 +269,6 @@ impl ReviewBackendRequest {
                 "/api/trpc/transcriptions.submitTranscriptReviewAction",
                 Some(body.clone()),
             ),
-            Self::ReviewHistory { query } => {
-                let suffix = if query.is_empty() {
-                    String::new()
-                } else {
-                    format!("?{}", encode_query_params(query))
-                };
-                get(format!("/api/review-history{suffix}"))
-            }
-            Self::ReviewHistoryItem { history_id } => get(format!(
-                "/api/review-history/{}",
-                encode_path_segment(history_id)
-            )),
             Self::DraftGenerate {
                 payload,
                 audio_tracks,
@@ -208,10 +277,6 @@ impl ReviewBackendRequest {
                 payload,
                 audio_tracks,
             } => post_with_audio(DRAFT_GENERATE_STREAM_PATH, payload, audio_tracks),
-            Self::DraftTranscribeSegment {
-                payload,
-                audio_tracks,
-            } => post_with_audio("/api/broker/transcribe-segment", payload, audio_tracks),
             Self::DraftRedistributeText(body) => {
                 post("/api/broker/redistribute-text", Some(body.clone()))
             }
@@ -222,6 +287,33 @@ impl ReviewBackendRequest {
     pub fn is_stream(&self) -> bool {
         matches!(self, Self::DraftGenerateStream { .. })
     }
+
+    /// Paid routes that need the user's OpenRouter key (`X-OpenRouter-Key`).
+    pub fn requires_openrouter_key(&self) -> bool {
+        matches!(
+            self,
+            Self::ReviewGenerate(_)
+                | Self::ReviewCreateSession(_)
+                | Self::ReviewGenerateTemplateSuggestions { .. }
+                | Self::ReviewGrade(_)
+        )
+    }
+}
+
+/// Template-suggestion decision (`approved` / `rejected`, the backend's values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalDecision {
+    Approved,
+    Rejected,
+}
+
+impl ProposalDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
 }
 
 /// Reviewer/Drafting backend client. Cheap to clone; all methods are `Send` futures that need
@@ -230,6 +322,9 @@ impl ReviewBackendRequest {
 pub struct ReviewBackend {
     base_url: String,
     client: reqwest::Client,
+    /// No redirects, 180 s timeout: used only for keyed requests.
+    keyed_client: reqwest::Client,
+    credentials: Option<ReviewCredentials>,
 }
 
 impl ReviewBackend {
@@ -242,7 +337,28 @@ impl ReviewBackend {
         Self {
             base_url: base_url.into().trim().trim_end_matches('/').to_string(),
             client: crate::http::client(),
+            keyed_client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(KEYED_REQUEST_TIMEOUT)
+                .build()
+                .expect("keyed review HTTP client should build"),
+            credentials: None,
         }
+    }
+
+    /// A client sending `credentials` on paid routes. Fails when this backend's origin is not
+    /// allowed to receive keys.
+    pub fn with_credentials(&self, credentials: ReviewCredentials) -> Result<Self> {
+        if !key_transport_allowed(&self.base_url) {
+            bail!(
+                "Review keys are only sent to https://reviewgen.ovh or a localhost backend, not {}.",
+                self.base_url
+            );
+        }
+        Ok(Self {
+            credentials: Some(credentials),
+            ..self.clone()
+        })
     }
 
     pub fn base_url(&self) -> &str {
@@ -250,17 +366,64 @@ impl ReviewBackend {
     }
 
     /// Sends one request and returns the raw success body (`done` payload for stream requests).
-    /// Non-2xx → `review backend returned HTTP <code>: <body>`.
+    /// Non-2xx → `review backend returned HTTP <code>: <body>`. Paid routes without credentials
+    /// fail before sending.
     pub async fn send(&self, request: &ReviewBackendRequest) -> Result<String> {
-        self.send_parts(request.to_parts(), request.is_stream())
+        let credentials = if request.requires_openrouter_key() {
+            Some(
+                self.credentials
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Add your OpenRouter key for Review in Settings."))?,
+            )
+        } else {
+            None
+        };
+        self.send_parts(request.to_parts(), request.is_stream(), credentials)
             .await
     }
 
-    async fn send_parts(&self, parts: BackendRequestParts, stream: bool) -> Result<String> {
+    async fn send_parts(
+        &self,
+        parts: BackendRequestParts,
+        stream: bool,
+        credentials: Option<&ReviewCredentials>,
+    ) -> Result<String> {
+        let response = self.start_request(parts, stream, credentials).await?;
+        let status = response.status();
+        let payload = response
+            .text()
+            .await
+            .context("review backend response read failed")?;
+        if !status.is_success() {
+            bail!(
+                "review backend returned HTTP {}: {}",
+                status.as_u16(),
+                payload
+            );
+        }
+        if stream && !payload.trim_start().starts_with('{') {
+            parse_sse_done_payload(&payload)
+        } else {
+            Ok(payload)
+        }
+    }
+
+    /// Sends a request and returns the response with its status unchecked (3xx refused).
+    async fn start_request(
+        &self,
+        parts: BackendRequestParts,
+        stream: bool,
+        credentials: Option<&ReviewCredentials>,
+    ) -> Result<reqwest::Response> {
         let url = review_backend_url(&self.base_url, &parts.path);
-        let builder = match parts.method {
-            BackendHttpMethod::Get => self.client.get(&url),
-            BackendHttpMethod::Post => self.client.post(&url),
+        let client = if credentials.is_some() {
+            &self.keyed_client
+        } else {
+            &self.client
+        };
+        let mut builder = match parts.method {
+            BackendHttpMethod::Get => client.get(&url),
+            BackendHttpMethod::Post => client.post(&url),
         }
         .header(
             ACCEPT,
@@ -270,6 +433,12 @@ impl ReviewBackend {
                 "application/json"
             },
         );
+        if let Some(credentials) = credentials {
+            builder = builder.header(OPENROUTER_KEY_HEADER, &credentials.api_key);
+            if let Some(model) = &credentials.model {
+                builder = builder.header(OPENROUTER_MODEL_HEADER, model);
+            }
+        }
         let builder = if !parts.audio_tracks.is_empty() {
             let payload = parts.body.unwrap_or(Value::Null);
             let mut form = reqwest::multipart::Form::new().text("payload", payload.to_string());
@@ -293,27 +462,20 @@ impl ReviewBackend {
             builder
         };
 
+        // `without_url`: request errors must not echo URLs; keys only travel in headers.
         let response = builder
             .send()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("review backend request failed")?;
         let status = response.status();
-        let payload = response
-            .text()
-            .await
-            .context("review backend response read failed")?;
-        if !status.is_success() {
+        if status.is_redirection() {
             bail!(
-                "review backend returned HTTP {}: {}",
-                status.as_u16(),
-                payload
+                "review backend returned HTTP {}: redirects are not followed",
+                status.as_u16()
             );
         }
-        if stream && !payload.trim_start().starts_with('{') {
-            parse_sse_done_payload(&payload)
-        } else {
-            Ok(payload)
-        }
+        Ok(response)
     }
 
     /// Native capability panel "Check backend".
@@ -321,26 +483,32 @@ impl ReviewBackend {
         parse_backend_health(&self.send(&ReviewBackendRequest::BackendHealth).await?)
     }
 
-    /// Reviewer "Generate review" (payload from [`super::build_reviewer_payload`]).
-    pub async fn generate_review(&self, payload: Value) -> Result<GeneratedReview> {
+    /// Fast-mode Magic Review (paid).
+    pub async fn generate_review(&self, snapshot: &ReviewSnapshot) -> Result<GeneratedReview> {
         parse_generated_review(
             &self
-                .send(&ReviewBackendRequest::ReviewGenerate(payload))
+                .send(&ReviewBackendRequest::ReviewGenerate(
+                    snapshot.prepare_body(),
+                ))
                 .await?,
         )
     }
 
-    /// Reviewer "Create session" (payload from [`super::build_reviewer_payload`]).
-    pub async fn create_session(&self, payload: Value) -> Result<ReviewerSession> {
-        self.session_request(ReviewBackendRequest::ReviewCreateSession(payload))
-            .await
+    /// Interactive Magic Review / Refresh: a new session from `snapshot` (paid).
+    pub async fn create_session(&self, snapshot: &ReviewSnapshot) -> Result<ReviewerSession> {
+        self.session_request(ReviewBackendRequest::ReviewCreateSession(
+            snapshot.prepare_body(),
+        ))
+        .await
     }
 
-    pub async fn get_session(&self, session_id: &str) -> Result<ReviewerSession> {
-        self.session_request(ReviewBackendRequest::ReviewGetSession {
-            session_id: session_id.to_string(),
-        })
-        .await
+    /// Grader: five category grades for `snapshot` (paid).
+    pub async fn grade(&self, snapshot: &ReviewSnapshot) -> Result<GradeResult> {
+        parse_grade_result(
+            &self
+                .send(&ReviewBackendRequest::ReviewGrade(snapshot.grade_body()))
+                .await?,
+        )
     }
 
     /// Saves session + card comments; `body` from [`super::ReviewerWorkspace::begin_comment_save`].
@@ -385,17 +553,16 @@ impl ReviewBackend {
         .await
     }
 
-    /// `decision` is `"accepted"` or `"rejected"`.
     pub async fn decide_template_suggestion(
         &self,
         session_id: &str,
         proposal_id: &str,
-        decision: &str,
+        decision: ProposalDecision,
     ) -> Result<ReviewerSession> {
         self.session_request(ReviewBackendRequest::ReviewDecideTemplateSuggestion {
             session_id: session_id.to_string(),
             proposal_id: proposal_id.to_string(),
-            body: json!({ "decision": decision }),
+            body: json!({ "decision": decision.as_str() }),
         })
         .await
     }
@@ -412,7 +579,7 @@ impl ReviewBackend {
         parse_finalize_outcome(session_id, &body, &payload)
     }
 
-    /// Template search (old panel used `limit = Some(20)`).
+    /// Per-card template search (unpaid).
     pub async fn search_templates(
         &self,
         query: &str,
@@ -434,55 +601,77 @@ impl ReviewBackend {
             .await
     }
 
-    /// Review history list; raw JSON body (the old panel displayed it verbatim).
-    pub async fn history(&self, query: Vec<(String, String)>) -> Result<String> {
-        self.send(&ReviewBackendRequest::ReviewHistory { query })
-            .await
-    }
-
-    pub async fn history_item(&self, history_id: &str) -> Result<String> {
-        self.send(&ReviewBackendRequest::ReviewHistoryItem {
-            history_id: history_id.to_string(),
-        })
-        .await
-    }
-
-    /// Gold Drafting row generation via the stream route. A `draftSessionId` is added when
-    /// missing; if the stream connection drops, the final result is reconciled with one
-    /// non-stream request for the same session (`reconciled_after_stream_loss`).
+    /// Gold Draft polish via `/api/draft/generate/stream`: `started` / `row` events reach
+    /// `on_event` as they arrive; the `done` payload is the result. A `draftSessionId` is added
+    /// when missing; if the connection drops (not an HTTP or `error` event failure), the same
+    /// session is reconciled once through the non-stream route (`Reconnecting` is reported and
+    /// the result is marked `reconciled_after_stream_loss`).
     pub async fn generate_drafts(
         &self,
         mut payload: Value,
         audio_tracks: Vec<AudioTrack>,
+        on_event: impl Fn(DraftStreamEvent) + Send + Sync,
     ) -> Result<DraftResult> {
         super::payload::ensure_draft_session_id(&mut payload);
-        let stream = post_with_audio(DRAFT_GENERATE_STREAM_PATH, &payload, &audio_tracks);
-        match self.send_parts(stream, true).await {
-            Ok(raw) => parse_draft_result(&raw),
-            Err(error) if is_reconnectable_draft_stream_error(&format!("{error:#}")) => {
+        match self.stream_drafts(&payload, &audio_tracks, &on_event).await {
+            Ok(result) => Ok(result),
+            Err(StreamFailure::Connection) => {
+                on_event(DraftStreamEvent::Reconnecting);
                 let reconcile = post_with_audio(DRAFT_GENERATE_PATH, &payload, &audio_tracks);
-                let mut result = parse_draft_result(&self.send_parts(reconcile, false).await?)?;
+                let mut result =
+                    parse_draft_result(&self.send_parts(reconcile, false, None).await?)?;
                 result.reconciled_after_stream_loss = true;
                 Ok(result)
             }
-            Err(error) => Err(error),
+            Err(StreamFailure::Rejected(error)) => Err(error),
         }
     }
 
-    /// Broker transcription of one segment (payload from
-    /// [`super::build_draft_transcribe_segment_payload`]). The old UI required lane audio.
-    pub async fn transcribe_segment(
+    async fn stream_drafts(
         &self,
-        payload: Value,
-        audio_tracks: Vec<AudioTrack>,
-    ) -> Result<DraftTranscription> {
-        let raw = self
-            .send(&ReviewBackendRequest::DraftTranscribeSegment {
-                payload: payload.clone(),
-                audio_tracks,
-            })
-            .await?;
-        parse_transcription(&payload, &raw)
+        payload: &Value,
+        audio_tracks: &[AudioTrack],
+        on_event: &(impl Fn(DraftStreamEvent) + Send + Sync),
+    ) -> Result<DraftResult, StreamFailure> {
+        let parts = post_with_audio(DRAFT_GENERATE_STREAM_PATH, payload, audio_tracks);
+        let mut response = self
+            .start_request(parts, true, None)
+            .await
+            .map_err(|_| StreamFailure::Connection)?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(StreamFailure::Rejected(anyhow!(
+                "review backend returned HTTP {}: {}",
+                status.as_u16(),
+                body
+            )));
+        }
+        let mut parser = SseParser::default();
+        let mut done = None;
+        loop {
+            let chunk = response
+                .chunk()
+                .await
+                .map_err(|_| StreamFailure::Connection)?;
+            let events = match &chunk {
+                Some(bytes) => parser.push(bytes),
+                None => parser.finish(),
+            };
+            for event in &events {
+                match draft_stream_step(event).map_err(StreamFailure::Rejected)? {
+                    DraftStreamStep::Progress(progress) => on_event(progress),
+                    DraftStreamStep::Done(payload) => done = Some(payload),
+                    DraftStreamStep::Ignored => {}
+                }
+            }
+            if chunk.is_none() {
+                break;
+            }
+        }
+        // The stream ended without its required terminal event: treat it as a lost stream.
+        let payload = done.ok_or(StreamFailure::Connection)?;
+        parse_draft_result(&payload).map_err(StreamFailure::Rejected)
     }
 
     /// Broker text redistribution review (payload from [`super::build_draft_redistribute_payload`]).
@@ -530,18 +719,11 @@ pub fn parse_sse_done_payload(stream: &str) -> Result<String> {
     final_payload.ok_or_else(|| anyhow!("draft stream finished without a done event"))
 }
 
-/// Errors after which a stream with a `draftSessionId` is reconciled via the non-stream route.
-pub fn is_reconnectable_draft_stream_error(error: &str) -> bool {
-    let message = error.to_ascii_lowercase();
-    [
-        "could not reach backend",
-        "failed to fetch",
-        "networkerror",
-        "load failed",
-        "response read failed",
-    ]
-    .iter()
-    .any(|needle| message.contains(needle))
+/// Why a draft stream ended without a result: a lost connection is reconciled for the same
+/// session; an HTTP rejection, `error` event or malformed result is final.
+enum StreamFailure {
+    Connection,
+    Rejected(anyhow::Error),
 }
 
 pub fn draft_payload_has_session_id(payload: &Value) -> bool {
@@ -561,21 +743,6 @@ pub fn review_backend_base_url_from_env() -> String {
 
 pub fn review_backend_url(base_url: &str, path: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), path)
-}
-
-/// Parses the panel's free-form history query (`a=1&b=2`; bare terms become `q=<term>`).
-pub fn parse_history_query(input: &str) -> Vec<(String, String)> {
-    input
-        .split('&')
-        .filter_map(|part| {
-            let trimmed = part.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            let (key, value) = trimmed.split_once('=').unwrap_or(("q", trimmed));
-            Some((key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect()
 }
 
 fn get(path: impl Into<String>) -> BackendRequestParts {

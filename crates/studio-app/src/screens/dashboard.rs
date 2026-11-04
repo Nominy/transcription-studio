@@ -15,7 +15,7 @@ use studio_editor::editor_model::task_lookup::{TaskLookupEffect, TaskLookupState
 use studio_editor::workflow::StudioWorkflow;
 use studio_services::auth::flow::AuthFlow;
 use studio_services::babel::{
-    DashboardProject, LoadedTask, META_STITCHED_QUEUE_ID, NO_ACTIVE_PROJECTS_MESSAGE,
+    DashboardProject, META_STITCHED_QUEUE_ID, NO_ACTIVE_PROJECTS_MESSAGE, OpenedTask,
     ROUTE_METADATA_KEYS, RouteContext, TaskRequest, daily_task_progress,
 };
 use studio_services::recovery::{self, RecoveryDraft};
@@ -25,6 +25,7 @@ use crate::editor::panels::dialogs::no_work;
 use crate::root::{StudioRoot, demo_audio_dir};
 use crate::screens::ShellModels;
 use crate::screens::auth::{brand, brand_mark};
+use crate::screens::error_task::ErrorTaskOpen;
 use crate::screens::settings::SettingsView;
 use crate::screens::subaccounts::{LoadProjects, SubaccountsView};
 use crate::screens::task_lookup;
@@ -76,6 +77,8 @@ pub struct DashboardScreen {
     root: WeakEntity<StudioRoot>,
     section: Section,
     projects: Vec<DashboardProject>,
+    /// Signed-in worker (decides whether a viewed error task is editable).
+    worker_id: Option<String>,
     loaded: bool,
     refresh: Option<Task<()>>,
     task_load: Option<TaskLoad>,
@@ -117,6 +120,7 @@ impl DashboardScreen {
             root,
             section: Section::Projects,
             projects: Vec::new(),
+            worker_id: None,
             loaded: false,
             refresh: None,
             task_load: None,
@@ -167,6 +171,7 @@ impl DashboardScreen {
                     Ok(dashboard) => {
                         this.loaded = true;
                         this.projects = dashboard.projects;
+                        this.worker_id = dashboard.worker_id;
                         if matches!(&this.problem, Some(p) if p.title.as_ref() == REFRESH_FAILED || p.signed_out)
                         {
                             this.problem = None;
@@ -286,6 +291,19 @@ impl DashboardScreen {
         let processed = state.processed_transcription_id.clone();
         let queue_id = scope.stitched_queue_id.clone();
         let request = match effect {
+            TaskLookupEffect::ClaimQaTask if queue_id.is_empty() => {
+                self.problem = Some(Problem {
+                    title: "QA claims need a stitched queue".into(),
+                    detail: "Open the lookup from a project that has a stitched queue.".into(),
+                    signed_out: false,
+                });
+                cx.notify();
+                return;
+            }
+            TaskLookupEffect::ClaimQaTask => TaskRequest::ClaimErrorQaTask {
+                transcription_error_diff_id: state.qa_diff_id.clone(),
+                queue_id: queue_id.clone(),
+            },
             TaskLookupEffect::ViewReadOnlyByReviewActionId => TaskRequest::ReviewAction {
                 review_action_id: state.review_action_id.clone(),
             },
@@ -346,6 +364,23 @@ impl DashboardScreen {
         );
     }
 
+    /// Claims the next task of `project_id` (error tasks' "Next task").
+    pub fn claim_next_in_project(
+        &mut self,
+        project_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(project) = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+        {
+            let project = project.clone();
+            self.start_project(&project, window, cx);
+        }
+    }
+
     /// Fetches and opens a task; replaces (cancels) any load in flight.
     fn open_task(
         &mut self,
@@ -363,6 +398,7 @@ impl DashboardScreen {
             TaskRequest::ClaimByProcessedTranscription { .. } => {
                 "Claiming the stitched transcription…"
             }
+            TaskRequest::ClaimErrorQaTask { .. } => "Claiming the QA task…",
             TaskRequest::ReviewAction { .. } => "Loading the review action…",
             TaskRequest::LatestReviewAction { .. } => "Loading the processed transcription…",
         }
@@ -370,11 +406,14 @@ impl DashboardScreen {
         self.problem = None;
         let babel = cx.global::<AppServices>().babel.clone();
         let fetch = request.clone();
+        let opened_project = project_id.clone();
         let task = spawn_service_in(
             window,
             cx,
             async move { babel.open_task(&fetch, metadata).await },
-            move |this, result, window, cx| this.task_opened(request, result, window, cx),
+            move |this, result, window, cx| {
+                this.task_opened(request, opened_project, result, window, cx)
+            },
         );
         self.task_load = Some(TaskLoad {
             label,
@@ -387,24 +426,43 @@ impl DashboardScreen {
     fn task_opened(
         &mut self,
         request: TaskRequest,
-        result: Result<LoadedTask, studio_services::babel::BabelError>,
+        project_id: Option<String>,
+        result: Result<OpenedTask, studio_services::babel::BabelError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.task_load = None;
         cx.notify();
         match result {
-            Ok(task) => {
+            Ok(OpenedTask::Transcript(task)) => {
                 self.root
                     .update(cx, |root, cx| {
                         root.open_loaded_task(
-                            task,
+                            *task,
                             request.success_status(),
                             request.failure_label(),
                             window,
                             cx,
                         )
                     })
+                    .ok();
+            }
+            Ok(OpenedTask::ErrorTask(loaded)) => {
+                let read_only =
+                    request.error_task_read_only(&loaded.task, self.worker_id.as_deref());
+                // Babel offers "Next task" only for claims from the project's queue.
+                let next_project = matches!(request, TaskRequest::ClaimNext { .. })
+                    .then(|| project_id.clone())
+                    .flatten();
+                let open = ErrorTaskOpen {
+                    loaded: *loaded,
+                    project_id,
+                    read_only,
+                    next_project,
+                    status: request.success_status(),
+                };
+                self.root
+                    .update(cx, |root, cx| root.open_error_task(open, window, cx))
                     .ok();
             }
             Err(error) if error.signed_out => {
@@ -864,6 +922,7 @@ impl DashboardScreen {
             .as_ref()
             .is_some_and(|load| load.project_id.as_deref() == Some(project.id.as_str()));
         let start = project.clone();
+        let claims_qa = project.is_error_categorization();
         let lookup_scope = LookupScope {
             project_id: project.id.clone(),
             chunked_queue_id: project.chunked_queue_id.clone(),
@@ -945,7 +1004,8 @@ impl DashboardScreen {
                                     "",
                                     "",
                                     !lookup_scope.stitched_queue_id.is_empty(),
-                                );
+                                )
+                                .claiming_qa_tasks(claims_qa);
                                 this.open_lookup(state, lookup_scope.clone(), window, cx);
                             })),
                     )

@@ -1,5 +1,5 @@
-//! Settings: appearance (theme, editor layout), keyboard shortcuts, drafting backend, relay,
-//! session portability, updates and local task files.
+//! Settings: appearance (theme, editor layout), keyboard shortcuts, AI (inference location,
+//! Gold Draft, Review Helper, denoise), relay, session portability, updates and local task files.
 
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -13,14 +13,14 @@ use gpui_kit::*;
 use studio_services::auth;
 use studio_services::prefs::EditorLayout;
 use studio_services::relay::RelayStatus;
-use studio_services::review::BackendHealth;
 
 use crate::editor::panels::dialogs::hotkeys;
 use crate::root::StudioRoot;
 use crate::screens::ShellModels;
+use crate::screens::ai_settings::AiSettingsView;
 use crate::screens::local_files::{self, LocalSource};
-use crate::screens::ui::{self, Tone};
-use crate::services::{AppServices, spawn_service};
+use crate::screens::ui;
+use crate::services::AppServices;
 
 /// UI storage key of the persisted theme (`"light"` / `"dark"`).
 pub const THEME_STORAGE_KEY: &str = "studio.theme.v1";
@@ -40,30 +40,17 @@ pub fn apply_saved_theme(cx: &mut App) {
     Theme::change(mode, None, cx);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DraftField {
-    ApiKey,
-    Model,
-    Tier,
-    Effort,
-}
-
 pub struct SettingsView {
     root: WeakEntity<StudioRoot>,
     layout: EditorLayout,
-    api_key: Entity<InputState>,
-    model: Entity<InputState>,
-    tier: Entity<InputState>,
-    effort: Entity<InputState>,
+    ai: Entity<AiSettingsView>,
     relay_url: Entity<InputState>,
-    health: Option<Result<BackendHealth, String>>,
-    health_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SettingsView {
     pub fn new(root: WeakEntity<StudioRoot>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let drafting = cx.global::<AppServices>().drafting.clone();
+        let ai = cx.new(|cx| AiSettingsView::new(window, cx));
         let layout = cx
             .global::<AppServices>()
             .storage
@@ -79,15 +66,6 @@ impl SettingsView {
                     .default_value(value)
             })
         };
-        let api_key = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("OpenRouter API key (falls back to OPENROUTER_API_KEY)")
-                .masked(true)
-                .default_value(drafting.openrouter_api_key.clone())
-        });
-        let model = input("Model (backend default)", drafting.model, window, cx);
-        let tier = input("Service tier", drafting.service_tier, window, cx);
-        let effort = input("Reasoning effort", drafting.reasoning_effort, window, cx);
         let relay = ShellModels::relay(cx);
         let relay_url = input(
             "Relay URL, e.g. http://127.0.0.1:8787",
@@ -97,10 +75,6 @@ impl SettingsView {
         );
 
         let mut subscriptions = vec![
-            Self::watch_draft(&api_key, DraftField::ApiKey, window, cx),
-            Self::watch_draft(&model, DraftField::Model, window, cx),
-            Self::watch_draft(&tier, DraftField::Tier, window, cx),
-            Self::watch_draft(&effort, DraftField::Effort, window, cx),
             cx.subscribe_in(&relay_url, window, |this, _, event, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     this.save_relay_url(window, cx);
@@ -120,35 +94,10 @@ impl SettingsView {
         Self {
             root,
             layout,
-            api_key,
-            model,
-            tier,
-            effort,
+            ai,
             relay_url,
-            health: None,
-            health_task: None,
             _subscriptions: subscriptions,
         }
-    }
-
-    fn watch_draft(
-        input: &Entity<InputState>,
-        field: DraftField,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Subscription {
-        cx.subscribe_in(input, window, move |_, input, event, _, cx| {
-            if let InputEvent::Change = event {
-                let value = input.read(cx).value().trim().to_string();
-                let drafting = &mut cx.global_mut::<AppServices>().drafting;
-                match field {
-                    DraftField::ApiKey => drafting.openrouter_api_key = value,
-                    DraftField::Model => drafting.model = value,
-                    DraftField::Tier => drafting.service_tier = value,
-                    DraftField::Effort => drafting.reasoning_effort = value,
-                }
-            }
-        })
     }
 
     fn set_theme(&mut self, mode: ThemeMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -179,21 +128,6 @@ impl SettingsView {
                 cx,
             );
         }
-        cx.notify();
-    }
-
-    fn check_backend(&mut self, cx: &mut Context<Self>) {
-        let review = cx.global::<AppServices>().review.clone();
-        self.health = None;
-        self.health_task = Some(spawn_service(
-            cx,
-            async move { review.health().await },
-            |this, result, cx| {
-                this.health_task = None;
-                this.health = Some(result.map_err(|error| format!("{error:#}")));
-                cx.notify();
-            },
-        ));
         cx.notify();
     }
 
@@ -371,68 +305,6 @@ impl SettingsView {
                         .on_click(|_, window, cx| hotkeys::open(window, cx)),
                 ),
         )
-    }
-
-    fn render_drafting(&self, cx: &mut Context<Self>) -> Div {
-        let checking = self.health_task.is_some();
-        let mut card = ui::card(
-            "Drafting backend",
-            Some("Reviewer appears on L2 review tasks; drafting uses these backend settings."),
-            cx,
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .child(Input::new(&self.api_key).mask_toggle()),
-                )
-                .child(
-                    Button::new("check-backend")
-                        .outline()
-                        .label("Check backend")
-                        .loading(checking)
-                        .disabled(checking)
-                        .on_click(cx.listener(|this, _, _, cx| this.check_backend(cx))),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .child(div().flex_1().child(Input::new(&self.model)))
-                .child(div().w(rems(9.375)).child(Input::new(&self.tier)))
-                .child(div().w(rems(9.375)).child(Input::new(&self.effort))),
-        );
-        match &self.health {
-            Some(Ok(health)) => {
-                let mut details = vec![health.service.clone()];
-                details.extend(health.backend_version.clone());
-                details.extend(health.openrouter_status.clone());
-                if health.test_mode == Some(true) {
-                    details.push("test mode".to_string());
-                }
-                details.extend(health.provider_diagnostics.iter().cloned());
-                card = card.child(ui::banner(
-                    Tone::Success,
-                    "Backend reachable",
-                    Some(details.join(" · ").into()),
-                    None,
-                    cx,
-                ));
-            }
-            Some(Err(error)) => {
-                card = card.child(ui::banner(
-                    Tone::Danger,
-                    "Backend check failed",
-                    Some(error.clone().into()),
-                    None,
-                    cx,
-                ));
-            }
-            None => {}
-        }
-        card
     }
 
     fn render_relay(&self, cx: &mut Context<Self>) -> Div {
@@ -617,7 +489,7 @@ impl Render for SettingsView {
             .gap_4()
             .child(self.render_appearance(cx))
             .child(self.render_local_files(cx))
-            .child(self.render_drafting(cx))
+            .child(self.ai.clone())
             .child(self.render_relay(cx))
             .child(self.render_session(cx))
             .child(self.render_updates(cx))

@@ -121,7 +121,8 @@ impl EditorDoc {
         let text = draft.text().to_string();
         if segment.start_seconds == start && segment.end_seconds == end && segment.text == text {
             return Ok(Outcome::status(format!(
-                "No changes to apply for `{segment_id}`."
+                "No changes to apply for {}.",
+                self.segment_label(segment_id)
             )));
         }
         self.apply("Apply", |workflow| {
@@ -129,13 +130,13 @@ impl EditorDoc {
         })?;
         self.drafts.refresh(self.workflow.project(), segment_id);
         self.mark_dirty();
-        Ok(
-            Outcome::status(format!("Applied edits to `{segment_id}`.")).with(
-                Effect::DraftChanged {
-                    segment_id: segment_id.to_string(),
-                },
-            ),
-        )
+        Ok(Outcome::status(format!(
+            "Applied edits to {}.",
+            self.segment_label(segment_id)
+        ))
+        .with(Effect::DraftChanged {
+            segment_id: segment_id.to_string(),
+        }))
     }
 
     /// Segment ids whose drafts differ from the project.
@@ -285,7 +286,8 @@ impl EditorDoc {
                 draft.replace_times(segment.start_seconds, segment.end_seconds);
             }
             return Ok(Outcome::status(format!(
-                "No timestamp changes to apply for `{segment_id}`."
+                "No timestamp changes to apply for {}.",
+                self.segment_label(segment_id)
             )));
         }
 
@@ -301,10 +303,28 @@ impl EditorDoc {
         self.mark_dirty();
         self.reconcile(true);
         Ok(Outcome::status(format!(
-            "Updated `{segment_id}` {} time to {}.",
+            "Updated {} {} time to {}.",
+            self.segment_label(segment_id),
             field.label(),
             format_time(field.value_from(next.start_seconds, next.end_seconds))
         )))
+    }
+
+    /// Escape in a time cell: leaves it without applying, showing the stored time again
+    /// (Babel's time cell cancel).
+    pub fn cancel_time_edit(&mut self, segment_id: &str, field: TimeField) {
+        let Some(stored) = self
+            .workflow
+            .project()
+            .segment(segment_id)
+            .map(|segment| field.value_from(segment.start_seconds, segment.end_seconds))
+        else {
+            return;
+        };
+        if let Some(draft) = self.drafts.get_mut(segment_id) {
+            draft.set_time_value(field, format_time(stored));
+            *draft.time_edit_mut() = TimeEditState::default();
+        }
     }
 
     // ---- track cell -------------------------------------------------------------------
@@ -358,7 +378,9 @@ impl EditorDoc {
         self.mark_dirty();
         self.reconcile_selection_to_visible();
         Ok(Outcome::status(format!(
-            "Moved `{segment_id}` to `{lane_id}`."
+            "Moved {} to {}.",
+            self.segment_label(segment_id),
+            self.lane_label(lane_id)
         )))
     }
 
@@ -695,9 +717,9 @@ impl EditorDoc {
             .map(|word| word.index)
             .collect();
         if !reviewable.contains(&word_index) {
-            return Err(EditError::Unavailable(format!(
-                "Low-confidence word `{word_index}` was not found."
-            )));
+            return Err(EditError::Unavailable(
+                "That low-confidence word was not found.".into(),
+            ));
         }
         let acknowledged = self
             .low_confidence_acks
@@ -709,7 +731,8 @@ impl EditorDoc {
         self.touch();
         if !complete {
             return Ok(Outcome::status(format!(
-                "Reviewed {reviewed} of {total} low-confidence words in `{segment_id}`."
+                "Reviewed {reviewed} of {total} low-confidence words in {}.",
+                self.segment_label(segment_id)
             )));
         }
         self.apply("Low-confidence review", |workflow| {
@@ -719,7 +742,8 @@ impl EditorDoc {
         self.mark_dirty();
         self.reconcile(false);
         Ok(Outcome::status(format!(
-            "Marked low-confidence words reviewed for `{segment_id}`."
+            "Marked low-confidence words reviewed for {}.",
+            self.segment_label(segment_id)
         )))
     }
 

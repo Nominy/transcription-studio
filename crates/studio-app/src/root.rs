@@ -20,6 +20,7 @@ use crate::editor::{EditorScreen, EditorScreenEvent, panels};
 use crate::screens::ShellModels;
 use crate::screens::auth::AuthScreen;
 use crate::screens::dashboard::DashboardScreen;
+use crate::screens::error_task::{ErrorTaskEvent, ErrorTaskOpen, ErrorTaskScreen};
 use crate::screens::relay::RelayEvent;
 use crate::tray;
 
@@ -28,6 +29,10 @@ enum Screen {
     Dashboard,
     Editor {
         screen: Entity<EditorScreen>,
+        _events: Subscription,
+    },
+    ErrorTask {
+        screen: Entity<ErrorTaskScreen>,
         _events: Subscription,
     },
 }
@@ -197,6 +202,35 @@ impl StudioRoot {
         }
     }
 
+    /// Opens an error-category task (comparison + questionnaire) fetched from Babel.
+    pub fn open_error_task(
+        &mut self,
+        open: ErrorTaskOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_editor(cx);
+        let screen = cx.new(|cx| ErrorTaskScreen::new(open, window, cx));
+        let events = cx.subscribe_in(&screen, window, |this, _, event, window, cx| match event {
+            ErrorTaskEvent::Leave => this.show_dashboard(window, cx),
+            ErrorTaskEvent::NextTask { project_id } => {
+                this.show_dashboard(window, cx);
+                if let Some(dashboard) = this.dashboard.clone() {
+                    dashboard.update(cx, |dashboard, cx| {
+                        dashboard.claim_next_in_project(project_id, window, cx)
+                    });
+                }
+            }
+        });
+        let focus = screen.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        self.screen = Screen::ErrorTask {
+            screen,
+            _events: events,
+        };
+        cx.notify();
+    }
+
     /// The dashboard, kept alive while a task is open.
     pub fn dashboard(&self) -> Option<&Entity<DashboardScreen>> {
         self.dashboard.as_ref()
@@ -220,7 +254,7 @@ impl StudioRoot {
         let root = cx.entity().downgrade();
         self.confirm_leave(window, cx, move |window, cx| {
             root.update(cx, |root, cx| {
-                if root.editor_model(cx).is_some() {
+                if !matches!(root.screen, Screen::Auth(_) | Screen::Dashboard) {
                     root.show_dashboard(window, cx);
                 }
             })
@@ -243,6 +277,12 @@ impl StudioRoot {
         cx: &mut Context<Self>,
         on_confirmed: impl FnOnce(&mut Window, &mut App) + 'static,
     ) {
+        if let Screen::ErrorTask { screen, .. } = &self.screen {
+            let screen = screen.clone();
+            return screen.update(cx, |screen, cx| {
+                screen.confirm_leave(window, cx, on_confirmed)
+            });
+        }
         match self.editor_model(cx) {
             Some(model) => panels::flows::request_leave(&model, window, cx, on_confirmed),
             // Deferred like the editor path: the callback updates this root again.
@@ -250,9 +290,12 @@ impl StudioRoot {
         }
     }
 
-    /// Releases audio and decoded PCM of the current editor before switching screens.
+    /// Releases audio and decoded PCM of the current task before switching screens.
     fn leave_editor(&mut self, cx: &mut Context<Self>) {
         self.audio_guard = None;
+        if let Screen::ErrorTask { screen, .. } = &self.screen {
+            screen.update(cx, |screen, _| screen.unload());
+        }
         if let Some(model) = self.editor_model(cx) {
             model.update(cx, |model, _| model.unload());
         }
@@ -268,6 +311,7 @@ impl Render for StudioRoot {
                 None => div().into_any_element(),
             },
             Screen::Editor { screen, .. } => screen.clone().into_any_element(),
+            Screen::ErrorTask { screen, .. } => screen.clone().into_any_element(),
         };
         div()
             .size_full()

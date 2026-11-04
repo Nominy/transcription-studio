@@ -8,8 +8,13 @@ use studio_editor::workflow::StudioWorkflow;
 
 use super::BabelError;
 use super::dashboard::{Dashboard, parse_dashboard};
+use super::error_task::{
+    ErrorLabelSubmission, ErrorTask, ErrorTaskError, StyleGuide, parse_error_task,
+    parse_style_guide_document, payload_is_error_task, select_style_guide_document,
+};
 use super::payload::{SaveAnnotationsRequest, SubmitReviewActionRequest};
 use super::request::BabelRequest;
+use super::response::parse_error_label_submit;
 use super::response::{
     FeedbackDraftBootstrap, SaveOutcome, merge_review_action_annotations, parse_feedback_draft,
     parse_feedback_draft_save, parse_feedback_form_step_id, parse_feedback_inputs,
@@ -36,6 +41,11 @@ pub enum TaskRequest {
         processed_transcription_id: String,
         queue_id: String,
     },
+    /// Claim an error-category QA task by its transcription-error diff id.
+    ClaimErrorQaTask {
+        transcription_error_diff_id: String,
+        queue_id: String,
+    },
 }
 
 impl TaskRequest {
@@ -46,6 +56,7 @@ impl TaskRequest {
             Self::LatestReviewAction { .. } => "Processed transcription loaded.",
             Self::ClaimByProcessedTranscription { .. } => "Stitched transcription claimed.",
             Self::ClaimNext { .. } => "Queue claim loaded.",
+            Self::ClaimErrorQaTask { .. } => "QA task claimed.",
         }
     }
 
@@ -56,6 +67,20 @@ impl TaskRequest {
             Self::LatestReviewAction { .. } => "Processed transcription load",
             Self::ClaimByProcessedTranscription { .. } => "Stitched transcription claim",
             Self::ClaimNext { .. } => "Queue claim load",
+            Self::ClaimErrorQaTask { .. } => "QA task claim",
+        }
+    }
+
+    /// Babel's read-only rule for an error task opened by this request: claims are
+    /// editable; a viewed action only while it is this worker's in-progress action; the
+    /// latest action of a processed transcription never.
+    pub fn error_task_read_only(&self, task: &ErrorTask, worker_id: Option<&str>) -> bool {
+        match self {
+            Self::ClaimNext { .. }
+            | Self::ClaimByProcessedTranscription { .. }
+            | Self::ClaimErrorQaTask { .. } => false,
+            Self::ReviewAction { .. } => task.viewed_read_only(worker_id),
+            Self::LatestReviewAction { .. } => true,
         }
     }
 
@@ -79,6 +104,13 @@ impl TaskRequest {
                 processed_transcription_id,
                 queue_id,
             },
+            Self::ClaimErrorQaTask {
+                transcription_error_diff_id,
+                queue_id,
+            } => BabelRequest::ClaimTranscriptionErrorQaTask {
+                transcription_error_diff_id,
+                queue_id,
+            },
         }
     }
 }
@@ -92,6 +124,23 @@ pub struct LoadedTask {
     /// Remote audio references downloaded for this task (if > 0 and no lane
     /// audio decodes, the old app treated the load as failed).
     pub remote_audio_count: usize,
+}
+
+/// An opened error-category task plus where its staged audio lives.
+#[derive(Debug)]
+pub struct LoadedErrorTask {
+    pub task: ErrorTask,
+    /// Base directory for resolving the focus recording's audio path.
+    pub audio_base_dir: PathBuf,
+}
+
+/// What a task payload turned out to be.
+#[derive(Debug)]
+pub enum OpenedTask {
+    /// An ordinary transcript (editor).
+    Transcript(Box<LoadedTask>),
+    /// A review action carrying a `transcriptionError` (error questionnaire).
+    ErrorTask(Box<LoadedErrorTask>),
 }
 
 /// Babel service client. Cheap to clone; every method runs on the services runtime.
@@ -162,13 +211,14 @@ impl BabelClient {
         merge_review_action_annotations(&payload, &annotations)
     }
 
-    /// Fetches the task, stages remote audio locally, imports it and merges
-    /// `route_metadata` plus the project lint/tag profile metadata.
+    /// Fetches the task and stages remote audio locally. A payload with a
+    /// `transcriptionError` opens as an error task; anything else is imported as a transcript
+    /// with `route_metadata` plus the project lint/tag profile metadata merged in.
     pub async fn open_task(
         &self,
         request: &TaskRequest,
         route_metadata: Vec<(String, String)>,
-    ) -> Result<LoadedTask, BabelError> {
+    ) -> Result<OpenedTask, BabelError> {
         let payload = self.fetch_task_payload(request).await?;
         let prepared = if audio_fetch::payload_needs_audio(&payload) {
             audio_fetch::prepare_payload_audio(payload, &self.config)
@@ -177,16 +227,85 @@ impl BabelClient {
         } else {
             audio_fetch::PreparedPayload::local(payload)
         };
+        if payload_is_error_task(&prepared.source) {
+            return Ok(OpenedTask::ErrorTask(Box::new(LoadedErrorTask {
+                task: parse_error_task(&prepared.source)?,
+                audio_base_dir: prepared.audio_base_dir,
+            })));
+        }
         let mut workflow = StudioWorkflow::from_babel_json(&prepared.source)
             .map_err(|error| BabelError::new(format!("{error:#}")))?;
         workflow.merge_project_metadata(route_metadata);
         let lint_tag_metadata = babel_project_lint_tag_metadata(workflow.project());
         workflow.merge_project_metadata(lint_tag_metadata);
-        Ok(LoadedTask {
+        Ok(OpenedTask::Transcript(Box::new(LoadedTask {
             workflow,
             audio_base_dir: prepared.audio_base_dir,
             remote_audio_count: prepared.remote_audio_count,
-        })
+        })))
+    }
+
+    /// Submits an error-diff label (`transcriptions.submitTranscriptionErrorLabel`). Never
+    /// saves annotations.
+    pub async fn submit_error_label(
+        &self,
+        submission: ErrorLabelSubmission,
+    ) -> Result<(), BabelError> {
+        let payload = self
+            .raw(&BabelRequest::SubmitTranscriptionErrorLabel(submission))
+            .await?;
+        parse_error_label_submit(&payload)
+    }
+
+    /// The project's complete Docs style guide for Initial fill (15 s budget).
+    pub async fn error_task_style_guide(
+        &self,
+        project_id: &str,
+    ) -> Result<StyleGuide, ErrorTaskError> {
+        if !super::error_task::valid_project_id(project_id) {
+            return Err(ErrorTaskError::new(
+                "style-guide-project",
+                "Couldn’t find this project’s style guide. Reopen the task from its project.",
+            ));
+        }
+        let load = async {
+            let read = |request: BabelRequest| async move {
+                let payload = self.raw(&request).await.map_err(|error| {
+                    ErrorTaskError::new(
+                        "style-guide-unavailable",
+                        format!("Couldn’t load the style guide: {}", error.message),
+                    )
+                })?;
+                if payload.trim().is_empty() {
+                    return Ok(serde_json::Value::Null);
+                }
+                serde_json::from_str::<serde_json::Value>(&payload).map_err(|_| {
+                    ErrorTaskError::new(
+                        "style-guide-invalid",
+                        "Couldn’t read the style guide. Try again.",
+                    )
+                })
+            };
+            let documents = read(BabelRequest::LoadProjectDocuments {
+                project_id: project_id.to_string(),
+            })
+            .await?;
+            let document_id = select_style_guide_document(&documents)?;
+            let document = read(BabelRequest::LoadProjectDocument {
+                project_id: project_id.to_string(),
+                document_id: document_id.clone(),
+            })
+            .await?;
+            parse_style_guide_document(project_id, &document_id, &document)
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(15), load)
+            .await
+            .unwrap_or_else(|_| {
+                Err(ErrorTaskError::new(
+                    "style-guide-unavailable",
+                    "Couldn’t load the style guide. Check your connection and try again.",
+                ))
+            })
     }
 
     /// Saves progress. Errors carry server lint issues when Babel returned them.
@@ -308,6 +427,20 @@ impl BabelClient {
                 .raw(&BabelRequest::SaveFeedbackDraft(request.clone()))
                 .await?,
         )
+    }
+
+    /// Raw review actions of `review_action_id`'s chunk (`[{id, level, ...}]`).
+    pub async fn review_actions_for_chunk(
+        &self,
+        review_action_id: &str,
+    ) -> Result<String, BabelError> {
+        self.raw_prefixed(
+            &BabelRequest::LoadReviewActionsForChunk {
+                review_action_id: review_action_id.to_string(),
+            },
+            "Review actions load failed",
+        )
+        .await
     }
 }
 

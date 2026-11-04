@@ -1,5 +1,5 @@
-//! Editor toolbar: back, play/pause, speed, zoom, overview waveform, task state badge,
-//! support id and keyboard shortcuts.
+//! Editor toolbar: back, play/pause, speed, zoom, denoise, overview waveform, task state
+//! badge, support id and keyboard shortcuts.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -9,7 +9,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderScale, SliderState};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _, h_flex};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable as _, WindowExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use studio_editor::edit::EditorAction;
@@ -19,10 +19,11 @@ use studio_editor::edit::format::{
 };
 use studio_editor::editor_model::SaveStatus;
 
-use crate::editor::RequestLeave;
+use crate::editor::denoise::DenoiseControl;
 use crate::editor::model::EditorModel;
 use crate::editor::timeline::overview::OverviewView;
 use crate::editor::timeline::shortcut_hint;
+use crate::editor::{OpenGoldDraft, RequestLeave};
 
 /// Zoom factor change per zoom-button press.
 const ZOOM_STEP: f32 = 1.5;
@@ -34,6 +35,7 @@ const NARROW_WIDTH: Rems = rems(46.);
 pub struct Toolbar {
     model: Entity<EditorModel>,
     overview: Entity<OverviewView>,
+    denoise: Entity<DenoiseControl>,
     zoom: Entity<SliderState>,
     /// Zoom factor last written into the slider (detects zoom changes from wheel/keys).
     synced_zoom: f32,
@@ -43,12 +45,14 @@ pub struct Toolbar {
 }
 
 impl EventEmitter<RequestLeave> for Toolbar {}
+impl EventEmitter<OpenGoldDraft> for Toolbar {}
 
 impl Toolbar {
     pub const HEIGHT: Rems = rems(2.75);
 
     pub fn new(model: Entity<EditorModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let overview = cx.new(|cx| OverviewView::new(model.clone(), window, cx));
+        let denoise = cx.new(|cx| DenoiseControl::new(model.clone(), window, cx));
         let zoom_factor = model.read(cx).doc().session().zoom;
         let zoom = cx.new(|_| {
             SliderState::new()
@@ -73,6 +77,7 @@ impl Toolbar {
         Self {
             model,
             overview,
+            denoise,
             zoom,
             synced_zoom: zoom_factor,
             width: Rc::default(),
@@ -139,6 +144,8 @@ impl Render for Toolbar {
         let measured = width > px(0.);
         let compact = measured && width < COMPACT_WIDTH.to_pixels(window.rem_size());
         let narrow = measured && width < NARROW_WIDTH.to_pixels(window.rem_size());
+        self.denoise
+            .update(cx, |denoise, _| denoise.set_narrow(compact));
 
         let back = Button::new("toolbar-back")
             .ghost()
@@ -169,6 +176,13 @@ impl Render for Toolbar {
                 this.model
                     .update(cx, |model, cx| model.run(cx, |doc| doc.toggle_playback()));
             }));
+
+        let gold_draft = Button::new("toolbar-gold-draft")
+            .ghost()
+            .small()
+            .icon(Icon::new(IconName::WandSparkles).text_color(rgb(0x7c3aed)))
+            .tooltip("Gold Draft: timestamps and a draft transcript")
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenGoldDraft)));
 
         let speed_menu = Button::new("toolbar-speed")
             .outline()
@@ -279,6 +293,7 @@ impl Render for Toolbar {
             .child(div().flex_none().child(back))
             .child(separator(cx))
             .child(div().flex_none().child(play))
+            .child(div().flex_none().child(gold_draft))
             .child(
                 h_flex()
                     .flex_none()
@@ -302,6 +317,8 @@ impl Render for Toolbar {
                     })
                     .child(zoom_in),
             )
+            .child(separator(cx))
+            .child(self.denoise.clone())
             .child(separator(cx))
             .child(
                 div()

@@ -15,6 +15,10 @@ pub enum AudioError {
     Decode(WavDecodeError),
     #[error("no audio file found for lane `{lane_id}`")]
     LaneAudioNotFound { lane_id: String },
+    #[error("lane `{0}` has no loaded audio")]
+    LaneNotLoaded(String),
+    #[error("enhanced audio for lane `{lane_id}` does not match its original: {reason}")]
+    EnhancedAudioMismatch { lane_id: String, reason: String },
     #[error("unsupported channel count: {0}")]
     UnsupportedChannelCount(usize),
     #[error("audio output unavailable: {0}")]

@@ -302,9 +302,15 @@ impl TranscriptView {
                         .hover(|style| style.bg(theme.secondary))
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_time(&segment_id, field, window, cx);
+                                this.press_time_cell(
+                                    &segment_id,
+                                    field,
+                                    event.click_count,
+                                    window,
+                                    cx,
+                                );
                             }),
                         )
                 })
@@ -437,18 +443,27 @@ impl TranscriptView {
                         .size_full(),
                     )
                 })
-                .when(editable, |el| {
-                    el.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        let byte = match layout.index_for_position(event.position) {
+                            Ok(index) | Err(index) => index,
+                        };
+                        let modifiers = event.modifiers;
+                        // Helper word seek: a plain Alt+Click (no Ctrl/Shift/Meta).
+                        if modifiers.alt
+                            && !modifiers.control
+                            && !modifiers.shift
+                            && !modifiers.platform
+                        {
                             cx.stop_propagation();
-                            let byte = match layout.index_for_position(event.position) {
-                                Ok(index) | Err(index) => index,
-                            };
+                            this.seek_to_word_at_byte(&segment_id, byte, cx);
+                        } else if editable {
+                            cx.stop_propagation();
                             this.activate_text_at_byte(&segment_id, byte, window, cx);
-                        }),
-                    )
-                })
+                        }
+                    }),
+                )
                 .into_any_element()
         };
 

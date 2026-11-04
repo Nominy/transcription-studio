@@ -1,7 +1,8 @@
 //! Rodio source that mixes decoded lanes sharing one sample rate and channel
-//! count. Seek, loop, end bound and per-lane gains are read from a shared
-//! [`SessionControl`] at control-span boundaries, so they apply to the live
-//! source without tearing down players.
+//! count. Each lane may carry enhanced PCM beside its original; the two are
+//! blended per lane. Seek, loop, end bound and per-lane gains are read from a
+//! shared [`SessionControl`] at control-span boundaries, so they apply to the
+//! live source without tearing down players.
 
 use std::{
     sync::{
@@ -24,8 +25,32 @@ pub(crate) struct ControlState {
     pub(crate) seek: Option<(u64, f64)>,
     pub(crate) end_seconds: f64,
     pub(crate) loop_range: Option<(f64, f64)>,
-    /// Effective gain per lane slot (mute/solo/volume already applied).
-    pub(crate) gains: Vec<f32>,
+    /// Effective gains per lane slot (mute/solo/volume and the
+    /// original/enhanced ratio already applied).
+    pub(crate) gains: Vec<LaneGain>,
+}
+
+/// Gains applied to a lane's original and enhanced PCM.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LaneGain {
+    pub(crate) original: f32,
+    pub(crate) enhanced: f32,
+}
+
+impl LaneGain {
+    pub(crate) fn is_audible(self) -> bool {
+        self.original > 0.0 || self.enhanced > 0.0
+    }
+}
+
+/// One lane of a [`MixSource`] group: its control slot, original PCM and
+/// optional enhanced PCM (same rate and frame count; mono or the original's
+/// channel count).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LaneSources<'a> {
+    pub(crate) slot: usize,
+    pub(crate) original: &'a DecodedAudio,
+    pub(crate) enhanced: Option<&'a DecodedAudio>,
 }
 
 /// Shared between the engine (writer) and the audio thread (reader).
@@ -99,9 +124,21 @@ fn frame_for_seconds(seconds: f64, sample_rate: u32, bound: FrameBound) -> usize
 
 #[derive(Debug)]
 struct MixLane {
-    channels: Vec<Arc<[f32]>>,
+    original: Vec<Arc<[f32]>>,
+    /// One buffer per output channel; mono enhanced PCM is shared by all.
+    enhanced: Option<Vec<Arc<[f32]>>>,
     slot: usize,
-    gain: f32,
+    gain: LaneGain,
+}
+
+fn shared_channels(audio: &DecodedAudio, channel_count: usize) -> Option<Vec<Arc<[f32]>>> {
+    let source_channels = audio.number_of_channels();
+    if source_channels != channel_count && source_channels != 1 {
+        return None;
+    }
+    (0..channel_count)
+        .map(|index| audio.channel_data_shared(if source_channels == 1 { 0 } else { index }))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -120,35 +157,45 @@ pub(crate) struct MixSource {
 }
 
 impl MixSource {
-    /// `lanes` are `(slot, audio)` pairs that must share sample rate and
-    /// channel count (1..=u16::MAX channels); returns `None` for an empty or
-    /// mismatched group.
+    /// Lane originals must share sample rate and channel count
+    /// (1..=u16::MAX channels); enhanced PCM must match its original's rate
+    /// and frame count and be mono or have the original's channel count.
+    /// Returns `None` for an empty or mismatched group.
     pub(crate) fn new(
-        lanes: &[(usize, &DecodedAudio)],
+        lanes: &[LaneSources<'_>],
         start_seconds: f64,
         control: Arc<SessionControl>,
     ) -> Option<Self> {
-        let (_, first) = lanes.first()?;
+        let first = lanes.first()?.original;
         let channel_count = first.number_of_channels();
         let sample_rate = first.sample_rate();
         if channel_count == 0
             || channel_count > usize::from(u16::MAX)
-            || lanes.iter().any(|(_, audio)| {
-                audio.number_of_channels() != channel_count || audio.sample_rate() != sample_rate
+            || lanes.iter().any(|lane| {
+                lane.original.number_of_channels() != channel_count
+                    || lane.original.sample_rate() != sample_rate
+                    || lane.enhanced.is_some_and(|enhanced| {
+                        enhanced.sample_rate() != sample_rate
+                            || enhanced.frame_count() != lane.original.frame_count()
+                    })
             })
         {
             return None;
         }
         let lanes = lanes
             .iter()
-            .map(|(slot, audio)| MixLane {
-                channels: (0..channel_count)
-                    .filter_map(|index| audio.channel_data_shared(index))
-                    .collect(),
-                slot: *slot,
-                gain: 0.0,
+            .map(|lane| {
+                Some(MixLane {
+                    original: shared_channels(lane.original, channel_count)?,
+                    enhanced: match lane.enhanced {
+                        Some(enhanced) => Some(shared_channels(enhanced, channel_count)?),
+                        None => None,
+                    },
+                    slot: lane.slot,
+                    gain: LaneGain::default(),
+                })
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
         let mut source = Self {
             lanes,
             channel_count,
@@ -197,7 +244,7 @@ impl MixSource {
             )
         });
         for lane in &mut self.lanes {
-            lane.gain = state.gains.get(lane.slot).copied().unwrap_or(0.0);
+            lane.gain = state.gains.get(lane.slot).copied().unwrap_or_default();
         }
     }
 
@@ -243,11 +290,16 @@ impl Iterator for MixSource {
         let channel = self.next_channel;
         let mut sum = 0.0_f32;
         for lane in &self.lanes {
-            if lane.gain == 0.0 {
-                continue;
+            if lane.gain.original != 0.0
+                && let Some(sample) = lane.original[channel].get(frame)
+            {
+                sum += sample.clamp(-1.0, 1.0) * lane.gain.original;
             }
-            if let Some(sample) = lane.channels[channel].get(frame) {
-                sum += sample.clamp(-1.0, 1.0) * lane.gain;
+            if lane.gain.enhanced != 0.0
+                && let Some(enhanced) = &lane.enhanced
+                && let Some(sample) = enhanced[channel].get(frame)
+            {
+                sum += sample.clamp(-1.0, 1.0) * lane.gain.enhanced;
             }
         }
 
@@ -296,22 +348,33 @@ mod tests {
         DecodedAudio::new(sample_rate, channels).expect("valid decoded audio")
     }
 
+    fn gain(original: f32, enhanced: f32) -> LaneGain {
+        LaneGain { original, enhanced }
+    }
+
     fn control(end_seconds: f64, lanes: usize) -> Arc<SessionControl> {
         Arc::new(SessionControl::new(ControlState {
             seek: None,
             end_seconds,
             loop_range: None,
-            gains: vec![1.0; lanes],
+            gains: vec![gain(1.0, 0.0); lanes],
         }))
     }
 
-    fn source(lanes: &[&DecodedAudio], start: f64, control: Arc<SessionControl>) -> MixSource {
-        let lanes = lanes
+    fn originals<'a>(lanes: &[&'a DecodedAudio]) -> Vec<LaneSources<'a>> {
+        lanes
             .iter()
             .enumerate()
-            .map(|(slot, audio)| (slot, *audio))
-            .collect::<Vec<_>>();
-        MixSource::new(&lanes, start, control).expect("compatible lanes")
+            .map(|(slot, audio)| LaneSources {
+                slot,
+                original: audio,
+                enhanced: None,
+            })
+            .collect()
+    }
+
+    fn source(lanes: &[&DecodedAudio], start: f64, control: Arc<SessionControl>) -> MixSource {
+        MixSource::new(&originals(lanes), start, control).expect("compatible lanes")
     }
 
     #[test]
@@ -364,9 +427,51 @@ mod tests {
         let stereo = audio(2, vec![vec![0.1, 0.2], vec![0.3, 0.4]]);
         let other_rate = audio(3, vec![vec![0.1, 0.2]]);
 
-        assert!(MixSource::new(&[(0, &mono), (1, &stereo)], 0.0, control(1.0, 2)).is_none());
-        assert!(MixSource::new(&[(0, &mono), (1, &other_rate)], 0.0, control(1.0, 2)).is_none());
+        assert!(MixSource::new(&originals(&[&mono, &stereo]), 0.0, control(1.0, 2)).is_none());
+        assert!(MixSource::new(&originals(&[&mono, &other_rate]), 0.0, control(1.0, 2)).is_none());
         assert!(MixSource::new(&[], 0.0, control(1.0, 0)).is_none());
+
+        let with_enhanced = |original, enhanced| {
+            MixSource::new(
+                &[LaneSources {
+                    slot: 0,
+                    original,
+                    enhanced: Some(enhanced),
+                }],
+                0.0,
+                control(1.0, 1),
+            )
+        };
+        let short = audio(2, vec![vec![0.1]]);
+        let three_channels = audio(2, vec![vec![0.1, 0.2], vec![0.1, 0.2], vec![0.1, 0.2]]);
+        assert!(with_enhanced(&mono, &short).is_none());
+        assert!(with_enhanced(&mono, &other_rate).is_none());
+        assert!(with_enhanced(&stereo, &three_channels).is_none());
+        assert!(with_enhanced(&stereo, &mono).is_some());
+    }
+
+    #[test]
+    fn blends_original_and_enhanced_with_their_gains() {
+        let original = audio(2, vec![vec![0.5, -0.5], vec![0.25, 0.25]]);
+        let enhanced = audio(2, vec![vec![0.1, 1.5]]);
+        let control = Arc::new(SessionControl::new(ControlState {
+            seek: None,
+            end_seconds: 1.0,
+            loop_range: None,
+            gains: vec![gain(0.5, 0.5)],
+        }));
+        let lanes = [LaneSources {
+            slot: 0,
+            original: &original,
+            enhanced: Some(&enhanced),
+        }];
+
+        let samples = MixSource::new(&lanes, 0.0, control)
+            .expect("compatible lanes")
+            .collect::<Vec<_>>();
+
+        // Mono enhanced PCM feeds every channel; enhanced samples clamp too.
+        assert_eq!(samples, vec![0.3, 0.175, 0.25, 0.625]);
     }
 
     #[test]
@@ -379,7 +484,7 @@ mod tests {
         assert_eq!(span, 20);
 
         assert_eq!(source.next(), Some(0.75));
-        control.update(|state| state.gains = vec![0.0, 2.0]);
+        control.update(|state| state.gains = vec![gain(0.0, 0.0), gain(2.0, 0.0)]);
         let rest_of_span = source.by_ref().take(span - 1).collect::<Vec<_>>();
         assert!(rest_of_span.iter().all(|sample| *sample == 0.75));
         assert_eq!(source.next(), Some(0.5));

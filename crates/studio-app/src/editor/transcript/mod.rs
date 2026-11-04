@@ -209,10 +209,11 @@ impl TranscriptView {
     }
 
     /// Segment whose text editor currently has keyboard focus.
-    pub fn focused_segment_id(&self) -> Option<String> {
-        self.text_focused
-            .then(|| self.text_row.as_ref().map(ToString::to_string))
-            .flatten()
+    pub fn focused_segment_id(&self, window: &Window, cx: &App) -> Option<String> {
+        self.text_row
+            .as_ref()
+            .filter(|_| self.text_focused && self.text_input.focus_handle(cx).is_focused(window))
+            .map(ToString::to_string)
     }
 
     /// Rows of this grid: the doc's rows under the track filter, limited to the lane.
@@ -392,6 +393,21 @@ impl TranscriptView {
         self.activate_text(segment_id, Some(TextSelection::caret(caret)), window, cx);
     }
 
+    /// Alt+Click on a row's static text: seek to the clicked word through the word timings
+    /// (nothing happens without timings).
+    pub(super) fn seek_to_word_at_byte(&mut self, segment_id: &str, byte: usize, cx: &mut App) {
+        let doc = self.model.read(cx).doc();
+        let Some(char_offset) = doc.draft(segment_id).map(|draft| {
+            let text = draft.text();
+            text[..byte.min(text.len())].chars().count()
+        }) else {
+            return;
+        };
+        self.model.update(cx, |model, cx| {
+            model.edit(cx, |doc| doc.seek_to_word(segment_id, char_offset));
+        });
+    }
+
     /// Click into the padding/placeholder of a row's text cell: edit at the end.
     pub(super) fn activate_text_at_end(
         &mut self,
@@ -542,11 +558,21 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         if window.window_handle() != self.window_handle
-            || !self.text_focused
             || window.has_active_dialog(cx)
             || window.has_active_sheet(cx)
-            || !self.text_input.focus_handle(cx).is_focused(window)
         {
+            return;
+        }
+        // Escape in a time cell cancels the edit (Babel), never an editor shortcut.
+        if self.time_cell.is_some()
+            && self.time_input.focus_handle(cx).is_focused(window)
+            && keystroke_string(&event.keystroke) == "escape"
+        {
+            self.cancel_time_cell(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if !self.text_focused || !self.text_input.focus_handle(cx).is_focused(window) {
             return;
         }
         let Some(segment_id) = self.text_row.clone() else {
@@ -614,7 +640,28 @@ impl TranscriptView {
 
     // ---- time cells ---------------------------------------------------------------------
 
-    pub(super) fn activate_time(
+    /// Press on a start/end cell. A single click selects the row like a click on its body (so
+    /// Space then plays); a double click opens the cell for typing, as Babel's time cells do.
+    pub(super) fn press_time_cell(
+        &mut self,
+        segment_id: &str,
+        field: TimeField,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if click_count >= 2 {
+            self.activate_time(segment_id, field, window, cx);
+            return;
+        }
+        if self.time_input.focus_handle(cx).is_focused(window) {
+            self.commit_time_cell(true, cx);
+            self.focus_handle.focus(window, cx);
+        }
+        self.press_row(segment_id, 1, window, cx);
+    }
+
+    fn activate_time(
         &mut self,
         segment_id: &str,
         field: TimeField,
@@ -653,6 +700,18 @@ impl TranscriptView {
         if from_blur {
             self.time_cell = None;
         }
+        cx.notify();
+    }
+
+    /// Escape: leaves the cell without applying the typed value.
+    fn cancel_time_cell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((segment_id, field)) = self.time_cell.take() else {
+            return;
+        };
+        self.model.update(cx, |model, cx| {
+            model.update_doc(cx, |doc| doc.cancel_time_edit(&segment_id, field));
+        });
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

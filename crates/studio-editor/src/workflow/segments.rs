@@ -75,18 +75,29 @@ impl StudioWorkflow {
         self.split_segment_with_text(segment_id, at_seconds, left_text, right_text)
     }
 
+    /// Cuts `[start, end)` out of a lane; a row covering both edges gets `split_texts` (left,
+    /// right) or keeps its full text on both halves.
     pub fn cut_lane_range(
         &mut self,
         lane_id: &str,
         start_seconds: f64,
         end_seconds: f64,
-        smart_split: bool,
+        split_texts: Option<(String, String)>,
     ) -> Result<()> {
         self.apply(EditorCommand::CutLaneRange {
             lane_id: lane_id.to_string(),
             start_seconds,
             end_seconds,
-            smart_split,
+            split_texts,
+        })
+    }
+
+    /// Merges `right_segment_id` into `left_segment_id`: two rows of one lane, the left one
+    /// ending before the right one starts.
+    pub fn merge_segments(&mut self, left_segment_id: &str, right_segment_id: &str) -> Result<()> {
+        self.apply(EditorCommand::MergeSegments {
+            left_segment_id: left_segment_id.to_string(),
+            right_segment_id: right_segment_id.to_string(),
         })
     }
 
@@ -286,6 +297,50 @@ impl StudioWorkflow {
 
         self.apply(EditorCommand::CreateSegment { segment })?;
         Ok(new_segment_id)
+    }
+
+    /// Removes `remove_segment_ids` and creates one row per `(lane_id, start, end, text)` as a
+    /// single undo step; returns the created ids in input order.
+    pub fn replace_segments_with_rows(
+        &mut self,
+        remove_segment_ids: Vec<String>,
+        rows: Vec<(String, f64, f64, String)>,
+    ) -> Result<Vec<String>> {
+        let mut ids: Vec<String> = Vec::with_capacity(rows.len());
+        let mut next_index: BTreeMap<String, usize> = BTreeMap::new();
+        let mut segments = Vec::with_capacity(rows.len());
+        for (lane_id, start_seconds, end_seconds, text) in rows {
+            let lane = self
+                .project
+                .lanes
+                .iter()
+                .find(|lane| lane.id == lane_id)
+                .with_context(|| format!("audio lane `{lane_id}` was not found"))?;
+            let index = next_index.entry(lane_id.clone()).or_insert(1);
+            let id = loop {
+                let candidate = format!("{lane_id}__studio_{index}");
+                *index += 1;
+                if !self.project.has_segment(&candidate) {
+                    break candidate;
+                }
+            };
+            segments.push(Segment {
+                id: id.clone(),
+                source_annotation_id: None,
+                speaker_id: lane.speaker_id.clone(),
+                lane_id: lane.id.clone(),
+                start_seconds,
+                end_seconds,
+                text,
+                metadata: BTreeMap::new(),
+            });
+            ids.push(id);
+        }
+        self.apply(EditorCommand::ReplaceSegments {
+            remove_segment_ids,
+            segments,
+        })?;
+        Ok(ids)
     }
 
     pub fn create_segment_at_time_in_lane(

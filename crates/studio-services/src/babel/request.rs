@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 use studio_editor::editor_model::feedback_assessment::FeedbackDraftSaveRequest;
 
+use super::error_task::ErrorLabelSubmission;
 use super::payload::{SaveAnnotationsRequest, SubmitReviewActionRequest};
 
 /// Worker (for its id) and the worker's projects; everything the dashboard consumes.
@@ -42,6 +43,10 @@ pub enum BabelRequest {
     LoadAnnotationsByReviewAction {
         review_action_id: String,
     },
+    /// Every review action of the current action's chunk (Magic Review finds the L1 reference).
+    LoadReviewActionsForChunk {
+        review_action_id: String,
+    },
     LoadLatestReviewAction {
         processed_transcription_id: String,
         queue_id: String,
@@ -61,6 +66,21 @@ pub enum BabelRequest {
         worker_id: String,
     },
     SaveFeedbackDraft(FeedbackDraftSaveRequest),
+    /// Claims an error-category QA task by its transcription-error diff id.
+    ClaimTranscriptionErrorQaTask {
+        transcription_error_diff_id: String,
+        queue_id: String,
+    },
+    /// Submits (or, with `capturesWholeError: false`, discards) an error-diff label.
+    SubmitTranscriptionErrorLabel(ErrorLabelSubmission),
+    /// Docs of a project (the error-task style guide is one of them).
+    LoadProjectDocuments {
+        project_id: String,
+    },
+    LoadProjectDocument {
+        project_id: String,
+        document_id: String,
+    },
 }
 
 /// How a raw response is normalized before parsing.
@@ -85,12 +105,17 @@ impl BabelRequest {
             Self::ClaimByProcessedTranscription { .. } => "claimByProcessedTranscription",
             Self::LoadReviewAction { .. } => "loadReviewAction",
             Self::LoadAnnotationsByReviewAction { .. } => "loadAnnotationsByReviewAction",
+            Self::LoadReviewActionsForChunk { .. } => "loadReviewActionsForChunk",
             Self::LoadLatestReviewAction { .. } => "loadLatestReviewAction",
             Self::LoadFeedbackRubricFlags { .. } => "loadFeedbackRubricFlags",
             Self::LoadFeedbackForm { .. } => "loadFeedbackForm",
             Self::LoadFeedbackInputs { .. } => "loadFeedbackInputs",
             Self::LoadFeedbackDraft { .. } => "loadFeedbackDraft",
             Self::SaveFeedbackDraft(_) => "saveFeedbackDraft",
+            Self::ClaimTranscriptionErrorQaTask { .. } => "claimTranscriptionErrorQaTask",
+            Self::SubmitTranscriptionErrorLabel(_) => "submitTranscriptionErrorLabel",
+            Self::LoadProjectDocuments { .. } => "loadProjectDocuments",
+            Self::LoadProjectDocument { .. } => "loadProjectDocument",
         }
     }
 
@@ -100,7 +125,8 @@ impl BabelRequest {
             Self::LoadReviewAction { .. }
             | Self::LoadLatestReviewAction { .. }
             | Self::ClaimByProcessedTranscription { .. }
-            | Self::ClaimNextFromQueue { .. } => ResponseShape::ReviewAction,
+            | Self::ClaimNextFromQueue { .. }
+            | Self::ClaimTranscriptionErrorQaTask { .. } => ResponseShape::ReviewAction,
             _ => ResponseShape::Generic,
         }
     }
@@ -172,6 +198,10 @@ impl BabelRequest {
                 "operation": "transcriptions.getAnnotationsByReviewActionId",
                 "payload": { "reviewActionId": review_action_id },
             }),
+            Self::LoadReviewActionsForChunk { review_action_id } => json!({
+                "operation": "transcriptions.getReviewActionsForChunk",
+                "payload": { "reviewActionId": review_action_id },
+            }),
             Self::LoadLatestReviewAction {
                 processed_transcription_id,
                 queue_id,
@@ -216,6 +246,31 @@ impl BabelRequest {
                     })).collect::<Vec<_>>(),
                 },
             }),
+            Self::ClaimTranscriptionErrorQaTask {
+                transcription_error_diff_id,
+                queue_id,
+            } => json!({
+                "operation": "transcriptions.claimTranscriptionErrorQaTask",
+                "payload": {
+                    "transcriptionErrorDiffId": transcription_error_diff_id,
+                    "queueId": queue_id,
+                },
+            }),
+            Self::SubmitTranscriptionErrorLabel(submission) => json!({
+                "operation": "transcriptions.submitTranscriptionErrorLabel",
+                "payload": submission,
+            }),
+            Self::LoadProjectDocuments { project_id } => json!({
+                "operation": "project.listProjectDocuments",
+                "payload": { "projectId": project_id },
+            }),
+            Self::LoadProjectDocument {
+                project_id,
+                document_id,
+            } => json!({
+                "operation": "project.getProjectDocument",
+                "payload": { "projectId": project_id, "documentId": document_id },
+            }),
         }
     }
 }
@@ -243,7 +298,10 @@ pub(super) fn is_query_operation(operation: &str) -> bool {
                 | "transcriptions.getReviewActionDataById"
                 | "transcriptions.getLatestReviewActionByProcessedTranscriptionId"
                 | "transcriptions.getAnnotationsByReviewActionId"
+                | "transcriptions.getReviewActionsForChunk"
                 | "transcriptions.getPresignedChunkUrls"
+                | "project.listProjectDocuments"
+                | "project.getProjectDocument"
         )
     })
 }

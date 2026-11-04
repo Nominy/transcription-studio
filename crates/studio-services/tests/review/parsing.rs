@@ -2,7 +2,6 @@ use serde_json::json;
 use studio_services::review::{
     draft_row_previews, parse_backend_health, parse_draft_result, parse_finalize_outcome,
     parse_generated_review, parse_redistribution, parse_reviewer_session, parse_template_search,
-    parse_transcription,
 };
 
 use super::sample_project;
@@ -252,19 +251,6 @@ fn draft_result_parses_rows_summary_and_previews() {
     assert!(parse_draft_result(r#"{"draftRows":[{"rewrittenText":"x"}]}"#).is_err());
     assert!(parse_draft_result(r#"{"draftRows":[{"rowId":"a"}]}"#).is_err());
     assert!(parse_draft_result("{}").is_err());
-}
-
-#[test]
-fn transcription_takes_the_segment_from_the_request() {
-    let transcription = parse_transcription(
-        &json!({ "segment": { "rowId": "s2" } }),
-        r#"{"text":" Fresh broker transcription. ","model":"openai/gpt-4o-mini"}"#,
-    )
-    .unwrap();
-    assert_eq!(transcription.segment_id.as_deref(), Some("s2"));
-    assert_eq!(transcription.text, "Fresh broker transcription.");
-    assert_eq!(transcription.model.as_deref(), Some("openai/gpt-4o-mini"));
-    assert!(parse_transcription(&json!({}), r#"{"text":"  "}"#).is_err());
 }
 
 #[test]

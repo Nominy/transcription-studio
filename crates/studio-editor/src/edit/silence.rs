@@ -5,6 +5,7 @@
 use studio_core::{Project, Segment, SegmentUpdate};
 use studio_waveform::DecodedAudio;
 
+use crate::edit::text_placement::AUTO_SEGMENT_MERGE_GAP_SECONDS;
 use crate::editor_model::EditorSession;
 use crate::timeline_model::TimeRange;
 use crate::track_filter::TrackFilter;
@@ -285,6 +286,91 @@ pub fn auto_segment_split_plans_for_segment(
             })
         })
         .collect()
+}
+
+/// One auto-segmentation merge: `left` absorbs `right`, the next row on its lane. The
+/// millisecond bounds tell a retried plan from a new one between the same rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoSegmentMergePlan {
+    pub left_id: String,
+    pub right_id: String,
+    left_end_ms: i64,
+    right_start_ms: i64,
+}
+
+/// Helper `collectAutoSegmentMergePlans`: lanes in order of their first row, each lane's rows
+/// by start, and every neighbour pair at most [`AUTO_SEGMENT_MERGE_GAP_SECONDS`] apart, the
+/// latest pair first.
+pub fn auto_segment_merge_plans(rows: &[&Segment]) -> Vec<AutoSegmentMergePlan> {
+    let mut lanes: Vec<(&str, Vec<&Segment>)> = Vec::new();
+    for row in rows {
+        match lanes.iter_mut().find(|(lane, _)| *lane == row.lane_id) {
+            Some((_, lane_rows)) => lane_rows.push(row),
+            None => lanes.push((&row.lane_id, vec![row])),
+        }
+    }
+    let mut plans = Vec::new();
+    for (_, mut lane_rows) in lanes {
+        lane_rows.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+        for pair in lane_rows.windows(2).rev() {
+            let (current, next) = (pair[0], pair[1]);
+            let gap = next.start_seconds - current.end_seconds;
+            if !gap.is_finite() || gap > AUTO_SEGMENT_MERGE_GAP_SECONDS {
+                continue;
+            }
+            let plan = AutoSegmentMergePlan {
+                left_id: current.id.clone(),
+                right_id: next.id.clone(),
+                left_end_ms: (current.end_seconds * 1000.0).round() as i64,
+                right_start_ms: (next.start_seconds * 1000.0).round() as i64,
+            };
+            if !plans.contains(&plan) {
+                plans.push(plan);
+            }
+        }
+    }
+    plans
+}
+
+/// Whether a row's decoded lane audio has nothing above the trim threshold inside it (Helper's
+/// silent-row probe). Rows whose lane audio is not decoded are never silent.
+pub fn segment_is_silent(editor: &EditorSession, segment: &Segment) -> bool {
+    editor
+        .lane_waveforms
+        .get(&segment.lane_id)
+        .and_then(|waveform| waveform.decoded_audio())
+        .is_some_and(|audio| {
+            decoded_audio_speech_bounds(audio, segment.start_seconds, segment.end_seconds).is_none()
+        })
+}
+
+/// Helper `findNearestSameSpeakerAutoSegmentRow`: the closest other row of `rows` on `silent`'s
+/// lane (overlapping rows are at distance 0); on a tie a row before `silent` wins over one after.
+pub fn nearest_same_lane_segment<'a>(
+    rows: &[&'a Segment],
+    silent: &Segment,
+) -> Option<&'a Segment> {
+    let mut best: Option<(&Segment, f64, bool)> = None;
+    for candidate in rows {
+        if candidate.id == silent.id || candidate.lane_id != silent.lane_id {
+            continue;
+        }
+        let before = candidate.end_seconds <= silent.start_seconds;
+        let distance = if before {
+            silent.start_seconds - candidate.end_seconds
+        } else if candidate.start_seconds >= silent.end_seconds {
+            candidate.start_seconds - silent.end_seconds
+        } else {
+            0.0
+        };
+        let better = best.is_none_or(|(_, best_distance, best_before)| {
+            distance < best_distance || (distance == best_distance && before && !best_before)
+        });
+        if better {
+            best = Some((candidate, distance, before));
+        }
+    }
+    best.map(|(segment, _, _)| segment)
 }
 
 pub fn visible_transcription_segments<'a>(

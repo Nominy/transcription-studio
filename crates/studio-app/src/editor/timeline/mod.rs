@@ -339,10 +339,9 @@ impl TimelineView {
         &mut self,
         lane_id: &str,
         event: &MouseDownEvent,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_handle.focus(window, cx);
         cx.stop_propagation();
         let Some(hit) = self.lane_hit(lane_id, event.position, cx) else {
             return;
@@ -405,13 +404,7 @@ impl TimelineView {
         });
     }
 
-    fn loop_pressed(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_handle.focus(window, cx);
+    fn loop_pressed(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let hit = self.loop_hit(event.position, cx);
         self.model.update(cx, |model, cx| {
@@ -437,10 +430,9 @@ impl TimelineView {
     fn scrollbar_pressed(
         &mut self,
         event: &MouseDownEvent,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_handle.focus(window, cx);
         cx.stop_propagation();
         let doc = self.model.read(cx).doc();
         let Some(thumb) = Thumb::for_viewport(
@@ -1055,6 +1047,11 @@ impl Render for TimelineView {
         v_flex()
             .id("timeline")
             .track_focus(&self.focus_handle)
+            // Any press in the timeline takes keyboard focus from a row's text editor (Babel's
+            // waveform blurs the editor), so timeline hotkeys (S, Alt+Shift+S, ...) apply.
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.focus_handle.focus(window, cx);
+            }))
             .relative()
             .size_full()
             .overflow_hidden()

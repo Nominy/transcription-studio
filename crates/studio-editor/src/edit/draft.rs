@@ -339,9 +339,9 @@ pub enum DraftError {
     InvalidEnd,
     #[error("Start must be before end.")]
     StartNotBeforeEnd,
-    #[error("segment `{0}` was not found")]
+    #[error("that segment no longer exists")]
     SegmentNotFound(String),
-    #[error("segment `{0}` has no editable draft")]
+    #[error("that segment has no editable draft")]
     NoDraft(String),
 }
 

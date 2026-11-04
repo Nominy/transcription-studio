@@ -64,7 +64,7 @@ pub fn push_cross_row_history(history: &mut Vec<CrossRowTextEdit>, entry: CrossR
 pub enum TextMoveError {
     #[error("No adjacent same-speaker segment found for text move.")]
     NoAdjacentSegment,
-    #[error("Segment `{0}` has no editable draft.")]
+    #[error("That segment has no editable draft.")]
     NoDraft(String),
     #[error("No text before the caret to move.")]
     NothingBeforeCaret,

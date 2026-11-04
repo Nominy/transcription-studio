@@ -8,6 +8,7 @@ pub mod linter;
 pub mod project_lint_tag_config;
 mod sample;
 pub mod timeline_model;
+pub mod timing;
 pub mod track_filter;
 pub mod transcript_model;
 pub mod workflow;

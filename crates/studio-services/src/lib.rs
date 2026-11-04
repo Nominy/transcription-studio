@@ -5,6 +5,7 @@ pub mod audio_fetch;
 pub mod auth;
 pub mod babel;
 pub mod http;
+pub mod inference;
 pub mod paths;
 pub mod prefs;
 pub mod recovery;

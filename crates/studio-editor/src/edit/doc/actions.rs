@@ -105,13 +105,31 @@ impl EditorDoc {
     }
 
     /// Applies an edit made outside the doc's own operations (drafting/reviewer suggestions)
-    /// as an undoable, read-only-guarded edit: re-syncs drafts, marks dirty and reconciles.
+    /// as an undoable, read-only-guarded edit: rows whose drafts matched the project follow the
+    /// change (drafts with unapplied edits are kept), then marks dirty and reconciles.
     pub fn edit_workflow<T>(
         &mut self,
         action: &'static str,
         change: impl FnOnce(&mut StudioWorkflow) -> anyhow::Result<T>,
     ) -> Result<T, super::EditError> {
+        let clean: Vec<String> = self
+            .workflow
+            .project()
+            .segments
+            .iter()
+            .filter(|segment| matches!(self.drafts.differs(segment), Ok(false)))
+            .map(|segment| segment.id.clone())
+            .collect();
         let value = self.apply(action, change)?;
+        let project = self.workflow.project();
+        for id in &clean {
+            if project
+                .segment(id)
+                .is_some_and(|segment| !matches!(self.drafts.differs(segment), Ok(false)))
+            {
+                self.drafts.refresh(project, id);
+            }
+        }
         self.mark_dirty();
         self.reconcile(true);
         Ok(value)

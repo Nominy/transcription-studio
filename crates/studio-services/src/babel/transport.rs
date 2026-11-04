@@ -618,6 +618,34 @@ mod tests {
                 },
                 false,
             ),
+            (
+                BabelRequest::ClaimTranscriptionErrorQaTask {
+                    transcription_error_diff_id: "d".to_string(),
+                    queue_id: "q".to_string(),
+                },
+                false,
+            ),
+            (
+                BabelRequest::SubmitTranscriptionErrorLabel(crate::babel::error_task::submission(
+                    "r",
+                    &crate::babel::error_task::ErrorChoices::default(),
+                    crate::babel::error_task::ErrorSource::Real,
+                )),
+                false,
+            ),
+            (
+                BabelRequest::LoadProjectDocuments {
+                    project_id: "p".to_string(),
+                },
+                true,
+            ),
+            (
+                BabelRequest::LoadProjectDocument {
+                    project_id: "p".to_string(),
+                    document_id: "d".to_string(),
+                },
+                true,
+            ),
         ];
         for (request, expect_get) in cases {
             let envelope = request.envelope();

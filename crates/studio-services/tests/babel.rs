@@ -10,9 +10,16 @@ use studio_editor::editor_model::feedback_assessment::{
 };
 use studio_editor::workflow::StudioWorkflow;
 use studio_services::babel::{
-    self, BabelClient, BabelConfig, BabelRequest, Fixture, RouteContext, SaveAnnotationsRequest,
-    SubmitReviewActionRequest, TaskRequest,
+    self, BabelClient, BabelConfig, BabelRequest, Fixture, LoadedTask, OpenedTask, RouteContext,
+    SaveAnnotationsRequest, SubmitReviewActionRequest, TaskRequest,
 };
+
+fn transcript(opened: OpenedTask) -> LoadedTask {
+    match opened {
+        OpenedTask::Transcript(task) => *task,
+        OpenedTask::ErrorTask(task) => panic!("expected a transcript, got {task:?}"),
+    }
+}
 
 const REVIEW_ACTION_FIXTURE: &str =
     include_str!("../../studio-babel/tests/fixtures/review-action-final.json");
@@ -513,15 +520,17 @@ async fn claim_without_annotations_loads_them_by_review_action_id() {
         ..BabelConfig::live(babel.base_url.clone())
     });
 
-    let task = client
-        .open_task(
-            &TaskRequest::ClaimNext {
-                queue_id: "queue-1".to_string(),
-            },
-            Vec::new(),
-        )
-        .await
-        .expect("open claimed task");
+    let task = transcript(
+        client
+            .open_task(
+                &TaskRequest::ClaimNext {
+                    queue_id: "queue-1".to_string(),
+                },
+                Vec::new(),
+            )
+            .await
+            .expect("open claimed task"),
+    );
 
     let project = task.workflow.project();
     assert_eq!(project.segments.len(), 24);
@@ -552,15 +561,17 @@ async fn claim_with_annotations_makes_no_annotations_request() {
         ..BabelConfig::live(babel.base_url.clone())
     });
 
-    let task = client
-        .open_task(
-            &TaskRequest::ClaimNext {
-                queue_id: "queue-1".to_string(),
-            },
-            Vec::new(),
-        )
-        .await
-        .expect("open claimed task");
+    let task = transcript(
+        client
+            .open_task(
+                &TaskRequest::ClaimNext {
+                    queue_id: "queue-1".to_string(),
+                },
+                Vec::new(),
+            )
+            .await
+            .expect("open claimed task"),
+    );
 
     assert_eq!(task.workflow.project().segments.len(), 24);
     assert_eq!(babel.join().len(), 1);
@@ -612,15 +623,17 @@ async fn fixture_task_stages_presigned_audio_and_merges_route_metadata() {
         ..RouteContext::default()
     };
 
-    let task = client
-        .open_task(
-            &TaskRequest::ClaimNext {
-                queue_id: "queue-1".to_string(),
-            },
-            route.merged_over(None),
-        )
-        .await
-        .expect("open fixture task");
+    let task = transcript(
+        client
+            .open_task(
+                &TaskRequest::ClaimNext {
+                    queue_id: "queue-1".to_string(),
+                },
+                route.merged_over(None),
+            )
+            .await
+            .expect("open fixture task"),
+    );
 
     assert_eq!(task.remote_audio_count, 2);
     assert!(
@@ -698,15 +711,17 @@ async fn fixture_without_remote_audio_opens_offline() {
         ..offline_config()
     });
 
-    let task = client
-        .open_task(
-            &TaskRequest::ReviewAction {
-                review_action_id: "r".to_string(),
-            },
-            Vec::new(),
-        )
-        .await
-        .expect("offline task");
+    let task = transcript(
+        client
+            .open_task(
+                &TaskRequest::ReviewAction {
+                    review_action_id: "r".to_string(),
+                },
+                Vec::new(),
+            )
+            .await
+            .expect("offline task"),
+    );
 
     assert_eq!(task.remote_audio_count, 0);
     assert_eq!(task.audio_base_dir, std::path::PathBuf::from("."));

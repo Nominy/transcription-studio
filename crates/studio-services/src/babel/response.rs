@@ -236,6 +236,29 @@ pub(super) fn parse_simple_mutation(payload: &str, fallback: &str) -> Result<(),
     }
 }
 
+/// `submitTranscriptionErrorLabel`: Babel's web treats any non-error reply as success, so
+/// only an explicit `success: false` or an error message fails.
+pub(super) fn parse_error_label_submit(payload: &str) -> Result<(), BabelError> {
+    const FALLBACK: &str = "Failed to submit the label. Please try again.";
+    let value = decode(payload)?;
+    let explicit_failure = first_bool_by_key(&value, &["success", "ok"]) == Some(false);
+    let error = value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .map(|error| {
+            error
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| first_string_by_key(error, &["message"]))
+                .unwrap_or_else(|| FALLBACK.to_string())
+        });
+    match (explicit_failure, error) {
+        (_, Some(message)) => Err(BabelError::new(message)),
+        (true, None) => Err(BabelError::new(response_error(&value, FALLBACK))),
+        (false, None) => Ok(()),
+    }
+}
+
 fn lint_failure_message(issues: &[ServerLintIssue]) -> String {
     format!(
         "Failed to pass linting: {}",

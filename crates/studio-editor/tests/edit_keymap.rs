@@ -757,13 +757,13 @@ fn helper_timeline_trim_hotkeys_route_outside_inputs() {
 }
 
 #[test]
-fn helper_timeline_transcription_hotkey_routes_to_draft_transcription_outside_inputs() {
-    assert_eq!(
-        resolve("alt-shift-g", WORKSPACE),
-        Some(EditorAction::DraftTranscribeSelectedSegment)
-    );
-    assert_eq!(resolve("alt-shift-g", TRANSCRIPT_TEXT), None);
-    assert_eq!(resolve("alt-shift-g", INPUT), None);
+fn helper_transcription_hotkey_routes_from_rows_and_the_workspace() {
+    for focus in [WORKSPACE, TRANSCRIPT_TEXT] {
+        assert_eq!(
+            resolve("alt-shift-g", focus),
+            Some(EditorAction::DraftTranscribeSelectedSegment)
+        );
+    }
 }
 
 #[test]

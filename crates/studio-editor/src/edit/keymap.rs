@@ -420,11 +420,12 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         Timeline,
         &["alt-shift-s"],
     ),
+    // Helper Alt+Shift+G works from the row being edited as well as from the timeline.
     def(
         A::DraftTranscribeSelectedSegment,
         TIMELINE_EDITING,
-        "Transcribe current empty segment with native drafting audio",
-        Timeline,
+        "Transcribe the current empty segment (Gold)",
+        Global,
         &["alt-shift-g"],
     ),
     def(

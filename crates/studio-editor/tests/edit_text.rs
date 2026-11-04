@@ -1006,6 +1006,47 @@ fn invalid_time_cell_blur_reverts_silently() {
 }
 
 #[test]
+fn escape_discards_a_typed_valid_time_even_when_the_cell_blurs_afterwards() {
+    let mut doc = stable_sample_doc();
+
+    ok(doc.set_time_draft("annotation-1", TimeField::Start, "00:02.00".to_string()));
+    doc.cancel_time_edit("annotation-1", TimeField::Start);
+    // Leaving the cell after Escape must not apply the abandoned value.
+    ok(doc.commit_time_edit("annotation-1", TimeField::Start, true));
+
+    let draft = doc.draft("annotation-1").unwrap();
+    assert_eq!(draft.time_value(TimeField::Start), "00:01.20");
+    assert_eq!(draft.time_edit().active_field, None);
+    assert_eq!(
+        doc.project().segment("annotation-1").unwrap().start_seconds,
+        1.2
+    );
+    assert!(!doc.can_undo());
+    assert!(!is_dirty(&doc));
+}
+
+#[test]
+fn escape_after_a_rejected_enter_clears_the_error_and_shows_the_stored_time() {
+    let mut doc = stable_sample_doc();
+
+    ok(doc.set_time_draft("annotation-1", TimeField::End, " ".to_string()));
+    assert!(
+        doc.commit_time_edit("annotation-1", TimeField::End, false)
+            .is_err()
+    );
+    doc.cancel_time_edit("annotation-1", TimeField::End);
+
+    let draft = doc.draft("annotation-1").unwrap();
+    assert_eq!(draft.time_value(TimeField::End), "00:03.40");
+    assert_eq!(draft.time_error(TimeField::End), None);
+    assert_eq!(draft.time_edit().active_field, None);
+    assert_eq!(
+        doc.project().segment("annotation-1").unwrap().end_seconds,
+        3.4
+    );
+}
+
+#[test]
 fn time_cell_boundary_edit_is_one_project_undo_step() {
     let mut doc = stable_sample_doc();
 

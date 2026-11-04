@@ -511,8 +511,8 @@ impl TaskPanels {
         }
         let payload = build_reviewer_analytics_payload(
             project,
-            self.reviewer.session(),
-            self.reviewer.generated_review.as_ref(),
+            self.review.workspace.session(),
+            self.review.workspace.generated_review.as_ref(),
         );
         match payload {
             Ok(payload) => {
@@ -524,7 +524,7 @@ impl TaskPanels {
                 )
                 .detach();
             }
-            Err(error) => self.reviewer_error = Some(format!("{error:#}")),
+            Err(error) => self.status(format!("Reviewer analytics skipped: {error:#}"), cx),
         }
     }
 

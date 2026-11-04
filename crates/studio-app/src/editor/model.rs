@@ -6,16 +6,21 @@
 //! Playback frames that only advance the clock do not notify observers; they emit
 //! [`EditorEvent::Frame`], which only views showing the playhead or viewport listen to.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use gpui_kit::*;
-use studio_audio::{AudioEngine, AudioError, DecodedAudio, PlaybackState, load_lane_audio};
+use studio_audio::{
+    AudioEngine, AudioError, DecodedAudio, LaneAudioFile, PlaybackState, load_lane_audio,
+};
 use studio_core::AudioLane;
 use studio_editor::edit::{EditResult, EditorAction, EditorDoc, Effect, Outcome};
 use studio_editor::timeline_model::LaneWaveform;
 use studio_editor::workflow::StudioWorkflow;
+
+use crate::editor::inference_audio::LaneSource;
 
 /// View-directed effects re-emitted from [`Effect`].
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +55,8 @@ pub struct EditorModel {
     audio: AudioEngine,
     audio_base_dir: Option<PathBuf>,
     audio_load: AudioLoadState,
+    /// Original file each loaded lane was decoded from, by lane id.
+    lane_files: HashMap<String, PathBuf>,
     status: Option<SharedString>,
     last_frame: Option<Instant>,
     load_tasks: Vec<Task<()>>,
@@ -73,6 +80,7 @@ impl EditorModel {
             audio,
             audio_base_dir,
             audio_load: AudioLoadState::default(),
+            lane_files: HashMap::new(),
             status: None,
             last_frame: None,
             load_tasks: Vec::new(),
@@ -96,6 +104,42 @@ impl EditorModel {
 
     pub fn status(&self) -> Option<&SharedString> {
         self.status.as_ref()
+    }
+
+    /// Project lanes whose original audio is loaded, in project order, with the files they
+    /// were decoded from (the bytes inference backends receive).
+    pub fn inference_lane_sources(&self) -> Vec<LaneSource> {
+        self.doc
+            .project()
+            .lanes
+            .iter()
+            .filter_map(|lane| {
+                self.lane_files.get(&lane.id).map(|path| LaneSource {
+                    lane: lane.clone(),
+                    path: path.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Installs enhanced PCM beside the loaded originals (all or nothing). Playback keeps the
+    /// original clock; waveforms keep showing the originals.
+    pub fn set_enhanced_audio(
+        &mut self,
+        lanes: Vec<(String, Arc<DecodedAudio>)>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), AudioError> {
+        let result = self.audio.set_enhanced_audio(lanes);
+        cx.notify();
+        result
+    }
+
+    /// Share of enhanced audio in every lane (`0` original … `1` enhanced). Applies to live
+    /// playback without restarting it.
+    pub fn set_enhanced_ratio(&mut self, ratio: f32) {
+        for lane in &self.doc.project().lanes {
+            self.audio.set_lane_enhanced_ratio(&lane.id, ratio);
+        }
     }
 
     pub fn set_status(&mut self, status: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -248,6 +292,7 @@ impl EditorModel {
     /// the editor (back to projects, task switch, hide to tray).
     pub fn unload(&mut self) {
         self.load_tasks.clear();
+        self.lane_files.clear();
         self.audio.unload();
     }
 
@@ -299,17 +344,19 @@ impl EditorModel {
     fn finish_lane_load(
         &mut self,
         lane_id: String,
-        result: Result<DecodedAudio, AudioError>,
+        result: Result<LaneAudioFile, AudioError>,
         cx: &mut Context<Self>,
     ) {
         self.audio_load.pending = self.audio_load.pending.saturating_sub(1);
-        match result.map(Arc::new).and_then(|audio| {
+        match result.and_then(|LaneAudioFile { path, audio }| {
+            let audio = Arc::new(audio);
             self.audio
                 .insert_lane(lane_id.clone(), Arc::clone(&audio))
-                .map(|()| audio)
+                .map(|()| (path, audio))
         }) {
-            Ok(audio) => {
+            Ok((path, audio)) => {
                 self.audio_load.loaded += 1;
+                self.lane_files.insert(lane_id.clone(), path);
                 // The clone shares the sample buffers with the engine; PCM is held once.
                 self.doc
                     .set_lane_waveform(lane_id, LaneWaveform::from_decoded((*audio).clone()));
@@ -318,7 +365,8 @@ impl EditorModel {
             }
             Err(error) => {
                 self.audio_load.failed += 1;
-                self.status = Some(format!("Lane {lane_id}: {error}").into());
+                let lane = self.doc.lane_label(&lane_id);
+                self.status = Some(format!("{lane} audio: {error}").into());
             }
         }
         cx.notify();

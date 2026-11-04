@@ -1,8 +1,10 @@
 //! Non-editor screens (sign-in, dashboard with projects / sub-accounts / settings) and the
 //! app-wide models they share with the tray.
 
+pub mod ai_settings;
 pub mod auth;
 pub mod dashboard;
+pub mod error_task;
 pub mod local_files;
 pub mod relay;
 pub mod settings;

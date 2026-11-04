@@ -3,6 +3,8 @@
 mod apply;
 mod audio;
 mod backend;
+mod draft_stream;
+mod fake_backend;
 mod feedback;
 mod parsing;
 mod payloads;

@@ -1,11 +1,10 @@
 //! Applying drafting results to the project as undoable workflow edits.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use studio_core::SegmentUpdate;
 use studio_editor::workflow::StudioWorkflow;
 
 use super::model::{DraftRow, RedistributionAllocation, RedistributionMove, RedistributionPreview};
-use super::payload::META_REVIEWER_SELECTED_SESSION_ID;
 
 /// Result of applying rows: updated segment ids (one undo step) and row ids not in the project.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -30,39 +29,6 @@ pub fn apply_draft_rows(workflow: &mut StudioWorkflow, rows: &[DraftRow]) -> Res
         bail!("Apply drafting found no rows present in this project.");
     }
     Ok(outcome)
-}
-
-/// Applies one previewed row (must be `rewritten` and present).
-pub fn apply_draft_row(workflow: &mut StudioWorkflow, row: &DraftRow) -> Result<()> {
-    if row.status != "rewritten" {
-        bail!("`{}` has status `{}`.", row.row_id, row.status);
-    }
-    let outcome = apply_texts(
-        workflow,
-        [(row.row_id.as_str(), row.rewritten_text.as_str())],
-    )?;
-    if outcome.applied.is_empty() {
-        bail!("`{}` was not found.", row.row_id);
-    }
-    Ok(())
-}
-
-/// Replaces one segment's text (broker transcription), keeping its timing; undoable.
-pub fn apply_segment_text(
-    workflow: &mut StudioWorkflow,
-    segment_id: &str,
-    text: &str,
-) -> Result<()> {
-    let text = text.trim();
-    if text.is_empty() {
-        bail!("transcription response did not include text");
-    }
-    let segment = workflow
-        .project()
-        .segment(segment_id)
-        .ok_or_else(|| anyhow!("selected segment `{segment_id}` was not found"))?;
-    let (start, end) = (segment.start_seconds, segment.end_seconds);
-    workflow.apply_segment_edit(segment_id, start, end, text.to_string())
 }
 
 /// Applies a redistribution group: accepted drafts use the request allocations as-is, otherwise
@@ -147,14 +113,6 @@ pub fn apply_redistribution_moves(
         next[to].text = target.join(" ");
     }
     Ok(next)
-}
-
-/// Persists the selected reviewer session id in project metadata (survives save/reload).
-pub fn persist_reviewer_session_id(workflow: &mut StudioWorkflow, session_id: &str) {
-    workflow.merge_project_metadata([(
-        META_REVIEWER_SELECTED_SESSION_ID.to_string(),
-        session_id.trim().to_string(),
-    )]);
 }
 
 fn apply_texts<'a>(

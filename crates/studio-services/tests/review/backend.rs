@@ -1,8 +1,7 @@
 use bytes::Bytes;
 use serde_json::{Value, json};
 use studio_services::review::{
-    AudioTrack, BackendHttpMethod, ReviewBackend, ReviewBackendRequest,
-    is_reconnectable_draft_stream_error, parse_history_query, parse_sse_done_payload,
+    AudioTrack, BackendHttpMethod, ReviewBackend, ReviewBackendRequest, parse_sse_done_payload,
     review_backend_url,
 };
 
@@ -57,10 +56,10 @@ fn every_reviewer_route_matches_the_backend_contract() {
             true,
         ),
         (
-            ReviewBackendRequest::ReviewGetSession { session_id: s1() },
-            BackendHttpMethod::Get,
-            "/api/review/sessions/s1",
-            false,
+            ReviewBackendRequest::ReviewGrade(json!({})),
+            BackendHttpMethod::Post,
+            "/api/review/grade",
+            true,
         ),
         (
             ReviewBackendRequest::ReviewUpdateComments {
@@ -90,7 +89,7 @@ fn every_reviewer_route_matches_the_backend_contract() {
             ReviewBackendRequest::ReviewDecideTemplateSuggestion {
                 session_id: s1(),
                 proposal_id: "p1".to_string(),
-                body: json!({ "decision": "accepted" }),
+                body: json!({ "decision": "approved" }),
             },
             BackendHttpMethod::Post,
             "/api/review/sessions/s1/template-suggestions/p1/decision",
@@ -110,28 +109,6 @@ fn every_reviewer_route_matches_the_backend_contract() {
             BackendHttpMethod::Post,
             "/api/trpc/transcriptions.submitTranscriptReviewAction",
             true,
-        ),
-        (
-            ReviewBackendRequest::ReviewHistory {
-                query: vec![("limit".to_string(), "10".to_string())],
-            },
-            BackendHttpMethod::Get,
-            "/api/review-history?limit=10",
-            false,
-        ),
-        (
-            ReviewBackendRequest::ReviewHistory { query: Vec::new() },
-            BackendHttpMethod::Get,
-            "/api/review-history",
-            false,
-        ),
-        (
-            ReviewBackendRequest::ReviewHistoryItem {
-                history_id: "h1".to_string(),
-            },
-            BackendHttpMethod::Get,
-            "/api/review-history/h1",
-            false,
         ),
     ];
     for (request, method, path, has_body) in cases {
@@ -163,18 +140,10 @@ fn drafting_routes_post_json_or_multipart_payloads() {
         (
             ReviewBackendRequest::DraftGenerateStream {
                 payload: json!({ "jobId": "job" }),
-                audio_tracks: vec![track.clone()],
+                audio_tracks: vec![track],
             },
             "/api/draft/generate/stream",
             true,
-        ),
-        (
-            ReviewBackendRequest::DraftTranscribeSegment {
-                payload: json!({ "segment": { "rowId": "s" } }),
-                audio_tracks: vec![track],
-            },
-            "/api/broker/transcribe-segment",
-            false,
         ),
         (
             ReviewBackendRequest::DraftRedistributeText(json!({ "groups": [] })),
@@ -240,20 +209,6 @@ fn sse_error_event_or_missing_done_fails() {
 }
 
 #[test]
-fn only_connection_drops_are_reconciled() {
-    for error in [
-        "review backend request failed: Failed to fetch",
-        "review backend response read failed: connection reset",
-        "NetworkError when attempting to fetch resource",
-    ] {
-        assert!(is_reconnectable_draft_stream_error(error), "{error}");
-    }
-    assert!(!is_reconnectable_draft_stream_error(
-        "review backend returned HTTP 400: bad rows"
-    ));
-}
-
-#[test]
 fn backend_urls_join_without_double_slashes() {
     assert_eq!(
         review_backend_url("https://reviewgen.ovh/", "/api/review/generate"),
@@ -262,16 +217,5 @@ fn backend_urls_join_without_double_slashes() {
     assert_eq!(
         ReviewBackend::new(" https://review.example/ ").base_url(),
         "https://review.example"
-    );
-}
-
-#[test]
-fn history_query_accepts_pairs_and_bare_terms() {
-    assert_eq!(
-        parse_history_query("limit=10 & tone issue &"),
-        vec![
-            ("limit".to_string(), "10".to_string()),
-            ("q".to_string(), "tone issue".to_string()),
-        ]
     );
 }

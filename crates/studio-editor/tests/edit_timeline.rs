@@ -269,12 +269,13 @@ fn auto_segment_visible_silences_splits_long_silence_then_trims_segments() {
 }
 
 #[test]
-fn auto_segment_visible_silences_without_long_silence_is_unavailable() {
-    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 4.0, "speech")]);
+fn auto_segment_with_nothing_to_change_is_unavailable() {
+    // The row already hugs its only speech: no trim, merge, split, silent row or placement.
+    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.195, 1.595, "speech")]);
     install_audio(
         &mut doc,
         "lane-1",
-        audio_with_speech(6.0, 100, &[(0.0, 6.0)]),
+        audio_with_speech(6.0, 100, &[(1.20, 1.60)]),
     );
     let before = doc.project().segments.clone();
 
@@ -282,6 +283,130 @@ fn auto_segment_visible_silences_without_long_silence_is_unavailable() {
 
     assert!(matches!(error, EditError::Unavailable(_)));
     assert_eq!(doc.project().segments, before);
+    assert!(!doc.can_undo());
+}
+
+/// A lane's words in time order, the way a reader sees the transcript.
+fn lane_words(doc: &EditorDoc, lane: &str) -> Vec<String> {
+    let mut rows: Vec<_> = doc
+        .project()
+        .segments
+        .iter()
+        .filter(|segment| segment.lane_id == lane)
+        .collect();
+    rows.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+    rows.iter()
+        .flat_map(|segment| segment.text.split_whitespace().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn auto_segment_merges_close_same_speaker_rows_before_splitting_on_silence() {
+    // Two rows 0.3s apart whose shared speech has its pause inside the second row: Helper
+    // merges them first, so the pause (not the old row boundary) decides the rows.
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 1.0, 2.0, "Раз два."),
+        seg("b", "lane-1", 2.3, 6.0, "Три четыре. Пять шесть."),
+        seg("other", "lane-2", 2.0, 3.0, "Чужой текст."),
+    ]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(8.0, 100, &[(1.0, 3.5), (4.8, 6.0)]),
+    );
+    let words = lane_words(&doc, "lane-1");
+
+    let outcome = ok(doc.auto_segment_visible_silences());
+
+    let mut rows: Vec<_> = doc
+        .project()
+        .segments
+        .iter()
+        .filter(|segment| segment.lane_id == "lane-1")
+        .collect();
+    rows.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
+    assert_eq!(rows.len(), 2, "merged then split once: {rows:?}");
+    assert!(rows[0].end_seconds <= 3.6 && rows[1].start_seconds >= 4.7);
+    assert_eq!(
+        lane_words(&doc, "lane-1"),
+        words,
+        "no word lost, added or reordered"
+    );
+    assert_eq!(text_of(&doc, "other"), "Чужой текст.");
+    for row in &rows {
+        assert_eq!(draft_text(&doc, &row.id), row.text);
+    }
+    assert!(
+        outcome
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("merged 1"))
+    );
+}
+
+#[test]
+fn auto_segment_removes_silent_rows_and_stitches_their_text_onto_the_nearest_row() {
+    // `stray` has no audio and sits 1.5s after `speech` (too far to merge): its text moves to
+    // `speech` and the row goes. Text placement must not overwrite the stitched words.
+    let mut doc = doc(vec![
+        seg("speech", "lane-1", 1.0, 2.0, "hello there"),
+        seg("stray", "lane-1", 3.5, 4.0, "stray words"),
+    ]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(6.0, 100, &[(1.0, 2.0)]),
+    );
+
+    ok(doc.auto_segment_visible_silences());
+
+    assert_eq!(ids(&doc), vec!["speech".to_string()]);
+    assert_eq!(text_of(&doc, "speech"), "hello there stray words");
+    assert_eq!(draft_text(&doc, "speech"), "hello there stray words");
+}
+
+#[test]
+fn auto_segment_stitches_an_earlier_silent_row_in_front_and_drops_empty_silent_rows() {
+    let mut doc = doc(vec![
+        seg("lead", "lane-1", 0.2, 0.6, "first"),
+        seg("speech", "lane-1", 2.0, 3.0, "second third"),
+        seg("empty", "lane-1", 5.0, 5.5, ""),
+    ]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(8.0, 100, &[(2.0, 3.0)]),
+    );
+
+    ok(doc.auto_segment_visible_silences());
+
+    assert_eq!(ids(&doc), vec!["speech".to_string()]);
+    assert_eq!(text_of(&doc, "speech"), "first second third");
+}
+
+#[test]
+fn auto_segment_keeps_a_silent_row_with_text_and_no_same_speaker_neighbour() {
+    let mut doc = doc(vec![
+        seg("alone", "lane-1", 1.0, 2.0, "only words"),
+        seg("other", "lane-2", 1.0, 2.0, "other speaker"),
+    ]);
+    install_audio(&mut doc, "lane-1", audio_with_speech(4.0, 100, &[]));
+    install_audio(
+        &mut doc,
+        "lane-2",
+        audio_with_speech(4.0, 100, &[(1.0, 2.0)]),
+    );
+
+    let outcome = ok(doc.auto_segment_visible_silences());
+
+    assert_eq!(text_of(&doc, "alone"), "only words");
+    assert_eq!(text_of(&doc, "other"), "other speaker");
+    assert!(
+        outcome
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("kept 1 silent segment"))
+    );
 }
 
 #[test]
@@ -453,6 +578,32 @@ fn trim_visible_segments_uses_decoded_audio_and_skips_lanes_without_audio() {
         project.segment("annotation-2").unwrap().start_seconds,
         3.5,
         "lanes without decoded audio are skipped"
+    );
+}
+
+#[test]
+fn trim_visible_segments_never_grows_two_neighbours_into_each_other() {
+    // Speech runs through the gap: both rows' outward passes want the same span.
+    let mut doc = doc(vec![
+        seg("left", "lane-1", 1.0, 1.9, "раз"),
+        seg("right", "lane-1", 2.1, 3.0, "два"),
+    ]);
+    install_audio(
+        &mut doc,
+        "lane-1",
+        audio_with_speech(5.0, 1000, &[(0.5, 3.5)]),
+    );
+
+    ok(doc.trim_visible_segments_to_audio());
+
+    let project = doc.project();
+    let left = project.segment("left").unwrap();
+    let right = project.segment("right").unwrap();
+    assert!(
+        left.end_seconds < right.start_seconds,
+        "rows overlap: left ends {} after right starts {}",
+        left.end_seconds,
+        right.start_seconds
     );
 }
 

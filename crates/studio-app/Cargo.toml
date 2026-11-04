@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 async-channel = "2.5"
+bytes.workspace = true
 gpui-kit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +20,7 @@ studio-audio.workspace = true
 studio-babel.workspace = true
 studio-core.workspace = true
 studio-editor.workspace = true
+studio-inference.workspace = true
 studio-services.workspace = true
 studio-waveform.workspace = true
 

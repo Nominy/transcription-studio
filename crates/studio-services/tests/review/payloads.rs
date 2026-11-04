@@ -2,9 +2,9 @@ use serde_json::{Value, json};
 use studio_services::review::{
     DraftingConfig, GeneratedReview, ReviewerCard, ReviewerFeedback, ReviewerSession,
     build_draft_generate_payload, build_draft_redistribute_payload,
-    build_draft_transcribe_segment_payload, build_reviewer_analytics_payload,
-    build_reviewer_payload, draft_generate_payloads_are_equivalent, ensure_draft_session_id,
-    review_action_id, reviewer_capability_available,
+    build_reviewer_analytics_payload, build_reviewer_payload,
+    draft_generate_payloads_are_equivalent, ensure_draft_session_id, review_action_id,
+    reviewer_capability_available,
 };
 
 use super::{review_action_workflow, sample_project};
@@ -159,21 +159,13 @@ fn analytics_payload_snapshots_generated_feedback_and_comments() {
             ReviewerCard {
                 id: "card-1".to_string(),
                 change_index: 1,
-                kind: String::new(),
-                summary: String::new(),
-                evidence: String::new(),
-                categories: Vec::new(),
-                matched_template_id: None,
-                template_title: None,
-                match_source: None,
-                opinion_text: None,
-                rationale: None,
                 comment: "card note".to_string(),
+                ..ReviewerCard::default()
             },
             ReviewerCard {
                 id: "card-2".to_string(),
                 comment: "  ".to_string(),
-                ..empty_card()
+                ..ReviewerCard::default()
             },
         ],
         suggestions: Vec::new(),
@@ -209,23 +201,6 @@ fn analytics_payload_snapshots_generated_feedback_and_comments() {
     assert!(bare.get("prepared").is_none());
 }
 
-fn empty_card() -> ReviewerCard {
-    ReviewerCard {
-        id: String::new(),
-        change_index: 0,
-        kind: String::new(),
-        summary: String::new(),
-        evidence: String::new(),
-        categories: Vec::new(),
-        matched_template_id: None,
-        template_title: None,
-        match_source: None,
-        opinion_text: None,
-        rationale: None,
-        comment: String::new(),
-    }
-}
-
 #[test]
 fn drafting_payloads_follow_the_gold_extension_contract() {
     let workflow = review_action_workflow();
@@ -247,11 +222,6 @@ fn drafting_payloads_follow_the_gold_extension_contract() {
             .iter()
             .any(|row| row["rowId"] == selected)
     );
-
-    let transcribe =
-        build_draft_transcribe_segment_payload(project, Some(selected), &config()).unwrap();
-    assert_eq!(transcribe["segment"]["rowId"], selected);
-    assert_eq!(transcribe["openRouterApiKey"], "sk-test");
 
     let redistribute =
         build_draft_redistribute_payload(project, Some(selected), &config()).unwrap();
@@ -303,15 +273,6 @@ fn redistribution_groups_only_the_selected_speaker() {
         ])
     );
     assert_eq!(group["segments"][1]["index"], 2);
-}
-
-#[test]
-fn transcribe_falls_back_to_the_first_segment() {
-    let payload =
-        build_draft_transcribe_segment_payload(&sample_project(), Some("missing"), &config())
-            .unwrap();
-    assert_eq!(payload["segment"]["rowId"], "s1");
-    assert_eq!(payload["segment"]["endSeconds"], 2.0);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use studio_waveform::DecodedAudio;
 use crate::{
     AudioError, LoopRange, MIN_PLAYBACK_SPEED, ManualClock, PlaybackEvent, PlaybackState,
     clock::Clock,
-    source::{ControlState, MixSource, SessionControl},
+    source::{ControlState, LaneGain, LaneSources, MixSource, SessionControl},
     transport::Transport,
 };
 
@@ -22,11 +22,15 @@ pub const MAX_LANE_VOLUME: f32 = 2.0;
 
 /// Per-lane mix settings. A lane is audible when it is not muted and either
 /// no lane is soloed or it is soloed itself; its gain is then `volume`.
+/// `enhanced_ratio` is the share of the lane's enhanced PCM in its sound
+/// (`0` = original only, `1` = enhanced only); it has no effect while the
+/// lane has no enhanced PCM.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LaneMix {
     pub muted: bool,
     pub solo: bool,
     pub volume: f32,
+    pub enhanced_ratio: f32,
 }
 
 impl Default for LaneMix {
@@ -35,6 +39,7 @@ impl Default for LaneMix {
             muted: false,
             solo: false,
             volume: 1.0,
+            enhanced_ratio: 0.0,
         }
     }
 }
@@ -42,6 +47,8 @@ impl Default for LaneMix {
 struct Lane {
     id: String,
     audio: Arc<DecodedAudio>,
+    /// Same clock as `audio` (validated rate and frame count).
+    enhanced: Option<Arc<DecodedAudio>>,
 }
 
 /// Players feeding the output for the current play/audition. Dropping it
@@ -112,6 +119,10 @@ pub struct AudioEngine {
     clock: Clock,
     lanes: Vec<Lane>,
     mix: HashMap<String, LaneMix>,
+    /// Replaced PCM a live source may still read; dropped once the audio
+    /// thread has released it so large buffers are not freed in the output
+    /// callback.
+    retired: Vec<Arc<DecodedAudio>>,
     transport: Transport,
     timeline_end: Option<f64>,
     silent: bool,
@@ -158,6 +169,7 @@ impl AudioEngine {
             clock,
             lanes: Vec::new(),
             mix: HashMap::new(),
+            retired: Vec::new(),
             transport: Transport::new(now),
             timeline_end: None,
             silent,
@@ -174,8 +186,9 @@ impl AudioEngine {
     // ---- lanes -------------------------------------------------------------
 
     /// Adds or replaces a lane's decoded audio. The same `Arc` can back the
-    /// lane's waveform, so PCM is decoded and held once. If playback is
-    /// running it restarts in place to include the lane.
+    /// lane's waveform, so PCM is decoded and held once. Replacing audio drops
+    /// the lane's enhanced PCM (it was derived from the old audio). If
+    /// playback is running it restarts in place to include the lane.
     pub fn insert_lane(
         &mut self,
         lane_id: impl Into<String>,
@@ -187,15 +200,24 @@ impl AudioEngine {
         }
         let lane_id = lane_id.into();
         match self.lanes.iter_mut().find(|lane| lane.id == lane_id) {
-            Some(lane) => lane.audio = audio,
-            None => self.lanes.push(Lane { id: lane_id, audio }),
+            Some(lane) => {
+                let previous = std::mem::replace(&mut lane.audio, audio);
+                let enhanced = lane.enhanced.take();
+                self.retired.push(previous);
+                self.retired.extend(enhanced);
+            }
+            None => self.lanes.push(Lane {
+                id: lane_id,
+                audio,
+                enhanced: None,
+            }),
         }
         self.lanes_changed();
         let _ = self.prepare();
         Ok(())
     }
 
-    /// Removes a lane and returns its audio.
+    /// Removes a lane (and its enhanced PCM) and returns its original audio.
     pub fn remove_lane(&mut self, lane_id: &str) -> Option<Arc<DecodedAudio>> {
         let index = self.lanes.iter().position(|lane| lane.id == lane_id)?;
         let lane = self.lanes.remove(index);
@@ -210,6 +232,81 @@ impl AudioEngine {
             .map(|lane| &lane.audio)
     }
 
+    /// Installs enhanced PCM beside the originals of loaded lanes, all or
+    /// nothing: every entry must name a loaded lane and match its original's
+    /// sample rate and frame count, with one channel (shared by all original
+    /// channels) or the original's channel count. Playback restarts in place
+    /// once, on the original clock; timeline and positions are unchanged.
+    pub fn set_enhanced_audio(
+        &mut self,
+        lanes: Vec<(String, Arc<DecodedAudio>)>,
+    ) -> Result<(), AudioError> {
+        let mut targets = Vec::with_capacity(lanes.len());
+        for (lane_id, enhanced) in lanes {
+            let Some(index) = self.lanes.iter().position(|lane| lane.id == lane_id) else {
+                return Err(AudioError::LaneNotLoaded(lane_id));
+            };
+            let original = &self.lanes[index].audio;
+            let mismatch = if enhanced.sample_rate() != original.sample_rate() {
+                Some(format!(
+                    "sample rate {} Hz, original {} Hz",
+                    enhanced.sample_rate(),
+                    original.sample_rate()
+                ))
+            } else if enhanced.frame_count() != original.frame_count() {
+                Some(format!(
+                    "{} frames, original {}",
+                    enhanced.frame_count(),
+                    original.frame_count()
+                ))
+            } else if enhanced.number_of_channels() != 1
+                && enhanced.number_of_channels() != original.number_of_channels()
+            {
+                Some(format!(
+                    "{} channels, original {}",
+                    enhanced.number_of_channels(),
+                    original.number_of_channels()
+                ))
+            } else {
+                None
+            };
+            if let Some(reason) = mismatch {
+                return Err(AudioError::EnhancedAudioMismatch { lane_id, reason });
+            }
+            targets.push((index, enhanced));
+        }
+        if targets.is_empty() {
+            return Ok(());
+        }
+        for (index, enhanced) in targets {
+            let previous = self.lanes[index].enhanced.replace(enhanced);
+            self.retired.extend(previous);
+        }
+        self.lanes_changed();
+        Ok(())
+    }
+
+    /// Drops every lane's enhanced PCM; playback continues on the originals.
+    pub fn clear_enhanced_audio(&mut self) {
+        let mut cleared = false;
+        for lane in &mut self.lanes {
+            if let Some(enhanced) = lane.enhanced.take() {
+                self.retired.push(enhanced);
+                cleared = true;
+            }
+        }
+        if cleared {
+            self.lanes_changed();
+        }
+    }
+
+    pub fn lane_enhanced_audio(&self, lane_id: &str) -> Option<&Arc<DecodedAudio>> {
+        self.lanes
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .and_then(|lane| lane.enhanced.as_ref())
+    }
+
     /// Loaded lane ids in insertion order.
     pub fn lane_ids(&self) -> impl Iterator<Item = &str> {
         self.lanes.iter().map(|lane| lane.id.as_str())
@@ -222,6 +319,7 @@ impl AudioEngine {
         self.session = None;
         self.lanes = Vec::new();
         self.mix = HashMap::new();
+        self.retired = Vec::new();
         self.output.release();
         self.timeline_end = None;
         let speed = self.transport.speed();
@@ -258,9 +356,26 @@ impl AudioEngine {
         self.push_controls();
     }
 
+    /// Share of the lane's enhanced PCM in its sound. Non-finite values are
+    /// ignored; others clamp to `0..=1`. Applies to live playback within one
+    /// control span without restarting it.
+    pub fn set_lane_enhanced_ratio(&mut self, lane_id: &str, ratio: f32) {
+        if !ratio.is_finite() {
+            return;
+        }
+        self.mix
+            .entry(lane_id.to_string())
+            .or_default()
+            .enhanced_ratio = ratio.clamp(0.0, 1.0);
+        self.push_controls();
+    }
+
     /// Loaded lanes that currently contribute sound.
     pub fn audible_lane_count(&self) -> usize {
-        self.gains().into_iter().filter(|gain| *gain > 0.0).count()
+        self.gains()
+            .into_iter()
+            .filter(|gain| gain.is_audible())
+            .count()
     }
 
     // ---- transport ---------------------------------------------------------
@@ -278,6 +393,7 @@ impl AudioEngine {
     /// Applies time-driven transitions (end of playback, end of audition)
     /// and reports them. Call once per frame while not stopped.
     pub fn poll(&mut self) -> Option<PlaybackEvent> {
+        self.release_retired();
         let state = self.transport.state();
         if state == PlaybackState::Stopped {
             return None;
@@ -474,19 +590,36 @@ impl AudioEngine {
         })
     }
 
-    fn gains(&self) -> Vec<f32> {
+    fn gains(&self) -> Vec<LaneGain> {
         let any_solo = self.mix.values().any(|mix| mix.solo);
         self.lanes
             .iter()
             .map(|lane| {
                 let mix = self.lane_mix(&lane.id);
                 if mix.muted || (any_solo && !mix.solo) {
-                    0.0
+                    return LaneGain::default();
+                }
+                let ratio = if lane.enhanced.is_some() {
+                    mix.enhanced_ratio
                 } else {
-                    mix.volume
+                    0.0
+                };
+                LaneGain {
+                    original: mix.volume * (1.0 - ratio),
+                    enhanced: mix.volume * ratio,
                 }
             })
             .collect()
+    }
+
+    /// Drops retired PCM no live source references any more (the engine's
+    /// clone plus the retired entry are the only owners).
+    fn release_retired(&mut self) {
+        self.retired.retain(|audio| {
+            audio
+                .channel_data_shared(0)
+                .is_some_and(|channel| Arc::strong_count(&channel) > 2)
+        });
     }
 
     fn control_state(&self) -> ControlState {
@@ -511,6 +644,7 @@ impl AudioEngine {
     }
 
     fn lanes_changed(&mut self) {
+        self.release_retired();
         let now = self.now();
         self.transport
             .set_timeline_end(now, self.effective_timeline_end());
@@ -532,21 +666,26 @@ impl AudioEngine {
         let audible = control_state
             .gains
             .iter()
-            .filter(|gain| **gain > 0.0)
+            .filter(|gain| gain.is_audible())
             .count();
         let control = Arc::new(SessionControl::new(control_state));
 
-        let mut groups: Vec<Vec<(usize, &DecodedAudio)>> = Vec::new();
+        let mut groups: Vec<Vec<LaneSources<'_>>> = Vec::new();
         for (slot, lane) in self.lanes.iter().enumerate() {
-            let audio = lane.audio.as_ref();
+            let sources = LaneSources {
+                slot,
+                original: lane.audio.as_ref(),
+                enhanced: lane.enhanced.as_deref(),
+            };
+            let audio = sources.original;
             match groups.iter_mut().find(|group| {
-                group.first().is_some_and(|(_, first)| {
-                    first.sample_rate() == audio.sample_rate()
-                        && first.number_of_channels() == audio.number_of_channels()
+                group.first().is_some_and(|first| {
+                    first.original.sample_rate() == audio.sample_rate()
+                        && first.original.number_of_channels() == audio.number_of_channels()
                 })
             }) {
-                Some(group) => group.push((slot, audio)),
-                None => groups.push(vec![(slot, audio)]),
+                Some(group) => group.push(sources),
+                None => groups.push(vec![sources]),
             }
         }
 

@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use studio_audio::{
-    AudioEngine, DecodedAudio, LoopRange, ManualClock, OfflineOutput, PlaybackEvent, PlaybackState,
+    AudioEngine, AudioError, DecodedAudio, LoopRange, ManualClock, OfflineOutput, PlaybackEvent,
+    PlaybackState,
 };
 
 const RATE: u32 = 1_000;
@@ -452,4 +453,255 @@ fn removing_a_lane_returns_its_audio_and_shrinks_the_timeline() {
 fn engine_can_be_moved_to_another_thread_on_windows() {
     fn assert_send<T: Send>() {}
     assert_send::<AudioEngine>();
+}
+
+fn enhanced(lane: &str, audio: &Arc<DecodedAudio>) -> Vec<(String, Arc<DecodedAudio>)> {
+    vec![(lane.to_string(), Arc::clone(audio))]
+}
+
+/// `original` at frame `f` is `f / 1000`; `enhanced` is the constant 0.5.
+fn ramp_with_constant_enhancement(engine: &mut AudioEngine) -> Arc<DecodedAudio> {
+    let original = ramp(1_000);
+    engine.insert_lane("a", Arc::clone(&original)).unwrap();
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.5, 1.0)))
+        .unwrap();
+    original
+}
+
+fn blend(original: &[f32], enhanced: f32, ratio: f32) -> Vec<f32> {
+    original
+        .iter()
+        .map(|sample| sample * (1.0 - ratio) + enhanced * ratio)
+        .collect()
+}
+
+fn assert_samples_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (frame, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "frame {frame}: expected {expected}, got {actual}"
+        );
+    }
+}
+
+#[test]
+fn enhanced_ratio_blends_original_and_enhanced_audio() {
+    let (mut engine, mut output, _clock) = setup(1);
+    engine.insert_lane("a", constant(0.2, 1.0)).unwrap();
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.6, 1.0)))
+        .unwrap();
+    engine.play().unwrap();
+
+    // Ratio 0 (the default) is the untouched original.
+    assert_eq!(level(&mut output), 0.2);
+    for (ratio, expected) in [(0.1, 0.24), (0.5, 0.4), (0.9, 0.56), (1.0, 0.6)] {
+        engine.set_lane_enhanced_ratio("a", ratio);
+        assert!(
+            (level(&mut output) - expected).abs() < 1e-6,
+            "ratio {ratio}"
+        );
+    }
+
+    engine.set_lane_enhanced_ratio("a", f32::NAN);
+    assert_eq!(engine.lane_mix("a").enhanced_ratio, 1.0);
+    engine.set_lane_enhanced_ratio("a", 7.0);
+    assert_eq!(engine.lane_mix("a").enhanced_ratio, 1.0);
+    engine.set_lane_enhanced_ratio("a", -1.0);
+    assert_eq!(level(&mut output), 0.2);
+}
+
+#[test]
+fn ratio_changes_apply_live_without_restarting_playback() {
+    let (mut engine, mut output, _clock) = setup(1);
+    let original = ramp_with_constant_enhancement(&mut engine);
+    engine.play().unwrap();
+    let pcm = frames(&original, 0..1_000);
+    assert_eq!(output.render(SPAN), pcm[..SPAN]);
+
+    // The clock has not moved: a restarted session would begin at frame 0 again.
+    engine.set_lane_enhanced_ratio("a", 0.3);
+    let rendered = output.render(2 * SPAN);
+
+    assert_eq!(rendered[..SPAN], pcm[SPAN..2 * SPAN]);
+    assert_samples_close(
+        &rendered[SPAN..],
+        &blend(&pcm[2 * SPAN..3 * SPAN], 0.5, 0.3),
+    );
+}
+
+#[test]
+fn installing_enhanced_audio_keeps_the_original_clock() {
+    let (mut engine, mut output, clock) = setup(1);
+    let original = ramp(1_000);
+    engine.insert_lane("a", Arc::clone(&original)).unwrap();
+    engine.set_lane_enhanced_ratio("a", 0.5);
+    engine.play().unwrap();
+    output.render(300);
+    clock.advance(ms(300));
+
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.5, 1.0)))
+        .unwrap();
+
+    assert_eq!(engine.state(), PlaybackState::Playing);
+    assert_close(engine.position(), 0.3);
+    assert_close(engine.duration(), 1.0);
+    let pcm = frames(&original, 300..300 + SPAN);
+    assert_samples_close(&output.render(SPAN), &blend(&pcm, 0.5, 0.5));
+
+    engine.clear_enhanced_audio();
+    assert!(engine.lane_enhanced_audio("a").is_none());
+    assert_close(engine.position(), 0.3);
+    assert_eq!(output.render(SPAN), frames(&original, 300..300 + SPAN));
+}
+
+#[test]
+fn seeks_and_loops_keep_original_and_enhanced_aligned() {
+    let (mut engine, mut output, _clock) = setup(1);
+    let original = ramp(1_000);
+    engine.insert_lane("a", Arc::clone(&original)).unwrap();
+    let enhanced_ramp = mono((0..1_000).map(|frame| -(frame as f64) / 1_000.0).collect());
+    engine
+        .set_enhanced_audio(enhanced("a", &enhanced_ramp))
+        .unwrap();
+    engine.set_lane_enhanced_ratio("a", 0.25);
+    let expected = |range: std::ops::Range<usize>| {
+        // 0.75 * f/1000 + 0.25 * -f/1000 = 0.5 * f/1000
+        frames(&original, range)
+            .iter()
+            .map(|sample| sample * 0.5)
+            .collect::<Vec<_>>()
+    };
+
+    engine.play_from(0.6).unwrap();
+    assert_samples_close(&output.render(SPAN), &expected(600..600 + SPAN));
+    engine.seek(0.2);
+    settle(&mut output);
+    assert_samples_close(&output.render(SPAN), &expected(200..200 + SPAN));
+
+    engine.pause();
+    engine.set_loop(Some(LoopRange {
+        start_seconds: 0.1,
+        end_seconds: 0.15,
+    }));
+    engine.play_from(0.1).unwrap();
+    let rendered = output.render(100);
+    assert_samples_close(&rendered[..50], &expected(100..150));
+    assert_samples_close(&rendered[50..], &expected(100..150));
+}
+
+#[test]
+fn muted_lanes_silence_enhanced_audio_and_lanes_without_it_stay_original() {
+    let (mut engine, mut output, _clock) = setup(1);
+    engine.insert_lane("a", constant(0.2, 1.0)).unwrap();
+    engine.insert_lane("b", constant(0.1, 1.0)).unwrap();
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.4, 1.0)))
+        .unwrap();
+    engine.set_lane_enhanced_ratio("a", 1.0);
+    // Lane b has no enhanced audio: its ratio must not attenuate the original.
+    engine.set_lane_enhanced_ratio("b", 1.0);
+    engine.play().unwrap();
+    assert!((level(&mut output) - 0.5).abs() < 1e-6);
+
+    engine.set_lane_muted("a", true);
+    assert_eq!(engine.audible_lane_count(), 1);
+    assert!((level(&mut output) - 0.1).abs() < 1e-6);
+
+    engine.set_lane_muted("a", false);
+    engine.set_lane_solo("a", true);
+    engine.set_lane_volume("a", 2.0);
+    assert!((level(&mut output) - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn enhanced_audio_must_match_its_original_and_installs_all_or_nothing() {
+    let (mut engine, mut output, _clock) = setup(1);
+    engine.insert_lane("a", constant(0.2, 1.0)).unwrap();
+    engine.insert_lane("b", constant(0.1, 1.0)).unwrap();
+    let valid = constant(0.4, 1.0);
+    let short = constant(0.4, 0.5);
+    let other_rate = Arc::new(DecodedAudio::new(2 * RATE, vec![vec![0.4; 2_000]]).unwrap());
+
+    let attempts = [
+        (short, "b"),
+        (other_rate, "b"),
+        (Arc::clone(&valid), "missing"),
+    ];
+    for (bad, lane) in attempts {
+        let result = engine.set_enhanced_audio(vec![
+            ("a".to_string(), Arc::clone(&valid)),
+            (lane.to_string(), bad),
+        ]);
+        assert!(
+            matches!(
+                result,
+                Err(AudioError::EnhancedAudioMismatch { .. } | AudioError::LaneNotLoaded(_))
+            ),
+            "{result:?}"
+        );
+        assert!(engine.lane_enhanced_audio("a").is_none());
+    }
+
+    engine.set_lane_enhanced_ratio("a", 1.0);
+    engine.play().unwrap();
+    assert!((level(&mut output) - 0.3).abs() < 1e-6);
+}
+
+#[test]
+fn mono_enhanced_audio_feeds_every_channel_of_a_stereo_original() {
+    let (mut engine, mut output, _clock) = setup(2);
+    let stereo =
+        DecodedAudio::new(RATE, vec![vec![0.5; 1_000], vec![-0.5; 1_000]]).expect("stereo audio");
+    engine.insert_lane("a", Arc::new(stereo)).unwrap();
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.25, 1.0)))
+        .unwrap();
+    engine.set_lane_enhanced_ratio("a", 0.5);
+    engine.play().unwrap();
+
+    let rendered = output.render(40);
+    assert!(
+        rendered
+            .chunks(2)
+            .all(|frame| frame[0] == 0.375 && frame[1] == -0.125),
+        "{rendered:?}"
+    );
+}
+
+#[test]
+fn replacing_a_lane_original_drops_its_enhanced_audio() {
+    let (mut engine, _output, _clock) = setup(1);
+    engine.insert_lane("a", constant(0.2, 1.0)).unwrap();
+    engine
+        .set_enhanced_audio(enhanced("a", &constant(0.4, 1.0)))
+        .unwrap();
+
+    engine.insert_lane("a", constant(0.3, 1.0)).unwrap();
+
+    assert!(engine.lane_enhanced_audio("a").is_none());
+}
+
+#[test]
+fn replaced_enhanced_audio_is_released_after_the_audio_thread_drops_it() {
+    let (mut engine, mut output, _clock) = setup(1);
+    engine.insert_lane("a", constant(0.2, 1.0)).unwrap();
+    let first = constant(0.4, 1.0);
+    let samples = Arc::downgrade(&first.channel_data_shared(0).expect("channel"));
+    engine.set_enhanced_audio(enhanced("a", &first)).unwrap();
+    drop(first);
+    engine.set_lane_enhanced_ratio("a", 1.0);
+    engine.play().unwrap();
+    output.render(SPAN);
+
+    engine.clear_enhanced_audio();
+    // The output callback drops the old source but must not free its PCM.
+    output.render(SPAN);
+    assert!(samples.upgrade().is_some());
+
+    engine.poll();
+    assert!(samples.upgrade().is_none());
 }

@@ -8,11 +8,16 @@
 
 mod actions;
 mod dialogs;
+mod drafting;
 mod navigation;
 mod structure;
 mod text;
 mod timeline;
 
+pub use drafting::{
+    DraftedRow, RowSnapshot, SEGMENT_BOUNDARY_TOLERANCE_SECONDS, TranscriptionRefusal,
+    TranscriptionTarget, capitalize_first_letter, remove_word_final_ellipsis,
+};
 pub use text::TagSuggestionList;
 
 use std::cell::{Cell, RefCell};
@@ -26,6 +31,7 @@ use super::annotation::{EditAnnotationDialog, EditAnnotationError};
 use super::create_region::{CreateRegionDialog, CreateRegionError};
 use super::draft::{DraftError, Drafts, SegmentDraft, TextSelection};
 use super::find::FindState;
+use super::format::format_time;
 use super::navigate::{self, HelperFocusRestore};
 use super::structure::{
     AuditionKey, LoopStripDrag, OverlayDrag, SplitError, TimelineAutoscroll, WaveformCreateDrag,
@@ -36,7 +42,8 @@ use super::time::TimeEditError;
 use crate::editor_model::{EditorSession, ProblemCounts};
 use crate::linter::LintSeverity;
 use crate::timeline_model::LoopStripHit;
-use crate::transcript_model::TranscriptRowView;
+use crate::timing::WordTimings;
+use crate::transcript_model::{TranscriptRowView, speaker_label};
 use crate::workflow::StudioWorkflow;
 
 /// Side effects the UI performs after an operation.
@@ -113,9 +120,9 @@ impl Outcome {
 pub enum EditError {
     #[error("{action} unavailable: project is read-only.")]
     ReadOnly { action: &'static str },
-    #[error("Segment `{0}` was not found.")]
+    #[error("That segment no longer exists.")]
     SegmentNotFound(String),
-    #[error("Segment `{0}` has no editable draft.")]
+    #[error("That segment has no editable draft.")]
     NoDraft(String),
     #[error("{action}: select a transcript segment first.")]
     NoSelection { action: &'static str },
@@ -241,6 +248,7 @@ pub struct EditorDoc {
     generation: u64,
     rows_cache: RefCell<Option<(RowsCacheKey, Rc<[TranscriptRowView]>)>>,
     problem_counts_cache: Cell<Option<(u64, ProblemCounts)>>,
+    word_timings: WordTimings,
 }
 
 impl EditorDoc {
@@ -264,6 +272,7 @@ impl EditorDoc {
             generation: 0,
             rows_cache: RefCell::new(None),
             problem_counts_cache: Cell::new(None),
+            word_timings: WordTimings::default(),
         };
         doc.hydrate_timeline_defaults();
         doc
@@ -334,6 +343,21 @@ impl EditorDoc {
     /// Acknowledged low-confidence word indices of a row.
     pub fn low_confidence_acks(&self, segment_id: &str) -> Option<&BTreeSet<usize>> {
         self.low_confidence_acks.get(segment_id)
+    }
+
+    /// Word timings of this task (Gold timestamps), used by smart split, Alt+Click seek, the
+    /// ghost cursor and auto-segmentation.
+    pub fn word_timings(&self) -> &WordTimings {
+        &self.word_timings
+    }
+
+    /// Installs timings for the given lanes (a newer timing run replaces older lanes).
+    pub fn install_word_timings(
+        &mut self,
+        lanes: impl IntoIterator<Item = studio_core::timing::LaneTimings>,
+    ) {
+        self.word_timings.install(lanes);
+        self.touch();
     }
 
     /// Whether the task is read-only (every edit is refused).
@@ -527,6 +551,41 @@ impl EditorDoc {
             .segment(segment_id)
             .cloned()
             .ok_or_else(|| EditError::SegmentNotFound(segment_id.to_string()))
+    }
+
+    /// How messages name a segment: its `#` number and speaker as the transcript shows them
+    /// (`segment 3 (Speaker 1)`). A row hidden by the track filter is named by speaker and
+    /// start time instead.
+    pub fn segment_label(&self, segment_id: &str) -> String {
+        if let Some(row) = self
+            .transcript_rows()
+            .iter()
+            .find(|row| row.segment_id == segment_id)
+        {
+            return format!("segment {} ({})", row.display_id, row.speaker_label);
+        }
+        let project = self.workflow.project();
+        match project.segment(segment_id) {
+            Some(segment) => format!(
+                "the {} segment at {}",
+                speaker_label(project, &segment.speaker_id),
+                format_time(segment.start_seconds)
+            ),
+            None => "the segment".to_string(),
+        }
+    }
+
+    /// How messages name a lane: its speaker (`Speaker 2`).
+    pub fn lane_label(&self, lane_id: &str) -> String {
+        let project = self.workflow.project();
+        project
+            .lanes
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .map_or_else(
+                || "the track".to_string(),
+                |lane| speaker_label(project, &lane.speaker_id),
+            )
     }
 
     fn selected_segment_id(&self, action: &'static str) -> Result<String, EditError> {

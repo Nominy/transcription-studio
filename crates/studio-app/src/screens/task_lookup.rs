@@ -1,5 +1,5 @@
-//! Task lookup dialog: claim a specific stitched transcription, or open a review action /
-//! processed transcription read-only.
+//! Task lookup dialog: claim a specific stitched transcription (or, on error-categorization
+//! projects, a diff's QA task), or open a review action / processed transcription read-only.
 
 use std::rc::Rc;
 
@@ -15,6 +15,7 @@ use studio_editor::editor_model::task_lookup::{
 const STITCHED_DESCRIPTION: &str =
     "Claim a specific stitched transcription or view a transcription in read-only mode.";
 const READ_ONLY_DESCRIPTION: &str = "View a transcription in read-only mode.";
+const QA_DESCRIPTION: &str = "Claim a diff's QA task or view a task in read-only mode.";
 const CONFIRM_EDIT_BODY: &str = "Are you sure you want to edit the stitched transcript? You will \
      have to submit again to mark the transcript as verified. For audits, please use the \
      read-only flow.";
@@ -46,6 +47,7 @@ struct TaskLookupView {
     state: TaskLookupState,
     processed: Entity<InputState>,
     review_action: Entity<InputState>,
+    qa_diff: Entity<InputState>,
     on_effect: OnEffect,
     _subscriptions: Vec<Subscription>,
 }
@@ -66,6 +68,11 @@ impl TaskLookupView {
             InputState::new(window, cx)
                 .placeholder("Review action ID (read-only)")
                 .default_value(state.review_action_id.clone())
+        });
+        let qa_diff = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Diff ID (QA)")
+                .default_value(state.qa_diff_id.clone())
         });
         let subscriptions = vec![
             cx.subscribe_in(
@@ -100,18 +107,35 @@ impl TaskLookupView {
                     _ => {}
                 },
             ),
+            cx.subscribe_in(
+                &qa_diff,
+                window,
+                |this, input, event, window, cx| match event {
+                    InputEvent::Change => {
+                        let value = input.read(cx).value().to_string();
+                        this.apply(TaskLookupEvent::ChangeQaDiffId { value }, window, cx);
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        this.apply(TaskLookupEvent::ClickClaimQa, window, cx)
+                    }
+                    _ => {}
+                },
+            ),
         ];
         Self {
             state,
             processed,
             review_action,
+            qa_diff,
             on_effect,
             _subscriptions: subscriptions,
         }
     }
 
     fn initial_input(&self) -> Entity<InputState> {
-        if self.state.show_stitched_option {
+        if self.state.shows_qa_claim() {
+            self.qa_diff.clone()
+        } else if self.state.shows_stitched_claim() {
             self.processed.clone()
         } else {
             self.review_action.clone()
@@ -130,7 +154,9 @@ impl TaskLookupView {
     }
 
     fn render_select(&self, cx: &mut Context<Self>) -> Div {
-        let description = if self.state.show_stitched_option {
+        let description = if self.state.shows_qa_claim() {
+            QA_DESCRIPTION
+        } else if self.state.show_stitched_option {
             STITCHED_DESCRIPTION
         } else {
             READ_ONLY_DESCRIPTION
@@ -139,7 +165,10 @@ impl TaskLookupView {
             .gap_3()
             .child(title("Find a task"))
             .child(body(description, cx))
-            .when(self.state.show_stitched_option, |this| {
+            .when(self.state.shows_qa_claim(), |this| {
+                this.child(Input::new(&self.qa_diff))
+            })
+            .when(self.state.shows_stitched_claim(), |this| {
                 this.child(Input::new(&self.processed))
             })
             .child(Input::new(&self.review_action))
@@ -147,7 +176,18 @@ impl TaskLookupView {
                 h_flex()
                     .justify_end()
                     .gap_2()
-                    .when(self.state.show_stitched_option, |this| {
+                    .when(self.state.shows_qa_claim(), |this| {
+                        this.child(
+                            Button::new("claim-qa")
+                                .outline()
+                                .label("Claim QA task")
+                                .disabled(!self.state.can_claim_qa())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.apply(TaskLookupEvent::ClickClaimQa, window, cx)
+                                })),
+                        )
+                    })
+                    .when(self.state.shows_stitched_claim(), |this| {
                         this.child(
                             Button::new("claim-stitched")
                                 .outline()

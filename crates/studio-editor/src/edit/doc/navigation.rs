@@ -36,6 +36,38 @@ impl EditorDoc {
         })
     }
 
+    /// Alt+Click on a row's text (Helper word seek): moves the playhead to the start of the
+    /// clicked word through the lane's word timings, selecting the row without scrolling.
+    /// Playback state is unchanged (a playing transport continues from the word). Without a
+    /// timestamp for the word nothing moves: there is no ratio estimate.
+    pub fn seek_to_word(&mut self, segment_id: &str, char_offset: usize) -> EditResult {
+        let segment = self.segment(segment_id)?;
+        let Some(lane) = self.word_timings.lane(&segment.lane_id) else {
+            return Ok(Outcome::status(
+                "Word seek: no word timestamps for this track yet. Run Gold Draft to create them.",
+            ));
+        };
+        let Some(time) = crate::timing::timestamp_at_offset(
+            self.drafts.text_or(&segment),
+            lane,
+            crate::timing::TimeRange::new(segment.start_seconds, segment.end_seconds),
+            char_offset,
+        ) else {
+            return Ok(Outcome::status(
+                "Word seek: no word in this row matches its timestamps.",
+            ));
+        };
+        let project = self.workflow.project();
+        self.session
+            .select_segment_without_seek(project, segment_id);
+        self.session.seek_to_time(project, time);
+        self.touch();
+        Ok(
+            Outcome::status(format!("Seeked to the word at {time:.3}s."))
+                .extend(self.restart_if_playing()),
+        )
+    }
+
     /// Click on a row body: selects without seeking; a double click also seeks to the row.
     pub fn press_row(&mut self, segment_id: &str, click_count: usize) -> Outcome {
         if click_count >= 2 {
@@ -284,7 +316,8 @@ impl EditorDoc {
     }
 
     /// Ghost caret for a row while a restore is pending and the row is not focused. While
-    /// playing it tracks the playhead proportionally (snapped to word starts).
+    /// playing it tracks the playhead through the lane's word timings when available, else
+    /// proportionally (snapped to word starts); never before the restore baseline.
     pub fn ghost_cursor(&self, segment_id: &str) -> Option<GhostCursor> {
         let restore = self.helper.pending.as_ref()?;
         if restore.segment_id != segment_id
@@ -295,12 +328,25 @@ impl EditorDoc {
         let segment = self.workflow.project().segment(segment_id)?;
         let text = self.drafts.text_or(segment);
         let char_offset = if self.session.is_playing {
-            proportional_restore_offset(
-                text,
-                segment,
-                self.session.playhead_seconds,
-                restore.restore_offset,
-            )
+            self.word_timings
+                .lane(&segment.lane_id)
+                .and_then(|lane| {
+                    crate::timing::offset_at_time(
+                        text,
+                        lane,
+                        crate::timing::TimeRange::new(segment.start_seconds, segment.end_seconds),
+                        self.session.playhead_seconds,
+                    )
+                })
+                .map(|offset| offset.max(restore.restore_offset).min(text.chars().count()))
+                .unwrap_or_else(|| {
+                    proportional_restore_offset(
+                        text,
+                        segment,
+                        self.session.playhead_seconds,
+                        restore.restore_offset,
+                    )
+                })
         } else {
             restore.restore_offset.min(text.chars().count())
         };
@@ -349,7 +395,12 @@ impl EditorDoc {
         Outcome::none().with(Effect::StartPlayback)
     }
 
+    /// Pausing focuses where the ghost cursor is shown — its row (synced to the playhead first,
+    /// as the next playback tick would) and offset, timed through word timings when the lane
+    /// has them (Helper `getGhostCursorTarget`). Without a shown ghost, the row under the
+    /// playhead gets a proportional offset.
     fn restore_helper_focus_for_current_playhead(&mut self) -> Result<Effect, String> {
+        self.sync_pending_restore_to_playback();
         let project = self.workflow.project();
         let session = &self.session;
         let visible = |id: &String| {
@@ -358,27 +409,37 @@ impl EditorDoc {
                 .is_some_and(|segment| navigate::segment_is_visible(session, segment))
         };
         let pending = self.helper.pending.clone();
-        let segment_id = segment_id_at_playhead(project, session)
-            .or_else(|| {
-                pending
-                    .as_ref()
-                    .map(|restore| restore.segment_id.clone())
-                    .filter(visible)
-            })
-            .or_else(|| session.selected_segment_id.clone().filter(visible))
-            .ok_or_else(|| {
-                "Helper focus restore failed: no segment at playback position.".to_string()
-            })?;
+        let ghost = pending
+            .as_ref()
+            .filter(|restore| visible(&restore.segment_id))
+            .and_then(|restore| self.ghost_cursor(&restore.segment_id));
+        let segment_id = match &ghost {
+            Some(ghost) => ghost.segment_id.clone(),
+            None => segment_id_at_playhead(project, session)
+                .or_else(|| {
+                    pending
+                        .as_ref()
+                        .map(|restore| restore.segment_id.clone())
+                        .filter(visible)
+                })
+                .or_else(|| session.selected_segment_id.clone().filter(visible))
+                .ok_or_else(|| {
+                    "Helper focus restore failed: no segment at playback position.".to_string()
+                })?,
+        };
         let blur = pending
             .as_ref()
             .map(|restore| restore.blur_playhead_seconds)
             .unwrap_or(session.playhead_seconds);
         let synthetic = pending.as_ref().is_some_and(|restore| restore.synthetic);
-        let restore = self
+        let mut restore = self
             .restore_for_segment(&segment_id, synthetic, Some(blur))
             .ok_or_else(|| {
-                format!("Helper focus restore failed: segment {segment_id} not found.")
+                "Helper focus restore failed: that segment no longer exists.".to_string()
             })?;
+        if let Some(ghost) = ghost {
+            restore.restore_offset = ghost.char_offset;
+        }
         self.session
             .select_segment_without_seek(self.workflow.project(), &segment_id);
         self.helper.focused_segment_id = Some(segment_id);

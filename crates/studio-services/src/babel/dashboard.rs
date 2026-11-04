@@ -28,6 +28,16 @@ pub struct DashboardProject {
     pub tasks_completed_today: u64,
     /// Babel's daily cap for this project; `None` when Babel enforces none.
     pub daily_task_limit: Option<u64>,
+    /// Babel project category (`error-categorization` for error-label projects).
+    pub category: Option<String>,
+}
+
+impl DashboardProject {
+    /// Error-label project: tasks open the error questionnaire and the lookup claims QA
+    /// tasks by diff id.
+    pub fn is_error_categorization(&self) -> bool {
+        self.category.as_deref() == Some(super::error_task::ERROR_CATEGORIZATION)
+    }
 }
 
 /// Totals over projects that report a daily limit:
@@ -159,6 +169,7 @@ fn project_from_object(
         tasks_completed_today: nested_u64(value, &["workerStats", "tasksCompletedToday"])
             .unwrap_or(0),
         daily_task_limit: nested_u64(value, &["taskLimit", "limit"]),
+        category: direct_string(value, &["category"]),
     })
 }
 

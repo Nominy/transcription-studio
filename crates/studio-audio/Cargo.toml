@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 rodio.workspace = true
+sha2 = "0.10"
 studio-core.workspace = true
 studio-waveform.workspace = true
 thiserror.workspace = true

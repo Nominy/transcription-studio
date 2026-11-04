@@ -569,7 +569,7 @@ fn cut_lane_range_trims_edges_and_deletes_covered_segments() {
                 lane_id: "track-1".to_string(),
                 start_seconds: 2.0,
                 end_seconds: 7.0,
-                smart_split: false,
+                split_texts: None,
             },
         )
         .expect("cut should apply");
@@ -587,7 +587,7 @@ fn cut_lane_range_trims_edges_and_deletes_covered_segments() {
 }
 
 #[test]
-fn cut_lane_range_middle_split_smart_allocates_text_and_redoes_as_one_command() {
+fn cut_lane_range_middle_split_applies_allocated_texts_and_redoes_as_one_command() {
     let mut project = sample_project();
     project.segments[0].start_seconds = 1.0;
     project.segments[0].end_seconds = 6.0;
@@ -601,7 +601,7 @@ fn cut_lane_range_middle_split_smart_allocates_text_and_redoes_as_one_command() 
                 lane_id: "track-1".to_string(),
                 start_seconds: 2.5,
                 end_seconds: 4.0,
-                smart_split: true,
+                split_texts: Some(("one two three".to_string(), "four five six".to_string())),
             },
         )
         .expect("middle smart cut should apply");

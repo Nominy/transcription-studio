@@ -8,12 +8,12 @@
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use studio_services::review::{
-    FeedbackForm, ReviewerWorkspace, feedback_initially_open, feedback_is_tts_project,
-    reviewer_capability_available,
+    FeedbackForm, feedback_initially_open, feedback_is_tts_project, reviewer_capability_available,
 };
 
 use super::dialogs;
 use super::flows::Flows;
+use super::reviewer::{Grader, MagicReview};
 use crate::editor::model::EditorModel;
 
 /// Right-hand drawer currently shown next to the editor.
@@ -46,13 +46,10 @@ pub struct TaskPanels {
     pub feedback: Option<FeedbackForm>,
     pub(super) feedback_attempt: u64,
     pub(super) feedback_tasks: Vec<Task<()>>,
-    pub reviewer: ReviewerWorkspace,
-    pub(super) reviewer_tasks: Vec<Task<()>>,
-    /// Reviewer operations in flight, keyed by operation name (dedupe + spinners).
-    pub(super) reviewer_pending: Vec<&'static str>,
-    pub(super) reviewer_error: Option<String>,
-    /// Raw body of the last analytics/history response (shown verbatim).
-    pub(super) reviewer_last_response: Option<String>,
+    /// Magic Review (interactive workspace / fast mode) state.
+    pub review: MagicReview,
+    /// Grade review dialog state.
+    pub grader: Grader,
     pub(super) flows: Flows,
     doc_dialog: Option<DocDialog>,
     _subscriptions: Vec<Subscription>,
@@ -91,7 +88,6 @@ impl TaskPanels {
     fn new(model: Entity<EditorModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let project = model.read(cx).doc().project();
         let read_only = model.read(cx).doc().is_read_only();
-        let reviewer = ReviewerWorkspace::from_project(project);
         let drawer = if feedback_initially_open(project) {
             Drawer::Feedback
         } else {
@@ -114,11 +110,8 @@ impl TaskPanels {
             feedback,
             feedback_attempt: 0,
             feedback_tasks: Vec::new(),
-            reviewer,
-            reviewer_tasks: Vec::new(),
-            reviewer_pending: Vec::new(),
-            reviewer_error: None,
-            reviewer_last_response: None,
+            review: MagicReview::default(),
+            grader: Grader::default(),
             flows: Flows::default(),
             doc_dialog: None,
             _subscriptions: subscriptions,

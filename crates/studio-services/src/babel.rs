@@ -1,5 +1,5 @@
 //! Babel service client: task claim/load, save, submit, skip, drop,
-//! admin flag, dashboard projects and reviewer feedback forms.
+//! admin flag, dashboard projects, reviewer feedback forms and error-category labels.
 //!
 //! Transport precedence per request: offline fixture
 //! (`STUDIO_BABEL_SERVICE_FIXTURE_JSON` / `_PATH`) → external command bridge
@@ -13,12 +13,13 @@
 
 mod client;
 mod dashboard;
+pub mod error_task;
 mod payload;
 mod request;
 mod response;
 mod transport;
 
-pub use client::{BabelClient, LoadedTask, TaskRequest};
+pub use client::{BabelClient, LoadedErrorTask, LoadedTask, OpenedTask, TaskRequest};
 pub use dashboard::{
     Dashboard, DashboardProject, NO_ACTIVE_PROJECTS_MESSAGE, daily_task_progress, parse_dashboard,
 };

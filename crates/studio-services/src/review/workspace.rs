@@ -1,16 +1,20 @@
-//! UI-free Reviewer session workspace: selection, comment drafts, single-flight comment
-//! autosave, and finalize-after-comments sequencing.
+//! UI-free interactive Magic Review workspace: the open session, independent per-card state
+//! (expanded, comment draft, template search), single-flight comment autosave, and
+//! finalize-after-comments sequencing.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use studio_core::Project;
 
-use super::feedback::reviewer_feedback_for_card;
 use super::model::{
-    FinalizeOutcome, GeneratedReview, ReviewerCard, ReviewerFeedback, ReviewerFinalize,
-    ReviewerSession, ReviewerTemplate,
+    FinalizeOutcome, GeneratedReview, ReviewerFinalize, ReviewerSession, ReviewerTemplate,
 };
-use super::payload::{build_reviewer_analytics_payload, reviewer_session_id_from_project};
+use super::payload::build_reviewer_analytics_payload;
+
+/// Results per template search (the Review Helper's limit).
+pub const TEMPLATE_SEARCH_LIMIT: usize = 8;
 
 /// A comment save to send with [`super::ReviewBackend::update_comments`].
 #[derive(Debug, Clone, PartialEq)]
@@ -33,60 +37,70 @@ pub enum ReviewerNext {
     },
 }
 
+/// One card's inline template search.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TemplateSearch {
+    pub query: String,
+    pub results: Vec<ReviewerTemplate>,
+    pub loading: bool,
+    pub error: Option<String>,
+    generation: u64,
+}
+
+/// A template search to send; settle with [`ReviewerWorkspace::finish_template_search`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateSearchRequest {
+    pub session_id: String,
+    pub card_id: String,
+    pub query: String,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ReviewerWorkspace {
-    session_id: String,
     session: Option<ReviewerSession>,
     session_comment: String,
-    card_id: String,
-    card_comment: String,
-    template_id: String,
-    proposal_id: String,
+    card_comments: BTreeMap<String, String>,
+    expanded: BTreeSet<String>,
+    template_search: BTreeMap<String, TemplateSearch>,
+    search_generation: u64,
     comments_dirty: bool,
     comment_save_failed: bool,
     comment_save_in_flight: Option<CommentSave>,
     pending_finalize: Option<String>,
     finalize_in_flight: Option<(String, String)>,
+    /// Fast-mode result (echoed into analytics).
     pub generated_review: Option<GeneratedReview>,
     pub finalize_result: Option<ReviewerFinalize>,
-    pub template_results: Vec<ReviewerTemplate>,
 }
 
 impl ReviewerWorkspace {
-    /// Fresh workspace for a loaded task, hydrating the persisted session id.
-    pub fn from_project(project: &Project) -> Self {
-        Self {
-            session_id: reviewer_session_id_from_project(project),
-            ..Self::default()
-        }
-    }
-
     pub fn session_id(&self) -> &str {
-        &self.session_id
+        self.session
+            .as_ref()
+            .map_or("", |session| session.session_id.as_str())
     }
 
     pub fn session(&self) -> Option<&ReviewerSession> {
         self.session.as_ref()
     }
 
+    /// Drops the session and every per-card state (close, refresh, task change).
+    pub fn clear(&mut self) {
+        let generated_review = self.generated_review.take();
+        *self = Self {
+            generated_review,
+            search_generation: self.search_generation,
+            ..Self::default()
+        };
+    }
+
     pub fn session_comment(&self) -> &str {
         &self.session_comment
     }
 
-    pub fn selected_card_id(&self) -> &str {
-        &self.card_id
-    }
-
-    pub fn card_comment(&self) -> &str {
-        &self.card_comment
-    }
-
-    pub fn template_id(&self) -> &str {
-        &self.template_id
-    }
-
-    pub fn proposal_id(&self) -> &str {
-        &self.proposal_id
+    pub fn card_comment(&self, card_id: &str) -> &str {
+        self.card_comments.get(card_id).map_or("", String::as_str)
     }
 
     pub fn comments_dirty(&self) -> bool {
@@ -105,93 +119,153 @@ impl ReviewerWorkspace {
     pub fn comment_save_in_flight(&self) -> bool {
         self.comment_save_in_flight
             .as_ref()
-            .is_some_and(|save| save.session_id == self.session_id)
-    }
-
-    /// Typed session id. Switching sessions drops unsaved-comment and pending-finalize state;
-    /// persist the result with [`super::persist_reviewer_session_id`].
-    pub fn set_session_id(&mut self, session_id: &str) {
-        let session_id = session_id.trim();
-        self.cancel_persistence_if_changed(session_id);
-        self.session_id = session_id.to_string();
+            .is_some_and(|save| save.session_id == self.session_id())
     }
 
     pub fn set_session_comment(&mut self, comment: &str) {
-        if self.session_comment == comment {
+        if self.session.is_none() || self.session_comment == comment {
             return;
         }
         self.session_comment = comment.to_string();
-        if let Some(session) = &mut self.session {
-            session.session_comment = comment.to_string();
-        }
         self.comments_dirty = true;
     }
 
-    /// Comment for the selected card.
-    pub fn set_card_comment(&mut self, comment: &str) {
-        if self.card_comment == comment {
-            return;
-        }
-        self.card_comment = comment.to_string();
-        if let Some(card) = self.session.as_mut().and_then(|session| {
-            session
-                .cards
-                .iter_mut()
-                .find(|card| card.id == self.card_id)
-        }) {
-            card.comment = comment.to_string();
-        }
-        self.comments_dirty = true;
-    }
-
-    /// Selects a card; a card from the loaded session syncs its comment and matched template.
-    pub fn select_card(&mut self, card_id: &str) {
-        self.card_id = card_id.trim().to_string();
-        if let Some(card) = self
+    pub fn set_card_comment(&mut self, card_id: &str, comment: &str) {
+        let known = self
             .session
             .as_ref()
-            .and_then(|session| session.cards.iter().find(|card| card.id == self.card_id))
-        {
-            self.card_comment = card.comment.clone();
-            self.template_id = card.matched_template_id.clone().unwrap_or_default();
+            .is_some_and(|session| session.cards.iter().any(|card| card.id == card_id));
+        if !known || self.card_comment(card_id) == comment {
+            return;
+        }
+        self.card_comments
+            .insert(card_id.to_string(), comment.to_string());
+        self.comments_dirty = true;
+    }
+
+    pub fn is_expanded(&self, card_id: &str) -> bool {
+        self.expanded.contains(card_id)
+    }
+
+    pub fn toggle_expanded(&mut self, card_id: &str) {
+        if !self.expanded.remove(card_id) {
+            self.expanded.insert(card_id.to_string());
         }
     }
 
-    pub fn set_template_id(&mut self, template_id: &str) {
-        self.template_id = template_id.trim().to_string();
+    /// Expand All / Collapse All.
+    pub fn set_all_expanded(&mut self, expanded: bool) {
+        self.expanded = if expanded {
+            self.session
+                .iter()
+                .flat_map(|session| &session.cards)
+                .map(|card| card.id.clone())
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
     }
 
-    pub fn set_proposal_id(&mut self, proposal_id: &str) {
-        self.proposal_id = proposal_id.trim().to_string();
+    /// The card's open template search (`None` when the inline editor is closed).
+    pub fn template_search(&self, card_id: &str) -> Option<&TemplateSearch> {
+        self.template_search.get(card_id)
     }
 
-    /// `{ sessionComment, cardComments: { <cardId>: comment } }` covering every session card
-    /// plus the selected card when it is not in the session.
+    /// Opens ("Match template"/"Change template") or closes ("Cancel") the card's search.
+    pub fn set_template_search_open(&mut self, card_id: &str, open: bool) {
+        if open {
+            self.template_search.entry(card_id.to_string()).or_default();
+        } else {
+            self.template_search.remove(card_id);
+        }
+    }
+
+    /// Records the query typed into the card's search. Returns the request to send, or `None`
+    /// for a blank query (results cleared). Older in-flight results for the card are ignored.
+    pub fn begin_template_search(
+        &mut self,
+        card_id: &str,
+        query: &str,
+    ) -> Option<TemplateSearchRequest> {
+        let session_id = self.session_id().to_string();
+        let search = self.template_search.get_mut(card_id)?;
+        self.search_generation += 1;
+        search.generation = self.search_generation;
+        search.query = query.to_string();
+        search.error = None;
+        if query.trim().is_empty() {
+            search.results.clear();
+            search.loading = false;
+            return None;
+        }
+        search.loading = true;
+        Some(TemplateSearchRequest {
+            session_id,
+            card_id: card_id.to_string(),
+            query: query.trim().to_string(),
+            generation: search.generation,
+        })
+    }
+
+    /// Settles a search; stale results (newer query, closed search, other session) are dropped.
+    pub fn finish_template_search(
+        &mut self,
+        request: &TemplateSearchRequest,
+        result: Result<Vec<ReviewerTemplate>>,
+    ) -> bool {
+        if request.session_id != self.session_id() {
+            return false;
+        }
+        let Some(search) = self.template_search.get_mut(&request.card_id) else {
+            return false;
+        };
+        if search.generation != request.generation {
+            return false;
+        }
+        search.loading = false;
+        match result {
+            Ok(results) => {
+                search.results = results;
+                search.error = None;
+            }
+            Err(error) => {
+                search.results.clear();
+                search.error = Some(format!("{error:#}"));
+            }
+        }
+        true
+    }
+
+    /// `{ sessionComment, cardComments: { <cardId>: comment } }`. The backend merges card
+    /// comments (an empty one deletes) and logs every listed card as commented, so the body
+    /// lists the cards with a comment plus the cards whose saved comment was cleared.
     pub fn comments_body(&self) -> Value {
-        let mut card_comments = Map::new();
-        for card in self.session.iter().flat_map(|session| &session.cards) {
-            card_comments.insert(card.id.clone(), json!(card.comment));
-        }
-        let selected = self.card_id.trim();
-        if !selected.is_empty() && !card_comments.contains_key(selected) {
-            card_comments.insert(selected.to_string(), json!(self.card_comment));
-        }
+        let card_comments: Map<String, Value> = self
+            .session
+            .iter()
+            .flat_map(|session| &session.cards)
+            .filter_map(|card| {
+                let comment = self.card_comment(&card.id);
+                (!comment.trim().is_empty() || !card.comment.trim().is_empty())
+                    .then(|| (card.id.clone(), json!(comment)))
+            })
+            .collect();
         json!({ "sessionComment": self.session_comment, "cardComments": card_comments })
     }
 
-    /// Autosave tick (old cadence: 500 ms) should save now.
+    /// Autosave tick (500 ms) should save now.
     pub fn should_autosave(&self) -> bool {
         self.comments_dirty
             && !self.comment_save_failed
-            && !self.session_id.is_empty()
+            && self.session.is_some()
             && !self.comment_save_in_flight()
     }
 
     /// Starts a manual or automatic comment save (clears a previous failure).
     pub fn begin_comment_save(&mut self) -> Result<CommentSave> {
-        let session_id = required_field("session ID", &self.session_id)?;
+        let session_id = required_field("session ID", self.session_id())?;
         if self.comment_save_in_flight() {
-            bail!("Reviewer comments are already being saved.");
+            bail!("Review comments are already being saved.");
         }
         let save = CommentSave {
             session_id,
@@ -202,9 +276,9 @@ impl ReviewerWorkspace {
         Ok(save)
     }
 
-    /// Settles a comment save. Edits made while it was in flight stay dirty and are merged into
-    /// the returned session; a failure keeps the drafts dirty and stops autosave. Continues a
-    /// pending finalize once every comment is acknowledged.
+    /// Settles a comment save. Edits made while it was in flight stay dirty; a failure keeps
+    /// the drafts dirty and stops autosave. Continues a pending finalize once every comment is
+    /// acknowledged.
     pub fn finish_comment_save(
         &mut self,
         save: &CommentSave,
@@ -213,25 +287,21 @@ impl ReviewerWorkspace {
         if self.comment_save_in_flight.as_ref() == Some(save) {
             self.comment_save_in_flight = None;
         }
-        if save.session_id != self.session_id {
+        if save.session_id != self.session_id() {
             return ReviewerNext::Idle;
         }
-        let mut session = match result {
+        let session = match result {
             Ok(session) if session.session_id == save.session_id => session,
             Ok(_) => return ReviewerNext::Idle,
             Err(_) => {
                 self.comments_dirty = true;
                 self.comment_save_failed = true;
+                self.pending_finalize = None;
                 return ReviewerNext::Idle;
             }
         };
         self.comment_save_failed = false;
-        if save.body == self.comments_body() {
-            self.comments_dirty = false;
-        } else {
-            self.merge_local_comments_into(&mut session);
-            self.comments_dirty = true;
-        }
+        self.comments_dirty = save.body != self.comments_body();
         self.replace_session(session);
         match self.pending_finalize.clone() {
             Some(_) if self.comments_dirty => ReviewerNext::SaveComments,
@@ -242,7 +312,7 @@ impl ReviewerWorkspace {
 
     /// Finalize as `apply` or `skip`; unsaved or in-flight comments are saved first.
     pub fn request_finalize(&mut self, mode: &str) -> Result<ReviewerNext> {
-        required_field("session ID", &self.session_id)?;
+        required_field("session ID", self.session_id())?;
         if self.comments_dirty || self.comment_save_in_flight() {
             self.pending_finalize = Some(mode.to_string());
             return Ok(if self.comment_save_in_flight() {
@@ -254,8 +324,7 @@ impl ReviewerWorkspace {
         Ok(self.begin_finalize(mode))
     }
 
-    /// Settles a finalize request. `None` when it is stale (session switched or superseded);
-    /// otherwise the outcome, with the finalize/generated previews stored on success.
+    /// Settles a finalize request. `None` when it is stale (session switched or superseded).
     pub fn finish_finalize(
         &mut self,
         session_id: &str,
@@ -270,101 +339,52 @@ impl ReviewerWorkspace {
             self.finalize_in_flight = None;
         }
         if !in_flight
-            || self.session_id != session_id
+            || self.session_id() != session_id
             || self.pending_finalize.as_deref() != Some(mode)
         {
             return None;
         }
         self.pending_finalize = None;
-        Some(result.map(|outcome| {
+        Some(result.and_then(|outcome| {
+            if outcome.finalize.feedback.is_empty() {
+                bail!("No feedback came back. Try again.");
+            }
             self.generated_review = Some(outcome.generated);
             self.finalize_result = Some(outcome.finalize.clone());
-            outcome.finalize
+            Ok(outcome.finalize)
         }))
     }
 
-    /// Adopts a session response (create/load/template/suggestion calls). Local comment drafts
-    /// for the same session survive while dirty or saving; the selected card is kept when present.
-    pub fn replace_session(&mut self, mut session: ReviewerSession) {
-        self.cancel_persistence_if_changed(&session.session_id);
-        if session.session_id == self.session_id
-            && (self.comments_dirty || self.comment_save_in_flight())
-        {
-            self.merge_local_comments_into(&mut session);
+    /// Adopts a session response. Local comment drafts for the same session survive while
+    /// dirty or saving; a different session resets every per-card state.
+    pub fn replace_session(&mut self, session: ReviewerSession) {
+        let same = session.session_id == self.session_id();
+        let keep_local = same && (self.comments_dirty || self.comment_save_in_flight());
+        if !same {
+            let generated_review = self.generated_review.take();
+            *self = Self {
+                generated_review,
+                search_generation: self.search_generation,
+                ..Self::default()
+            };
         }
-        self.session_id = session.session_id.clone();
-        self.session_comment = session.session_comment.clone();
-        match session
-            .cards
-            .iter()
-            .find(|card| card.id == self.card_id)
-            .or_else(|| session.cards.first())
-        {
-            Some(card) => {
-                self.card_id = card.id.clone();
-                self.card_comment = card.comment.clone();
-                self.template_id = card.matched_template_id.clone().unwrap_or_default();
-            }
-            None => {
-                self.card_id.clear();
-                self.card_comment.clear();
-                self.template_id.clear();
-            }
+        if !keep_local {
+            self.session_comment = session.session_comment.clone();
+            self.card_comments = session
+                .cards
+                .iter()
+                .map(|card| (card.id.clone(), card.comment.clone()))
+                .collect();
         }
-        self.proposal_id = session
-            .suggestions
-            .first()
-            .map(|suggestion| suggestion.proposal_id.clone())
-            .unwrap_or_default();
+        let ids: BTreeSet<&str> = session.cards.iter().map(|card| card.id.as_str()).collect();
+        self.expanded.retain(|id| ids.contains(id.as_str()));
+        self.template_search
+            .retain(|id, _| ids.contains(id.as_str()));
+        self.card_comments.retain(|id, _| ids.contains(id.as_str()));
         self.session = Some(session);
     }
 
-    /// Selected card plus its matched generated feedback (generated cards first, then session
-    /// cards) for "Apply card to feedback".
-    pub fn selected_card_feedback(&self) -> Option<(&ReviewerCard, Option<&ReviewerFeedback>)> {
-        let generated_feedback = self
-            .generated_review
-            .as_ref()
-            .map(|review| review.feedback.as_slice())
-            .unwrap_or_default();
-        self.generated_review
-            .iter()
-            .flat_map(|review| &review.cards)
-            .chain(self.session.iter().flat_map(|session| &session.cards))
-            .find(|card| card.id == self.card_id)
-            .map(|card| (card, reviewer_feedback_for_card(card, generated_feedback)))
-    }
-
-    /// `(session_id, card_id, template_id)` for "Set template match".
-    pub fn template_match_target(&self) -> Result<(String, String, String)> {
-        Ok((
-            required_field("session ID", &self.session_id)?,
-            required_field("card ID", &self.card_id)?,
-            required_field("template ID", &self.template_id)?,
-        ))
-    }
-
-    /// `(session_id, card_id)` for "Clear template match".
-    pub fn card_target(&self) -> Result<(String, String)> {
-        Ok((
-            required_field("session ID", &self.session_id)?,
-            required_field("card ID", &self.card_id)?,
-        ))
-    }
-
-    /// `(session_id, proposal_id)` for accepting/rejecting a template suggestion.
-    pub fn suggestion_target(&self) -> Result<(String, String)> {
-        Ok((
-            required_field("session ID", &self.session_id)?,
-            required_field("proposal ID", &self.proposal_id)?,
-        ))
-    }
-
-    pub fn require_session_id(&self) -> Result<String> {
-        required_field("session ID", &self.session_id)
-    }
-
-    /// Analytics payload including this workspace's session comments and generated review.
+    /// Analytics payload including this workspace's session and generated review.
     pub fn analytics_payload(&self, project: &Project) -> Result<Value> {
         build_reviewer_analytics_payload(
             project,
@@ -377,37 +397,12 @@ impl ReviewerWorkspace {
         if self.finalize_in_flight.is_some() {
             return ReviewerNext::Idle;
         }
+        let session_id = self.session_id().to_string();
         self.pending_finalize = Some(mode.to_string());
-        self.finalize_in_flight = Some((self.session_id.clone(), mode.to_string()));
+        self.finalize_in_flight = Some((session_id.clone(), mode.to_string()));
         ReviewerNext::Finalize {
-            session_id: self.session_id.clone(),
+            session_id,
             mode: mode.to_string(),
-        }
-    }
-
-    fn cancel_persistence_if_changed(&mut self, next_session_id: &str) {
-        if self.session_id == next_session_id {
-            return;
-        }
-        self.comments_dirty = false;
-        self.comment_save_failed = false;
-        self.pending_finalize = None;
-        self.finalize_in_flight = None;
-    }
-
-    fn merge_local_comments_into(&self, session: &mut ReviewerSession) {
-        if session.session_id != self.session_id {
-            return;
-        }
-        session.session_comment = self.session_comment.clone();
-        let body = self.comments_body();
-        let Some(comments) = body.get("cardComments").and_then(Value::as_object) else {
-            return;
-        };
-        for card in &mut session.cards {
-            if let Some(comment) = comments.get(&card.id).and_then(Value::as_str) {
-                card.comment = comment.to_string();
-            }
         }
     }
 }

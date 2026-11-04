@@ -2,10 +2,13 @@
 //! side panels around one [`EditorModel`], drives the frame clock, and dispatches keyboard
 //! shortcuts that are not handled by a focused transcript row.
 
+pub mod denoise;
+pub mod inference_audio;
 pub mod model;
 pub mod panels;
 pub mod status_bar;
 pub mod timeline;
+pub mod timing_cache;
 pub mod toolbar;
 pub mod transcript;
 
@@ -22,6 +25,9 @@ use model::EditorModel;
 use panels::capabilities::CapabilityPanel;
 use panels::context::ContextPanels;
 use panels::feedback::FeedbackPanel;
+use panels::gold_draft::{DraftMode, GoldDraftPanel};
+use panels::grader::GraderPanel;
+use panels::review_workspace::ReviewWorkspacePanel;
 use panels::task::TaskPanels;
 use panels::transport::TransportStrip;
 use status_bar::StatusBar;
@@ -43,6 +49,10 @@ fn waveform_slot(height: Pixels) -> Div {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestLeave;
 
+/// Emitted by the toolbar's wand: open Gold Draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenGoldDraft;
+
 /// Events for the root view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorScreenEvent {
@@ -60,6 +70,9 @@ pub struct EditorScreen {
     context_panels: Entity<ContextPanels>,
     feedback: Entity<FeedbackPanel>,
     capabilities: Entity<CapabilityPanel>,
+    gold_draft: Entity<GoldDraftPanel>,
+    review: Entity<ReviewWorkspacePanel>,
+    grader: Entity<GraderPanel>,
     panels: Entity<TaskPanels>,
     focus_handle: FocusHandle,
     frame_scheduled: bool,
@@ -77,7 +90,11 @@ impl EditorScreen {
         let status_bar = cx.new(|cx| StatusBar::new(model.clone(), window, cx));
         let context_panels = cx.new(|cx| ContextPanels::new(model.clone(), window, cx));
         let feedback = cx.new(|cx| FeedbackPanel::new(model.clone(), window, cx));
-        let capabilities = cx.new(|cx| CapabilityPanel::new(model.clone(), window, cx));
+        let gold_draft = cx.new(|cx| GoldDraftPanel::new(model.clone(), cx));
+        let capabilities =
+            cx.new(|cx| CapabilityPanel::new(model.clone(), gold_draft.clone(), window, cx));
+        let review = cx.new(|cx| ReviewWorkspacePanel::new(model.clone(), window, cx));
+        let grader = cx.new(|cx| GraderPanel::new(model.clone(), window, cx));
         let transcript_pane = cx.new(|cx| {
             TranscriptPane::new(
                 model.clone(),
@@ -93,9 +110,19 @@ impl EditorScreen {
             cx.observe(&model, |_, _, cx| cx.notify()),
             // The open drawer is mounted from the panel state.
             cx.observe(&panels, |_, _, cx| cx.notify()),
+            cx.observe(&gold_draft, |_, _, cx| cx.notify()),
             cx.subscribe_in(&toolbar, window, |this, _, _: &RequestLeave, window, cx| {
                 this.leave(window, cx);
             }),
+            cx.subscribe_in(
+                &toolbar,
+                window,
+                |this, _, _: &OpenGoldDraft, window, cx| {
+                    this.gold_draft.update(cx, |gold, cx| {
+                        gold.open(DraftMode::Draft, window, cx);
+                    });
+                },
+            ),
             cx.subscribe_in(
                 &transport,
                 window,
@@ -116,6 +143,9 @@ impl EditorScreen {
             context_panels,
             feedback,
             capabilities,
+            gold_draft,
+            review,
+            grader,
             panels,
             focus_handle,
             frame_scheduled: false,
@@ -138,7 +168,7 @@ impl EditorScreen {
     }
 
     fn key_focus(&self, window: &mut Window, cx: &mut App) -> KeyFocus {
-        let focused_row = self.transcript_pane.read(cx).focused_segment_id(cx);
+        let focused_row = self.transcript_pane.read(cx).focused_segment_id(window, cx);
         let target = if focused_row.is_some() {
             FocusTarget::TranscriptText
         } else if window.has_focused_input(cx) {
@@ -153,8 +183,18 @@ impl EditorScreen {
         }
     }
 
+    /// The Magic Review workspace, the Grader or Gold Draft covers the editor; it gets no
+    /// shortcuts.
+    fn review_modal_open(&self, cx: &App) -> bool {
+        let panels = self.panels.read(cx);
+        ReviewWorkspacePanel::is_open(panels)
+            || GraderPanel::is_open(panels)
+            || self.gold_draft.read(cx).is_open()
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+        if window.has_active_dialog(cx) || window.has_active_sheet(cx) || self.review_modal_open(cx)
+        {
             return;
         }
         let focus = self.key_focus(window, cx);
@@ -168,7 +208,7 @@ impl EditorScreen {
         let Some(action) = ActiveKeymap::resolve(cx, &event.keystroke, focus) else {
             return;
         };
-        let focused_row = self.transcript_pane.read(cx).focused_segment_id(cx);
+        let focused_row = self.transcript_pane.read(cx).focused_segment_id(window, cx);
         let handled = self.model.update(cx, |model, cx| {
             model.perform(action, focused_row.as_deref(), cx)
         });
@@ -212,8 +252,9 @@ impl EditorScreen {
         match action {
             EditorAction::BackToProjects => self.leave(window, cx),
             EditorAction::DraftTranscribeSelectedSegment => {
-                self.capabilities.update(cx, |panel, cx| {
-                    panel.draft_transcribe_selected(window, cx);
+                let focused = self.transcript_pane.read(cx).focused_segment_id(window, cx);
+                self.gold_draft.update(cx, |gold, cx| {
+                    gold.transcribe_segment(focused, window, cx);
                 });
             }
             _ => {}
@@ -311,6 +352,23 @@ impl EditorScreen {
             None
         }
     }
+
+    /// Full-editor overlays (Magic Review workspace, Grader dialog) while open.
+    fn render_overlays(&self, cx: &App) -> Vec<AnyElement> {
+        let panels = self.panels.read(cx);
+        let overlay = || StyleRefinement::default().absolute().inset_0();
+        let mut overlays = Vec::new();
+        if ReviewWorkspacePanel::is_open(panels) {
+            overlays.push(self.review.clone().cached(overlay()).into_any_element());
+        }
+        if GraderPanel::is_open(panels) {
+            overlays.push(self.grader.clone().cached(overlay()).into_any_element());
+        }
+        if self.gold_draft.read(cx).is_open() {
+            overlays.push(self.gold_draft.clone().into_any_element());
+        }
+        overlays
+    }
 }
 
 /// Transport strip, find bar and the transcript grids below the waveform card: one grid of
@@ -401,10 +459,10 @@ impl TranscriptPane {
     }
 
     /// Segment whose row editor has keyboard focus, in any grid.
-    fn focused_segment_id(&self, cx: &App) -> Option<String> {
+    fn focused_segment_id(&self, window: &Window, cx: &App) -> Option<String> {
         self.grids
             .iter()
-            .find_map(|grid| grid.view.read(cx).focused_segment_id())
+            .find_map(|grid| grid.view.read(cx).focused_segment_id(window, cx))
     }
 }
 
@@ -474,7 +532,8 @@ impl Render for EditorScreen {
                             .child(div().flex_1().min_h_0().child(self.render_body(window, cx)))
                             .child(self.status_bar.clone()),
                     )
-                    .children(self.render_drawer(window, cx)),
+                    .children(self.render_drawer(window, cx))
+                    .children(self.render_overlays(cx)),
             )
     }
 }

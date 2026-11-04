@@ -1,8 +1,6 @@
 use studio_services::review::{
     DraftRow, RedistributionAllocation, RedistributionMove, RedistributionPreview,
-    ReviewerWorkspace, apply_draft_row, apply_draft_rows, apply_redistribution,
-    apply_redistribution_moves, apply_segment_text, persist_reviewer_session_id,
-    reviewer_session_id_from_project,
+    apply_draft_rows, apply_redistribution, apply_redistribution_moves,
 };
 
 use super::sample_workflow;
@@ -81,28 +79,6 @@ fn draft_rows_without_applicable_rows_fail_without_editing() {
     assert!(apply_draft_rows(&mut workflow, &[row("s1", "x", "failed")]).is_err());
     assert!(apply_draft_rows(&mut workflow, &[row("gone", "x", "rewritten")]).is_err());
     assert!(!workflow.can_undo());
-}
-
-#[test]
-fn single_draft_row_requires_rewritten_status_and_presence() {
-    let mut workflow = sample_workflow();
-    assert!(apply_draft_row(&mut workflow, &row("s2", "x", "unchanged")).is_err());
-    assert!(apply_draft_row(&mut workflow, &row("gone", "x", "rewritten")).is_err());
-    apply_draft_row(&mut workflow, &row("s2", "Drafted two.", "rewritten")).unwrap();
-    assert_eq!(text(&workflow, "s2"), "Drafted two.");
-}
-
-#[test]
-fn transcription_text_replaces_one_segment_with_undo() {
-    let mut workflow = sample_workflow();
-    apply_segment_text(&mut workflow, "s2", "  Fresh broker transcription. ").unwrap();
-    assert_eq!(text(&workflow, "s2"), "Fresh broker transcription.");
-    assert_eq!(text(&workflow, "s1"), "First row.");
-    workflow.undo().unwrap();
-    assert_eq!(text(&workflow, "s2"), "Second row.");
-
-    assert!(apply_segment_text(&mut workflow, "gone", "x").is_err());
-    assert!(apply_segment_text(&mut workflow, "s1", "   ").is_err());
 }
 
 #[test]
@@ -203,21 +179,4 @@ fn unaccepted_group_without_moves_or_with_error_is_not_applied() {
         .is_err()
     );
     assert!(!workflow.can_undo());
-}
-
-#[test]
-fn reviewer_session_id_persists_to_project_metadata_and_hydrates() {
-    let mut workflow = sample_workflow();
-    persist_reviewer_session_id(&mut workflow, " session-persisted ");
-
-    let reloaded =
-        studio_editor::workflow::StudioWorkflow::from_project(workflow.project().clone());
-    assert_eq!(
-        reviewer_session_id_from_project(reloaded.project()),
-        "session-persisted"
-    );
-    assert_eq!(
-        ReviewerWorkspace::from_project(reloaded.project()).session_id(),
-        "session-persisted"
-    );
 }

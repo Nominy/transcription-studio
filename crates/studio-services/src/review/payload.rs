@@ -10,8 +10,6 @@ use super::model::{GeneratedReview, ReviewerSession};
 
 pub const DRAFT_OPENROUTER_API_KEY_ENV: &str = "STUDIO_DRAFT_OPENROUTER_API_KEY";
 pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
-/// Project metadata key holding the reviewer session id selected for this task.
-pub const META_REVIEWER_SELECTED_SESSION_ID: &str = "studio.native.reviewer.sessionId";
 
 const META_EXTRA_PACKAGE: &str = "babel.extra.package";
 const META_EXTRA_TRACK_PREFIX: &str = "babel.extra.track.";
@@ -180,6 +178,23 @@ pub fn build_reviewer_payload(project: &Project) -> Result<Value> {
     }))
 }
 
+/// `(reviewActionId, current normalized state)` of an L2+ review task.
+pub(super) fn current_review_action(project: &Project) -> Result<(String, Value)> {
+    let review_action_id = review_action_id(project)
+        .ok_or_else(|| anyhow!("current project has no Babel review action id"))?;
+    if project_review_action_level(project).unwrap_or(0) <= 1 {
+        bail!("Magic Review is only available for L2 review tasks.");
+    }
+    let current = normalized_review_action(
+        project,
+        &review_action_id,
+        &current_utc_timestamp(),
+        false,
+        &package_extra(project),
+    );
+    Ok((review_action_id, current))
+}
+
 /// Analytics submission payload (also sent best-effort on L2 submit): reviewer payload +
 /// `inputBoxes` (generated feedback categories, non-empty session/card comments),
 /// `prepared`/`aiReview` from the generated review, and session ids in `metadata`.
@@ -282,27 +297,6 @@ pub fn draft_generate_payloads_are_equivalent(pending: &Value, requested: &Value
             .all(|(key, value)| pending.get(key) == Some(value))
 }
 
-/// `/api/broker/transcribe-segment` payload for the selected segment (or the first one).
-pub fn build_draft_transcribe_segment_payload(
-    project: &Project,
-    selected_segment_id: Option<&str>,
-    config: &DraftingConfig,
-) -> Result<Value> {
-    let api_key = config.resolved_api_key()?;
-    let segment = selected_segment(project, selected_segment_id)?;
-    let mut payload = json!({
-        "openRouterApiKey": api_key,
-        "segment": {
-            "rowId": segment.id,
-            "speakerKey": segment.speaker_id,
-            "startSeconds": segment.start_seconds,
-            "endSeconds": segment.end_seconds,
-        }
-    });
-    config.add_optional_fields(&mut payload);
-    Ok(payload)
-}
-
 /// `/api/broker/redistribute-text` payload: one group with every segment of the selected
 /// segment's speaker and their current texts as draft allocations.
 pub fn build_draft_redistribute_payload(
@@ -351,15 +345,6 @@ pub fn build_draft_redistribute_payload(
     });
     config.add_optional_fields(&mut payload);
     Ok(payload)
-}
-
-/// Selected reviewer session id persisted in project metadata (empty when unset).
-pub fn reviewer_session_id_from_project(project: &Project) -> String {
-    project
-        .metadata
-        .get(META_REVIEWER_SELECTED_SESSION_ID)
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
 }
 
 fn reviewer_input_boxes(
@@ -622,7 +607,7 @@ fn parse_level_literal(value: &str) -> Option<i64> {
         .ok()
 }
 
-fn current_utc_timestamp() -> String {
+pub(super) fn current_utc_timestamp() -> String {
     let now = OffsetDateTime::now_utc();
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",

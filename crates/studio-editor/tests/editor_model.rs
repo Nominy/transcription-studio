@@ -3419,6 +3419,32 @@ fn task_lookup_read_only_prefers_review_action_id_then_processed_transcription_i
 }
 
 #[test]
+fn error_projects_claim_qa_tasks_by_diff_id_without_the_stitched_confirm() {
+    let mut state = TaskLookupState::new("", "", true).claiming_qa_tasks(true);
+    assert!(state.shows_qa_claim() && !state.shows_stitched_claim());
+    assert_eq!(state.apply(TaskLookupEvent::ClickClaimQa), None);
+    state.apply(TaskLookupEvent::ChangeQaDiffId {
+        value: " diff-9 ".to_string(),
+    });
+    assert_eq!(state.qa_diff_id, "diff-9");
+    state.apply(TaskLookupEvent::ChangeProcessedTranscriptionId {
+        value: "processed-7".to_string(),
+    });
+    assert!(!state.can_claim_stitched());
+    assert_eq!(
+        state.apply(TaskLookupEvent::ClickClaimQa),
+        Some(TaskLookupEffect::ClaimQaTask)
+    );
+    assert!(!state.confirming_edit);
+    // Without a stitched queue there is nothing to claim against.
+    let mut no_queue = TaskLookupState::new("", "", false).claiming_qa_tasks(true);
+    no_queue.apply(TaskLookupEvent::ChangeQaDiffId {
+        value: "diff-9".to_string(),
+    });
+    assert_eq!(no_queue.apply(TaskLookupEvent::ClickClaimQa), None);
+}
+
+#[test]
 fn task_lookup_opens_from_startup_route_metadata() {
     let mut project = project_with_segments(Vec::new());
     assert_eq!(TaskLookupState::from_project(&project), None);

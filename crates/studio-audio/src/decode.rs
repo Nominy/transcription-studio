@@ -46,17 +46,25 @@ pub fn audio_source_candidates(base: &Path, source_path: &str, speaker_id: &str)
     candidates
 }
 
+/// A lane's decoded audio and the file it was decoded from (the original
+/// bytes inference backends receive).
+#[derive(Debug)]
+pub struct LaneAudioFile {
+    pub path: PathBuf,
+    pub audio: DecodedAudio,
+}
+
 /// Decodes the first readable, decodable candidate for `lane` (see
 /// [`audio_source_candidates`]). Missing files are skipped; when no candidate
 /// decodes, the last decode error is returned, else `LaneAudioNotFound`.
-pub fn load_lane_audio(base: &Path, lane: &AudioLane) -> Result<DecodedAudio, AudioError> {
+pub fn load_lane_audio(base: &Path, lane: &AudioLane) -> Result<LaneAudioFile, AudioError> {
     let mut decode_error = None;
     for path in audio_source_candidates(base, &lane.source_path, &lane.speaker_id) {
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
         match decode_audio_bytes(&bytes) {
-            Ok(audio) => return Ok(audio),
+            Ok(audio) => return Ok(LaneAudioFile { path, audio }),
             Err(error) => decode_error = Some(error),
         }
     }
@@ -154,9 +162,11 @@ mod tests {
         )
         .expect("write wav");
 
-        let audio = load_lane_audio(temp.path(), &lane("s3://bucket/recording.wav", "speaker-1"))
-            .expect("fallback speaker file decodes");
+        let LaneAudioFile { path, audio } =
+            load_lane_audio(temp.path(), &lane("s3://bucket/recording.wav", "speaker-1"))
+                .expect("fallback speaker file decodes");
 
+        assert_eq!(path, temp.path().join("speaker_1.wav"));
         assert_eq!(audio.frame_count(), 4);
         assert_eq!(audio.channel_data(0), Some(&[0.25; 4][..]));
     }
