@@ -18,6 +18,17 @@ impl DecodedAudio {
     }
 
     pub fn from_f32_channels(sample_rate: u32, channels: Vec<Vec<f32>>) -> Result<Self, String> {
+        Self::from_shared_channels(
+            sample_rate,
+            channels.into_iter().map(Arc::<[f32]>::from).collect(),
+        )
+    }
+
+    /// Wraps already shared channel buffers without copying them.
+    pub fn from_shared_channels(
+        sample_rate: u32,
+        channels: Vec<Arc<[f32]>>,
+    ) -> Result<Self, String> {
         if sample_rate == 0 {
             return Err("sample rate must be greater than zero".to_string());
         }
@@ -25,10 +36,6 @@ impl DecodedAudio {
             return Err("decoded audio must contain at least one channel".to_string());
         }
 
-        let channels = channels
-            .into_iter()
-            .map(Arc::<[f32]>::from)
-            .collect::<Vec<_>>();
         let frame_count = channels[0].len();
         if frame_count == 0 {
             return Err("decoded audio channels cannot be empty".to_string());

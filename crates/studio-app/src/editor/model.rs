@@ -20,6 +20,7 @@ use studio_editor::edit::{EditResult, EditorAction, EditorDoc, Effect, Outcome};
 use studio_editor::timeline_model::LaneWaveform;
 use studio_editor::workflow::StudioWorkflow;
 
+use crate::editor::blended_waveforms::{BlendKey, BlendedWaveforms, Selection, build_blend};
 use crate::editor::inference_audio::LaneSource;
 
 /// View-directed effects re-emitted from [`Effect`].
@@ -60,6 +61,10 @@ pub struct EditorModel {
     status: Option<SharedString>,
     last_frame: Option<Instant>,
     load_tasks: Vec<Task<()>>,
+    /// What each lane's waveform paints while enhanced audio is installed.
+    blends: BlendedWaveforms,
+    /// Blend being built per lane.
+    blend_tasks: HashMap<String, Task<()>>,
 }
 
 impl EventEmitter<EditorEvent> for EditorModel {}
@@ -84,6 +89,8 @@ impl EditorModel {
             status: None,
             last_frame: None,
             load_tasks: Vec::new(),
+            blends: BlendedWaveforms::default(),
+            blend_tasks: HashMap::new(),
         };
         this.sync_timeline_end();
         this.load_lane_audio(cx);
@@ -123,22 +130,105 @@ impl EditorModel {
     }
 
     /// Installs enhanced PCM beside the loaded originals (all or nothing). Playback keeps the
-    /// original clock; waveforms keep showing the originals.
+    /// original clock; lane waveforms switch to what the lanes now play.
     pub fn set_enhanced_audio(
         &mut self,
         lanes: Vec<(String, Arc<DecodedAudio>)>,
         cx: &mut Context<Self>,
     ) -> Result<(), AudioError> {
         let result = self.audio.set_enhanced_audio(lanes);
+        if result.is_ok() {
+            self.blends.sources_changed();
+            self.sync_display_waveforms(cx);
+        }
         cx.notify();
         result
     }
 
     /// Share of enhanced audio in every lane (`0` original … `1` enhanced). Applies to live
-    /// playback without restarting it.
-    pub fn set_enhanced_ratio(&mut self, ratio: f32) {
+    /// playback without restarting it; lane waveforms follow once their blend is built.
+    pub fn set_enhanced_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
         for lane in &self.doc.project().lanes {
             self.audio.set_lane_enhanced_ratio(&lane.id, ratio);
+        }
+        if self.sync_display_waveforms(cx) {
+            cx.notify();
+        }
+    }
+
+    /// Paints each loaded lane's waveform of what it plays: its original, or its blend with
+    /// its enhanced audio at its enhanced ratio. A blend not built yet is built in the
+    /// background while the current painting stays. Returns whether any painting changed.
+    fn sync_display_waveforms(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut changed = false;
+        let lane_ids: Vec<String> = self.audio.lane_ids().map(str::to_owned).collect();
+        for lane_id in lane_ids {
+            let wanted = self.blends.wanted(
+                &lane_id,
+                self.audio.lane_enhanced_audio(&lane_id).is_some(),
+                self.audio.lane_mix(&lane_id).enhanced_ratio,
+            );
+            match self.blends.select(&lane_id, wanted.clone()) {
+                Selection::Unchanged => {}
+                Selection::Paint { waveform, replaced } => {
+                    let previous = self
+                        .doc
+                        .set_lane_display_waveform(&lane_id, waveform.map(|waveform| *waveform));
+                    if let (Some(key), Some(previous)) = (replaced, previous) {
+                        self.blends.store(key, previous);
+                    }
+                    changed = true;
+                }
+                Selection::Missing => {
+                    if let Some(key) = wanted {
+                        self.start_blend(key, cx);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// Builds `key`'s blend in the background unless its lane is already building one; when
+    /// that finishes, the lane's then wanted blend is painted or built next.
+    fn start_blend(&mut self, key: BlendKey, cx: &mut Context<Self>) {
+        if self.blend_tasks.contains_key(&key.lane_id) {
+            return;
+        }
+        let (Some(original), Some(enhanced)) = (
+            self.audio.lane_audio(&key.lane_id).cloned(),
+            self.audio.lane_enhanced_audio(&key.lane_id).cloned(),
+        ) else {
+            return;
+        };
+        let lane_id = key.lane_id.clone();
+        let build = cx.background_spawn(async move {
+            let waveform = build_blend(&key, &original, &enhanced);
+            (key, waveform)
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let (key, waveform) = build.await;
+            this.update(cx, |this, cx| this.finish_blend(key, waveform, cx))
+                .ok();
+        });
+        self.blend_tasks.insert(lane_id, task);
+    }
+
+    fn finish_blend(
+        &mut self,
+        key: BlendKey,
+        waveform: Option<LaneWaveform>,
+        cx: &mut Context<Self>,
+    ) {
+        self.blend_tasks.remove(&key.lane_id);
+        // Audio the engine accepted always blends; without a waveform there is nothing to
+        // paint, and rebuilding would fail again.
+        let Some(waveform) = waveform else {
+            return;
+        };
+        self.blends.store(key, waveform);
+        if self.sync_display_waveforms(cx) {
+            cx.notify();
         }
     }
 
@@ -292,6 +382,8 @@ impl EditorModel {
     /// the editor (back to projects, task switch, hide to tray).
     pub fn unload(&mut self) {
         self.load_tasks.clear();
+        self.blend_tasks.clear();
+        self.blends = BlendedWaveforms::default();
         self.lane_files.clear();
         self.audio.unload();
     }
@@ -328,8 +420,18 @@ impl EditorModel {
         self.audio_load.pending = lanes.len();
         for lane in lanes {
             let base = base.clone();
+            // Decoding and the waveform's display signal both run off the UI thread.
             let decode = cx.background_spawn(async move {
-                let result = load_lane_audio(&base, &lane);
+                let result = load_lane_audio(&base, &lane).map(|LaneAudioFile { path, audio }| {
+                    let audio = Arc::new(audio);
+                    // The clone shares the sample buffers with the engine; PCM is held once.
+                    let waveform = LaneWaveform::from_decoded((*audio).clone());
+                    LoadedLane {
+                        path,
+                        audio,
+                        waveform,
+                    }
+                });
                 (lane.id, result)
             });
             let task = cx.spawn(async move |this, cx| {
@@ -344,24 +446,24 @@ impl EditorModel {
     fn finish_lane_load(
         &mut self,
         lane_id: String,
-        result: Result<LaneAudioFile, AudioError>,
+        result: Result<LoadedLane, AudioError>,
         cx: &mut Context<Self>,
     ) {
         self.audio_load.pending = self.audio_load.pending.saturating_sub(1);
-        match result.and_then(|LaneAudioFile { path, audio }| {
-            let audio = Arc::new(audio);
+        match result.and_then(|loaded| {
             self.audio
-                .insert_lane(lane_id.clone(), Arc::clone(&audio))
-                .map(|()| (path, audio))
+                .insert_lane(lane_id.clone(), Arc::clone(&loaded.audio))
+                .map(|()| loaded)
         }) {
-            Ok((path, audio)) => {
+            Ok(LoadedLane { path, waveform, .. }) => {
                 self.audio_load.loaded += 1;
                 self.lane_files.insert(lane_id.clone(), path);
-                // The clone shares the sample buffers with the engine; PCM is held once.
-                self.doc
-                    .set_lane_waveform(lane_id, LaneWaveform::from_decoded((*audio).clone()));
+                self.doc.set_lane_waveform(lane_id, waveform);
                 self.sync_lane_mix();
                 self.sync_timeline_end();
+                // New originals drop the lane's enhanced audio and outdate its blends.
+                self.blends.sources_changed();
+                self.sync_display_waveforms(cx);
             }
             Err(error) => {
                 self.audio_load.failed += 1;
@@ -371,4 +473,11 @@ impl EditorModel {
         }
         cx.notify();
     }
+}
+
+/// A lane's decoded original with its waveform, built in the background.
+struct LoadedLane {
+    path: PathBuf,
+    audio: Arc<DecodedAudio>,
+    waveform: LaneWaveform,
 }

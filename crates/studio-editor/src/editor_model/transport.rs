@@ -1,4 +1,4 @@
-use super::{EditorSession, MIN_LOOP_DURATION_SECONDS, visible_duration_for_zoom};
+use super::{EditorSession, MIN_LOOP_DURATION_SECONDS};
 use crate::timeline_model::{
     LoopStripHit, LoopStripView, MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimeRange, build_loop_strip,
     hit_loop_strip,
@@ -123,7 +123,7 @@ impl EditorSession {
         let bounds = self.timeline_bounds(project);
         let previous_viewport = self.viewport;
         self.zoom = zoom.clamp(0.05, 10.0);
-        let visible_duration = visible_duration_for_zoom(bounds, self.zoom);
+        let visible_duration = self.visible_duration(bounds);
         if visible_duration >= bounds.duration_seconds() {
             self.viewport = bounds;
             return;

@@ -7,7 +7,7 @@ use std::{
 use crate::timeline_model::{LaneWaveform, TimeRange, WaveformBlock};
 use crate::track_filter::TrackFilter;
 use studio_core::{AudioLane, Project, Segment};
-use studio_waveform::WaveformRenderModel;
+use studio_waveform::LineWaveform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineLaneView {
@@ -19,7 +19,8 @@ pub struct TimelineLaneView {
     pub is_muted: bool,
     pub vertical_zoom: f32,
     pub track_height: f32,
-    pub waveform_model: Option<WaveformRenderModel>,
+    /// Babel's line waveform of the lane's (display) audio, once decoded.
+    pub waveform: Option<Arc<LineWaveform>>,
     pub overlay: Option<TimelineOverlayView>,
     pub blocks: Arc<[WaveformBlock]>,
     pub strip_blocks: Arc<[WaveformBlock]>,
@@ -97,12 +98,21 @@ pub(crate) struct TimelineLaneBuildState<'a> {
     pub(crate) muted_lane_ids: &'a BTreeSet<String>,
     pub(crate) lane_vertical_zoom: &'a BTreeMap<String, f32>,
     pub(crate) lane_waveforms: &'a BTreeMap<String, LaneWaveform>,
+    pub(crate) lane_display_waveforms: &'a BTreeMap<String, LaneWaveform>,
     pub(crate) bounds: TimeRange,
     pub(crate) viewport: TimeRange,
-    pub(crate) playhead_seconds: f64,
     pub(crate) overlay_range: Option<TimeRange>,
     pub(crate) strip_blocks: Option<&'a BTreeMap<String, Arc<[WaveformBlock]>>>,
     pub(crate) segment_preview: Option<&'a TimelineSegmentPreview>,
+}
+
+/// The waveform painted for a lane: its display override, else its original.
+pub(crate) fn display_waveform<'a>(
+    display: &'a BTreeMap<String, LaneWaveform>,
+    original: &'a BTreeMap<String, LaneWaveform>,
+    lane_id: &str,
+) -> Option<&'a LaneWaveform> {
+    display.get(lane_id).or_else(|| original.get(lane_id))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -262,19 +272,9 @@ pub(crate) fn build_timeline_lanes_with_segment_index(
                         .then_with(|| left.1.id.cmp(&right.1.id))
                 });
             }
-            let visible_segment_refs = visible_segments
-                .iter()
-                .map(|(_, segment)| segment.as_ref())
-                .collect::<Vec<_>>();
-
-            let lane_waveform = state.lane_waveforms.get(&lane.id);
-            let waveform_model = lane_waveform.and_then(|waveform| {
-                waveform.render_model(
-                    visible_segment_refs.as_slice(),
-                    state.viewport,
-                    state.playhead_seconds,
-                )
-            });
+            let lane_waveform =
+                display_waveform(state.lane_display_waveforms, state.lane_waveforms, &lane.id);
+            let waveform = lane_waveform.map(LaneWaveform::line);
             let header = lane_header(index, lane, &state);
 
             let blocks = visible_segments
@@ -315,7 +315,7 @@ pub(crate) fn build_timeline_lanes_with_segment_index(
                 } else {
                     DEFAULT_TRACK_HEIGHT
                 },
-                waveform_model,
+                waveform,
                 overlay: timeline_overlay_view(state.overlay_range, state.viewport),
                 blocks,
                 strip_blocks,

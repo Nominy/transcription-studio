@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::babel_metadata::server_lint_snapshot_from_project;
 use crate::linter::{LintSeverity, ServerLintSnapshot};
-use crate::timeline_model::{LaneWaveform, TimeRange};
+use crate::timeline_model::{LaneWaveform, TimeRange, display_waveform};
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{TranscriptRowView, build_transcript_rows};
 use studio_core::Project;
@@ -24,7 +24,9 @@ pub use view_data::{ProblemCounts, SaveStatus};
 
 const DEFAULT_SPEED: f32 = 1.0;
 const DEFAULT_ZOOM: f32 = 1.0;
-const TIMELINE_RENDER_WIDTH_PX: f64 = 1_000.0;
+/// Lane width assumed until the timeline reports its own (CSS px).
+const DEFAULT_TIMELINE_WIDTH_PX: f64 = 1_000.0;
+/// Babel's `minPxPerSec` at zoom 1: the viewport shows `lane width / (zoom × 200)` seconds.
 const DEFAULT_MIN_PX_PER_SEC: f64 = 200.0;
 const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 
@@ -32,6 +34,8 @@ const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 pub struct EditorSession {
     pub speed: f32,
     pub zoom: f32,
+    /// Width of the timeline's lane surface in CSS px (see [`Self::set_timeline_width`]).
+    timeline_width_px: f64,
     pub is_playing: bool,
     pub playhead_seconds: f64,
     pub diff_view: bool,
@@ -46,6 +50,10 @@ pub struct EditorSession {
     pub muted_lane_ids: BTreeSet<String>,
     pub lane_vertical_zoom: BTreeMap<String, f32>,
     pub lane_waveforms: BTreeMap<String, LaneWaveform>,
+    /// Waveforms painted instead of `lane_waveforms` (the timeline, segment blocks and the
+    /// overview): what a lane plays while its enhanced audio is mixed in. Analysis (silence,
+    /// drafts) keeps reading the originals in `lane_waveforms`.
+    lane_display_waveforms: BTreeMap<String, LaneWaveform>,
     pub open_actions_segment_id: Option<String>,
     pub asserted_warning_keys: BTreeSet<String>,
     server_lint_snapshot: Option<ServerLintSnapshot>,
@@ -65,10 +73,16 @@ pub struct EditorSession {
 impl EditorSession {
     pub fn for_project(project: &Project) -> Self {
         let bounds = TimeRange::for_project(project);
-        let viewport = viewport_centered_on(bounds, bounds.start_seconds, DEFAULT_ZOOM);
+        let viewport = viewport_centered_on(
+            bounds,
+            bounds.start_seconds,
+            DEFAULT_ZOOM,
+            DEFAULT_TIMELINE_WIDTH_PX,
+        );
         Self {
             speed: DEFAULT_SPEED,
             zoom: DEFAULT_ZOOM,
+            timeline_width_px: DEFAULT_TIMELINE_WIDTH_PX,
             is_playing: false,
             playhead_seconds: bounds.start_seconds,
             diff_view: false,
@@ -83,6 +97,7 @@ impl EditorSession {
             muted_lane_ids: BTreeSet::new(),
             lane_vertical_zoom: BTreeMap::new(),
             lane_waveforms: BTreeMap::new(),
+            lane_display_waveforms: BTreeMap::new(),
             open_actions_segment_id: None,
             asserted_warning_keys: BTreeSet::new(),
             server_lint_snapshot: server_lint_snapshot_from_project(project, 0),
@@ -207,8 +222,59 @@ impl EditorSession {
         self.lane_waveforms.insert(lane_id.into(), waveform);
     }
 
+    /// Paints `waveform` for the lane instead of its original (`None` restores the original).
+    /// Returns the replaced display waveform with its caches.
+    pub fn set_lane_display_waveform(
+        &mut self,
+        lane_id: &str,
+        waveform: Option<LaneWaveform>,
+    ) -> Option<LaneWaveform> {
+        match waveform {
+            Some(waveform) => self
+                .lane_display_waveforms
+                .insert(lane_id.to_owned(), waveform),
+            None => self.lane_display_waveforms.remove(lane_id),
+        }
+    }
+
+    /// The waveform painted for a lane: its display override, else its original.
+    pub fn lane_display_waveform(&self, lane_id: &str) -> Option<&LaneWaveform> {
+        display_waveform(&self.lane_display_waveforms, &self.lane_waveforms, lane_id)
+    }
+
     pub fn timeline_min_px_per_sec(&self) -> f64 {
         timeline_min_px_per_sec_for_zoom(self.zoom)
+    }
+
+    pub fn timeline_width_px(&self) -> f64 {
+        self.timeline_width_px
+    }
+
+    /// The lane surface is `width_px` CSS px wide: like Babel's wavesurfer at `minPxPerSec`
+    /// = zoom × 200, the viewport keeps its start and shows `width_px / (zoom × 200)` seconds.
+    pub fn set_timeline_width(&mut self, project: &Project, width_px: f64) {
+        if !width_px.is_finite() || width_px <= 0.0 || width_px == self.timeline_width_px {
+            return;
+        }
+        self.timeline_width_px = width_px;
+        let bounds = self.timeline_bounds(project);
+        let duration = self.visible_duration(bounds);
+        if duration >= bounds.duration_seconds() {
+            self.viewport = bounds;
+            return;
+        }
+        let start = self
+            .viewport
+            .start_seconds
+            .clamp(bounds.start_seconds, bounds.end_seconds - duration);
+        self.viewport = TimeRange {
+            start_seconds: start,
+            end_seconds: start + duration,
+        };
+    }
+
+    pub(super) fn visible_duration(&self, bounds: TimeRange) -> f64 {
+        visible_duration_for_zoom(bounds, self.zoom, self.timeline_width_px)
     }
 
     fn transcript_rows_for_filter(
@@ -239,18 +305,28 @@ impl EditorSession {
     }
 
     fn recenter_viewport(&mut self, bounds: TimeRange) {
-        self.viewport = viewport_centered_on(bounds, self.playhead_seconds, self.zoom);
+        self.viewport = viewport_centered_on(
+            bounds,
+            self.playhead_seconds,
+            self.zoom,
+            self.timeline_width_px,
+        );
     }
 }
 
-pub(super) fn visible_duration_for_zoom(bounds: TimeRange, zoom: f32) -> f64 {
+fn visible_duration_for_zoom(bounds: TimeRange, zoom: f32, width_px: f64) -> f64 {
     let full_duration = bounds.duration_seconds();
-    (TIMELINE_RENDER_WIDTH_PX / timeline_min_px_per_sec_for_zoom(zoom)).min(full_duration)
+    (width_px / timeline_min_px_per_sec_for_zoom(zoom)).min(full_duration)
 }
 
-fn viewport_centered_on(bounds: TimeRange, center_seconds: f64, zoom: f32) -> TimeRange {
+fn viewport_centered_on(
+    bounds: TimeRange,
+    center_seconds: f64,
+    zoom: f32,
+    width_px: f64,
+) -> TimeRange {
     let full_duration = bounds.duration_seconds();
-    let visible_duration = visible_duration_for_zoom(bounds, zoom);
+    let visible_duration = visible_duration_for_zoom(bounds, zoom, width_px);
     if visible_duration >= full_duration {
         return bounds;
     }

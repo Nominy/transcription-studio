@@ -38,8 +38,33 @@ pub(crate) struct LaneGain {
 }
 
 impl LaneGain {
+    /// Gains of an audible lane at `volume` playing `enhanced_ratio` of its enhanced PCM
+    /// (`0` when it has none).
+    pub(crate) fn blend(volume: f32, enhanced_ratio: f32) -> Self {
+        Self {
+            original: volume * (1.0 - enhanced_ratio),
+            enhanced: volume * enhanced_ratio,
+        }
+    }
+
     pub(crate) fn is_audible(self) -> bool {
         self.original > 0.0 || self.enhanced > 0.0
+    }
+
+    /// Adds the lane's share of one output sample to `sum`: each present source sample,
+    /// clamped to full scale, times its gain. Zero gains skip their source.
+    #[inline]
+    pub(crate) fn accumulate(self, sum: &mut f32, original: Option<f32>, enhanced: Option<f32>) {
+        if self.original != 0.0
+            && let Some(sample) = original
+        {
+            *sum += sample.clamp(-1.0, 1.0) * self.original;
+        }
+        if self.enhanced != 0.0
+            && let Some(sample) = enhanced
+        {
+            *sum += sample.clamp(-1.0, 1.0) * self.enhanced;
+        }
     }
 }
 
@@ -290,17 +315,13 @@ impl Iterator for MixSource {
         let channel = self.next_channel;
         let mut sum = 0.0_f32;
         for lane in &self.lanes {
-            if lane.gain.original != 0.0
-                && let Some(sample) = lane.original[channel].get(frame)
-            {
-                sum += sample.clamp(-1.0, 1.0) * lane.gain.original;
-            }
-            if lane.gain.enhanced != 0.0
-                && let Some(enhanced) = &lane.enhanced
-                && let Some(sample) = enhanced[channel].get(frame)
-            {
-                sum += sample.clamp(-1.0, 1.0) * lane.gain.enhanced;
-            }
+            lane.gain.accumulate(
+                &mut sum,
+                lane.original[channel].get(frame).copied(),
+                lane.enhanced
+                    .as_ref()
+                    .and_then(|enhanced| enhanced[channel].get(frame).copied()),
+            );
         }
 
         self.next_channel += 1;

@@ -10,7 +10,7 @@ pub use builder::{
 };
 pub(crate) use builder::{
     MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimelineLaneBuildState, build_timeline_lane_headers,
-    build_timeline_lanes, build_timeline_lanes_with_segment_index,
+    build_timeline_lanes, build_timeline_lanes_with_segment_index, display_waveform,
 };
 pub use loop_strip::{
     LoopStripClientMetrics, LoopStripHit, LoopStripHitTarget, LoopStripView, client_x_to_loop_time,

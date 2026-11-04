@@ -6,11 +6,14 @@
 //!   speed / loop / audition), per-lane mute/solo/volume, per-lane enhanced
 //!   (denoised) PCM blended with the original at a live ratio, and rodio
 //!   output.
+//! - [`blend_lane_audio`]: the PCM one lane plays at an enhanced ratio, for
+//!   waveforms of what is heard.
 //! - [`EnhancedAudioCache`]: enhanced lane WAVs on disk, keyed by task,
 //!   enhancer model and original source digest.
 //! - [`AudioEngine::offline`] + [`ManualClock`]: deterministic headless engine
 //!   for tests (no audio device).
 
+mod blend;
 mod clock;
 mod decode;
 mod engine;
@@ -19,6 +22,7 @@ mod error;
 mod source;
 mod transport;
 
+pub use blend::blend_lane_audio;
 pub use clock::ManualClock;
 pub use decode::{
     LaneAudioFile, audio_source_candidates, decode_audio_bytes, decode_audio_file, load_lane_audio,

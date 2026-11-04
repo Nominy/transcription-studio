@@ -6946,6 +6946,7 @@ name = "studio-waveform"
 version = "0.1.0"
 dependencies = [
  "rayon",
+ "serde_json",
 ]
 
 [[package]]

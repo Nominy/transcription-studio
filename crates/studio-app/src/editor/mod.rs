@@ -2,6 +2,7 @@
 //! side panels around one [`EditorModel`], drives the frame clock, and dispatches keyboard
 //! shortcuts that are not handled by a focused transcript row.
 
+pub mod blended_waveforms;
 pub mod denoise;
 pub mod inference_audio;
 pub mod model;

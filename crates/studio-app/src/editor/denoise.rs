@@ -5,8 +5,8 @@
 //! denoise location setting (This PC or Remote GPU). Results are cached on disk per task,
 //! enhancer model and original source digest; when the task's audio loads a cached result
 //! is installed without inference, and with "denoise automatically" a miss generates one.
-//! The mix ratio changes live in the audio engine; playback, waveforms and every timing
-//! keep the originals' clock.
+//! The mix ratio changes live in the audio engine, and lane waveforms follow it (they paint
+//! the blend each lane plays); playback, waveforms and every timing keep the originals' clock.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -213,7 +213,9 @@ impl DenoiseControl {
                 .step(f32::from(MIX_STEP_PERCENT))
                 .default_value(selected.slider_value())
         });
-        model.update(cx, |model, _| model.set_enhanced_ratio(selected.ratio()));
+        model.update(cx, |model, cx| {
+            model.set_enhanced_ratio(selected.ratio(), cx)
+        });
         let subscriptions = vec![
             cx.observe(&model, |this, _, cx| this.check_startup(cx)),
             cx.subscribe_in(
@@ -287,8 +289,9 @@ impl DenoiseControl {
 
     fn apply_mix(&mut self, percent: EnhancedPercent, cx: &mut Context<Self>) {
         self.selected = percent;
-        self.model
-            .update(cx, |model, _| model.set_enhanced_ratio(percent.ratio()));
+        self.model.update(cx, |model, cx| {
+            model.set_enhanced_ratio(percent.ratio(), cx)
+        });
     }
 
     /// Restores the slider to the audible selection (cancelled 100% confirmation).
@@ -498,7 +501,7 @@ impl DenoiseControl {
     ) -> Result<(), String> {
         let ratio = self.selected.ratio();
         self.model.update(cx, |model, cx| {
-            model.set_enhanced_ratio(ratio);
+            model.set_enhanced_ratio(ratio, cx);
             model
                 .set_enhanced_audio(lanes, cx)
                 .map_err(|error| format!("Enhanced audio was rejected: {error}"))

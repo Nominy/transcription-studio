@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, VecDeque},
-    mem::size_of,
     sync::Arc,
 };
 
@@ -9,23 +8,11 @@ use crate::timeline_model::{LaneColor, TimeRange};
 use crate::transcript_model::TranscriptAnnotationKind;
 use studio_core::Segment;
 use studio_waveform::{
-    DecodedAudio, PeakCache, WaveViewport, WaveformRenderModel, WaveformRenderOptions,
-    WaveformSource,
+    DISPLAY_SAMPLE_RATE, DecodedAudio, DisplaySignal, LineWaveform, PeakCache, WaveViewport,
+    WaveformRenderModel, WaveformRenderOptions, WaveformSource,
 };
 
 const WAVEFORM_PEAK_COUNT: usize = 256;
-const TIMELINE_RENDER_PEAK_COUNT: usize = 2_048;
-const TIMELINE_RENDER_WIDTH_PX: f64 = 2_000.0;
-const TIMELINE_RENDER_MODEL_CACHE_CAPACITY: usize = 8;
-// Timeline render-model retention is bounded by entry count and by an estimated byte
-// budget so zoom churn cannot pin unbounded strip/sample allocations per lane.
-// Together with the `PeakCache` byte budget (16 MiB), this keeps each lane's
-// waveform caches at or below ~20 MiB regardless of zoom history.
-const TIMELINE_RENDER_MODEL_CACHE_BYTE_BUDGET: usize = 4 * 1024 * 1024;
-// Rough per-entry struct overhead (model fields, Arc headers, cursor/region
-// geometry) used by the cache byte estimator; sample buffers are counted exactly.
-const CACHED_TIMELINE_MODEL_BASE_BYTES: usize = 512;
-const CACHED_TIMELINE_MODEL_CHANNEL_BYTES: usize = 128;
 const OVERVIEW_RENDER_PEAK_COUNT: usize = 1_024;
 const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;
 // Segment-derived caches retain only the current variant for each stable segment ID.
@@ -33,8 +20,13 @@ const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;
 const SEGMENT_PEAK_CACHE_CAPACITY: usize = 512;
 const WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY: usize = 512;
 
+/// A lane's audio as the editor draws it. The timeline paints Babel's display signal (see
+/// [`DisplaySignal`]); the overview and segment peaks read the same signal, so only
+/// analysis (silence, drafting) needs the full-rate PCM, kept unless built `display_only`.
 #[derive(Debug)]
 pub struct LaneWaveform {
+    audio: Option<Arc<DecodedAudio>>,
+    line: Arc<LineWaveform>,
     source: WaveformSource,
     peak_cache: RefCell<PeakCache>,
     render_cache: RefCell<LaneWaveformRenderCache>,
@@ -44,64 +36,103 @@ pub struct LaneWaveform {
 
 impl Clone for LaneWaveform {
     fn clone(&self) -> Self {
-        Self {
-            source: self.source.clone(),
-            peak_cache: RefCell::new(PeakCache::new(self.source.clone())),
-            render_cache: RefCell::new(LaneWaveformRenderCache::default()),
-            segment_peak_cache: RefCell::new(SegmentPeakCache::default()),
-            block_static_cache: RefCell::new(WaveformBlockStaticCache::default()),
-        }
+        Self::with_parts(
+            self.audio.clone(),
+            Arc::clone(&self.line),
+            self.source.clone(),
+        )
     }
 }
 
 impl PartialEq for LaneWaveform {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
+        self.audio == other.audio && self.line.signal() == other.line.signal()
     }
 }
 
 impl LaneWaveform {
+    /// Decoded lane audio; builds the display signal (O(frames): call off the UI thread).
     pub fn from_decoded(decoded: DecodedAudio) -> Self {
-        let source = WaveformSource::from_decoded(decoded);
-        Self {
-            peak_cache: RefCell::new(PeakCache::new(source.clone())),
-            source,
-            render_cache: RefCell::new(LaneWaveformRenderCache::default()),
-            segment_peak_cache: RefCell::new(SegmentPeakCache::default()),
-            block_static_cache: RefCell::new(WaveformBlockStaticCache::default()),
-        }
+        let signal = DisplaySignal::from_decoded(&decoded);
+        Self::from_signal(signal, Some(Arc::new(decoded)))
     }
 
+    /// Like [`Self::from_decoded`] without keeping the PCM (`decoded_audio()` is `None`).
+    pub fn display_only(decoded: &DecodedAudio) -> Self {
+        Self::from_signal(DisplaySignal::from_decoded(decoded), None)
+    }
+
+    /// Peaks drawn as they are, like wavesurfer's `load(url, [peaks], duration)` (first
+    /// channel).
     pub fn from_precomputed_peaks(
         peaks: Vec<Vec<f64>>,
         duration_seconds: f64,
     ) -> Result<Self, String> {
+        let first = peaks
+            .first()
+            .map(|channel| channel.iter().map(|peak| *peak as f32).collect())
+            .unwrap_or_default();
+        let signal = DisplaySignal::from_peaks(first, duration_seconds)?;
         let source = WaveformSource::from_precomputed_peaks(peaks, duration_seconds)?;
-        Ok(Self {
+        Ok(Self::with_parts(
+            None,
+            Arc::new(LineWaveform::new(signal)),
+            source,
+        ))
+    }
+
+    fn from_signal(signal: DisplaySignal, audio: Option<Arc<DecodedAudio>>) -> Self {
+        // A decoded lane has at least one frame, so its display signal has a sample.
+        let display_audio =
+            DecodedAudio::from_shared_channels(DISPLAY_SAMPLE_RATE, vec![signal.samples_shared()])
+                .expect("display signal of decoded audio is never empty");
+        Self::with_parts(
+            audio,
+            Arc::new(LineWaveform::new(signal)),
+            WaveformSource::from_decoded(display_audio),
+        )
+    }
+
+    fn with_parts(
+        audio: Option<Arc<DecodedAudio>>,
+        line: Arc<LineWaveform>,
+        source: WaveformSource,
+    ) -> Self {
+        Self {
+            audio,
+            line,
             peak_cache: RefCell::new(PeakCache::new(source.clone())),
             source,
             render_cache: RefCell::new(LaneWaveformRenderCache::default()),
             segment_peak_cache: RefCell::new(SegmentPeakCache::default()),
             block_static_cache: RefCell::new(WaveformBlockStaticCache::default()),
-        })
+        }
     }
 
+    /// Full-rate PCM for analysis; `None` for display-only and peak-backed waveforms.
     pub fn decoded_audio(&self) -> Option<&DecodedAudio> {
-        match &self.source {
-            WaveformSource::Decoded(decoded) => Some(decoded.as_ref()),
-            WaveformSource::Peaks(_) => None,
-        }
+        self.audio.as_deref()
     }
 
     pub fn decoded_audio_shared(&self) -> Option<Arc<DecodedAudio>> {
-        match &self.source {
-            WaveformSource::Decoded(decoded) => Some(Arc::clone(decoded)),
-            WaveformSource::Peaks(_) => None,
-        }
+        self.audio.clone()
+    }
+
+    /// The timeline's waveform (shared; its canvas cache survives clones).
+    pub fn line(&self) -> Arc<LineWaveform> {
+        Arc::clone(&self.line)
     }
 
     pub fn duration_seconds(&self) -> f64 {
-        self.source.duration()
+        self.line.duration_seconds()
+    }
+
+    /// Bytes of sample data this waveform keeps alive: the display signal plus any PCM.
+    pub fn retained_bytes(&self) -> usize {
+        let pcm = self.audio.as_ref().map_or(0, |audio| {
+            audio.frame_count() * audio.number_of_channels() * std::mem::size_of::<f32>()
+        });
+        self.line.signal().retained_bytes() + pcm
     }
 
     pub fn peaks_for_segment(&self, segment: &Segment, count: usize) -> Option<Arc<[f32]>> {
@@ -157,71 +188,9 @@ impl LaneWaveform {
             .into()
     }
 
-    pub fn render_model(
-        &self,
-        segments: &[&Segment],
-        viewport: TimeRange,
-        playhead_seconds: f64,
-    ) -> Option<WaveformRenderModel> {
-        let _ = segments;
-        let key = WaveformRenderCacheKey::timeline(viewport);
-        // Bind the cached model first: the `if let` scrutinee temporary would
-        // otherwise hold the RefCell borrow across the body, and the re-store
-        // below borrows the same cell again.
-        let cached_model = self.render_cache.borrow_mut().timeline_model(&key);
-        if let Some(model) = cached_model {
-            if model.visible_start_seconds.to_bits() == viewport.start_seconds.to_bits()
-                && model.visible_end_seconds.to_bits() == viewport.end_seconds.to_bits()
-            {
-                return Some(with_cursor(model, playhead_seconds, 1.0));
-            }
-            let model = retarget_timeline_visible_window(model, viewport, playhead_seconds);
-            // Keep the retargeted model in the cache so the next frame clones the
-            // shifted strip instead of resampling a fresh bounded strip every frame
-            // once playback walks beyond the previous strip window.
-            self.render_cache
-                .borrow_mut()
-                .store_timeline_model(key, model.clone());
-            return Some(model);
-        }
-        let visible_duration = viewport.duration_seconds();
-        let min_px_per_sec = TIMELINE_RENDER_WIDTH_PX / visible_duration;
-        let mut wave_viewport = WaveViewport::new(
-            self.source.duration(),
-            TIMELINE_RENDER_WIDTH_PX,
-            min_px_per_sec,
-            false,
-            1.0,
-        );
-        wave_viewport.set_scroll_time(viewport.start_seconds);
-
-        let model = {
-            let mut peak_cache = self.peak_cache.borrow_mut();
-            WaveformRenderModel::from_peak_cache_full_resolution(
-                &mut peak_cache,
-                wave_viewport,
-                &[],
-                playhead_seconds,
-                WaveformRenderOptions {
-                    channels: 1,
-                    peak_count: TIMELINE_RENDER_PEAK_COUNT,
-                    precision: 10_000.0,
-                    ..WaveformRenderOptions::default()
-                },
-            )
-            .ok()?
-        };
-        let model = retarget_timeline_visible_window(model, viewport, playhead_seconds);
-        self.render_cache
-            .borrow_mut()
-            .store_timeline_model(key, model.clone());
-        Some(model)
-    }
-
     pub fn overview_render_model(&self, playhead_seconds: f64) -> Option<WaveformRenderModel> {
-        let key = WaveformRenderCacheKey::overview();
-        if let Some(model) = self.render_cache.borrow_mut().overview_model(&key) {
-            return Some(with_cursor(model, playhead_seconds, 2.0));
+        if let Some(model) = self.render_cache.borrow_mut().overview_model() {
+            return Some(model.with_playhead_cursor(playhead_seconds, 2.0));
         }
 
         let viewport = WaveViewport::new(
@@ -251,7 +220,7 @@ impl LaneWaveform {
         };
         self.render_cache
             .borrow_mut()
-            .store_overview_model(key, model.clone());
+            .store_overview_model(model.clone());
         Some(model)
     }
 
@@ -274,20 +243,6 @@ impl LaneWaveform {
     pub fn cached_peak_resolution_count(&self) -> usize {
         self.peak_cache.borrow().cached_resolution_count()
     }
-}
-
-fn retarget_timeline_visible_window(
-    model: WaveformRenderModel,
-    viewport: TimeRange,
-    playhead_seconds: f64,
-) -> WaveformRenderModel {
-    model.with_visible_window_for_scroll_strip(
-        viewport.start_seconds,
-        viewport.end_seconds,
-        &[],
-        playhead_seconds,
-        1.0,
-    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -505,163 +460,33 @@ impl WaveformBlockStatic {
     }
 }
 
-#[derive(Clone, Debug)]
+/// The overview's render model (one per lane; the playhead cursor is reapplied per frame).
+#[derive(Clone, Debug, Default)]
 struct LaneWaveformRenderCache {
-    timeline: Vec<CachedWaveformRenderModel>,
-    timeline_cached_bytes: usize,
-    timeline_byte_budget: usize,
-    overview: Option<CachedWaveformRenderModel>,
+    overview: Option<WaveformRenderModel>,
     stats: WaveformRenderCacheStats,
 }
 
-impl Default for LaneWaveformRenderCache {
-    fn default() -> Self {
-        Self {
-            timeline: Vec::new(),
-            timeline_cached_bytes: 0,
-            timeline_byte_budget: TIMELINE_RENDER_MODEL_CACHE_BYTE_BUDGET,
-            overview: None,
-            stats: WaveformRenderCacheStats::default(),
-        }
-    }
-}
-
 impl LaneWaveformRenderCache {
-    fn timeline_model(&mut self, key: &WaveformRenderCacheKey) -> Option<WaveformRenderModel> {
-        if let Some(index) = self.timeline.iter().position(|cached| cached.key == *key) {
+    fn overview_model(&mut self) -> Option<WaveformRenderModel> {
+        let model = self.overview.clone();
+        if model.is_some() {
             self.stats.hits += 1;
-            let cached = self.timeline.remove(index);
-            let model = cached.model.clone();
-            self.timeline.push(cached);
-            return Some(model);
+        } else {
+            self.stats.misses += 1;
         }
-
-        self.stats.misses += 1;
-        None
+        model
     }
 
-    fn overview_model(&mut self, key: &WaveformRenderCacheKey) -> Option<WaveformRenderModel> {
-        if let Some(cached) = self.overview.as_ref()
-            && cached.key == *key
-        {
-            self.stats.hits += 1;
-            return Some(cached.model.clone());
-        }
-
-        self.stats.misses += 1;
-        None
+    fn store_overview_model(&mut self, model: WaveformRenderModel) {
+        self.overview = Some(model);
     }
-
-    fn store_timeline_model(&mut self, key: WaveformRenderCacheKey, model: WaveformRenderModel) {
-        if let Some(index) = self.timeline.iter().position(|cached| cached.key == key) {
-            let removed = self.timeline.remove(index);
-            self.timeline_cached_bytes = self
-                .timeline_cached_bytes
-                .saturating_sub(removed.estimated_bytes);
-        }
-        let estimated_bytes = cached_timeline_render_model_bytes(&model);
-        self.timeline_cached_bytes = self.timeline_cached_bytes.saturating_add(estimated_bytes);
-        self.timeline.push(CachedWaveformRenderModel {
-            key,
-            model,
-            estimated_bytes,
-        });
-
-        // Evict least-recently-used entries (front) until within both bounds; the
-        // just-stored entry is kept even if it alone exceeds the byte budget.
-        while self.timeline.len() > 1
-            && (self.timeline.len() > TIMELINE_RENDER_MODEL_CACHE_CAPACITY
-                || self.timeline_cached_bytes > self.timeline_byte_budget)
-        {
-            let evicted = self.timeline.remove(0);
-            self.timeline_cached_bytes = self
-                .timeline_cached_bytes
-                .saturating_sub(evicted.estimated_bytes);
-        }
-    }
-
-    fn store_overview_model(&mut self, key: WaveformRenderCacheKey, model: WaveformRenderModel) {
-        let estimated_bytes = cached_timeline_render_model_bytes(&model);
-        self.overview = Some(CachedWaveformRenderModel {
-            key,
-            model,
-            estimated_bytes,
-        });
-    }
-}
-
-/// Estimated retained bytes for one cached timeline render model. Counts the
-/// per-model f32 sample buffers (visible + scroll-strip peaks) exactly; the f64
-/// backing peaks are shared with `PeakCache`, which tracks them under its own byte
-/// budget, so they are not double-counted here.
-fn cached_timeline_render_model_bytes(model: &WaveformRenderModel) -> usize {
-    let sample_count = model
-        .channels
-        .iter()
-        .map(|channel| {
-            channel
-                .visible_peaks
-                .len()
-                .saturating_add(channel.scroll_strip_peaks.len())
-        })
-        .sum::<usize>();
-    CACHED_TIMELINE_MODEL_BASE_BYTES
-        .saturating_add(
-            model
-                .channels
-                .len()
-                .saturating_mul(CACHED_TIMELINE_MODEL_CHANNEL_BYTES),
-        )
-        .saturating_add(sample_count.saturating_mul(size_of::<f32>()))
-}
-
-#[derive(Clone, Debug)]
-struct CachedWaveformRenderModel {
-    key: WaveformRenderCacheKey,
-    model: WaveformRenderModel,
-    estimated_bytes: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WaveformRenderCacheKey {
-    kind: WaveformRenderCacheKind,
-    duration_seconds_bits: u64,
-}
-
-impl WaveformRenderCacheKey {
-    fn timeline(viewport: TimeRange) -> Self {
-        Self {
-            kind: WaveformRenderCacheKind::Timeline,
-            duration_seconds_bits: viewport.duration_seconds().to_bits(),
-        }
-    }
-
-    fn overview() -> Self {
-        Self {
-            kind: WaveformRenderCacheKind::Overview,
-            duration_seconds_bits: 0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WaveformRenderCacheKind {
-    Timeline,
-    Overview,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WaveformRenderCacheStats {
     pub hits: usize,
     pub misses: usize,
-}
-
-fn with_cursor(
-    model: WaveformRenderModel,
-    playhead_seconds: f64,
-    cursor_width_px: f64,
-) -> WaveformRenderModel {
-    model.with_playhead_cursor(playhead_seconds, cursor_width_px)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -825,17 +650,15 @@ fn waveform_peaks(seed: &str, count: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use std::{mem::size_of, sync::Arc};
+    use std::sync::Arc;
 
     use studio_core::Segment;
+    use studio_waveform::DecodedAudio;
 
     use super::{
-        CACHED_TIMELINE_MODEL_BASE_BYTES, CACHED_TIMELINE_MODEL_CHANNEL_BYTES, LaneWaveform,
-        SEGMENT_PEAK_CACHE_CAPACITY, SegmentPeakCache, SegmentPeakCacheKey,
-        TIMELINE_RENDER_MODEL_CACHE_BYTE_BUDGET, TIMELINE_RENDER_MODEL_CACHE_CAPACITY,
-        TIMELINE_RENDER_PEAK_COUNT, TimeRange, WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY, WaveformBlock,
-        WaveformBlockStatic, WaveformBlockStaticCache, WaveformBlockStaticCacheKey,
-        WaveformPeakSource, WaveformRenderCacheKey, cached_timeline_render_model_bytes,
+        LaneWaveform, SEGMENT_PEAK_CACHE_CAPACITY, SegmentPeakCache, SegmentPeakCacheKey,
+        TimeRange, WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY, WaveformBlock, WaveformBlockStatic,
+        WaveformBlockStaticCache, WaveformBlockStaticCacheKey, WaveformPeakSource,
     };
 
     #[test]
@@ -1048,179 +871,21 @@ mod tests {
         );
     }
 
-    fn render_cache_test_waveform() -> LaneWaveform {
-        LaneWaveform::from_precomputed_peaks(vec![vec![0.5; 256]], 600.0)
-            .expect("valid peak source")
-    }
-
-    fn viewport_with_duration(duration_seconds: f64) -> TimeRange {
-        TimeRange {
-            start_seconds: 0.0,
-            end_seconds: duration_seconds,
-        }
-    }
-
     #[test]
-    fn cached_timeline_render_model_bytes_counts_sample_buffers_and_overhead() {
-        let waveform = render_cache_test_waveform();
-        let model = waveform
-            .render_model(&[], viewport_with_duration(10.0), 0.0)
-            .expect("render model should build");
-        let channel = model.channels.first().expect("model should have a channel");
+    fn display_only_waveforms_drop_the_pcm_but_draw_the_same_signal() {
+        let audio =
+            DecodedAudio::from_f32_channels(16_000, vec![vec![0.25; 16_000]]).expect("valid audio");
+        let full = LaneWaveform::from_decoded(audio.clone());
+        let display = LaneWaveform::display_only(&audio);
 
-        let expected = CACHED_TIMELINE_MODEL_BASE_BYTES
-            + CACHED_TIMELINE_MODEL_CHANNEL_BYTES
-            + (channel.visible_peaks.len() + channel.scroll_strip_peaks.len()) * size_of::<f32>();
-        assert_eq!(cached_timeline_render_model_bytes(&model), expected);
-        assert!(expected > channel.scroll_strip_peaks.len() * size_of::<f32>());
-    }
-
-    #[test]
-    fn timeline_render_cache_keeps_at_most_capacity_entries() {
-        let waveform = render_cache_test_waveform();
-        for index in 0..=TIMELINE_RENDER_MODEL_CACHE_CAPACITY {
-            let viewport = viewport_with_duration(10.0 + index as f64);
-            waveform
-                .render_model(&[], viewport, 0.0)
-                .expect("render model should build");
-        }
-
-        let cache = waveform.render_cache.borrow();
-        assert_eq!(cache.timeline.len(), TIMELINE_RENDER_MODEL_CACHE_CAPACITY);
-        assert!(
-            !cache.timeline.iter().any(|cached| cached.key
-                == WaveformRenderCacheKey::timeline(viewport_with_duration(10.0))),
-            "the oldest entry should be evicted once the count cap is exceeded"
-        );
-        let newest_duration = 10.0 + TIMELINE_RENDER_MODEL_CACHE_CAPACITY as f64;
-        assert!(cache.timeline.iter().any(|cached| cached.key
-            == WaveformRenderCacheKey::timeline(viewport_with_duration(newest_duration))));
-        assert!(cache.timeline_cached_bytes <= TIMELINE_RENDER_MODEL_CACHE_BYTE_BUDGET);
-    }
-
-    #[test]
-    fn timeline_render_cache_byte_budget_evicts_least_recently_used_entries() {
-        let waveform = render_cache_test_waveform();
-        let first_viewport = viewport_with_duration(10.0);
-        waveform
-            .render_model(&[], first_viewport, 0.0)
-            .expect("first render model should build");
-        let entry_bytes = waveform.render_cache.borrow().timeline_cached_bytes;
-        assert!(entry_bytes > 0);
-        // Keep the budget just above two entries so storing a third must evict.
-        waveform.render_cache.borrow_mut().timeline_byte_budget = 2 * entry_bytes + 1;
-
-        let second_viewport = viewport_with_duration(20.0);
-        waveform
-            .render_model(&[], second_viewport, 0.0)
-            .expect("second render model should build");
-        // Touch the first entry so the second becomes the eviction candidate.
-        waveform
-            .render_model(&[], first_viewport, 1.0)
-            .expect("first viewport should hit the cache");
-        let third_viewport = viewport_with_duration(30.0);
-        waveform
-            .render_model(&[], third_viewport, 0.0)
-            .expect("third render model should build");
-
-        let cache = waveform.render_cache.borrow();
-        assert_eq!(cache.timeline.len(), 2);
-        assert!(
-            cache
-                .timeline
-                .iter()
-                .any(|cached| cached.key == WaveformRenderCacheKey::timeline(first_viewport))
-        );
-        assert!(
-            !cache
-                .timeline
-                .iter()
-                .any(|cached| cached.key == WaveformRenderCacheKey::timeline(second_viewport)),
-            "the least recently used entry should be evicted when the byte budget is exceeded"
-        );
-        assert!(
-            cache
-                .timeline
-                .iter()
-                .any(|cached| cached.key == WaveformRenderCacheKey::timeline(third_viewport))
-        );
-        assert!(cache.timeline_cached_bytes <= cache.timeline_byte_budget);
-    }
-
-    #[test]
-    fn timeline_render_cache_retarget_replaces_entry_without_growing_bytes() {
-        let waveform = render_cache_test_waveform();
-        let viewport = viewport_with_duration(10.0);
-        waveform
-            .render_model(&[], viewport, 0.0)
-            .expect("render model should build");
-        let initial_bytes = waveform.render_cache.borrow().timeline_cached_bytes;
-
-        // Same duration (same cache key) at a new scroll offset retargets and
-        // re-stores the model; the cache must not double-count the replacement.
-        let shifted = TimeRange {
-            start_seconds: 5.0,
-            end_seconds: 15.0,
-        };
-        waveform
-            .render_model(&[], shifted, 5.0)
-            .expect("retargeted render model should build");
-
-        let cache = waveform.render_cache.borrow();
-        assert_eq!(cache.timeline.len(), 1);
-        assert_eq!(cache.timeline_cached_bytes, initial_bytes);
-    }
-
-    #[test]
-    fn timeline_render_model_strip_stays_bounded_and_dense_across_zoom_levels() {
-        let waveform = LaneWaveform::from_precomputed_peaks(vec![vec![0.5; 256]], 3_600.0)
-            .expect("valid peak source");
-
-        // Extreme zoom-in on long audio: a 0.5s window of one hour. The strip
-        // previously sampled the whole source proportionally to the zoom ratio
-        // (~4MB per entry); it must now stay bounded without losing density.
-        let zoomed = waveform
-            .render_model(
-                &[],
-                TimeRange {
-                    start_seconds: 100.0,
-                    end_seconds: 100.5,
-                },
-                100.25,
-            )
-            .expect("zoomed render model should build");
-        let channel = zoomed
-            .channels
-            .first()
-            .expect("model should have a channel");
-        let strip_duration = channel.scroll_strip_end_seconds - channel.scroll_strip_start_seconds;
-        assert!(channel.scroll_strip_peaks.len() <= 8 * TIMELINE_RENDER_PEAK_COUNT);
-        assert!(strip_duration <= 8.0 * 0.5 + 1e-9);
-        assert!(channel.scroll_strip_start_seconds <= 100.0);
-        assert!(channel.scroll_strip_end_seconds >= 100.5);
-        let visible_samples = channel.scroll_strip_peaks.len() as f64 * (0.5 / strip_duration);
-        assert!(
-            visible_samples >= TIMELINE_RENDER_PEAK_COUNT as f64 - 1.0,
-            "the visible window must keep a full window of samples so the strip never renders sparse"
-        );
-
-        // Full zoom-out: the strip covers the whole source and never renders empty.
-        let zoomed_out = waveform
-            .render_model(
-                &[],
-                TimeRange {
-                    start_seconds: 0.0,
-                    end_seconds: 3_600.0,
-                },
-                1_800.0,
-            )
-            .expect("zoomed-out render model should build");
-        let channel = zoomed_out
-            .channels
-            .first()
-            .expect("model should have a channel");
-        assert_eq!(channel.scroll_strip_start_seconds, 0.0);
-        assert_eq!(channel.scroll_strip_end_seconds, 3_600.0);
-        assert_eq!(channel.scroll_strip_peaks.len(), TIMELINE_RENDER_PEAK_COUNT);
+        assert!(full.decoded_audio().is_some());
+        assert!(display.decoded_audio().is_none());
+        assert_eq!(full.line().signal(), display.line().signal());
+        assert_eq!(full.duration_seconds(), 1.0);
+        assert_eq!(display.duration_seconds(), 1.0);
+        // 8 kHz display signal, plus the 16 kHz PCM when kept.
+        assert_eq!(display.retained_bytes(), 8_000 * 4);
+        assert_eq!(full.retained_bytes(), 8_000 * 4 + 16_000 * 4);
+        assert!(display.overview_render_model(0.0).is_some());
     }
 }

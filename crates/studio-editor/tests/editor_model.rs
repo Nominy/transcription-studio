@@ -1286,7 +1286,7 @@ fn timeline_lanes_use_loaded_audio_peaks_for_matching_lane_and_fallback_for_miss
     other_lane.speaker_id = "speaker-2".to_string();
     let project = two_lane_project(vec![segment("audio-backed", 0.0, 1.0, "audio"), other_lane]);
     let mut session = EditorSession::for_project(&project);
-    let audio = DecodedAudio::new(4, vec![vec![0.5; 4]]).expect("valid audio");
+    let audio = DecodedAudio::new(8_000, vec![vec![0.5; 8_000]]).expect("valid audio");
 
     session.set_lane_waveform("track-1", LaneWaveform::from_decoded(audio));
 
@@ -1315,119 +1315,49 @@ fn timeline_lanes_use_loaded_audio_peaks_for_matching_lane_and_fallback_for_miss
 }
 
 #[test]
-fn timeline_lanes_expose_wavesurfer_render_model_with_segment_blocks() {
+fn timeline_lanes_expose_the_lane_line_waveform_with_segment_blocks() {
     let project = two_lane_project(vec![segment("audio-backed", 0.0, 1.0, "audio")]);
     let mut session = EditorSession::for_project(&project);
-    let audio = DecodedAudio::new(4, vec![vec![0.25, -0.5, 0.75, -1.0]]).expect("valid audio");
+    let audio = DecodedAudio::new(16_000, vec![vec![0.25; 16_000]]).expect("valid audio");
 
     session.set_lane_waveform("track-1", LaneWaveform::from_decoded(audio));
 
     let lanes = session.timeline_lanes(&project);
-    let model = lanes
-        .iter()
-        .find(|lane| lane.lane_id == "track-1")
-        .unwrap()
-        .waveform_model
-        .as_ref()
-        .expect("audio-backed lane should expose render model");
-
-    assert_eq!(model.visible_start_seconds, 0.0);
-    assert_eq!(model.visible_end_seconds, 1.0);
-    assert!(model.regions.is_empty());
-    assert_eq!(model.channels[0].peaks.len(), 2_048);
     let lane = lanes.iter().find(|lane| lane.lane_id == "track-1").unwrap();
+    let waveform = lane
+        .waveform
+        .as_ref()
+        .expect("audio-backed lane should expose its waveform");
+
+    assert_eq!(waveform.duration_seconds(), 1.0);
+    assert_eq!(waveform.signal().samples().len(), 8_000);
     assert_eq!(lane.blocks.len(), 1);
     assert_eq!(lane.blocks[0].segment_id, "audio-backed");
     assert_eq!(lane.blocks[0].peak_source, WaveformPeakSource::Audio);
+    let missing = lanes.iter().find(|lane| lane.lane_id == "track-2").unwrap();
+    assert!(missing.waveform.is_none());
 }
 
 #[test]
-fn lane_waveform_reuses_timeline_render_cache_across_playhead_only_changes() {
+fn timeline_rebuilds_share_the_lane_waveform_and_its_canvas_cache() {
     let project = two_lane_project(vec![segment("audio-backed", 0.0, 1.0, "audio")]);
-    let audio = DecodedAudio::new(4, vec![vec![0.25, -0.5, 0.75, -1.0]]).expect("valid audio");
-    let waveform = LaneWaveform::from_decoded(audio);
-    let segment_refs = project.segments.iter().collect::<Vec<_>>();
-    let viewport = TimeRange {
-        start_seconds: 0.0,
-        end_seconds: 1.0,
+    let mut session = EditorSession::for_project(&project);
+    let audio = DecodedAudio::new(8_000, vec![vec![0.25; 8_000]]).expect("valid audio");
+    session.set_lane_waveform("track-1", LaneWaveform::from_decoded(audio));
+
+    let waveform_of = |session: &EditorSession| {
+        session
+            .timeline_lanes(&project)
+            .into_iter()
+            .find(|lane| lane.lane_id == "track-1")
+            .and_then(|lane| lane.waveform)
+            .expect("audio-backed lane should expose its waveform")
     };
+    let first = waveform_of(&session);
+    session.playhead_seconds = 0.5;
+    let second = waveform_of(&session);
 
-    let first = waveform
-        .render_model(&segment_refs, viewport, 0.25)
-        .expect("first render should build");
-    let after_first = waveform.render_cache_stats();
-    let second = waveform
-        .render_model(&segment_refs, viewport, 0.75)
-        .expect("second render should reuse cached peaks");
-    let after_second = waveform.render_cache_stats();
-
-    assert_eq!(after_first.misses, 1);
-    assert_eq!(after_first.hits, 0);
-    assert_eq!(after_second.misses, 1);
-    assert_eq!(after_second.hits, 1);
-    assert!(std::sync::Arc::ptr_eq(&first.channels, &second.channels));
-    assert!(std::sync::Arc::ptr_eq(
-        &first.channels[0].peaks,
-        &second.channels[0].peaks
-    ));
-    assert!(std::sync::Arc::ptr_eq(&first.regions, &second.regions));
-    assert_ne!(
-        first.cursor.progress_percent,
-        second.cursor.progress_percent
-    );
-
-    let shifted_viewport = TimeRange {
-        start_seconds: 0.25,
-        end_seconds: 1.25,
-    };
-    let _ = waveform.render_model(&segment_refs, shifted_viewport, 0.75);
-
-    let after_shift = waveform.render_cache_stats();
-    assert_eq!(after_shift.misses, 1);
-    assert_eq!(after_shift.hits, 2);
-}
-
-#[test]
-fn lane_waveform_tail_view_beyond_source_preserves_requested_window_on_miss_and_hit() {
-    let project = two_lane_project(vec![segment("canonical-tail", 0.0, 3.0, "tail")]);
-    let audio = DecodedAudio::new(4, vec![vec![0.25, -0.5, 0.75, -1.0]]).expect("valid audio");
-    let waveform = LaneWaveform::from_decoded(audio);
-    let segment_refs = project.segments.iter().collect::<Vec<_>>();
-    let viewport = TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 3.0,
-    };
-
-    let first = waveform
-        .render_model(&segment_refs, viewport, 2.25)
-        .expect("first tail render should build");
-    let second = waveform
-        .render_model(&segment_refs, viewport, 2.75)
-        .expect("second tail render should hit the cache");
-    let stats = waveform.render_cache_stats();
-
-    for model in [&first, &second] {
-        assert_eq!(model.visible_start_seconds, 2.0);
-        assert_eq!(model.visible_end_seconds, 3.0);
-        assert_eq!(model.channels[0].peak_start_seconds, 0.0);
-        assert_eq!(model.channels[0].peak_end_seconds, 1.0);
-        assert_eq!(model.channels[0].scroll_strip_start_seconds, 0.0);
-        assert_eq!(model.channels[0].scroll_strip_end_seconds, 1.0);
-        assert!(
-            model.channels[0].scroll_strip_end_seconds <= model.visible_start_seconds,
-            "the shorter source must not be shifted into the canonical tail viewport"
-        );
-    }
-    assert_eq!(stats.misses, 1);
-    assert_eq!(stats.hits, 1);
-    assert!(std::sync::Arc::ptr_eq(
-        &first.channels[0].peaks,
-        &second.channels[0].peaks
-    ));
-    assert!(std::sync::Arc::ptr_eq(
-        &first.channels[0].scroll_strip_peaks,
-        &second.channels[0].scroll_strip_peaks
-    ));
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
 }
 
 #[test]
@@ -1520,12 +1450,12 @@ fn lane_waveform_can_use_precomputed_peaks_without_decoded_audio() {
 
     let lanes = session.timeline_lanes(&project);
     let lane = lanes.iter().find(|lane| lane.lane_id == "track-1").unwrap();
-    let model = lane.waveform_model.as_ref().unwrap();
+    let waveform = lane.waveform.as_ref().unwrap();
 
     assert_eq!(lane.blocks[0].peak_source, WaveformPeakSource::Audio);
-    assert!(model.regions.is_empty());
     assert_eq!(lane.blocks[0].segment_id, "peak-backed");
-    assert_eq!(model.channels[0].peaks.len(), 2_048);
+    assert_eq!(waveform.signal().samples(), &[0.0, 0.5, -1.0, 0.25]);
+    assert_eq!(waveform.duration_seconds(), 1.0);
 }
 
 #[test]
@@ -2304,6 +2234,23 @@ fn zoom_clamps_to_babel_toolbar_range() {
 
     session.set_zoom(&project, 20.0);
     assert_eq!(session.zoom, 10.0);
+}
+
+#[test]
+fn the_viewport_shows_the_lane_width_at_babels_200_px_per_second_per_zoom() {
+    let project = sample_project();
+    let mut session = EditorSession::for_project(&project);
+    session.viewport.start_seconds = 10.0;
+    session.viewport.end_seconds = 15.0;
+
+    session.set_timeline_width(&project, 1_240.0);
+    assert_eq!(session.timeline_width_px(), 1_240.0);
+    assert_eq!(session.viewport.start_seconds, 10.0);
+    assert!((session.viewport.duration_seconds() - 6.2).abs() < 1e-9);
+
+    session.set_zoom(&project, 2.0);
+    assert!((session.viewport.duration_seconds() - 3.1).abs() < 1e-9);
+    assert_eq!(session.timeline_min_px_per_sec(), 400.0);
 }
 
 #[test]

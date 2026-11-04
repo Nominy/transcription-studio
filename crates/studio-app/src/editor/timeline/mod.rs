@@ -34,8 +34,8 @@ use crate::editor::model::{EditorEvent, EditorModel};
 use crate::keymap::{ActiveKeymap, IS_MAC};
 use geometry::{HANDLE_HIT_PX, Thumb, fraction_at, hit_test, x_at};
 use paint::{
-    LaneScene, Palette, PeakStrip, RegionMark, RegionMarks, paint_lane, paint_loop_strip,
-    paint_ruler, paint_scrollbar,
+    LaneScene, Palette, RegionMark, RegionMarks, paint_lane, paint_loop_strip, paint_ruler,
+    paint_scrollbar,
 };
 use rail::{LaneHeader, LoopToggle, rail_cell_style};
 
@@ -44,18 +44,34 @@ const LOOP_HEIGHT: Rems = rems(1.375);
 const RULER_HEIGHT: Rems = rems(1.375);
 const SCROLLBAR_HEIGHT: Rems = rems(0.875);
 const COLLAPSED_LANE_HEIGHT: Rems = rems(2.5);
-/// Fits the rail header (title and button row) with its padding.
-const MIN_LANE_HEIGHT: Rems = rems(3.5);
-/// Height of an expanded lane in the stacked layouts. Two lanes reproduce the former fixed
-/// 22.5rem waveform card; as in Babel's browser editor, hiding a speaker shrinks the card
-/// instead of stretching the remaining lane over the freed space.
-const LANE_HEIGHT: Rems = rems(7.8125);
+/// Babel's lane (waveform canvas) height: 150 CSS px ("Large", its default)...
+const LANE_HEIGHT: Rems = rems(9.375);
+/// ...and 48 CSS px ("Small") for tasks with three or more speakers.
+const MULTI_SPEAKER_LANE_HEIGHT: Rems = rems(3.);
+
+/// Visible lane rows of the timeline and the height of an expanded one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LaneRows {
+    pub expanded: usize,
+    pub collapsed: usize,
+    pub lane_height: Rems,
+}
+
+/// Babel sizes every lane by the task's speaker count, whatever is filtered or collapsed.
+fn lane_height(doc: &EditorDoc) -> Rems {
+    if doc.project().lanes.len() >= 3 {
+        MULTI_SPEAKER_LANE_HEIGHT
+    } else {
+        LANE_HEIGHT
+    }
+}
+
 /// Pixels per wheel "line" (Windows reports three lines per notch).
 const WHEEL_LINE_PIXELS: f32 = 20.0;
 const TOOLTIP_WIDTH: Rems = rems(20.);
 
-/// Visible lanes as `(expanded, collapsed)` counts (at least one expanded row).
-pub fn visible_lane_rows(doc: &EditorDoc) -> (usize, usize) {
+/// Visible lanes (at least one expanded row).
+pub fn visible_lane_rows(doc: &EditorDoc) -> LaneRows {
     let session = doc.session();
     let (mut expanded, mut collapsed) = (0_usize, 0_usize);
     for lane in doc
@@ -73,20 +89,23 @@ pub fn visible_lane_rows(doc: &EditorDoc) -> (usize, usize) {
     if expanded + collapsed == 0 {
         expanded = 1;
     }
-    (expanded, collapsed)
+    LaneRows {
+        expanded,
+        collapsed,
+        lane_height: lane_height(doc),
+    }
 }
 
-/// Height the timeline needs to show `rows` (see [`visible_lane_rows`]) at [`LANE_HEIGHT`]
-/// (collapsed lanes at [`COLLAPSED_LANE_HEIGHT`]) under the loop strip and ruler, above the
-/// scrollbar.
-pub fn natural_height((expanded, collapsed): (usize, usize), rem_size: Pixels) -> Pixels {
-    let rows = LOOP_HEIGHT.0
+/// Height the timeline needs to show `rows` (see [`visible_lane_rows`]; collapsed lanes at
+/// [`COLLAPSED_LANE_HEIGHT`]) under the loop strip and ruler, above the scrollbar.
+pub fn natural_height(rows: LaneRows, rem_size: Pixels) -> Pixels {
+    let height = LOOP_HEIGHT.0
         + RULER_HEIGHT.0
         + SCROLLBAR_HEIGHT.0
-        + expanded as f32 * LANE_HEIGHT.0
-        + collapsed as f32 * COLLAPSED_LANE_HEIGHT.0;
+        + rows.expanded as f32 * rows.lane_height.0
+        + rows.collapsed as f32 * COLLAPSED_LANE_HEIGHT.0;
     // Outer border (top and bottom), the loop row's bottom border and one per lane.
-    rem_size * rows + px((3 + expanded + collapsed) as f32)
+    rem_size * height + px((3 + rows.expanded + rows.collapsed) as f32)
 }
 
 /// Lane accent as a gpui color.
@@ -99,7 +118,8 @@ fn palette(cx: &App) -> Palette {
     Palette {
         text: theme.foreground.opacity(0.9),
         grid: theme.border,
-        unplayed: theme.muted_foreground.opacity(0.45),
+        // Babel's lanes draw the unplayed waveform in `waveColor` #707070.
+        unplayed: rgb(0x707070).into(),
         playhead: theme.foreground,
         hover: theme.muted_foreground.opacity(0.6),
         accent: theme.info,
@@ -557,8 +577,8 @@ impl TimelineView {
             playhead_seconds: frame.playhead_seconds,
             color: lane_color(lane.color),
             collapsed: lane.is_collapsed,
-            gain: lane.vertical_zoom,
-            peaks: lane.waveform_model.as_ref().and_then(PeakStrip::timeline),
+            bar_height: lane.vertical_zoom,
+            waveform: lane.waveform.clone(),
             blocks: Arc::clone(&lane.blocks),
             selected: frame.selected.clone(),
             hovered: hover.and_then(|hit| hit.region_id.clone()),
@@ -652,7 +672,7 @@ impl TimelineView {
                         }
                     }
                 }));
-            if lane.waveform_model.is_none() && frame.audio_pending {
+            if lane.waveform.is_none() && frame.audio_pending {
                 body = body.child(
                     div()
                         .absolute()
@@ -679,7 +699,7 @@ impl TimelineView {
         if lane.is_collapsed {
             row.h(COLLAPSED_LANE_HEIGHT).flex_none().into_any_element()
         } else {
-            row.flex_1().min_h(MIN_LANE_HEIGHT).into_any_element()
+            row.h(frame.lane_row_height).flex_none().into_any_element()
         }
     }
 
@@ -824,6 +844,8 @@ impl TimelineView {
         let min_px_per_sec = frame.min_px_per_sec;
         let playhead = frame.playhead_seconds;
         let palette = frame.palette;
+        let reported_width = frame.timeline_width;
+        let model = self.model.clone();
         h_flex()
             .h(RULER_HEIGHT)
             .flex_none()
@@ -839,7 +861,18 @@ impl TimelineView {
             )
             .child(
                 canvas(
-                    move |bounds, _, _| {
+                    move |bounds, window, cx| {
+                        // The session sizes the viewport from the lane width in CSS px
+                        // (Babel's px/sec zoom); the ruler spans the same width as the lanes.
+                        let width =
+                            f64::from(f32::from(bounds.size.width) / crate::zoom::ui_scale(window));
+                        if width > 0.0 && width != reported_width {
+                            window.defer(cx, move |_, cx| {
+                                model.update(cx, |model, cx| {
+                                    model.update_doc(cx, |doc| doc.set_timeline_width(width));
+                                });
+                            });
+                        }
                         build_babel_timeline_ruler_for_viewport(
                             viewport,
                             f64::from(f32::from(bounds.size.width)),
@@ -950,6 +983,10 @@ struct Frame {
     viewport: TimeRange,
     playhead_seconds: f64,
     min_px_per_sec: f64,
+    /// Expanded lane row: Babel's lane height plus the row's bottom border.
+    lane_row_height: Pixels,
+    /// Lane width (CSS px) the session last sized the viewport for.
+    timeline_width: f64,
     selected: Option<String>,
     hover: Option<(String, WaveformHit)>,
     autoscroll: Option<(String, f32)>,
@@ -967,7 +1004,7 @@ struct Frame {
 }
 
 impl Frame {
-    fn new(view: &mut TimelineView, cx: &App) -> Self {
+    fn new(view: &mut TimelineView, window: &Window, cx: &App) -> Self {
         let marks = view.marks(cx);
         let model = view.model.read(cx);
         let doc = model.doc();
@@ -1001,6 +1038,8 @@ impl Frame {
             viewport: session.viewport,
             playhead_seconds: session.playhead_seconds,
             min_px_per_sec: session.timeline_min_px_per_sec(),
+            lane_row_height: window.rem_size() * lane_height(doc).0 + px(1.),
+            timeline_width: session.timeline_width_px(),
             selected: session.selected_segment_id.clone(),
             autoscroll: pointer
                 .autoscroll
@@ -1032,7 +1071,7 @@ impl Render for TimelineView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.scale = crate::zoom::ui_scale(window);
         let lanes = self.lanes(cx);
-        let frame = Frame::new(self, cx);
+        let frame = Frame::new(self, window, cx);
         let lane_rows: Vec<AnyElement> = lanes
             .iter()
             .enumerate()
@@ -1063,10 +1102,12 @@ impl Render for TimelineView {
             .child(loop_row)
             .child(ruler_row)
             .child(
+                // Lanes keep Babel's height; when the card is capped they scroll.
                 v_flex()
+                    .id("timeline-lanes")
                     .flex_1()
                     .min_h_0()
-                    .overflow_hidden()
+                    .overflow_y_scroll()
                     .children(lane_rows),
             )
             .child(scrollbar_row)

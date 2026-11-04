@@ -433,6 +433,18 @@ impl EditorDoc {
         self.touch();
     }
 
+    /// Paints `waveform` for a lane instead of its original (`None` restores the original);
+    /// returns the replaced display waveform. See [`EditorSession::set_lane_display_waveform`].
+    pub fn set_lane_display_waveform(
+        &mut self,
+        lane_id: &str,
+        waveform: Option<crate::timeline_model::LaneWaveform>,
+    ) -> Option<crate::timeline_model::LaneWaveform> {
+        let previous = self.session.set_lane_display_waveform(lane_id, waveform);
+        self.touch();
+        previous
+    }
+
     // ---- shared internals -------------------------------------------------------------
 
     fn touch(&mut self) {

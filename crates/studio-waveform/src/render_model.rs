@@ -9,17 +9,6 @@ use crate::{
 const MAX_CACHED_RENDER_PEAKS: usize = 1_048_576;
 const PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN: usize = 16_384;
 
-/// A scroll strip only spans this many visible windows' worth of audio around the
-/// current viewport. Scrolling inside the strip reuses the sampled peaks; deeper
-/// jumps resample a fresh bounded strip. Bounding the strip window bounds strip
-/// memory at `SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE * visible_peak_count` samples
-/// regardless of source duration or zoom ratio, while the visible window keeps
-/// full display density at every zoom level.
-const SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE: f64 = 8.0;
-/// Hard ceiling on scroll-strip samples, matching the windowed strip bound. Guards
-/// the strip size even if window sizing and sample sizing ever drift apart.
-const MAX_SCROLL_STRIP_VISIBLE_WINDOWS: usize = SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE as usize;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaveformRenderOptions {
     pub channels: usize,
@@ -51,13 +40,6 @@ pub struct WaveformRenderModel {
     pub channels: Arc<[WaveformChannelRender]>,
     pub regions: Arc<[WaveformRegionRender]>,
     handle_width_px: f64,
-}
-
-struct SharedPeakWindow {
-    channels: Vec<Arc<[f64]>>,
-    start_seconds: f64,
-    end_seconds: f64,
-    visible_peak_count: usize,
 }
 
 impl WaveformRenderModel {
@@ -114,67 +96,10 @@ impl WaveformRenderModel {
         )
     }
 
-    pub fn from_peak_cache_full_resolution(
-        peak_cache: &mut PeakCache,
-        viewport: WaveViewport,
-        regions: &[Region],
-        current_seconds: f64,
-        options: WaveformRenderOptions,
-    ) -> Result<Self, PeakExportError> {
-        let scroll_window = viewport.scroll_window();
-        let resolution_length =
-            cached_render_peak_resolution(viewport.layout(), options.peak_count);
-        let duration_seconds = peak_cache.source().duration();
-        let peaks = peak_cache.shared_peaks_for_resolution(
-            options.channels,
-            resolution_length,
-            options.precision,
-        )?;
-        Self::from_arc_render_parts(
-            viewport.layout(),
-            scroll_window,
-            SharedPeakWindow {
-                channels: peaks,
-                start_seconds: 0.0,
-                end_seconds: duration_seconds,
-                visible_peak_count: options.peak_count,
-            },
-            regions,
-            current_seconds,
-            options,
-        )
-    }
-
     fn from_render_parts(
         layout: RendererLayout,
         scroll_window: ScrollWindow,
         peaks: Vec<Vec<f64>>,
-        regions: &[Region],
-        current_seconds: f64,
-        options: WaveformRenderOptions,
-    ) -> Result<Self, PeakExportError> {
-        let visible_start_seconds = scroll_window.visible_start_seconds;
-        let visible_end_seconds = scroll_window.visible_end_seconds;
-        let visible_peak_count = options.peak_count;
-        Self::from_arc_render_parts(
-            layout,
-            scroll_window,
-            SharedPeakWindow {
-                channels: peaks.into_iter().map(Arc::<[f64]>::from).collect(),
-                start_seconds: visible_start_seconds,
-                end_seconds: visible_end_seconds,
-                visible_peak_count,
-            },
-            regions,
-            current_seconds,
-            options,
-        )
-    }
-
-    fn from_arc_render_parts(
-        layout: RendererLayout,
-        scroll_window: ScrollWindow,
-        peak_window: SharedPeakWindow,
         regions: &[Region],
         current_seconds: f64,
         options: WaveformRenderOptions,
@@ -196,19 +121,18 @@ impl WaveformRenderModel {
             visible_end_seconds,
             viewport_width_px,
             cursor,
-            channels: peak_window
-                .channels
+            channels: peaks
                 .into_iter()
                 .enumerate()
                 .map(|(channel_index, peaks)| {
                     WaveformChannelRender::from_window(
                         channel_index,
-                        peaks,
-                        peak_window.start_seconds,
-                        peak_window.end_seconds,
+                        Arc::from(peaks),
                         visible_start_seconds,
                         visible_end_seconds,
-                        peak_window.visible_peak_count,
+                        visible_start_seconds,
+                        visible_end_seconds,
+                        options.peak_count,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -266,54 +190,6 @@ impl WaveformRenderModel {
             .channels
             .iter()
             .map(|channel| channel.with_visible_window(visible_start_seconds, visible_end_seconds))
-            .collect::<Vec<_>>()
-            .into();
-        self.regions = regions
-            .iter()
-            .filter_map(|region| {
-                WaveformRegionRender::from_region(
-                    region,
-                    visible_start_seconds,
-                    visible_end_seconds,
-                )
-            })
-            .collect::<Vec<_>>()
-            .into();
-        self
-    }
-
-    /// Retargets the visible window for renderers that draw from `scroll_strip_peaks`.
-    ///
-    /// Unlike `with_visible_window`, this keeps `visible_peaks` untouched because the
-    /// native offset-clipped WaveSurfer strip does not consume that buffer.
-    pub fn with_visible_window_for_scroll_strip(
-        mut self,
-        visible_start_seconds: f64,
-        visible_end_seconds: f64,
-        regions: &[Region],
-        current_seconds: f64,
-        cursor_width_px: f64,
-    ) -> Self {
-        let visible_start_seconds = finite_non_negative(visible_start_seconds);
-        let visible_end_seconds =
-            finite_non_negative(visible_end_seconds).max(visible_start_seconds);
-        let visible_duration_seconds = (visible_end_seconds - visible_start_seconds).max(0.001);
-        self.visible_start_seconds = visible_start_seconds;
-        self.visible_end_seconds = visible_end_seconds;
-        self.cursor = ProgressGeometry::from_wavesurfer_rules(
-            current_seconds - visible_start_seconds,
-            visible_duration_seconds,
-            cursor_width_px,
-        );
-        self.channels = self
-            .channels
-            .iter()
-            .map(|channel| {
-                channel.with_visible_window_for_scroll_strip(
-                    visible_start_seconds,
-                    visible_end_seconds,
-                )
-            })
             .collect::<Vec<_>>()
             .into();
         self.regions = regions
@@ -412,12 +288,9 @@ pub struct WaveformChannelRender {
     pub channel_index: usize,
     pub peaks: Arc<[f64]>,
     pub visible_peaks: Arc<[f32]>,
-    pub scroll_strip_peaks: Arc<[f32]>,
     pub peak_start_seconds: f64,
     pub peak_end_seconds: f64,
     pub visible_peak_count: usize,
-    pub scroll_strip_start_seconds: f64,
-    pub scroll_strip_end_seconds: f64,
 }
 
 impl WaveformChannelRender {
@@ -438,38 +311,14 @@ impl WaveformChannelRender {
             visible_end_seconds,
             visible_peak_count,
         );
-        let (scroll_strip_start_seconds, scroll_strip_end_seconds) = scroll_strip_window(
-            visible_start_seconds,
-            visible_end_seconds,
-            peak_start_seconds,
-            peak_end_seconds,
-        );
-        let scroll_strip_peak_count = scroll_strip_sample_count(
-            visible_peak_count,
-            visible_start_seconds,
-            visible_end_seconds,
-            scroll_strip_start_seconds,
-            scroll_strip_end_seconds,
-        );
-        let scroll_strip_peaks = sample_visible_peaks(
-            &peaks,
-            peak_start_seconds,
-            peak_end_seconds,
-            scroll_strip_start_seconds,
-            scroll_strip_end_seconds,
-            scroll_strip_peak_count,
-        );
 
         Self {
             channel_index,
             peaks,
             visible_peaks,
-            scroll_strip_peaks,
             peak_start_seconds,
             peak_end_seconds,
             visible_peak_count,
-            scroll_strip_start_seconds,
-            scroll_strip_end_seconds,
         }
     }
 
@@ -482,110 +331,14 @@ impl WaveformChannelRender {
             visible_end_seconds,
             self.visible_peak_count,
         );
-        let (next_strip_start, next_strip_end) = scroll_strip_window(
-            visible_start_seconds,
-            visible_end_seconds,
-            self.peak_start_seconds,
-            self.peak_end_seconds,
-        );
-        let next_strip_peak_count = scroll_strip_sample_count(
-            self.visible_peak_count,
-            visible_start_seconds,
-            visible_end_seconds,
-            next_strip_start,
-            next_strip_end,
-        );
-        let can_reuse_scroll_strip = visible_start_seconds + f64::EPSILON
-            >= self.scroll_strip_start_seconds
-            && visible_end_seconds <= self.scroll_strip_end_seconds + f64::EPSILON;
-        let (scroll_strip_peaks, scroll_strip_start_seconds, scroll_strip_end_seconds) =
-            if can_reuse_scroll_strip {
-                (
-                    Arc::clone(&self.scroll_strip_peaks),
-                    self.scroll_strip_start_seconds,
-                    self.scroll_strip_end_seconds,
-                )
-            } else {
-                (
-                    sample_visible_peaks(
-                        &self.peaks,
-                        self.peak_start_seconds,
-                        self.peak_end_seconds,
-                        next_strip_start,
-                        next_strip_end,
-                        next_strip_peak_count,
-                    ),
-                    next_strip_start,
-                    next_strip_end,
-                )
-            };
 
         Self {
             channel_index: self.channel_index,
             peaks: Arc::clone(&self.peaks),
             visible_peaks,
-            scroll_strip_peaks,
             peak_start_seconds: self.peak_start_seconds,
             peak_end_seconds: self.peak_end_seconds,
             visible_peak_count: self.visible_peak_count,
-            scroll_strip_start_seconds,
-            scroll_strip_end_seconds,
-        }
-    }
-
-    fn with_visible_window_for_scroll_strip(
-        &self,
-        visible_start_seconds: f64,
-        visible_end_seconds: f64,
-    ) -> Self {
-        let (next_strip_start, next_strip_end) = scroll_strip_window(
-            visible_start_seconds,
-            visible_end_seconds,
-            self.peak_start_seconds,
-            self.peak_end_seconds,
-        );
-        let next_strip_peak_count = scroll_strip_sample_count(
-            self.visible_peak_count,
-            visible_start_seconds,
-            visible_end_seconds,
-            next_strip_start,
-            next_strip_end,
-        );
-        let can_reuse_scroll_strip = visible_start_seconds + f64::EPSILON
-            >= self.scroll_strip_start_seconds
-            && visible_end_seconds <= self.scroll_strip_end_seconds + f64::EPSILON;
-        let (scroll_strip_peaks, scroll_strip_start_seconds, scroll_strip_end_seconds) =
-            if can_reuse_scroll_strip {
-                (
-                    Arc::clone(&self.scroll_strip_peaks),
-                    self.scroll_strip_start_seconds,
-                    self.scroll_strip_end_seconds,
-                )
-            } else {
-                (
-                    sample_visible_peaks(
-                        &self.peaks,
-                        self.peak_start_seconds,
-                        self.peak_end_seconds,
-                        next_strip_start,
-                        next_strip_end,
-                        next_strip_peak_count,
-                    ),
-                    next_strip_start,
-                    next_strip_end,
-                )
-            };
-
-        Self {
-            channel_index: self.channel_index,
-            peaks: Arc::clone(&self.peaks),
-            visible_peaks: Arc::clone(&self.visible_peaks),
-            scroll_strip_peaks,
-            peak_start_seconds: self.peak_start_seconds,
-            peak_end_seconds: self.peak_end_seconds,
-            visible_peak_count: self.visible_peak_count,
-            scroll_strip_start_seconds,
-            scroll_strip_end_seconds,
         }
     }
 }
@@ -712,61 +465,6 @@ fn sample_visible_peak(
     )
 }
 
-fn scroll_strip_window(
-    visible_start_seconds: f64,
-    visible_end_seconds: f64,
-    peak_start_seconds: f64,
-    peak_end_seconds: f64,
-) -> (f64, f64) {
-    let visible_start_seconds = finite_non_negative(visible_start_seconds);
-    let visible_end_seconds = finite_non_negative(visible_end_seconds).max(visible_start_seconds);
-    let peak_start_seconds = finite_non_negative(peak_start_seconds);
-    let peak_end_seconds = finite_non_negative(peak_end_seconds).max(peak_start_seconds);
-    let peak_duration = peak_end_seconds - peak_start_seconds;
-    if peak_duration <= f64::EPSILON {
-        return (visible_start_seconds, visible_end_seconds);
-    }
-
-    let visible_duration = visible_end_seconds - visible_start_seconds;
-    let strip_duration = visible_duration * SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE;
-    if visible_duration <= f64::EPSILON || strip_duration >= peak_duration {
-        return (peak_start_seconds, peak_end_seconds);
-    }
-
-    let margin = (strip_duration - visible_duration) / 2.0;
-    let mut strip_start_seconds = visible_start_seconds - margin;
-    let mut strip_end_seconds = visible_end_seconds + margin;
-    if strip_start_seconds < peak_start_seconds {
-        strip_end_seconds =
-            (strip_end_seconds + (peak_start_seconds - strip_start_seconds)).min(peak_end_seconds);
-        strip_start_seconds = peak_start_seconds;
-    }
-    if strip_end_seconds > peak_end_seconds {
-        strip_start_seconds =
-            (strip_start_seconds - (strip_end_seconds - peak_end_seconds)).max(peak_start_seconds);
-        strip_end_seconds = peak_end_seconds;
-    }
-    (strip_start_seconds, strip_end_seconds)
-}
-
-fn scroll_strip_sample_count(
-    visible_peak_count: usize,
-    visible_start_seconds: f64,
-    visible_end_seconds: f64,
-    scroll_strip_start_seconds: f64,
-    scroll_strip_end_seconds: f64,
-) -> usize {
-    let visible_peak_count = visible_peak_count.max(1);
-    let visible_duration = (visible_end_seconds - visible_start_seconds).max(f64::EPSILON);
-    let strip_duration = (scroll_strip_end_seconds - scroll_strip_start_seconds).max(f64::EPSILON);
-    let proportional =
-        (visible_peak_count as f64 * (strip_duration / visible_duration)).ceil() as usize;
-    let sample_cap = visible_peak_count
-        .saturating_mul(MAX_SCROLL_STRIP_VISIBLE_WINDOWS)
-        .min(MAX_CACHED_RENDER_PEAKS);
-    proportional.clamp(visible_peak_count.min(sample_cap), sample_cap)
-}
-
 fn peak_window_abs_max(
     peaks: &[f64],
     peak_start_seconds: f64,
@@ -836,7 +534,7 @@ mod tests {
         let mut peak_cache = PeakCache::new(source);
         let mut viewport = WaveViewport::new(5.0, 100.0, 20.0, false, 1.0);
         viewport.set_scroll_time(0.0);
-        let model = WaveformRenderModel::from_peak_cache_full_resolution(
+        let model = WaveformRenderModel::from_peak_cache(
             &mut peak_cache,
             viewport,
             &[],
@@ -866,146 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_visible_window_reuses_scroll_strip_peaks_while_inside_cached_strip() {
-        let source = WaveformSource::from_precomputed_peaks(
-            vec![vec![
-                0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 0.90, 0.80, 0.70,
-                0.60, 0.50,
-            ]],
-            12.0,
-        )
-        .unwrap();
-        let mut peak_cache = PeakCache::new(source);
-        let mut viewport = WaveViewport::new(12.0, 100.0, 100.0 / 3.0, false, 1.0);
-        viewport.set_scroll_time(3.0);
-        let model = WaveformRenderModel::from_peak_cache_full_resolution(
-            &mut peak_cache,
-            viewport,
-            &[],
-            4.5,
-            WaveformRenderOptions {
-                channels: 1,
-                peak_count: 4,
-                precision: 10_000.0,
-                ..WaveformRenderOptions::default()
-            },
-        )
-        .unwrap();
-        let first_channel = model.channels.first().unwrap();
-        let first_visible_peaks = Arc::clone(&first_channel.visible_peaks);
-        let first_scroll_strip_peaks = Arc::clone(&first_channel.scroll_strip_peaks);
-
-        let retargeted = model.with_visible_window(3.5, 6.5, &[], 5.0, 1.0);
-        let retargeted_channel = retargeted.channels.first().unwrap();
-
-        assert!(!Arc::ptr_eq(
-            &first_visible_peaks,
-            &retargeted_channel.visible_peaks
-        ));
-        assert!(
-            Arc::ptr_eq(
-                &first_scroll_strip_peaks,
-                &retargeted_channel.scroll_strip_peaks
-            ),
-            "moving playback should shift an already sampled WaveSurfer-style strip instead of forcing the waveform path to be tessellated every frame"
-        );
-        assert_eq!(retargeted_channel.scroll_strip_peaks.len(), 16);
-        assert_eq!(retargeted_channel.scroll_strip_start_seconds, 0.0);
-        assert_eq!(retargeted_channel.scroll_strip_end_seconds, 12.0);
-    }
-
-    #[test]
-    fn scroll_strip_retargeting_keeps_unused_visible_peak_samples() {
-        let source = WaveformSource::from_precomputed_peaks(
-            vec![vec![
-                0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 0.90, 0.80, 0.70,
-                0.60, 0.50,
-            ]],
-            12.0,
-        )
-        .unwrap();
-        let mut peak_cache = PeakCache::new(source);
-        let mut viewport = WaveViewport::new(12.0, 100.0, 100.0 / 3.0, false, 1.0);
-        viewport.set_scroll_time(3.0);
-        let model = WaveformRenderModel::from_peak_cache_full_resolution(
-            &mut peak_cache,
-            viewport,
-            &[],
-            4.5,
-            WaveformRenderOptions {
-                channels: 1,
-                peak_count: 4,
-                precision: 10_000.0,
-                ..WaveformRenderOptions::default()
-            },
-        )
-        .unwrap();
-        let first_channel = model.channels.first().unwrap();
-        let first_full_peaks = Arc::clone(&first_channel.peaks);
-        let first_visible_peaks = Arc::clone(&first_channel.visible_peaks);
-        let first_scroll_strip_peaks = Arc::clone(&first_channel.scroll_strip_peaks);
-
-        let retargeted = model.with_visible_window_for_scroll_strip(3.5, 6.5, &[], 5.0, 1.0);
-        let retargeted_channel = retargeted.channels.first().unwrap();
-
-        assert_eq!(retargeted.visible_start_seconds, 3.5);
-        assert_eq!(retargeted.visible_end_seconds, 6.5);
-        assert!(Arc::ptr_eq(&first_full_peaks, &retargeted_channel.peaks));
-        assert!(Arc::ptr_eq(
-            &first_visible_peaks,
-            &retargeted_channel.visible_peaks
-        ));
-        assert!(Arc::ptr_eq(
-            &first_scroll_strip_peaks,
-            &retargeted_channel.scroll_strip_peaks
-        ));
-    }
-
-    #[test]
-    fn full_resolution_timeline_strip_keeps_entire_chunk_in_memory_across_far_scrolls() {
-        let source = WaveformSource::from_precomputed_peaks(
-            vec![vec![
-                0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 0.90, 0.80, 0.70,
-                0.60, 0.50,
-            ]],
-            12.0,
-        )
-        .unwrap();
-        let mut peak_cache = PeakCache::new(source);
-        let mut viewport = WaveViewport::new(12.0, 100.0, 100.0 / 3.0, false, 1.0);
-        viewport.set_scroll_time(0.0);
-        let model = WaveformRenderModel::from_peak_cache_full_resolution(
-            &mut peak_cache,
-            viewport,
-            &[],
-            1.5,
-            WaveformRenderOptions {
-                channels: 1,
-                peak_count: 4,
-                precision: 10_000.0,
-                ..WaveformRenderOptions::default()
-            },
-        )
-        .unwrap();
-        let first_channel = model.channels.first().unwrap();
-        let full_chunk_strip = Arc::clone(&first_channel.scroll_strip_peaks);
-
-        assert_eq!(first_channel.scroll_strip_start_seconds, 0.0);
-        assert_eq!(first_channel.scroll_strip_end_seconds, 12.0);
-        assert_eq!(full_chunk_strip.len(), 16);
-
-        let retargeted = model.with_visible_window_for_scroll_strip(8.0, 11.0, &[], 9.5, 1.0);
-        let retargeted_channel = retargeted.channels.first().unwrap();
-        assert!(
-            Arc::ptr_eq(&full_chunk_strip, &retargeted_channel.scroll_strip_peaks),
-            "far scrolling should shift one precomputed full-chunk strip instead of sampling another viewport-sized strip"
-        );
-        assert_eq!(retargeted_channel.scroll_strip_start_seconds, 0.0);
-        assert_eq!(retargeted_channel.scroll_strip_end_seconds, 12.0);
-    }
-
-    #[test]
-    fn full_chunk_peak_sampling_uses_parallel_iterator_for_large_strips() {
+    fn visible_peak_sampling_uses_parallel_iterator_for_large_windows() {
         let source = include_str!("render_model.rs");
         let imports_and_constants = source
             .split("#[derive(Clone, Copy, Debug, PartialEq)]")
@@ -1015,108 +574,16 @@ mod tests {
             .split("fn sample_visible_peaks(")
             .nth(1)
             .expect("peak sampling helper should exist")
-            .split("\nfn scroll_strip_window(")
+            .split("\nfn sample_visible_peak(")
             .next()
-            .expect("scroll strip window should follow peak sampling helper");
+            .expect("single-peak sampler should follow peak sampling helper");
 
         assert!(imports_and_constants.contains("use rayon::prelude::*;"));
         assert!(imports_and_constants.contains("const PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN: usize"));
         assert!(sampling_helper.contains("sample_count >= PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN"));
         assert!(
             sampling_helper.contains("into_par_iter()"),
-            "max-size scroll strips still reach PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN and must fan bucket sampling across CPU cores"
+            "large visible windows reach PARALLEL_SAMPLE_VISIBLE_PEAKS_MIN and must fan bucket sampling across CPU cores"
         );
-    }
-
-    #[test]
-    fn scroll_strip_window_is_bounded_and_covers_the_visible_window() {
-        // Deep zoom-in on long audio: the strip stays bounded at a small multiple
-        // of the visible window instead of spanning the whole source.
-        let (start, end) = scroll_strip_window(100.0, 100.5, 0.0, 3_600.0);
-        assert_eq!((start, end), (98.25, 102.25));
-
-        // Near the source start the strip shifts into range without shrinking.
-        let (start, end) = scroll_strip_window(0.25, 0.75, 0.0, 3_600.0);
-        assert_eq!((start, end), (0.0, 4.0));
-
-        // Near the source end the strip shifts the other way.
-        let (start, end) = scroll_strip_window(3_599.0, 3_599.5, 0.0, 3_600.0);
-        assert_eq!((start, end), (3_596.0, 3_600.0));
-
-        // Zoomed out far enough that the multiple covers the peaks: full range.
-        let (start, end) = scroll_strip_window(0.0, 500.0, 0.0, 3_600.0);
-        assert_eq!((start, end), (0.0, 3_600.0));
-
-        // Tiny peak ranges stay fully covered.
-        let (start, end) = scroll_strip_window(0.0, 0.01, 0.0, 0.02);
-        assert_eq!((start, end), (0.0, 0.02));
-
-        // Degenerate inputs keep their legacy behavior.
-        assert_eq!(scroll_strip_window(1.0, 2.0, 5.0, 5.0), (1.0, 2.0));
-        assert_eq!(scroll_strip_window(3.0, 3.0, 0.0, 10.0), (0.0, 10.0));
-    }
-
-    #[test]
-    fn scroll_strip_sample_count_is_hard_capped_at_eight_visible_windows() {
-        // An extreme zoom ratio previously produced ~15M samples (~59MB) for one
-        // strip; it is now hard-capped at eight visible windows of samples.
-        let capped = scroll_strip_sample_count(2_048, 100.0, 100.5, 0.0, 3_600.0);
-        assert_eq!(capped, MAX_SCROLL_STRIP_VISIBLE_WINDOWS * 2_048);
-        assert!(capped <= MAX_CACHED_RENDER_PEAKS);
-
-        // Proportional sizing below the cap is preserved.
-        assert_eq!(
-            scroll_strip_sample_count(2_048, 0.0, 100.0, 0.0, 200.0),
-            4_096
-        );
-
-        // At least one visible window of samples is always kept, so the strip
-        // never renders empty at any zoom level.
-        assert_eq!(
-            scroll_strip_sample_count(2_048, 0.0, 100.0, 0.0, 100.0),
-            2_048
-        );
-        assert_eq!(
-            scroll_strip_sample_count(2_048, 0.0, 200.0, 0.0, 100.0),
-            2_048
-        );
-    }
-
-    #[test]
-    fn full_resolution_strip_stays_bounded_at_extreme_zoom_without_losing_visible_density() {
-        let visible_peak_count = 2_048;
-        let source = WaveformSource::from_precomputed_peaks(vec![vec![0.5; 2_048]], 30.0).unwrap();
-        let mut peak_cache = PeakCache::new(source);
-        let mut viewport = WaveViewport::new(30.0, 2_000.0, 2_000.0 / 0.5, false, 1.0);
-        viewport.set_scroll_time(10.0);
-        let model = WaveformRenderModel::from_peak_cache_full_resolution(
-            &mut peak_cache,
-            viewport,
-            &[],
-            10.25,
-            WaveformRenderOptions {
-                channels: 1,
-                peak_count: visible_peak_count,
-                precision: 10_000.0,
-                ..WaveformRenderOptions::default()
-            },
-        )
-        .unwrap();
-        let channel = model.channels.first().unwrap();
-        let strip_duration = channel.scroll_strip_end_seconds - channel.scroll_strip_start_seconds;
-
-        assert!(
-            channel.scroll_strip_peaks.len()
-                <= MAX_SCROLL_STRIP_VISIBLE_WINDOWS * visible_peak_count,
-            "strip samples must stay bounded regardless of zoom ratio"
-        );
-        assert!(channel.scroll_strip_start_seconds <= 10.0);
-        assert!(channel.scroll_strip_end_seconds >= 10.5);
-        assert!(strip_duration <= 0.5 * SCROLL_STRIP_WINDOW_VISIBLE_MULTIPLE + 1e-9);
-
-        // The visible window still receives a full window's worth of samples, so
-        // the strip renders at full display density at every zoom level.
-        let visible_samples = channel.scroll_strip_peaks.len() as f64 * (0.5 / strip_duration);
-        assert!(visible_samples >= visible_peak_count as f64 - 1.0);
     }
 }

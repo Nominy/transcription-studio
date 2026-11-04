@@ -8,6 +8,7 @@ use studio_waveform::DecodedAudio;
 
 use crate::{
     AudioError, LoopRange, MIN_PLAYBACK_SPEED, ManualClock, PlaybackEvent, PlaybackState,
+    blend::enhanced_mismatch,
     clock::Clock,
     source::{ControlState, LaneGain, LaneSources, MixSource, SessionControl},
     transport::Transport,
@@ -246,31 +247,7 @@ impl AudioEngine {
             let Some(index) = self.lanes.iter().position(|lane| lane.id == lane_id) else {
                 return Err(AudioError::LaneNotLoaded(lane_id));
             };
-            let original = &self.lanes[index].audio;
-            let mismatch = if enhanced.sample_rate() != original.sample_rate() {
-                Some(format!(
-                    "sample rate {} Hz, original {} Hz",
-                    enhanced.sample_rate(),
-                    original.sample_rate()
-                ))
-            } else if enhanced.frame_count() != original.frame_count() {
-                Some(format!(
-                    "{} frames, original {}",
-                    enhanced.frame_count(),
-                    original.frame_count()
-                ))
-            } else if enhanced.number_of_channels() != 1
-                && enhanced.number_of_channels() != original.number_of_channels()
-            {
-                Some(format!(
-                    "{} channels, original {}",
-                    enhanced.number_of_channels(),
-                    original.number_of_channels()
-                ))
-            } else {
-                None
-            };
-            if let Some(reason) = mismatch {
+            if let Some(reason) = enhanced_mismatch(&self.lanes[index].audio, &enhanced) {
                 return Err(AudioError::EnhancedAudioMismatch { lane_id, reason });
             }
             targets.push((index, enhanced));
@@ -604,10 +581,7 @@ impl AudioEngine {
                 } else {
                     0.0
                 };
-                LaneGain {
-                    original: mix.volume * (1.0 - ratio),
-                    enhanced: mix.volume * ratio,
-                }
+                LaneGain::blend(mix.volume, ratio)
             })
             .collect()
     }

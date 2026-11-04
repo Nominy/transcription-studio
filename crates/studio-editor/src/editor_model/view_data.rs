@@ -136,9 +136,9 @@ impl EditorSession {
             muted_lane_ids: &self.muted_lane_ids,
             lane_vertical_zoom: &self.lane_vertical_zoom,
             lane_waveforms: &self.lane_waveforms,
+            lane_display_waveforms: &self.lane_display_waveforms,
             bounds,
             viewport: self.viewport,
-            playhead_seconds: self.playhead_seconds,
             overlay_range: self.overlay_range,
             strip_blocks,
             segment_preview,
@@ -154,8 +154,7 @@ impl EditorSession {
             .enumerate()
             .filter(|(_, lane)| self.track_filter.matches_lane(&lane.id))
             .filter_map(|(lane_index, lane)| {
-                self.lane_waveforms
-                    .get(&lane.id)
+                self.lane_display_waveform(&lane.id)
                     .and_then(|waveform| waveform.overview_render_model(self.playhead_seconds))
                     .map(|waveform_model| OverviewLaneWaveformView {
                         lane_id: lane.id.clone(),

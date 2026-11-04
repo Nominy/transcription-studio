@@ -2,6 +2,7 @@
 
 mod audio;
 mod cache;
+mod line;
 mod peaks;
 mod region;
 mod render_model;
@@ -13,6 +14,10 @@ mod wavesurfer;
 
 pub use audio::DecodedAudio;
 pub use cache::PeakCache;
+pub use line::{
+    CanvasLayout, DISPLAY_SAMPLE_RATE, DisplaySignal, LineCanvasColumns, LineColumn, LineFrame,
+    LineFrameCanvas, LineView, LineWaveform, js_round,
+};
 pub use peaks::{PeakExportError, export_peaks, export_range_peaks};
 pub use region::{
     Region, RegionGeometry, RegionParams, RegionUpdate, RegionUpdateSide, RegionVirtualVisibility,

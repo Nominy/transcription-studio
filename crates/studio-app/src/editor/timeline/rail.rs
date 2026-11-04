@@ -170,7 +170,9 @@ impl Render for LaneHeader {
                         .flex_1()
                         .min_w_0()
                         .h_full()
-                        .p_2()
+                        // Fits Babel's 48 px multi-speaker lanes (title over the buttons).
+                        .px_2()
+                        .py_1()
                         .justify_between()
                         .child(title)
                         .child(

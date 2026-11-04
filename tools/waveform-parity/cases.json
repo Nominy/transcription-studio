@@ -1,0 +1,31 @@
+{
+  "defaults": {
+    "clientWidth": 1240,
+    "height": 150,
+    "dpr": 1.25,
+    "barHeight": 20,
+    "progress": 0,
+    "waveColor": "#707070",
+    "progressColor": "#64B5F6",
+    "background": "#ffffff"
+  },
+  "cases": [
+    { "id": "full-lane-zoomed-out", "audio": "s1-full.wav", "fit": true, "scroll": 0, "progress": 140 },
+    { "id": "default-zoom-200", "audio": "s1-60.wav", "pxPerSec": 200, "scroll": 3000, "progress": 18 },
+    { "id": "mid-zoom-60", "audio": "s1-60.wav", "pxPerSec": 60, "scroll": 900, "progress": 22.5 },
+    { "id": "max-zoom-2000", "audio": "s1-60.wav", "pxPerSec": 2000, "scroll": 40000, "progress": 20.5 },
+    { "id": "fractional-zoom", "audio": "s1-60.wav", "pxPerSec": 137.37, "scroll": 1234, "progress": 13 },
+    { "id": "quiet-passage", "audio": "quiet-60.wav", "pxPerSec": 200, "scroll": 1500 },
+    { "id": "clipping-bar20", "audio": "clip-60.wav", "pxPerSec": 200, "scroll": 3000 },
+    { "id": "clipping-bar1", "audio": "clip-60.wav", "pxPerSec": 200, "scroll": 3000, "barHeight": 1 },
+    { "id": "low-vertical-zoom", "audio": "s1-60.wav", "pxPerSec": 200, "scroll": 3000, "barHeight": 0.3 },
+    { "id": "short-lane-48", "audio": "s1-60.wav", "pxPerSec": 100, "scroll": 700, "height": 48 },
+    { "id": "lane-96-dpr1.5", "audio": "s1-60.wav", "pxPerSec": 200, "scroll": 2000, "height": 96, "dpr": 1.5 },
+    { "id": "stereo", "audio": "stereo-60.wav", "pxPerSec": 200, "scroll": 3000, "progressColor": "#B083FF" },
+    { "id": "rate-24k-dpr2", "audio": "s1-24k.wav", "pxPerSec": 500, "scroll": 6000, "dpr": 2 },
+    { "id": "rate-32k-dpr1", "audio": "s1-32k.wav", "pxPerSec": 300, "scroll": 4500, "dpr": 1 },
+    { "id": "rate-48k", "audio": "s1-48k.wav", "pxPerSec": 200, "scroll": 3000 },
+    { "id": "canvas-boundary", "audio": "s1-60.wav", "pxPerSec": 200, "scroll": 1860, "clientWidth": 1000 },
+    { "id": "narrow-dpr1.75", "audio": "s1-60.wav", "pxPerSec": 250, "scroll": 2500, "clientWidth": 600, "dpr": 1.75 }
+  ]
+}

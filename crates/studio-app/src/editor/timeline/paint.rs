@@ -1,6 +1,7 @@
 //! Immediate-mode painters for the timeline surfaces (lane bodies, ruler, loop strip,
-//! overview). Shapes are drawn from shared peak buffers; waveforms are one anti-aliased path
-//! per surface, built from a per-frame column scan of those buffers.
+//! overview). Lane waveforms are drawn exactly as Babel's wavesurfer draws them (see
+//! [`studio_waveform::LineWaveform`]); the overview draws a per-frame column scan of its
+//! peak buffer.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -13,7 +14,7 @@ use studio_editor::timeline_model::{
     WaveformBlock,
 };
 use studio_editor::transcript_model::format_mm_ss;
-use studio_waveform::WaveformRenderModel;
+use studio_waveform::{LineFrame, LineView, LineWaveform, WaveformRenderModel, js_round};
 
 use super::geometry::{Thumb, x_at};
 
@@ -83,16 +84,6 @@ pub struct PeakStrip {
 }
 
 impl PeakStrip {
-    /// The bounded scroll strip of a timeline render model (reused while panning inside it).
-    pub fn timeline(model: &WaveformRenderModel) -> Option<Self> {
-        let channel = model.channels.first()?;
-        (!channel.scroll_strip_peaks.is_empty()).then(|| Self {
-            peaks: Arc::clone(&channel.scroll_strip_peaks),
-            start_seconds: channel.scroll_strip_start_seconds,
-            end_seconds: channel.scroll_strip_end_seconds,
-        })
-    }
-
     /// The whole-file peaks of an overview render model.
     pub fn overview(model: &WaveformRenderModel) -> Option<Self> {
         let channel = model.channels.first()?;
@@ -128,6 +119,7 @@ impl PeakStrip {
 pub struct Palette {
     pub text: Hsla,
     pub grid: Hsla,
+    /// The not-yet-played waveform (Babel's `waveColor`).
     pub unplayed: Hsla,
     pub playhead: Hsla,
     pub hover: Hsla,
@@ -154,8 +146,9 @@ pub struct LaneScene {
     pub playhead_seconds: f64,
     pub color: Hsla,
     pub collapsed: bool,
-    pub gain: f32,
-    pub peaks: Option<PeakStrip>,
+    /// Babel's `barHeight`: the lane's vertical zoom.
+    pub bar_height: f32,
+    pub waveform: Option<Arc<LineWaveform>>,
     pub blocks: Arc<[WaveformBlock]>,
     pub selected: Option<String>,
     pub hovered: Option<String>,
@@ -219,15 +212,16 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
 
     let playhead_x = x_of(scene.playhead_seconds);
     if !scene.collapsed
-        && let Some(strip) = scene.peaks.as_ref()
+        && let Some(waveform) = scene.waveform.as_deref()
+        && let Some(frame) = waveform.frame(&line_view(window, bounds, waveform, scene.viewport))
     {
-        paint_peaks(
+        let split = js_round(frame.viewport_x_of(scene.playhead_seconds));
+        paint_line(
             window,
             bounds,
-            strip,
-            scene.viewport,
-            scene.gain,
-            playhead_x,
+            &frame,
+            f64::from(scene.bar_height),
+            split,
             scene.color,
             palette.unplayed,
         );
@@ -408,9 +402,9 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
     }
 
     if let Some(seconds) = scene.magnifier_seconds
-        && let Some(strip) = scene.peaks.as_ref()
+        && let Some(waveform) = scene.waveform.as_deref()
     {
-        paint_magnifier(window, bounds, scene, strip, seconds, s);
+        paint_magnifier(window, bounds, scene, waveform, seconds, s);
     }
 }
 
@@ -419,7 +413,7 @@ fn paint_magnifier(
     window: &mut Window,
     bounds: Bounds<Pixels>,
     scene: &LaneScene,
-    strip: &PeakStrip,
+    waveform: &LineWaveform,
     seconds: f64,
     scale: f32,
 ) {
@@ -452,16 +446,17 @@ fn paint_magnifier(
         end_seconds: seconds + span / 2.0,
     };
     window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
-        paint_peaks(
-            window,
-            area,
-            strip,
-            range,
-            scene.gain * MAGNIFIER_SCALE,
-            f32::MIN,
-            scene.color,
-            scene.color,
-        );
+        if let Some(frame) = waveform.frame_uncached(&line_view(window, area, waveform, range)) {
+            paint_line(
+                window,
+                area,
+                &frame,
+                f64::from(scene.bar_height * MAGNIFIER_SCALE),
+                f64::INFINITY,
+                scene.color,
+                scene.color,
+            );
+        }
         let center = area.center().x;
         window.paint_quad(fill(
             Bounds::new(
@@ -473,21 +468,105 @@ fn paint_magnifier(
     });
 }
 
-/// Draws peaks the way wavesurfer.js draws a line waveform: one value per *device* pixel (the
-/// loudest absolute sample in that column), joined into a filled outline mirrored around the
-/// vertical centre. Neighbouring columns meet in anti-aliased slopes instead of the steps of
-/// per-logical-pixel bars, which look blocky at fractional display scales and high gain.
-/// The part left of `split_x` (surface-local px) uses `played`, the rest `unplayed`.
-#[allow(clippy::too_many_arguments)]
-pub fn paint_peaks(
+/// The wavesurfer view of `range` across `bounds`. Bounds are logical px; at interface zoom
+/// `z` they are what Babel's page shows at browser zoom `z`: CSS px are logical px / `z` and
+/// the device pixel ratio is the window scale × `z`.
+fn line_view(
+    window: &Window,
+    bounds: Bounds<Pixels>,
+    waveform: &LineWaveform,
+    range: TimeRange,
+) -> LineView {
+    let zoom = f64::from(crate::zoom::ui_scale(window));
+    LineView::of_window(
+        waveform.duration_seconds(),
+        (range.start_seconds, range.end_seconds),
+        (
+            f64::from(bounds.size.width) / zoom,
+            f64::from(bounds.size.height) / zoom,
+        ),
+        f64::from(window.scale_factor()) * zoom,
+    )
+}
+
+/// Fills a wavesurfer frame's outline with the viewport's left edge at `bounds.left()`, on
+/// device pixels as the browser places its canvases, clipped to the canvas height. Device
+/// columns left of `split` (device px from `bounds.left()`) take `played`, the rest
+/// `unplayed` (wavesurfer's progress overlay).
+fn paint_line(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    frame: &LineFrame,
+    bar_height: f64,
+    split: f64,
+    played: Hsla,
+    unplayed: Hsla,
+) {
+    let scale = f64::from(window.scale_factor());
+    let origin_x = js_round(f64::from(bounds.left()) * scale);
+    let origin_y = js_round(f64::from(bounds.top()) * scale);
+    let device_width = f64::from(bounds.size.width) * scale;
+    let mut builder = PathBuilder::fill();
+    let mut canvas_height = 0.0_f64;
+    for canvas in &frame.canvases {
+        let columns = canvas.columns.columns_between(
+            -canvas.viewport_x / canvas.x_scale,
+            (device_width - canvas.viewport_x) / canvas.x_scale,
+        );
+        if columns.is_empty() {
+            continue;
+        }
+        canvas_height = canvas_height.max(f64::from(canvas.device_height) * canvas.y_scale);
+        let to_point = |(x, y): (f64, f64)| {
+            point(
+                px(((origin_x + canvas.viewport_x + x * canvas.x_scale) / scale) as f32),
+                px(((origin_y + y * canvas.y_scale) / scale) as f32),
+            )
+        };
+        for direction in [-1.0, 1.0] {
+            let mut outline = canvas
+                .outline(columns.clone(), bar_height, direction)
+                .map(to_point);
+            if let Some(first) = outline.next() {
+                builder.move_to(first);
+                for vertex in outline {
+                    builder.line_to(vertex);
+                }
+                builder.close();
+            }
+        }
+    }
+    let Ok(path) = builder.build() else {
+        return;
+    };
+
+    // One outline, two colours: clip it at the progress edge instead of building it twice.
+    let x_at = |device_x: f64| px(((origin_x + device_x.clamp(0.0, device_width)) / scale) as f32);
+    let (left, split_x, right) = (x_at(0.0), x_at(split), x_at(device_width));
+    let top = px((origin_y / scale) as f32);
+    let height = px((canvas_height / scale) as f32);
+    if split_x > left {
+        let area = Bounds::new(point(left, top), size(split_x - left, height));
+        window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
+            window.paint_path(path.clone(), played);
+        });
+    }
+    if split_x < right {
+        let area = Bounds::new(point(split_x, top), size(right - split_x, height));
+        window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
+            window.paint_path(path, unplayed);
+        });
+    }
+}
+
+/// Draws an overview row: one value per device pixel (the loudest absolute peak in that
+/// column), joined into a filled outline mirrored around the vertical centre.
+fn paint_overview_peaks(
     window: &mut Window,
     bounds: Bounds<Pixels>,
     strip: &PeakStrip,
     range: TimeRange,
-    gain: f32,
-    split_x: f32,
-    played: Hsla,
-    unplayed: Hsla,
+    color: Hsla,
 ) {
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
@@ -507,7 +586,7 @@ pub fn paint_peaks(
             let t0 = range.start_seconds + step * index as f64;
             strip
                 .max_between(t0, t0 + step)
-                .map(|peak| ((peak * gain).min(1.0) * half).max(floor))
+                .map(|peak| (peak.min(1.0) * half).max(floor))
         })
         .collect();
 
@@ -550,26 +629,8 @@ pub fn paint_peaks(
         builder.line_to(point(px(x_start), px(middle + first)));
         builder.close();
     }
-    let Ok(path) = builder.build() else {
-        return;
-    };
-
-    // One outline, two colours: clip it at the playhead instead of building it twice.
-    let split = split_x.clamp(0.0, width);
-    if split > 0.0 {
-        let area = Bounds::new(bounds.origin, size(px(split), bounds.size.height));
-        window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
-            window.paint_path(path.clone(), played);
-        });
-    }
-    if split < width {
-        let area = Bounds::new(
-            point(bounds.left() + px(split), bounds.top()),
-            size(px(width - split), bounds.size.height),
-        );
-        window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
-            window.paint_path(path, unplayed);
-        });
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
     }
 }
 
@@ -766,15 +827,12 @@ pub fn paint_overview(
         ));
     }
     for lane in scene.lanes.iter() {
-        paint_peaks(
+        paint_overview_peaks(
             window,
             row_bounds(lane.row.min(rows - 1)),
             &lane.peaks,
             scene.bounds_range,
-            1.0,
-            f32::MAX,
             lane.color.opacity(0.9),
-            lane.color,
         );
     }
     let markers = OverviewMarkers::new(bounds, scene.thumb, scene.playhead_fraction);

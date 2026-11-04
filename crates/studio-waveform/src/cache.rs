@@ -61,25 +61,6 @@ impl PeakCache {
             .collect())
     }
 
-    pub fn shared_peaks_for_resolution(
-        &mut self,
-        channels: usize,
-        max_length: usize,
-        precision: f64,
-    ) -> Result<Vec<Arc<[f64]>>, PeakExportError> {
-        if channels == 0 {
-            return Err(PeakExportError::NoChannelsRequested);
-        }
-
-        let channel_count = channels.min(self.source.number_of_channels());
-        Ok(self
-            .cached_peaks_for_resolution(max_length, precision)?
-            .iter()
-            .take(channel_count)
-            .cloned()
-            .collect())
-    }
-
     fn cached_peaks_for_resolution(
         &mut self,
         max_length: usize,
@@ -213,12 +194,12 @@ impl PeakCache {
             return Err(PeakExportError::InvalidRange);
         }
 
-        let full_resolution = self.cached_peaks_for_resolution(resolution_length, precision)?;
+        let cached = self.cached_peaks_for_resolution(resolution_length, precision)?;
         let start_index = (start_seconds / duration * resolution_length as f64).floor() as usize;
         let end_index = (end_seconds / duration * resolution_length as f64).ceil() as usize;
-        let channel_count = channels.min(full_resolution.len());
+        let channel_count = channels.min(cached.len());
 
-        Ok(full_resolution
+        Ok(cached
             .iter()
             .take(channel_count)
             .map(|channel| {
@@ -278,7 +259,7 @@ mod tests {
 
         for max_length in 1..=300 {
             cache
-                .shared_peaks_for_resolution(1, max_length, 100.0)
+                .cached_peaks_for_resolution(max_length, 100.0)
                 .expect("valid peak request");
         }
 
@@ -292,15 +273,15 @@ mod tests {
         let mut cache = PeakCache::new(source());
         for max_length in 1..=MAX_CACHED_RESOLUTIONS {
             cache
-                .shared_peaks_for_resolution(1, max_length, 100.0)
+                .cached_peaks_for_resolution(max_length, 100.0)
                 .expect("valid peak request");
         }
 
         cache
-            .shared_peaks_for_resolution(1, 1, 100.0)
+            .cached_peaks_for_resolution(1, 100.0)
             .expect("cached peak request");
         cache
-            .shared_peaks_for_resolution(1, MAX_CACHED_RESOLUTIONS + 1, 100.0)
+            .cached_peaks_for_resolution(MAX_CACHED_RESOLUTIONS + 1, 100.0)
             .expect("new peak request");
 
         assert!(cache.resolutions.contains_key(&key(1)));
@@ -317,14 +298,14 @@ mod tests {
         let mut used = PeakCache::new(source());
         let mut unused = PeakCache::new(source());
         for max_length in 1..=MAX_CACHED_RESOLUTIONS {
-            used.shared_peaks_for_resolution(1, max_length, 100.0)
+            used.cached_peaks_for_resolution(max_length, 100.0)
                 .expect("valid peak request");
             unused
-                .shared_peaks_for_resolution(1, max_length, 100.0)
+                .cached_peaks_for_resolution(max_length, 100.0)
                 .expect("valid peak request");
         }
 
-        used.shared_peaks_for_resolution(1, 1, 100.0)
+        used.cached_peaks_for_resolution(1, 100.0)
             .expect("cached peak request");
 
         assert_eq!(used, unused);
@@ -337,10 +318,10 @@ mod tests {
         let second_length = 1_800_000;
 
         cache
-            .shared_peaks_for_resolution(1, first_length, 100.0)
+            .cached_peaks_for_resolution(first_length, 100.0)
             .expect("first large peak request");
         cache
-            .shared_peaks_for_resolution(1, second_length, 100.0)
+            .cached_peaks_for_resolution(second_length, 100.0)
             .expect("second large peak request");
 
         assert_eq!(cache.cached_resolution_count(), 1);
@@ -349,11 +330,12 @@ mod tests {
         assert!(cache.resolutions.contains_key(&key(second_length)));
 
         let oversized_length = MAX_CACHED_PEAK_BYTES / size_of::<f64>() + 1;
-        let oversized = cache
-            .shared_peaks_for_resolution(1, oversized_length, 100.0)
-            .expect("oversized peak request");
+        let oversized_len = cache
+            .cached_peaks_for_resolution(oversized_length, 100.0)
+            .expect("oversized peak request")[0]
+            .len();
 
-        assert_eq!(oversized[0].len(), oversized_length);
+        assert_eq!(oversized_len, oversized_length);
         assert_eq!(cache.cached_resolution_count(), 1);
         assert!(cache.cached_peak_bytes > MAX_CACHED_PEAK_BYTES);
         assert!(cache.resolutions.contains_key(&key(oversized_length)));

@@ -130,6 +130,16 @@ impl EditorDoc {
         self.persist_timeline_defaults();
     }
 
+    /// The timeline's lane surface is `width_px` CSS px wide (see
+    /// [`crate::editor_model::EditorSession::set_timeline_width`]). Returns whether that
+    /// changed the viewport.
+    pub fn set_timeline_width(&mut self, width_px: f64) -> bool {
+        let viewport = self.session.viewport;
+        self.session
+            .set_timeline_width(self.workflow.project(), width_px);
+        self.session.viewport != viewport
+    }
+
     /// Wheel over the timeline: secondary = zoom around the hovered time, shift or horizontal
     /// delta = pan, plain vertical = nothing (the UI scrolls the page).
     pub fn timeline_wheel(&mut self, delta_x: f32, delta_y: f32) -> bool {
