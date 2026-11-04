@@ -1,18 +1,22 @@
 //! Column geometry and row-height measurement for the virtualized grid.
 //!
-//! `v_virtual_list` needs every row height up front, so rows are measured by shaping their
-//! wrapped text at the current text-column width with the same font, size and padding the
-//! row's text editor uses. Fixed cell metrics are rems, so heights follow the interface zoom.
-//! Line counts are cached per row and only re-shaped when the text, the column width or the
-//! font size (zoom) changes.
+//! `v_virtual_list` needs every row height up front, so rows are measured by wrapping their
+//! text at the current text-column width with the same font, size, padding and wrapping
+//! ([`WrappedText`]) the row's text editor uses; the static row text paints the same wrap.
+//! Fixed cell metrics are rems, so heights follow the interface zoom. Wraps are cached per
+//! row and only recomputed when the text, the column width or the font size (zoom) changes.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::rc::Rc;
 
 use gpui_kit::*;
 use studio_editor::edit::EditorDoc;
+use studio_editor::edit::draft::byte_offset;
 use studio_editor::edit::time::TimeField;
 use studio_editor::transcript_model::{TranscriptRowKind, TranscriptRowView};
+
+use super::wrap::WrappedText;
 
 pub(super) const ID_W: Rems = rems(2.75);
 pub(super) const TRACK_W: Rems = rems(7.5);
@@ -66,18 +70,31 @@ impl TextMetrics {
     }
 }
 
-struct CachedLines {
+/// Cache key of a measured text: its hash, wrap width and font size.
+#[derive(Clone, Copy, PartialEq)]
+struct CacheKey {
     hash: u64,
     width: Pixels,
     font_size: Pixels,
-    lines: usize,
 }
 
-/// Row height cache keyed by segment id.
+impl CacheKey {
+    fn new(text: &str, width: Pixels, font_size: Pixels) -> Self {
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        Self {
+            hash: hasher.finish(),
+            width,
+            font_size,
+        }
+    }
+}
+
+/// Row wrap and diff line-count caches keyed by segment id.
 #[derive(Default)]
 pub(super) struct RowMetrics {
-    text: HashMap<String, CachedLines>,
-    aux: HashMap<String, CachedLines>,
+    text: HashMap<String, (CacheKey, Rc<WrappedText>)>,
+    aux: HashMap<String, (CacheKey, usize)>,
     font_family: SharedString,
 }
 
@@ -99,7 +116,7 @@ impl RowMetrics {
         let metrics = TextMetrics::for_window(window);
         let wrap_width = text_wrap_width(text_column_width, metrics);
         let font = font(font_family.clone());
-        let mut shaper = Shaper {
+        let shaper = Shaper {
             font: &font,
             metrics,
             window,
@@ -108,7 +125,7 @@ impl RowMetrics {
         let sizes = rows
             .iter()
             .map(|row| {
-                let height = self.row_height(row, doc, wrap_width, &mut shaper);
+                let height = self.row_height(row, doc, wrap_width, &shaper);
                 size(px(0.), height)
             })
             .collect();
@@ -125,12 +142,13 @@ impl RowMetrics {
         row: &TranscriptRowView,
         doc: &EditorDoc,
         wrap_width: Pixels,
-        shaper: &mut Shaper,
+        shaper: &Shaper,
     ) -> Pixels {
         let metrics = shaper.metrics;
         let line_height = metrics.line_height;
-        let text = display_text(row, doc);
-        let text_lines = cached_lines(&mut self.text, &row.segment_id, text, wrap_width, shaper);
+        let text_lines = self
+            .cached_wrap(&row.segment_id, display_text(row, doc), wrap_width, shaper)
+            .line_count();
         let mut text_block = line_height * text_lines as f32 + TEXT_PY * 2.;
 
         if row.row_kind == TranscriptRowKind::Annotation && has_review_chips(row, doc) {
@@ -139,13 +157,15 @@ impl RowMetrics {
         if row.diff.is_some() {
             let diff_text = diff_display_text(row);
             let diff_width = (wrap_width - metrics.px(DIFF_BADGE_W)).max(px(40.));
-            let diff_lines = cached_lines(
-                &mut self.aux,
-                &row.segment_id,
-                &diff_text,
-                diff_width,
-                shaper,
-            );
+            let key = CacheKey::new(&diff_text, diff_width, metrics.font_size);
+            let diff_lines = match self.aux.get(&row.segment_id) {
+                Some((cached, lines)) if *cached == key => *lines,
+                _ => {
+                    let lines = shaper.lines(&diff_text, diff_width);
+                    self.aux.insert(row.segment_id.clone(), (key, lines));
+                    lines
+                }
+            };
             let diff_block = line_height * diff_lines as f32;
             text_block = if row.row_kind == TranscriptRowKind::Annotation {
                 text_block + metrics.px(DIFF_GAP) + diff_block
@@ -174,10 +194,34 @@ impl RowMetrics {
         text_block.max(track_block).max(time_block) + metrics.px(ROW_PY) * 2. + px(1.)
     }
 
+    /// The wrap of `row`'s text at the column width (as measured by [`Self::row_sizes`]),
+    /// which its static text paints.
+    pub fn text_wrap(
+        &mut self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        text_column_width: Pixels,
+        window: &Window,
+    ) -> Rc<WrappedText> {
+        let metrics = TextMetrics::for_window(window);
+        let font = font(self.font_family.clone());
+        let shaper = Shaper {
+            font: &font,
+            metrics,
+            window,
+        };
+        self.cached_wrap(
+            &row.segment_id,
+            display_text(row, doc),
+            text_wrap_width(text_column_width, metrics),
+            &shaper,
+        )
+    }
+
     /// Vertical centre of the wrapped line holding `char_offset` in `row`'s text, measured
-    /// from the row's top, with the same shaping and wrap width as [`Self::row_sizes`].
+    /// from the row's top.
     pub fn caret_line_center(
-        &self,
+        &mut self,
         row: &TranscriptRowView,
         doc: &EditorDoc,
         char_offset: usize,
@@ -185,15 +229,30 @@ impl RowMetrics {
         window: &Window,
     ) -> Pixels {
         let metrics = TextMetrics::for_window(window);
-        let wrap_width = text_wrap_width(text_column_width, metrics);
-        let font = font(self.font_family.clone());
-        let shaper = Shaper {
-            font: &font,
-            metrics,
-            window,
-        };
-        let line = shaper.line_of_char(display_text(row, doc), char_offset, wrap_width);
+        let byte = byte_offset(display_text(row, doc), char_offset);
+        let line = self
+            .text_wrap(row, doc, text_column_width, window)
+            .line_of_byte(byte);
         metrics.px(ROW_PY) + TEXT_PY + metrics.line_height * (line as f32 + 0.5)
+    }
+
+    fn cached_wrap(
+        &mut self,
+        segment_id: &str,
+        text: &str,
+        wrap_width: Pixels,
+        shaper: &Shaper,
+    ) -> Rc<WrappedText> {
+        let key = CacheKey::new(text, wrap_width, shaper.metrics.font_size);
+        if let Some((cached, wrap)) = self.text.get(segment_id)
+            && *cached == key
+        {
+            return Rc::clone(wrap);
+        }
+        let wrap = Rc::new(shaper.wrap(text, wrap_width));
+        self.text
+            .insert(segment_id.to_string(), (key, Rc::clone(&wrap)));
+        wrap
     }
 }
 
@@ -248,109 +307,58 @@ struct Shaper<'a> {
 }
 
 impl Shaper<'_> {
-    fn shape(&self, text: &str, wrap_width: Pixels) -> Option<Vec<WrappedLine>> {
-        let run = TextRun {
-            len: text.len(),
+    fn run(&self, len: usize) -> TextRun {
+        TextRun {
+            len,
             font: self.font.clone(),
             color: Hsla::default(),
             background_color: None,
             underline: None,
             strikethrough: None,
-        };
+        }
+    }
+
+    /// Row text wrapped like the row editor wraps it (shaped single-line widths).
+    fn wrap(&self, text: &str, wrap_width: Pixels) -> WrappedText {
+        let text_system = self.window.text_system();
+        WrappedText::new(text, wrap_width, |line| {
+            text_system
+                .layout_line(line, self.metrics.font_size, &[self.run(line.len())], None)
+                .width
+        })
+    }
+
+    /// Line count of gpui's own wrapping of `text` (what a wrapping text element paints).
+    fn lines(&self, text: &str, wrap_width: Pixels) -> usize {
+        if text.is_empty() {
+            return 1;
+        }
         self.window
             .text_system()
             .shape_text(
                 SharedString::from(text.to_string()),
                 self.metrics.font_size,
-                &[run],
+                &[self.run(text.len())],
                 Some(wrap_width),
                 None,
             )
-            .ok()
-            .map(|lines| lines.into_iter().collect())
-    }
-
-    fn lines(&mut self, text: &str, wrap_width: Pixels) -> usize {
-        if text.is_empty() {
-            return 1;
-        }
-        self.shape(text, wrap_width).map_or(1, |lines| {
-            lines
-                .iter()
-                .map(|line| line.wrap_boundaries().len() + 1)
-                .sum::<usize>()
-                .max(1)
-        })
-    }
-
-    /// Visual (wrapped) line index of the caret at `char_offset`.
-    fn line_of_char(&self, text: &str, char_offset: usize, wrap_width: Pixels) -> usize {
-        let byte = text
-            .char_indices()
-            .nth(char_offset)
-            .map_or(text.len(), |(index, _)| index);
-        let Some(lines) = (!text.is_empty())
-            .then(|| self.shape(text, wrap_width))
-            .flatten()
-        else {
-            return 0;
-        };
-        let line_height = self.metrics.line_height;
-        let (mut start, mut lines_before) = (0, 0);
-        for line in &lines {
-            let len = line.len();
-            if byte <= start + len {
-                let within = line
-                    .position_for_index(byte - start, line_height)
-                    .map_or(0, |point| (point.y / line_height).round() as usize);
-                return lines_before + within;
-            }
-            lines_before += line.wrap_boundaries().len() + 1;
-            // Hard line breaks split the shaped text; skip the newline itself.
-            start += len + 1;
-        }
-        lines_before.saturating_sub(1)
+            .map_or(1, |lines| {
+                lines
+                    .iter()
+                    .map(|line| line.wrap_boundaries().len() + 1)
+                    .sum::<usize>()
+                    .max(1)
+            })
     }
 }
 
-/// Width the row text wraps at for a text column of `text_column_width` (the input's text
-/// area minus its wrap margin).
+/// Width the row text wraps at for a text column of `text_column_width`: the input's text
+/// area (the column minus its paddings) minus its wrap margin.
 fn text_wrap_width(text_column_width: Pixels, metrics: TextMetrics) -> Pixels {
     let column = if text_column_width > px(0.) {
         text_column_width
     } else {
         metrics.px(DEFAULT_TEXT_W)
     };
-    (column - TEXT_PX * 2. - WRAP_MARGIN).max(px(40.))
-}
-
-fn cached_lines(
-    cache: &mut HashMap<String, CachedLines>,
-    key: &str,
-    text: &str,
-    wrap_width: Pixels,
-    shaper: &mut Shaper,
-) -> usize {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    let hash = hasher.finish();
-    let font_size = shaper.metrics.font_size;
-    if let Some(cached) = cache.get(key)
-        && cached.hash == hash
-        && cached.width == wrap_width
-        && cached.font_size == font_size
-    {
-        return cached.lines;
-    }
-    let lines = shaper.lines(text, wrap_width);
-    cache.insert(
-        key.to_string(),
-        CachedLines {
-            hash,
-            width: wrap_width,
-            font_size,
-            lines,
-        },
-    );
-    lines
+    column - TEXT_PX * 2. - WRAP_MARGIN
 }

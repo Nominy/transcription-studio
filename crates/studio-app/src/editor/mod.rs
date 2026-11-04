@@ -258,6 +258,20 @@ impl EditorScreen {
                     gold.transcribe_segment(focused, window, cx);
                 });
             }
+            EditorAction::SwapSplitPanes => {
+                let swapped = self
+                    .transcript_pane
+                    .update(cx, |pane, cx| pane.swap_panes(cx));
+                if !swapped {
+                    self.model.update(cx, |model, cx| {
+                        model.set_status(
+                            "Swapping speaker panes applies to the Split layouts (Settings → \
+                             Editor layout).",
+                            cx,
+                        );
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -382,6 +396,9 @@ struct TranscriptPane {
     transport: Entity<TransportStrip>,
     find_bar: Entity<FindBar>,
     grids: Vec<TranscriptGrid>,
+    /// Split layouts show the lane grids in reverse order (Helper `split.swapPanes`, Ctrl+I).
+    /// Like Babel's swap it lasts while the task is open; split sizes stay with their slot.
+    swapped: bool,
     _subscription: Subscription,
 }
 
@@ -437,6 +454,7 @@ impl TranscriptPane {
             transport,
             find_bar,
             grids,
+            swapped: false,
             _subscription: subscription,
         };
         this.sync_shown(&model, cx);
@@ -459,6 +477,17 @@ impl TranscriptPane {
         changed
     }
 
+    /// Reverses the order of the speaker panes in the split layouts; `false` (no change) in
+    /// the Classic layout.
+    fn swap_panes(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.layout == EditorLayout::Classic {
+            return false;
+        }
+        self.swapped = !self.swapped;
+        cx.notify();
+        true
+    }
+
     /// Segment whose row editor has keyboard focus, in any grid.
     fn focused_segment_id(&self, window: &Window, cx: &App) -> Option<String> {
         self.grids
@@ -472,12 +501,15 @@ impl Render for TranscriptPane {
         let grid = |view: &Entity<TranscriptView>| {
             view.clone().cached(StyleRefinement::default().size_full())
         };
-        let shown: Vec<&Entity<TranscriptView>> = self
+        let mut shown: Vec<&Entity<TranscriptView>> = self
             .grids
             .iter()
             .filter(|grid| grid.shown)
             .map(|grid| &grid.view)
             .collect();
+        if self.swapped {
+            shown.reverse();
+        }
         let body = if let [view] = shown.as_slice() {
             grid(view).into_any_element()
         } else {
@@ -492,11 +524,19 @@ impl Render for TranscriptPane {
                 .children(shown.iter().map(|view| resizable_panel().child(grid(view))))
                 .into_any_element()
         };
-        v_flex()
-            .size_full()
-            .child(self.transport.clone())
-            .child(self.find_bar.clone())
-            .child(div().flex_1().min_h_0().child(body))
+        // The find bar floats over the grids' top-right corner (it never moves a row).
+        v_flex().size_full().child(self.transport.clone()).child(
+            div().relative().flex_1().min_h_0().child(body).child(
+                div()
+                    .absolute()
+                    .top_1()
+                    .right_4()
+                    .left_4()
+                    .flex()
+                    .justify_end()
+                    .child(self.find_bar.clone()),
+            ),
+        )
     }
 }
 

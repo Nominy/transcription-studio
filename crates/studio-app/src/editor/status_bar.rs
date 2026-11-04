@@ -4,10 +4,11 @@
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Sizable as _, h_flex};
 use gpui_kit::*;
-use studio_editor::edit::format::{format_speed, format_time};
+use studio_editor::edit::format::{MAX_ZOOM_FACTOR, SPEED_OPTIONS, format_speed, format_time};
 use studio_editor::editor_model::SaveStatus;
 
 use crate::editor::model::{EditorEvent, EditorModel};
+use crate::editor::panels::ui::{stable_text, tabular_figures};
 
 pub struct StatusBar {
     model: Entity<EditorModel>,
@@ -121,14 +122,33 @@ impl Render for StatusBar {
             )
             .children(save.map(|(text, color)| div().flex_none().text_color(color).child(text)))
             .children(audio)
-            .child(div().min_w_0().truncate().child(selection))
+            // Fixed slots (widest value, tabular figures): a changing value never moves the
+            // labels to its left.
             .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(format!("Zoom {:.2}× · {visible:.1}s visible", session.zoom)),
+                stable_text(selection, [format!("Segment {total} of {total}")])
+                    .text_right()
+                    .font_features(tabular_figures()),
             )
-            .child(div().flex_none().child(format_speed(session.speed)))
+            .child(
+                stable_text(
+                    format!("Zoom {:.2}× · {visible:.1}s visible", session.zoom),
+                    [format!(
+                        "Zoom {:.2}× · {:.1}s visible",
+                        MAX_ZOOM_FACTOR,
+                        (bounds.end_seconds - bounds.start_seconds).max(visible)
+                    )],
+                )
+                .text_right()
+                .font_features(tabular_figures()),
+            )
+            .child(
+                stable_text(
+                    format_speed(session.speed),
+                    SPEED_OPTIONS.iter().map(|option| format_speed(*option)),
+                )
+                .text_right()
+                .font_features(tabular_figures()),
+            )
             .child(
                 div()
                     .flex_none()

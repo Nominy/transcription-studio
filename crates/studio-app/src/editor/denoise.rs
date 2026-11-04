@@ -34,7 +34,9 @@ use studio_services::prefs::ExecutionLocation;
 
 use crate::editor::inference_audio::{LaneSource, read_lane_audio, until_cancelled};
 use crate::editor::model::EditorModel;
-use crate::editor::panels::ui::{dialog_footer, dialog_header, error_text, muted};
+use crate::editor::panels::ui::{
+    dialog_footer, dialog_header, error_text, muted, stable_text, tabular_figures,
+};
 use crate::services::AppServices;
 
 /// Slider detent, in percent.
@@ -534,7 +536,11 @@ impl DenoiseControl {
             .outline()
             .small()
             .icon(IconName::AudioLines)
-            .label(if running { "Denoising" } else { "Denoise" })
+            .child(stable_text(
+                if running { "Denoising" } else { "Denoise" },
+                ["Denoise", "Denoising"],
+            ))
+            .accessibility_label(if running { "Denoising" } else { "Denoise" })
             .loading(running)
             .disabled(running || ready)
             .tooltip(if ready {
@@ -572,12 +578,19 @@ impl DenoiseControl {
             RunState::Failed(_) => (IconName::CircleAlert, Some(theme.danger), None),
             RunState::Idle | RunState::Cancelled => (IconName::Info, None, None),
         };
+        // The progress slot is always reserved (as wide as "100%"), so a run starting or
+        // ending never moves the overview beside it.
         Button::new("denoise-status")
             .ghost()
             .small()
             .icon(icon)
             .when_some(color, |button, color| button.text_color(color))
-            .when_some(label, |button, label| button.label(label))
+            .child(
+                stable_text(label.unwrap_or_default(), ["100%"])
+                    .text_right()
+                    .font_features(tabular_figures()),
+            )
+            .accessibility_label("Denoise status")
             .tooltip("Denoise status")
     }
 

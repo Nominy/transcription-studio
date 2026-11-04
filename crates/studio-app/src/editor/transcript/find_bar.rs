@@ -1,5 +1,6 @@
-//! Find bar above the transcript panes: query input, match summary, previous/next and close.
-//! Find state is doc-wide, so one bar serves every pane of the split layouts.
+//! Find bar floating at the top right of the transcript panes (over the grids, so opening or
+//! closing it never moves a row): query input, match summary, previous/next and close. Find
+//! state is doc-wide, so one bar serves every pane of the split layouts.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -133,14 +134,18 @@ impl Render for FindBar {
         };
 
         h_flex()
-            .w_full()
-            .flex_none()
+            .id("find-bar")
+            .occlude()
+            .w(rems(32.))
+            .max_w_full()
             .gap_2()
             .px_2()
             .py_1p5()
-            .border_b_1()
+            .rounded(theme.radius)
+            .border_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
+            .bg(theme.popover)
+            .shadow_md()
             .child(
                 div()
                     .w(rems(17.5))

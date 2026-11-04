@@ -1,6 +1,7 @@
 //! Small building blocks shared by the editor panels and dialogs.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -85,6 +86,30 @@ pub fn vertical_rule(cx: &App) -> Div {
         .bg(cx.theme().border)
 }
 
+/// Font features with tabular (fixed-width) figures, so a changing number keeps its width.
+pub fn tabular_figures() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
+}
+
+/// `text` laid out at the width of the widest of itself and `variants` (the other values the
+/// label shows), so changing the value never moves its neighbours. The variants are laid out
+/// invisibly at zero height under the shown text; align it with `text_center`/`text_right`.
+pub fn stable_text(
+    text: impl Into<SharedString>,
+    variants: impl IntoIterator<Item = impl Into<SharedString>>,
+) -> Div {
+    v_flex()
+        .whitespace_nowrap()
+        .child(div().child(text.into()))
+        .children(variants.into_iter().map(|variant| {
+            div()
+                .h_0()
+                .overflow_hidden()
+                .invisible()
+                .child(variant.into())
+        }))
+}
+
 /// One option of a [`choice`] dropdown.
 pub struct Choice<T> {
     pub value: T,
@@ -115,13 +140,22 @@ pub fn choice<T: Clone + PartialEq + 'static>(
             || SharedString::from(placeholder),
             |option| option.label.clone(),
         );
+    // Like a native select, the button is as wide as its widest option.
+    let widths = stable_text(
+        label.clone(),
+        options
+            .iter()
+            .map(|option| option.label.clone())
+            .chain([SharedString::from(placeholder)]),
+    );
     let selected = selected.cloned();
     let options = Rc::new(options);
     let on_select = Rc::new(on_select);
     Button::new(id)
         .outline()
         .small()
-        .label(label)
+        .child(widths)
+        .accessibility_label(label)
         .dropdown_caret(true)
         .disabled(options.is_empty())
         .dropdown_menu(move |mut menu, window, _| {

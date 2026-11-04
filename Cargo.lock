@@ -6812,6 +6812,8 @@ dependencies = [
  "studio-services",
  "studio-waveform",
  "tray-icon",
+ "unicode-linebreak",
+ "unicode-segmentation",
  "windows-sys 0.61.2",
 ]
 

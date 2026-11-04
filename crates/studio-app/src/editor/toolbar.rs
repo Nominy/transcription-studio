@@ -21,6 +21,7 @@ use studio_editor::editor_model::SaveStatus;
 
 use crate::editor::denoise::DenoiseControl;
 use crate::editor::model::EditorModel;
+use crate::editor::panels::ui::{stable_text, tabular_figures};
 use crate::editor::timeline::overview::OverviewView;
 use crate::editor::timeline::shortcut_hint;
 use crate::editor::{OpenGoldDraft, RequestLeave};
@@ -114,7 +115,11 @@ impl Toolbar {
             SaveStatus::Dirty => (Tag::warning(), "Unsaved"),
             SaveStatus::Saved => (Tag::success(), "Saved"),
         };
-        tag.outline().small().child(label).into_any_element()
+        // As wide as the widest state, so saving never moves the overview beside it.
+        tag.outline()
+            .small()
+            .child(stable_text(label, ["Saving…", "Save failed", "Unsaved", "Saved"]).text_center())
+            .into_any_element()
     }
 }
 
@@ -184,10 +189,20 @@ impl Render for Toolbar {
             .tooltip("Gold Draft: timestamps and a draft transcript")
             .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenGoldDraft)));
 
+        // The label keeps the width of the widest speed (tabular figures), so changing the
+        // speed never moves the rest of the toolbar.
         let speed_menu = Button::new("toolbar-speed")
             .outline()
             .small()
-            .label(format_speed(speed))
+            .child(
+                stable_text(
+                    format_speed(speed),
+                    SPEED_OPTIONS.iter().map(|option| format_speed(*option)),
+                )
+                .text_center()
+                .font_features(tabular_figures()),
+            )
+            .accessibility_label(format_speed(speed))
             .tooltip("Playback speed")
             .dropdown_menu({
                 let model = self.model.clone();

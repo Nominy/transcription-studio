@@ -2,6 +2,7 @@
 //! plus read-only diff rows.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, Textarea};
@@ -27,11 +28,14 @@ use super::layout::{
     TEXT_PY, TIME_W, TRACK_W, TextMetrics, WRAP_MARGIN, diff_display_text, display_text,
     has_review_chips,
 };
+use super::wrap::WrappedText;
 
 /// Per-row inputs gathered by the view before rendering.
 pub(super) struct RowParams<'a> {
     pub row: &'a TranscriptRowView,
     pub doc: &'a EditorDoc,
+    /// The row text wrapped like its editor wraps it (static text paints these rows).
+    pub text_wrap: Rc<WrappedText>,
     pub height: Pixels,
     pub metrics: TextMetrics,
     pub lane_color: Hsla,
@@ -56,6 +60,7 @@ impl TranscriptView {
         let RowParams {
             row,
             doc,
+            text_wrap,
             height,
             metrics,
             lane_color,
@@ -127,7 +132,7 @@ impl TranscriptView {
                 el.child(reviewer_cell(row, metrics, theme))
             })
             .when(cells.text, |el| {
-                el.child(self.text_cell(row, doc, metrics, text_editing, cx))
+                el.child(self.text_cell(row, doc, &text_wrap, metrics, text_editing, cx))
             })
             .when(cells.linter, |el| {
                 el.child(self.lint_cell(row, doc, metrics, cx))
@@ -290,8 +295,15 @@ impl TranscriptView {
                     row.segment_id,
                     field_key(field)
                 )))
+                // The time input's box (line-height tall, 1px border, 4px padding, centred
+                // text), so the value does not move when the cell opens for editing.
                 .w_full()
+                .h(metrics.line_height)
+                .flex()
+                .items_center()
                 .px_1()
+                .border_1()
+                .border_color(transparent_black())
                 .text_xs()
                 .line_height(metrics.line_height)
                 .text_color(theme.foreground.opacity(0.85))
@@ -340,6 +352,7 @@ impl TranscriptView {
         &self,
         row: &TranscriptRowView,
         doc: &EditorDoc,
+        text_wrap: &Rc<WrappedText>,
         metrics: TextMetrics,
         text_editing: bool,
         cx: &Context<Self>,
@@ -363,9 +376,9 @@ impl TranscriptView {
                 )
                 .into_any_element()
         } else if reviewing {
-            self.low_confidence_text(row, doc, metrics, cx)
+            self.low_confidence_text(row, doc, text_wrap, metrics, cx)
         } else {
-            self.static_text(row, doc, metrics, cx)
+            self.static_text(row, doc, text_wrap, metrics, cx)
         };
 
         v_flex()
@@ -387,11 +400,13 @@ impl TranscriptView {
             .into_any_element()
     }
 
-    /// Read-only rendering of a row's text; a click mounts the editor at the clicked caret.
+    /// Read-only rendering of a row's text, broken into the editor's rows; a click mounts the
+    /// editor at the clicked caret.
     fn static_text(
         &self,
         row: &TranscriptRowView,
         doc: &EditorDoc,
+        text_wrap: &Rc<WrappedText>,
         metrics: TextMetrics,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -410,14 +425,15 @@ impl TranscriptView {
                 })
                 .into_any_element()
         } else {
-            let styled = StyledText::new(SharedString::from(text.to_string()));
+            let styled = StyledText::new(text_wrap.display_text(text));
             let layout = styled.layout().clone();
             let ghost = doc
                 .ghost_cursor(&row.segment_id)
-                .map(|ghost| byte_offset(text, ghost.char_offset));
+                .map(|ghost| text_wrap.to_display(byte_offset(text, ghost.char_offset)));
             let caret_layout = layout.clone();
             let ghost_color = theme.warning;
             let line_height = metrics.line_height;
+            let text_wrap = Rc::clone(text_wrap);
 
             div()
                 .id(SharedString::from(format!(
@@ -425,6 +441,7 @@ impl TranscriptView {
                     row.segment_id
                 )))
                 .relative()
+                .whitespace_nowrap()
                 .child(styled)
                 .when_some(ghost, |el, ghost| {
                     el.child(
@@ -446,9 +463,10 @@ impl TranscriptView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        let byte = match layout.index_for_position(event.position) {
-                            Ok(index) | Err(index) => index,
-                        };
+                        let byte =
+                            text_wrap.to_source(match layout.index_for_position(event.position) {
+                                Ok(index) | Err(index) => index,
+                            });
                         let modifiers = event.modifiers;
                         // Helper word seek: a plain Alt+Click (no Ctrl/Shift/Meta).
                         if modifiers.alt
@@ -494,11 +512,13 @@ impl TranscriptView {
     }
 
     /// Text of a row with unreviewed low-confidence words: words are underlined and seek on
-    /// click; editing resumes once every word is reviewed.
+    /// click; editing resumes once every word is reviewed. Broken into the editor's rows like
+    /// [`Self::static_text`].
     fn low_confidence_text(
         &self,
         row: &TranscriptRowView,
         doc: &EditorDoc,
+        text_wrap: &WrappedText,
         metrics: TextMetrics,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -510,7 +530,10 @@ impl TranscriptView {
         let mut seeks = Vec::new();
         let mut highlights = Vec::new();
         for word in row.word_views.iter().filter(|word| word.is_low_confidence) {
-            let Some(range) = tokens.get(word.index).cloned() else {
+            let Some(range) = tokens
+                .get(word.index)
+                .map(|range| text_wrap.to_display_range(range.clone()))
+            else {
                 continue;
             };
             let acknowledged = acks.is_some_and(|acks| acks.contains(&word.index));
@@ -533,8 +556,7 @@ impl TranscriptView {
             }
         }
         highlights.sort_by_key(|(range, _)| range.start);
-        let styled =
-            StyledText::new(SharedString::from(text.to_string())).with_highlights(highlights);
+        let styled = StyledText::new(text_wrap.display_text(text)).with_highlights(highlights);
         let model = self.model.clone();
 
         div()
@@ -545,6 +567,7 @@ impl TranscriptView {
             .text_sm()
             .line_height(metrics.line_height)
             .text_color(theme.foreground)
+            .whitespace_nowrap()
             .child(
                 InteractiveText::new(
                     SharedString::from(format!("transcript-lowconf:{}", row.segment_id)),

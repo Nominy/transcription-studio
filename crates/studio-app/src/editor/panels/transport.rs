@@ -24,7 +24,7 @@ use studio_editor::track_filter::TrackFilter;
 use super::dialogs::submit;
 use super::flows::SKIP_DISABLED_TOOLTIP;
 use super::task::{Drawer, TaskPanels, TaskPanelsEvent};
-use super::ui::{Choice, choice, muted, vertical_rule};
+use super::ui::{Choice, choice, muted, stable_text, tabular_figures, vertical_rule};
 use crate::editor::RequestLeave;
 use crate::editor::model::EditorModel;
 use crate::screens::local_files;
@@ -149,6 +149,19 @@ impl TransportStrip {
             return None;
         }
         let label = problem_summary(counts.errors, counts.warnings);
+        // Tabular figures, sized for counts with as many digits as the row count, both
+        // plurals and both kinds: the count changing never moves the step buttons.
+        let digits = doc.project().segments.len().max(1).to_string().len() as u32;
+        let most = 10_usize.pow(digits) - 1;
+        let label_slot = stable_text(
+            label,
+            [
+                problem_summary(most, 0),
+                problem_summary(0, most),
+                problem_summary(most, most),
+            ],
+        )
+        .font_features(tabular_figures());
         let theme = cx.theme();
         let color = if counts.errors > 0 {
             theme.danger
@@ -179,7 +192,7 @@ impl TransportStrip {
                 .border_1()
                 .border_color(color.opacity(0.5))
                 .bg(color.opacity(0.08))
-                .child(div().text_sm().text_color(color).child(label))
+                .child(div().text_sm().text_color(color).child(label_slot))
                 .child(nav(
                     "problem-previous",
                     IconName::ChevronUp,
@@ -308,11 +321,18 @@ impl TransportStrip {
                         Button::new("drop-claim")
                             .outline()
                             .small()
-                            .label(if drop.is_dropping {
-                                "Dropping..."
-                            } else {
-                                "Drop Claim"
-                            })
+                            .child(
+                                stable_text(
+                                    if drop.is_dropping {
+                                        "Dropping..."
+                                    } else {
+                                        "Drop Claim"
+                                    },
+                                    ["Dropping...", "Drop Claim"],
+                                )
+                                .text_center(),
+                            )
+                            .accessibility_label("Drop Claim")
                             .tooltip("Drop action for another worker")
                             .loading(drop_pending)
                             .disabled(dropping)
@@ -356,11 +376,14 @@ impl TransportStrip {
                 let save_panels = self.panels.clone();
                 let submit_panels = self.panels.clone();
                 let saving = matches!(save_status, SaveStatus::Saving);
+                // Labels keep the width of their widest state, so saving or submitting never
+                // moves the buttons to their left.
                 row.child(
                     Button::new("save-progress")
                         .outline()
                         .small()
-                        .label(save_label)
+                        .child(stable_text(save_label, SAVE_LABELS).text_center())
+                        .accessibility_label(save_label)
                         .tooltip(save_tooltip)
                         .loading(saving)
                         .disabled(saving || !save_clickable)
@@ -376,11 +399,18 @@ impl TransportStrip {
                     // opens the feedback drawer when that is what blocks).
                     Button::new("submit-review")
                         .small()
-                        .label(if submit_pending {
-                            "Submitting..."
-                        } else {
-                            submit_copy.trigger
-                        })
+                        .child(
+                            stable_text(
+                                if submit_pending {
+                                    "Submitting..."
+                                } else {
+                                    submit_copy.trigger
+                                },
+                                ["Submitting...", submit_copy.trigger],
+                            )
+                            .text_center(),
+                        )
+                        .accessibility_label(submit_copy.trigger)
                         .tooltip(submit_tooltip)
                         .loading(submit_pending)
                         .when(eligibility.is_allowed(), |button| button.primary())
@@ -572,6 +602,9 @@ fn problem_summary(errors: usize, warnings: usize) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// Every label [`save_copy`] returns (the save button is as wide as the widest).
+const SAVE_LABELS: [&str; 4] = ["Saving...", "Error - Retry", "Save progress", "Saved"];
 
 fn save_copy(status: &SaveStatus, clickable: bool) -> (&'static str, SharedString) {
     match status {

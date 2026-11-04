@@ -5,8 +5,8 @@
 //!
 //! Only one row is edited at a time, so a single multi-line input is mounted in the focused
 //! row and every other row paints its draft as static text laid out exactly like the input
-//! (same font, size, padding and wrap width). Row heights for `v_virtual_list` come from
-//! shaping that text (see [`layout`]).
+//! (same font, size, padding, wrap width and line breaks — see [`wrap`]). Row heights for
+//! `v_virtual_list` come from the same wrap (see [`layout`]).
 //!
 //! Keys pressed while the row editor has focus are intercepted before the input's own key
 //! bindings so keymap actions (row undo/redo, escape, tag list keys, text moves, global
@@ -18,6 +18,7 @@ mod find_bar;
 pub use find_bar::FindBar;
 mod layout;
 mod row;
+mod wrap;
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -339,7 +340,7 @@ impl TranscriptView {
     /// Centre of the wrapped text line holding `char_offset` of `segment_id`, in the grid's
     /// content coordinates (from the rows and heights of the last render).
     fn caret_line_y(
-        &self,
+        &mut self,
         doc: &EditorDoc,
         segment_id: &str,
         char_offset: usize,
@@ -938,12 +939,26 @@ impl TranscriptView {
         let is_playing = doc.session().is_playing;
         let fallback = cx.theme().foreground;
 
-        range
+        // Static row text paints the wraps the row heights were measured with.
+        let text_column_width = self.text_column_width.get();
+        let wraps: Vec<_> = range
             .filter_map(|index| {
                 let row = rows.get(index)?;
+                Some((
+                    row,
+                    self.metrics.text_wrap(row, doc, text_column_width, window),
+                    index,
+                ))
+            })
+            .collect();
+
+        wraps
+            .into_iter()
+            .map(|(row, text_wrap, index)| {
                 let params = RowParams {
                     row,
                     doc,
+                    text_wrap,
                     height: sizes.get(index).map_or(px(32.), |size| size.height),
                     metrics,
                     lane_color: self
@@ -961,7 +976,7 @@ impl TranscriptView {
                         .filter(|(id, _)| id.as_ref() == row.segment_id)
                         .map(|(_, field)| *field),
                 };
-                Some(self.render_row(params, cx))
+                self.render_row(params, cx)
             })
             .collect()
     }

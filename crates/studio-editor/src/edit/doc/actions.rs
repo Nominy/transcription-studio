@@ -8,8 +8,8 @@ use crate::workflow::StudioWorkflow;
 impl EditorDoc {
     /// Performs a keyboard action. `focused_segment` is the row whose text editor has focus
     /// (required by text-context actions). Returns `None` for app-level actions the UI owns
-    /// (back to projects, drafting transcription, default action when no doc dialog is open)
-    /// and for text actions without a focused row.
+    /// (back to projects, drafting transcription, swapping split panes, default action when no
+    /// doc dialog is open) and for text actions without a focused row.
     pub fn perform(
         &mut self,
         action: EditorAction,
@@ -100,7 +100,7 @@ impl EditorDoc {
             A::TagSuggestionDismiss => {
                 focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Dismiss))
             }
-            A::BackToProjects | A::DraftTranscribeSelectedSegment => None,
+            A::BackToProjects | A::DraftTranscribeSelectedSegment | A::SwapSplitPanes => None,
         }
     }
 

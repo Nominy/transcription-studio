@@ -80,6 +80,7 @@ editor_actions! {
     ResetSpeakerWorkflow,
     SwitchSpeakerWorkflowLane1,
     SwitchSpeakerWorkflowLane2,
+    SwapSplitPanes,
     RewindPlaybackOneSecond,
     MoveTextBeforeCaretToPreviousSegment,
     MoveTextAfterCaretToNextSegment,
@@ -321,6 +322,15 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         "Switch active speaker workflow lane 2",
         Global,
         &["alt-2"],
+    ),
+    // Helper `split.swapPanes`: works from the row being edited too (Helper claims Ctrl+I
+    // before the rich-text italic handler).
+    def(
+        A::SwapSplitPanes,
+        HELPER,
+        "Swap Split speaker panes",
+        Global,
+        &["secondary-i"],
     ),
     def(
         A::RewindPlaybackOneSecond,

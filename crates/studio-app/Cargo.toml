@@ -23,6 +23,9 @@ studio-editor.workspace = true
 studio-inference.workspace = true
 studio-services.workspace = true
 studio-waveform.workspace = true
+# Row-text wrapping matches gpui-component's multi-line input, which uses these.
+unicode-linebreak = "0.1.5"
+unicode-segmentation = "1.12"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

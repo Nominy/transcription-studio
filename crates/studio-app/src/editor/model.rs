@@ -262,7 +262,8 @@ impl EditorModel {
     }
 
     /// Runs a keymap action through the doc. Returns `false` for app-level actions the caller
-    /// must handle (`BackToProjects`, `DraftTranscribeSelectedSegment`, dialog defaults).
+    /// must handle (`BackToProjects`, `DraftTranscribeSelectedSegment`, `SwapSplitPanes`,
+    /// dialog defaults).
     pub fn perform(
         &mut self,
         action: EditorAction,
