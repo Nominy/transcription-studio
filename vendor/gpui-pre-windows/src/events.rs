@@ -1616,9 +1616,18 @@ fn parse_normal_key(
 ) -> Option<(Keystroke, bool)> {
     let (key_char, prefer_character_input) = process_key(vkey, lparam.hiword());
 
+    // Transcription Studio patch: printable keys are named by their physical position on a
+    // US keyboard (like the browser's `KeyboardEvent.code`), so shortcuts work the same under
+    // any layout (Russian, AZERTY, …). Shift stays a modifier; typed text still comes from
+    // `key_char`.
     let key = parse_immutable(vkey).or_else(|| {
         let scan_code = lparam.hiword() & 0xFF;
-        get_keystroke_key(vkey, scan_code as u32, &mut modifiers)
+        let extended = lparam.hiword() & 0x100 != 0;
+        (!extended)
+            .then(|| us_key_at_scan_code(scan_code))
+            .flatten()
+            .map(str::to_string)
+            .or_else(|| get_keystroke_key(vkey, scan_code as u32, &mut modifiers))
     })?;
 
     Some((

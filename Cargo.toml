@@ -55,7 +55,8 @@ incremental = true
 [profile.test]
 debug = 0
 
-# Adds the prebuilt fxc shader bytecode needed to cross-compile Windows release
-# builds from the Linux CI host; see vendor/gpui-pre-windows/build.rs.
+# Patched gpui Windows platform: prebuilt fxc shader bytecode so the Linux CI host can
+# cross-compile Windows release builds (vendor/gpui-pre-windows/build.rs), and shortcut
+# keys named by physical key position under any keyboard layout (src/events.rs).
 [patch.crates-io]
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
