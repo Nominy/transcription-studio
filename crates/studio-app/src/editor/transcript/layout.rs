@@ -97,12 +97,7 @@ impl RowMetrics {
             self.font_family = font_family.clone();
         }
         let metrics = TextMetrics::for_window(window);
-        let column = if text_column_width > px(0.) {
-            text_column_width
-        } else {
-            metrics.px(DEFAULT_TEXT_W)
-        };
-        let wrap_width = (column - TEXT_PX * 2. - WRAP_MARGIN).max(px(40.));
+        let wrap_width = text_wrap_width(text_column_width, metrics);
         let font = font(font_family.clone());
         let mut shaper = Shaper {
             font: &font,
@@ -178,6 +173,28 @@ impl RowMetrics {
 
         text_block.max(track_block).max(time_block) + metrics.px(ROW_PY) * 2. + px(1.)
     }
+
+    /// Vertical centre of the wrapped line holding `char_offset` in `row`'s text, measured
+    /// from the row's top, with the same shaping and wrap width as [`Self::row_sizes`].
+    pub fn caret_line_center(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        char_offset: usize,
+        text_column_width: Pixels,
+        window: &Window,
+    ) -> Pixels {
+        let metrics = TextMetrics::for_window(window);
+        let wrap_width = text_wrap_width(text_column_width, metrics);
+        let font = font(self.font_family.clone());
+        let shaper = Shaper {
+            font: &font,
+            metrics,
+            window,
+        };
+        let line = shaper.line_of_char(display_text(row, doc), char_offset, wrap_width);
+        metrics.px(ROW_PY) + TEXT_PY + metrics.line_height * (line as f32 + 0.5)
+    }
 }
 
 /// Text shown in a row's text cell: the draft for editable rows, else the row text.
@@ -231,10 +248,7 @@ struct Shaper<'a> {
 }
 
 impl Shaper<'_> {
-    fn lines(&mut self, text: &str, wrap_width: Pixels) -> usize {
-        if text.is_empty() {
-            return 1;
-        }
+    fn shape(&self, text: &str, wrap_width: Pixels) -> Option<Vec<WrappedLine>> {
         let run = TextRun {
             len: text.len(),
             font: self.font.clone(),
@@ -252,15 +266,62 @@ impl Shaper<'_> {
                 Some(wrap_width),
                 None,
             )
-            .map(|lines| {
-                lines
-                    .iter()
-                    .map(|line| line.wrap_boundaries().len() + 1)
-                    .sum::<usize>()
-                    .max(1)
-            })
-            .unwrap_or(1)
+            .ok()
+            .map(|lines| lines.into_iter().collect())
     }
+
+    fn lines(&mut self, text: &str, wrap_width: Pixels) -> usize {
+        if text.is_empty() {
+            return 1;
+        }
+        self.shape(text, wrap_width).map_or(1, |lines| {
+            lines
+                .iter()
+                .map(|line| line.wrap_boundaries().len() + 1)
+                .sum::<usize>()
+                .max(1)
+        })
+    }
+
+    /// Visual (wrapped) line index of the caret at `char_offset`.
+    fn line_of_char(&self, text: &str, char_offset: usize, wrap_width: Pixels) -> usize {
+        let byte = text
+            .char_indices()
+            .nth(char_offset)
+            .map_or(text.len(), |(index, _)| index);
+        let Some(lines) = (!text.is_empty())
+            .then(|| self.shape(text, wrap_width))
+            .flatten()
+        else {
+            return 0;
+        };
+        let line_height = self.metrics.line_height;
+        let (mut start, mut lines_before) = (0, 0);
+        for line in &lines {
+            let len = line.len();
+            if byte <= start + len {
+                let within = line
+                    .position_for_index(byte - start, line_height)
+                    .map_or(0, |point| (point.y / line_height).round() as usize);
+                return lines_before + within;
+            }
+            lines_before += line.wrap_boundaries().len() + 1;
+            // Hard line breaks split the shaped text; skip the newline itself.
+            start += len + 1;
+        }
+        lines_before.saturating_sub(1)
+    }
+}
+
+/// Width the row text wraps at for a text column of `text_column_width` (the input's text
+/// area minus its wrap margin).
+fn text_wrap_width(text_column_width: Pixels, metrics: TextMetrics) -> Pixels {
+    let column = if text_column_width > px(0.) {
+        text_column_width
+    } else {
+        metrics.px(DEFAULT_TEXT_W)
+    };
+    (column - TEXT_PX * 2. - WRAP_MARGIN).max(px(40.))
 }
 
 fn cached_lines(

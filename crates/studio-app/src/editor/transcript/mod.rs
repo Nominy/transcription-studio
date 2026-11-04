@@ -75,6 +75,9 @@ pub struct TranscriptView {
     text_column_width: Rc<Cell<Pixels>>,
     frame: Frame,
     render_key: RenderKey,
+    /// Ghost cursor line (row + its centre in content coordinates) the grid last centred on;
+    /// it re-centres only when the ghost moves to another line, so manual scrolling sticks.
+    ghost_line: Option<(String, Pixels)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -199,6 +202,7 @@ impl TranscriptView {
             text_column_width: Rc::new(Cell::new(px(0.))),
             frame: Frame::default(),
             render_key,
+            ghost_line: None,
             _subscriptions: subscriptions,
         }
     }
@@ -285,8 +289,14 @@ impl TranscriptView {
                 self.reveal(segment_id, *center, cx);
             }
             EditorEvent::FocusText { segment_id, caret } => {
-                if self.owns(self.model.read(cx).doc(), segment_id) {
-                    self.reveal(segment_id, false, cx);
+                let doc = self.model.read(cx).doc();
+                if self.owns(doc, segment_id) {
+                    // The caret lands where the ghost was: same line centring as playback, so
+                    // pausing or Escape never moves the transcript.
+                    if let Some(y) = self.caret_line_y(doc, segment_id, *caret, window) {
+                        self.center_on(y);
+                    }
+                    self.ghost_line = None;
                     self.activate_text(segment_id, Some(TextSelection::caret(*caret)), window, cx);
                 }
             }
@@ -309,7 +319,12 @@ impl TranscriptView {
     }
 
     fn reveal(&mut self, segment_id: &str, center: bool, cx: &mut Context<Self>) {
-        let rows = self.rows(self.model.read(cx).doc());
+        let doc = self.model.read(cx).doc();
+        // A row showing the ghost cursor is scrolled by `follow_ghost` (line centring).
+        if doc.ghost_cursor(segment_id).is_some() {
+            return;
+        }
+        let rows = self.rows(doc);
         if let Some(index) = rows.iter().position(|row| row.segment_id == segment_id) {
             let strategy = if center {
                 ScrollStrategy::Center
@@ -318,6 +333,64 @@ impl TranscriptView {
             };
             self.scroll_handle.scroll_to_item(index, strategy);
             cx.notify();
+        }
+    }
+
+    /// Centre of the wrapped text line holding `char_offset` of `segment_id`, in the grid's
+    /// content coordinates (from the rows and heights of the last render).
+    fn caret_line_y(
+        &self,
+        doc: &EditorDoc,
+        segment_id: &str,
+        char_offset: usize,
+        window: &Window,
+    ) -> Option<Pixels> {
+        let index = self
+            .frame
+            .rows
+            .iter()
+            .position(|row| row.segment_id == segment_id)?;
+        let row_top: Pixels = self.frame.sizes[..index]
+            .iter()
+            .map(|size| size.height)
+            .sum();
+        let within = self.metrics.caret_line_center(
+            &self.frame.rows[index],
+            doc,
+            char_offset,
+            self.text_column_width.get(),
+            window,
+        );
+        Some(row_top + within)
+    }
+
+    /// Scrolls so content position `y` sits in the middle of the viewport (clamped to the
+    /// content), even inside a row taller than the viewport.
+    fn center_on(&self, y: Pixels) {
+        let handle = self.scroll_handle.base_handle();
+        let viewport = handle.bounds().size.height;
+        if viewport <= px(0.) {
+            return;
+        }
+        let content: Pixels = self.frame.sizes.iter().map(|size| size.height).sum();
+        let max = (content - viewport).max(px(0.));
+        let target = (y - viewport / 2.).clamp(px(0.), max);
+        handle.set_offset(point(handle.offset().x, -target));
+    }
+
+    /// Keeps the ghost cursor's line in the middle of the grid while it moves.
+    fn follow_ghost(&mut self, doc: &EditorDoc, window: &Window) {
+        let Some((segment_id, offset)) = self.render_key.ghost.clone() else {
+            self.ghost_line = None;
+            return;
+        };
+        let Some(y) = self.caret_line_y(doc, &segment_id, offset, window) else {
+            return;
+        };
+        let line = Some((segment_id, y));
+        if self.ghost_line != line {
+            self.center_on(y);
+            self.ghost_line = line;
         }
     }
 
@@ -1158,6 +1231,7 @@ impl Render for TranscriptView {
             find_matches,
             lane_colors,
         };
+        self.follow_ghost(doc, window);
 
         let lane_header = self.render_lane_header(doc, cx);
         let header = self.render_header(doc, cx);
