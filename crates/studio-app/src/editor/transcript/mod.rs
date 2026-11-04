@@ -247,7 +247,6 @@ impl TranscriptView {
             .time_cell
             .as_ref()
             .is_some_and(|(row, _)| doc.draft(row).is_none());
-        let key = RenderKey::of(doc);
 
         match text_draft {
             Some(None) => self.unmount_text_editor(window, cx),
@@ -260,6 +259,13 @@ impl TranscriptView {
             self.time_cell = None;
         }
 
+        self.refresh_render_key(cx);
+    }
+
+    /// Re-renders when the doc state the grid shows changed. Playback frames only emit
+    /// [`EditorEvent::Frame`], yet move the selected row and the ghost cursor.
+    fn refresh_render_key(&mut self, cx: &mut Context<Self>) {
+        let key = RenderKey::of(self.model.read(cx).doc());
         if key != self.render_key {
             self.render_key = key;
             cx.notify();
@@ -297,7 +303,7 @@ impl TranscriptView {
                 }
                 cx.notify();
             }
-            EditorEvent::Frame => {}
+            EditorEvent::Frame => self.refresh_render_key(cx),
         }
     }
 
