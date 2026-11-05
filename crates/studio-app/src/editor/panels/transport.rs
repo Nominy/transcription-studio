@@ -77,7 +77,7 @@ impl TransportStrip {
         let project = doc.project();
         let session = doc.session();
         let show_track = session.transcript_visible_cells(project).track;
-        let overlay_on = session.overlay_range.is_some();
+        let overlay_on = session.overlay.is_some();
         let (can_undo, can_redo) = (doc.can_undo(), doc.can_redo());
         let track_filter = show_track.then(|| {
             let options = EditorSession::track_filter_options(project)

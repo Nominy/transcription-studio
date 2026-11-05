@@ -135,28 +135,6 @@ fn auto_insert_next_gap_seconds(project: &Project, segment_id: &str) -> Option<f
         .map(|next| next.start_seconds - current.end_seconds)
 }
 
-pub fn cut_preview_lane_id(
-    project: &Project,
-    editor: Option<&EditorSession>,
-    overlay_range: TimeRange,
-) -> Option<String> {
-    editor
-        .and_then(|editor| editor.selected_segment_id.as_deref())
-        .and_then(|segment_id| project.segment(segment_id))
-        .map(|segment| segment.lane_id.clone())
-        .or_else(|| {
-            project
-                .segments
-                .iter()
-                .filter(|segment| {
-                    segment.end_seconds > overlay_range.start_seconds
-                        && segment.start_seconds < overlay_range.end_seconds
-                })
-                .min_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds))
-                .map(|segment| segment.lane_id.clone())
-        })
-}
-
 pub fn cut_preview_scroll_target(
     project: &Project,
     lane_id: &str,

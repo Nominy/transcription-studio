@@ -3,8 +3,9 @@
 //!
 //! Lane bodies are painted on canvases from the shared peak buffers of the lanes' render
 //! models; lane views are rebuilt only when the doc generation, viewport or drag preview
-//! change. Pointer gestures map to [`WaveformHit`]s and drive the doc's waveform, loop-strip
-//! and autoscroll state machines; drags keep tracking the pointer outside the surface through
+//! change. Pointer-rate state (hover, playhead, cut preview) is read from the doc every frame.
+//! Pointer gestures map to [`WaveformHit`]s and drive the doc's waveform, loop-strip and
+//! autoscroll state machines; drags keep tracking the pointer outside the surface through
 //! window-level listeners registered while a capture is active.
 
 pub mod geometry;
@@ -22,7 +23,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use studio_editor::edit::structure::OverlayDragTarget;
 use studio_editor::edit::{EditorAction, EditorDoc, PointerModifiers};
+use studio_editor::editor_model::CutOverlay;
 use studio_editor::linter::LintSeverity;
 use studio_editor::timeline_model::{
     LaneColor, LoopStripHit, LoopStripHitTarget, TimeRange, TimelineLaneView, TimelineSegmentIndex,
@@ -327,31 +330,39 @@ impl TimelineView {
         ))
     }
 
-    fn hover_lane(&mut self, lane_id: &str, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn hover_lane(
+        &mut self,
+        lane_id: &str,
+        position: Point<Pixels>,
+        modifiers: PointerModifiers,
+        cx: &mut Context<Self>,
+    ) {
         let Some(hit) = self.lane_hit(lane_id, position, cx) else {
             return;
         };
-        let unchanged = self
-            .model
-            .read(cx)
-            .doc()
-            .pointer()
-            .waveform_hover
-            .as_ref()
-            .is_some_and(|hover| hover.lane_id == lane_id && hover.hit == hit);
+        let pointer = self.model.read(cx).doc().pointer();
+        let unchanged = pointer.modifiers == modifiers
+            && pointer
+                .waveform_hover
+                .as_ref()
+                .is_some_and(|hover| hover.lane_id == lane_id && hover.hit == hit);
         if unchanged {
             return;
         }
         self.model.update(cx, |model, cx| {
-            model.update_doc(cx, |doc| doc.hover_waveform(lane_id, hit));
+            model.update_doc(cx, |doc| {
+                doc.set_modifiers(modifiers);
+                doc.hover_waveform(lane_id, hit);
+            });
         });
     }
 
     fn lane_moved(&mut self, lane_id: &str, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if self.capture.is_some() {
-            self.captured_move(event.position, cx);
+            self.captured_move(event, cx);
         } else {
-            self.hover_lane(lane_id, event.position, cx);
+            let modifiers = pointer_modifiers(&event.modifiers, cx);
+            self.hover_lane(lane_id, event.position, modifiers, cx);
         }
     }
 
@@ -478,9 +489,11 @@ impl TimelineView {
 
     // ---- captured pointer -----------------------------------------------------------------
 
-    fn captured_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn captured_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let position = event.position;
+        let modifiers = pointer_modifiers(&event.modifiers, cx);
         match self.capture.clone() {
-            Some(Capture::Lane(lane_id)) => self.hover_lane(&lane_id, position, cx),
+            Some(Capture::Lane(lane_id)) => self.hover_lane(&lane_id, position, modifiers, cx),
             Some(Capture::LoopStrip) => self.hover_loop(position, cx),
             Some(Capture::Scrollbar { grab }) => self.drag_scrollbar(position, grab, cx),
             None => {
@@ -493,7 +506,7 @@ impl TimelineView {
                     .as_ref()
                     .map(|autoscroll| autoscroll.lane_id.clone());
                 if let Some(lane_id) = autoscroll_lane {
-                    self.hover_lane(&lane_id, position, cx);
+                    self.hover_lane(&lane_id, position, modifiers, cx);
                 }
             }
         }
@@ -583,10 +596,11 @@ impl TimelineView {
             selected: frame.selected.clone(),
             hovered: hover.and_then(|hit| hit.region_id.clone()),
             marks: Rc::clone(&frame.marks),
-            overlay: lane.overlay.map(|overlay| TimeRange {
-                start_seconds: overlay.start_seconds,
-                end_seconds: overlay.end_seconds,
-            }),
+            overlay: frame
+                .overlay
+                .as_ref()
+                .filter(|overlay| overlay.lane_id == lane.lane_id)
+                .map(|overlay| overlay.range),
             loop_range: frame.loop_range,
             hover_seconds: hover.map(|hit| hit.time_seconds),
             autoscroll_anchor: frame
@@ -601,20 +615,21 @@ impl TimelineView {
                 .map(|(_, seconds)| *seconds),
             palette: frame.palette,
         };
-        let cursor =
-            if frame.autoscroll.is_some() {
-                CursorStyle::ClosedHand
-            } else if dragging_here && frame.magnifier.is_some() {
-                CursorStyle::ResizeLeftRight
-            } else {
-                match hover.map(|hit| hit.target) {
-                    Some(
-                        WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle,
-                    ) if !frame.read_only => CursorStyle::ResizeLeftRight,
-                    Some(WaveformHitTarget::Waveform) if !frame.read_only => CursorStyle::Crosshair,
-                    _ => CursorStyle::Arrow,
-                }
-            };
+        let on_lane = |entry: &Option<(String, OverlayDragTarget)>| {
+            entry
+                .as_ref()
+                .filter(|(entry_lane, _)| *entry_lane == lane.lane_id)
+                .map(|(_, target)| *target)
+        };
+        let cursor = lane_cursor(LaneCursorState {
+            autoscroll: frame.autoscroll.is_some(),
+            overlay_drag: on_lane(&frame.overlay_drag),
+            boundary_drag: dragging_here && frame.magnifier.is_some(),
+            overlay_hover: on_lane(&frame.overlay_hover),
+            hover_target: hover.map(|hit| hit.target),
+            alt_create: frame.alt_create,
+            read_only: frame.read_only,
+        });
 
         let (background, muted_foreground, border) = {
             let theme = cx.theme();
@@ -816,7 +831,7 @@ impl TimelineView {
                     .cursor(cursor)
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                         if this.capture.is_some() {
-                            this.captured_move(event.position, cx);
+                            this.captured_move(event, cx);
                         } else {
                             this.hover_loop(event.position, cx);
                         }
@@ -919,7 +934,7 @@ impl TimelineView {
                             .on_mouse_up(MouseButton::Left, cx.listener(Self::release_left))
                             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                                 if this.capture.is_some() {
-                                    this.captured_move(event.position, cx);
+                                    this.captured_move(event, cx);
                                 }
                             }))
                     })
@@ -956,7 +971,7 @@ impl TimelineView {
                     window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                         if phase == DispatchPhase::Capture {
                             move_entity
-                                .update(cx, |this, cx| this.captured_move(event.position, cx))
+                                .update(cx, |this, cx| this.captured_move(event, cx))
                                 .ok();
                         }
                     });
@@ -992,6 +1007,14 @@ struct Frame {
     autoscroll: Option<(String, f32)>,
     magnifier: Option<(String, f64)>,
     capture_lane: Option<String>,
+    /// The cut preview (painted only on its lane).
+    overlay: Option<CutOverlay>,
+    /// Lane and part of an in-progress cut-preview drag.
+    overlay_drag: Option<(String, OverlayDragTarget)>,
+    /// Hovered lane and what a press there would grab of its cut preview.
+    overlay_hover: Option<(String, OverlayDragTarget)>,
+    /// Alt alone is held: a press draws a new cut preview.
+    alt_create: bool,
     loop_strip: studio_editor::timeline_model::LoopStripView,
     loop_range: Option<TimeRange>,
     loop_hover: Option<LoopStripHitTarget>,
@@ -1034,6 +1057,11 @@ impl Frame {
             Some(Capture::Lane(lane_id)) => Some(lane_id.clone()),
             _ => None,
         };
+        let overlay_hover = hover.as_ref().and_then(|(lane_id, hit)| {
+            doc.cut_overlay_target(lane_id, hit.time_seconds)
+                .map(|target| (lane_id.clone(), target))
+        });
+        let modifiers = pointer.modifiers;
         Self {
             viewport: session.viewport,
             playhead_seconds: session.playhead_seconds,
@@ -1047,6 +1075,13 @@ impl Frame {
                 .map(|autoscroll| (autoscroll.lane_id.clone(), autoscroll.anchor_fraction)),
             magnifier,
             capture_lane,
+            overlay: session.overlay.clone(),
+            overlay_drag: pointer
+                .overlay_drag
+                .as_ref()
+                .map(|drag| (drag.lane_id.clone(), drag.target)),
+            overlay_hover,
+            alt_create: modifiers.alt && !modifiers.shift && !modifiers.secondary,
             hover,
             loop_strip: session.loop_strip(project),
             loop_range: session.stored_loop_range.filter(|_| session.loop_enabled),
@@ -1058,6 +1093,67 @@ impl Frame {
             audio_pending: model.audio_load().pending > 0,
             palette: palette(cx),
         }
+    }
+}
+
+/// What decides a lane body's cursor this frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct LaneCursorState {
+    autoscroll: bool,
+    /// Cut-preview drag in progress on this lane.
+    overlay_drag: Option<OverlayDragTarget>,
+    /// Region boundary resize in progress on this lane.
+    boundary_drag: bool,
+    /// What a press at the pointer would grab of this lane's cut preview.
+    overlay_hover: Option<OverlayDragTarget>,
+    /// Hit under the pointer when it is over this lane.
+    hover_target: Option<WaveformHitTarget>,
+    /// Alt alone is held: a press draws a new cut preview.
+    alt_create: bool,
+    read_only: bool,
+}
+
+/// Lane body cursor: drags keep theirs; over the cut preview its edges resize (↔) and the
+/// body moves with the secondary modifier (open hand, closed while moving); Alt draws a new
+/// preview (crosshair); otherwise region handles resize and empty audio creates.
+fn lane_cursor(state: LaneCursorState) -> CursorStyle {
+    let overlay_cursor = |target: OverlayDragTarget, dragging: bool| match target {
+        OverlayDragTarget::Create
+        | OverlayDragTarget::StartHandle
+        | OverlayDragTarget::EndHandle => CursorStyle::ResizeLeftRight,
+        OverlayDragTarget::Body if dragging => CursorStyle::ClosedHand,
+        OverlayDragTarget::Body => CursorStyle::OpenHand,
+        OverlayDragTarget::Locked => CursorStyle::Arrow,
+    };
+    if state.autoscroll {
+        return CursorStyle::ClosedHand;
+    }
+    if let Some(target) = state.overlay_drag {
+        return overlay_cursor(target, true);
+    }
+    if state.boundary_drag {
+        return CursorStyle::ResizeLeftRight;
+    }
+    let Some(target) = state.hover_target else {
+        return CursorStyle::Arrow;
+    };
+    let on_region_handle = matches!(
+        target,
+        WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle
+    );
+    if state.alt_create && !on_region_handle {
+        return CursorStyle::Crosshair;
+    }
+    if let Some(target) = state.overlay_hover {
+        return overlay_cursor(target, false);
+    }
+    match target {
+        _ if state.read_only => CursorStyle::Arrow,
+        WaveformHitTarget::RegionStartHandle | WaveformHitTarget::RegionEndHandle => {
+            CursorStyle::ResizeLeftRight
+        }
+        WaveformHitTarget::Waveform => CursorStyle::Crosshair,
+        _ => CursorStyle::Arrow,
     }
 }
 
@@ -1112,5 +1208,101 @@ impl Render for TimelineView {
             )
             .child(scrollbar_row)
             .children(capture)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the gpui glob would shadow `#[test]`.
+    use super::{LaneCursorState, OverlayDragTarget, WaveformHitTarget, lane_cursor};
+    use gpui_kit::CursorStyle;
+
+    fn over(target: WaveformHitTarget) -> LaneCursorState {
+        LaneCursorState {
+            hover_target: Some(target),
+            ..LaneCursorState::default()
+        }
+    }
+
+    #[test]
+    fn cut_preview_edges_resize_and_body_moves_with_secondary() {
+        for target in [OverlayDragTarget::StartHandle, OverlayDragTarget::EndHandle] {
+            let state = LaneCursorState {
+                overlay_hover: Some(target),
+                ..over(WaveformHitTarget::RegionBody)
+            };
+            assert_eq!(lane_cursor(state), CursorStyle::ResizeLeftRight);
+        }
+        let body = LaneCursorState {
+            overlay_hover: Some(OverlayDragTarget::Body),
+            ..over(WaveformHitTarget::Waveform)
+        };
+        assert_eq!(lane_cursor(body), CursorStyle::OpenHand);
+        let locked = LaneCursorState {
+            overlay_hover: Some(OverlayDragTarget::Locked),
+            ..over(WaveformHitTarget::Waveform)
+        };
+        assert_eq!(lane_cursor(locked), CursorStyle::Arrow);
+    }
+
+    #[test]
+    fn cut_preview_drags_keep_their_cursor_off_the_preview() {
+        let moving = LaneCursorState {
+            overlay_drag: Some(OverlayDragTarget::Body),
+            ..over(WaveformHitTarget::Waveform)
+        };
+        assert_eq!(lane_cursor(moving), CursorStyle::ClosedHand);
+        for target in [
+            OverlayDragTarget::Create,
+            OverlayDragTarget::StartHandle,
+            OverlayDragTarget::EndHandle,
+        ] {
+            let state = LaneCursorState {
+                overlay_drag: Some(target),
+                ..LaneCursorState::default()
+            };
+            assert_eq!(lane_cursor(state), CursorStyle::ResizeLeftRight);
+        }
+    }
+
+    #[test]
+    fn alt_draws_a_new_cut_preview_except_on_region_handles() {
+        let over_preview = LaneCursorState {
+            alt_create: true,
+            overlay_hover: Some(OverlayDragTarget::EndHandle),
+            ..over(WaveformHitTarget::RegionBody)
+        };
+        assert_eq!(lane_cursor(over_preview), CursorStyle::Crosshair);
+        let handle = LaneCursorState {
+            alt_create: true,
+            ..over(WaveformHitTarget::RegionEndHandle)
+        };
+        assert_eq!(lane_cursor(handle), CursorStyle::ResizeLeftRight);
+    }
+
+    #[test]
+    fn plain_lane_cursors_are_unchanged() {
+        assert_eq!(
+            lane_cursor(over(WaveformHitTarget::Waveform)),
+            CursorStyle::Crosshair
+        );
+        assert_eq!(
+            lane_cursor(over(WaveformHitTarget::RegionStartHandle)),
+            CursorStyle::ResizeLeftRight
+        );
+        assert_eq!(
+            lane_cursor(over(WaveformHitTarget::RegionBody)),
+            CursorStyle::Arrow
+        );
+        let read_only = LaneCursorState {
+            read_only: true,
+            ..over(WaveformHitTarget::Waveform)
+        };
+        assert_eq!(lane_cursor(read_only), CursorStyle::Arrow);
+        let autoscroll = LaneCursorState {
+            autoscroll: true,
+            ..over(WaveformHitTarget::Waveform)
+        };
+        assert_eq!(lane_cursor(autoscroll), CursorStyle::ClosedHand);
     }
 }

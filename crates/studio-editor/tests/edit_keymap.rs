@@ -1261,11 +1261,11 @@ fn perform_toggle_overlay_and_loop() {
     ok(doc
         .perform(EditorAction::ToggleOverlay, None)
         .expect("doc action"));
-    assert!(doc.session().overlay_range.is_some());
+    assert!(doc.session().overlay.is_some());
     ok(doc
         .perform(EditorAction::ToggleOverlay, None)
         .expect("doc action"));
-    assert!(doc.session().overlay_range.is_none());
+    assert!(doc.session().overlay.is_none());
 
     let project = doc.project().clone();
     doc.session_mut()

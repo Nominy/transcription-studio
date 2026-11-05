@@ -15,7 +15,9 @@ use studio_editor::edit::create_region::{
     CreateRegionMode, CreateRegionTimeField, secondary_category_options, track_options,
 };
 use studio_editor::edit::format::format_time;
-use studio_editor::edit::structure::{AuditionKey, CREATE_PREVIEW_SEGMENT_ID, SplitError};
+use studio_editor::edit::structure::{
+    AuditionKey, CREATE_PREVIEW_SEGMENT_ID, OverlayDragTarget, SplitError,
+};
 use studio_editor::edit::time::{TimeEditError, TimeField};
 use studio_editor::edit::{EditError, EditorDoc, Effect, PointerModifiers, TextSelection};
 use studio_editor::timeline_model::TimeRange;
@@ -670,11 +672,11 @@ fn waveform_region_body_press_hover_release_does_not_create_boundary_undo_step()
 #[test]
 fn waveform_body_drag_inside_active_cut_preview_locks_without_editing_project() {
     let mut doc = stable_sample_doc();
-    let lane_id = doc.project().lanes[0].id.clone();
     let original_count = segment_count(&doc);
     set_viewport(&mut doc, 0.0, 10.0);
     doc.toggle_overlay();
-    let initial = doc.session().overlay_range.expect("T opens an overlay");
+    let initial = overlay_range(&doc).expect("T opens an overlay");
+    let lane_id = overlay_lane(&doc).unwrap().to_string();
 
     doc.hover_waveform(
         &lane_id,
@@ -695,7 +697,7 @@ fn waveform_body_drag_inside_active_cut_preview_locks_without_editing_project() 
     );
     let _ = ok(doc.release_waveform(&lane_id));
 
-    assert_eq!(doc.session().overlay_range, Some(initial));
+    assert_eq!(overlay_range(&doc), Some(initial));
     assert_eq!(segment_count(&doc), original_count);
     assert!(doc.create_region().is_none());
     assert!(doc.pointer().overlay_drag.is_none());
@@ -705,11 +707,11 @@ fn waveform_body_drag_inside_active_cut_preview_locks_without_editing_project() 
 #[test]
 fn secondary_waveform_body_drag_inside_active_overlay_moves_overlay_without_editing_project() {
     let mut doc = stable_sample_doc();
-    let lane_id = doc.project().lanes[0].id.clone();
     let original_count = segment_count(&doc);
     set_viewport(&mut doc, 0.0, 10.0);
     doc.toggle_overlay();
-    let initial = doc.session().overlay_range.expect("T opens an overlay");
+    let initial = overlay_range(&doc).expect("T opens an overlay");
+    let lane_id = overlay_lane(&doc).unwrap().to_string();
     doc.set_modifiers(SECONDARY);
 
     doc.hover_waveform(
@@ -731,7 +733,7 @@ fn secondary_waveform_body_drag_inside_active_overlay_moves_overlay_without_edit
     );
     let _ = ok(doc.release_waveform(&lane_id));
 
-    let overlay = doc.session().overlay_range.unwrap();
+    let overlay = overlay_range(&doc).unwrap();
     assert_eq!(segment_count(&doc), original_count);
     assert!(doc.create_region().is_none());
     assert!(!doc.session().is_dirty);
@@ -747,17 +749,14 @@ fn cut_preview_overlay_edge_drag_resizes_with_one_second_floor() {
     let mut doc = stable_sample_doc();
     let lane_id = doc.project().lanes[0].id.clone();
     set_viewport(&mut doc, 0.0, 10.0);
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 4.0,
-    });
+    set_overlay(&mut doc, &lane_id, 2.0, 4.0);
 
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.0));
     let _ = ok(doc.press_waveform(&lane_id));
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.6));
     let _ = ok(doc.release_waveform(&lane_id));
 
-    let overlay = doc.session().overlay_range.unwrap();
+    let overlay = overlay_range(&doc).unwrap();
     assert!((overlay.start_seconds - 2.6).abs() < 0.001);
     assert!((overlay.end_seconds - 4.0).abs() < 0.001);
 
@@ -766,10 +765,68 @@ fn cut_preview_overlay_edge_drag_resizes_with_one_second_floor() {
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 2.8));
     let _ = ok(doc.release_waveform(&lane_id));
 
-    let overlay = doc.session().overlay_range.unwrap();
+    let overlay = overlay_range(&doc).unwrap();
     assert!((overlay.start_seconds - 2.6).abs() < 0.001);
     assert!((overlay.end_seconds - 3.6).abs() < 0.001);
+    assert_eq!(overlay_lane(&doc), Some(lane_id.as_str()));
     assert!(!doc.session().is_dirty);
+}
+
+#[test]
+fn cut_preview_edges_grab_within_twelve_css_px_on_either_side() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    // 1000 CSS px over 10 s: 12 px = 0.12 s.
+    set_viewport(&mut doc, 0.0, 10.0);
+    assert_eq!(doc.session().timeline_width_px(), 1000.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 4.0);
+
+    let target = |doc: &EditorDoc, time: f64| doc.cut_overlay_target("lane-1", time);
+    assert_eq!(target(&doc, 1.89), Some(OverlayDragTarget::StartHandle));
+    assert_eq!(target(&doc, 2.11), Some(OverlayDragTarget::StartHandle));
+    assert_eq!(target(&doc, 3.89), Some(OverlayDragTarget::EndHandle));
+    assert_eq!(target(&doc, 4.11), Some(OverlayDragTarget::EndHandle));
+    assert_eq!(target(&doc, 2.13), Some(OverlayDragTarget::Locked));
+    assert_eq!(target(&doc, 1.87), None);
+    assert_eq!(target(&doc, 4.13), None);
+
+    // Zoomed in tenfold the window stays 12 px: 0.012 s.
+    set_viewport(&mut doc, 1.5, 2.5);
+    assert_eq!(target(&doc, 1.989), Some(OverlayDragTarget::StartHandle));
+    assert_eq!(target(&doc, 1.98), None);
+    assert_eq!(target(&doc, 2.02), Some(OverlayDragTarget::Locked));
+}
+
+#[test]
+fn press_just_outside_a_cut_preview_edge_resizes_instead_of_creating_a_region() {
+    let mut doc = doc(vec![seg("a", "lane-1", 6.0, 8.0, "text")]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 4.0);
+    let before = doc.project().segments.clone();
+
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::Waveform, None, 1.92));
+    let _ = ok(doc.press_waveform("lane-1"));
+    assert!(doc.pointer().create_drag.is_none());
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::Waveform, None, 1.4));
+    let _ = ok(doc.release_waveform("lane-1"));
+
+    let overlay = overlay_range(&doc).unwrap();
+    assert!((overlay.start_seconds - 1.4).abs() < 0.001);
+    assert!((overlay.end_seconds - 4.0).abs() < 0.001);
+    assert_eq!(doc.project().segments, before);
+    assert!(doc.create_region().is_none());
+}
+
+#[test]
+fn secondary_inside_cut_preview_moves_it_even_over_an_edge() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 4.0);
+    doc.set_modifiers(SECONDARY);
+
+    let target = |time: f64| doc.cut_overlay_target("lane-1", time);
+    assert_eq!(target(3.0), Some(OverlayDragTarget::Body));
+    assert_eq!(target(2.05), Some(OverlayDragTarget::Body));
+    assert_eq!(target(1.95), Some(OverlayDragTarget::StartHandle));
 }
 
 #[test]
@@ -778,19 +835,16 @@ fn alt_waveform_drag_creates_cut_preview_overlay_without_editing_project() {
     let lane_id = doc.project().lanes[0].id.clone();
     let original_count = segment_count(&doc);
     set_viewport(&mut doc, 0.0, 10.0);
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 1.0,
-        end_seconds: 2.0,
-    });
+    set_overlay(&mut doc, &lane_id, 1.0, 2.0);
     doc.set_modifiers(ALT);
 
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.0));
     let _ = ok(doc.press_waveform(&lane_id));
-    assert!(doc.session().overlay_range.is_none());
+    assert!(overlay_range(&doc).is_none());
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 5.25));
     let _ = ok(doc.release_waveform(&lane_id));
 
-    let overlay = doc.session().overlay_range.unwrap();
+    let overlay = overlay_range(&doc).unwrap();
     assert_eq!(segment_count(&doc), original_count);
     assert!(doc.create_region().is_none());
     assert!(!doc.session().is_dirty);
@@ -799,11 +853,41 @@ fn alt_waveform_drag_creates_cut_preview_overlay_without_editing_project() {
 }
 
 #[test]
+fn alt_drag_updates_the_cut_preview_on_every_pointer_move() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.set_modifiers(ALT);
+
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::RegionBody, Some("a"), 3.0));
+    let _ = ok(doc.press_waveform("lane-1"));
+    for (time, expected) in [
+        (3.06, (3.0, 4.0)),
+        (4.5, (3.0, 4.5)),
+        (5.25, (3.0, 5.25)),
+        (1.5, (1.5, 3.0)),
+        (6.0, (3.0, 6.0)),
+    ] {
+        doc.hover_waveform(
+            "lane-1",
+            hit(WaveformHitTarget::RegionBody, Some("a"), time),
+        );
+        let overlay = overlay_range(&doc).expect("the preview follows the pointer");
+        assert!(
+            (overlay.start_seconds - expected.0).abs() < 1e-9
+                && (overlay.end_seconds - expected.1).abs() < 1e-9,
+            "pointer at {time}: {overlay:?}"
+        );
+    }
+    let _ = ok(doc.release_waveform("lane-1"));
+    assert_eq!(overlay_lane(&doc), Some("lane-1"));
+}
+
+#[test]
 fn alt_waveform_tiny_drag_keeps_cut_preview_unmaterialized() {
     let mut doc = stable_sample_doc();
     let lane_id = doc.project().lanes[0].id.clone();
     set_viewport(&mut doc, 0.0, 10.0);
-    doc.session_mut().overlay_range = None;
+    doc.session_mut().overlay = None;
     doc.set_modifiers(ALT);
 
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.0));
@@ -811,8 +895,55 @@ fn alt_waveform_tiny_drag_keeps_cut_preview_unmaterialized() {
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 3.02));
     let _ = ok(doc.release_waveform(&lane_id));
 
-    assert!(doc.session().overlay_range.is_none());
+    assert!(overlay_range(&doc).is_none());
     assert!(doc.pointer().overlay_drag.is_none());
+}
+
+#[test]
+fn cut_preview_belongs_to_the_lane_it_was_drawn_on() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 6.0, 8.0, "one"),
+        seg("b", "lane-2", 0.5, 8.0, "two"),
+    ]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    doc.set_modifiers(ALT);
+    doc.hover_waveform("lane-2", hit(WaveformHitTarget::RegionBody, Some("b"), 2.0));
+    let _ = ok(doc.press_waveform("lane-2"));
+    doc.hover_waveform("lane-2", hit(WaveformHitTarget::RegionBody, Some("b"), 4.0));
+    let _ = ok(doc.release_waveform("lane-2"));
+    doc.set_modifiers(PointerModifiers::default());
+
+    assert_eq!(overlay_lane(&doc), Some("lane-2"));
+    assert_eq!(doc.session().overlay_on("lane-1"), None);
+    assert_eq!(doc.cut_overlay_target("lane-1", 2.0), None);
+    assert_eq!(
+        doc.cut_overlay_target("lane-2", 2.0),
+        Some(OverlayDragTarget::StartHandle)
+    );
+
+    // The same spot on the other lane is plain audio there: a press starts a region drag.
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::Waveform, None, 2.0));
+    let _ = ok(doc.press_waveform("lane-1"));
+    assert!(doc.pointer().overlay_drag.is_none());
+    assert!(doc.pointer().create_drag.is_some());
+    doc.leave_waveform("lane-1");
+    let _ = ok(doc.release_pointer());
+    assert_eq!(overlay_lane(&doc), Some("lane-2"));
+}
+
+#[test]
+fn t_opens_the_cut_preview_on_the_selected_rows_lane() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.5, 2.0, "one"),
+        seg("b", "lane-2", 3.0, 8.0, "two"),
+    ]);
+    let _ = doc.select_segment("b");
+
+    doc.toggle_overlay();
+
+    assert_eq!(overlay_lane(&doc), Some("lane-2"));
+    doc.toggle_overlay();
+    assert!(doc.session().overlay.is_none());
 }
 
 // ---- create by drag -------------------------------------------------------------------

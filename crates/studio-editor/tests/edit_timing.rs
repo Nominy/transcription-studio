@@ -12,7 +12,6 @@ use studio_editor::edit::{
     DraftedRow, EditError, EditorAction, EditorDoc, Effect, PointerModifiers, TextSelection,
     TranscriptionRefusal, remove_word_final_ellipsis,
 };
-use studio_editor::timeline_model::TimeRange;
 use studio_waveform::WaveformHitTarget;
 
 fn install_timings(doc: &mut EditorDoc, lane: &str, words: &[(&str, f64, f64)]) {
@@ -107,10 +106,7 @@ fn cut_preview_smart_split_uses_timings_at_the_cut_midpoint() {
         ],
     );
     let _ = doc.select_segment("a");
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 6.0,
-    });
+    set_overlay(&mut doc, "lane-1", 2.0, 6.0);
 
     ok(doc.commit_cut_preview(true));
 

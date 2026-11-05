@@ -179,7 +179,7 @@ impl EditorScreen {
         };
         KeyFocus {
             target,
-            cut_preview_active: self.model.read(cx).doc().session().overlay_range.is_some(),
+            cut_preview_active: self.model.read(cx).doc().session().overlay.is_some(),
             tag_suggestions_open: false,
         }
     }

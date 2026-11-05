@@ -17,8 +17,12 @@ pub const MIN_CREATE_DRAG_DISTANCE_FRACTION: f32 = 0.006;
 pub const AUDITION_BUFFER_SECONDS: f64 = 0.5;
 /// Splits must leave at least this much of the segment after the split point.
 pub const SPLIT_TAIL_GUARD_SECONDS: f64 = 0.1;
-/// Distance (viewport fraction) at which a cut-preview edge is grabbed.
-pub const CUT_PREVIEW_HANDLE_HIT_FRACTION: f32 = 0.008;
+/// Grab distance of a cut-preview edge, in CSS px on either side of it (Helper's
+/// `CUT_PREVIEW_HANDLE_HIT_WIDTH`); screen px scale with the interface zoom.
+pub const CUT_PREVIEW_HANDLE_HIT_PX: f64 = 12.0;
+/// Pointer travel (CSS px) before an Alt-press draws a cut preview (Helper's
+/// `CUT_PREVIEW_DRAG_THRESHOLD`).
+pub const CUT_PREVIEW_DRAG_THRESHOLD_PX: f64 = 5.0;
 /// Minimum cut-preview overlay length.
 pub const CUT_PREVIEW_MIN_DURATION_SECONDS: f64 = 1.0;
 /// Pointer travel that turns a held middle-click autoscroll into "drag" mode.
@@ -135,6 +139,41 @@ pub fn anchored_cut_preview_bounds(
     (start, end)
 }
 
+/// Part of the cut preview under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutOverlayHit {
+    StartHandle,
+    EndHandle,
+    Body,
+}
+
+/// What of the cut preview `range` lies at `time_seconds`: an edge within `handle_seconds`
+/// (the nearer one when both are), else the body when inside the range.
+pub fn cut_overlay_hit(
+    range: TimeRange,
+    time_seconds: f64,
+    handle_seconds: f64,
+) -> Option<CutOverlayHit> {
+    if !time_seconds.is_finite() {
+        return None;
+    }
+    let to_start = (time_seconds - range.start_seconds).abs();
+    let to_end = (time_seconds - range.end_seconds).abs();
+    if to_start.min(to_end) <= handle_seconds {
+        // Equidistant (a sliver of an overlay): the side the pointer is on wins.
+        let start =
+            to_start < to_end || (to_start == to_end && time_seconds <= range.start_seconds);
+        return Some(if start {
+            CutOverlayHit::StartHandle
+        } else {
+            CutOverlayHit::EndHandle
+        });
+    }
+    (range.start_seconds..=range.end_seconds)
+        .contains(&time_seconds)
+        .then_some(CutOverlayHit::Body)
+}
+
 /// Held boundary-audition key (Q/W/E/R by default).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AuditionKey {
@@ -183,7 +222,7 @@ pub fn audition_range(segment: &Segment, key: AuditionKey) -> Option<(f64, f64)>
 /// Part of the cut-preview overlay being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayDragTarget {
-    /// Alt-drag on empty waveform creates a new overlay.
+    /// Alt-drag on a lane draws a new overlay there.
     Create,
     /// Secondary-drag inside the overlay moves it.
     Body,
@@ -198,7 +237,6 @@ pub struct OverlayDrag {
     pub lane_id: String,
     pub target: OverlayDragTarget,
     pub grab_time_seconds: f64,
-    pub start_fraction: f32,
     pub original_start_seconds: f64,
     pub original_end_seconds: f64,
     pub has_moved: bool,

@@ -3,7 +3,8 @@
 
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::edit::{EditorDoc, Outcome};
-use studio_editor::timeline_model::LaneWaveform;
+use studio_editor::editor_model::CutOverlay;
+use studio_editor::timeline_model::{LaneWaveform, TimeRange};
 use studio_editor::workflow::StudioWorkflow;
 use studio_waveform::{DecodedAudio, WaveformHit, WaveformHitTarget};
 
@@ -126,4 +127,28 @@ pub fn ids(doc: &EditorDoc) -> Vec<String> {
 
 pub fn ok(result: Result<Outcome, studio_editor::edit::EditError>) -> Outcome {
     result.unwrap_or_else(|error| panic!("operation failed: {error}"))
+}
+
+/// Places the cut preview on `lane_id` over `start..end`.
+pub fn set_overlay(doc: &mut EditorDoc, lane_id: &str, start: f64, end: f64) {
+    doc.session_mut().overlay = Some(CutOverlay {
+        lane_id: lane_id.to_string(),
+        range: TimeRange {
+            start_seconds: start,
+            end_seconds: end,
+        },
+    });
+}
+
+/// Range of the cut preview (whatever its lane).
+pub fn overlay_range(doc: &EditorDoc) -> Option<TimeRange> {
+    doc.session().overlay.as_ref().map(|overlay| overlay.range)
+}
+
+/// Lane of the cut preview.
+pub fn overlay_lane(doc: &EditorDoc) -> Option<&str> {
+    doc.session()
+        .overlay
+        .as_ref()
+        .map(|overlay| overlay.lane_id.as_str())
 }

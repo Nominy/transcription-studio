@@ -1,4 +1,4 @@
-use super::{EditorSession, MIN_LOOP_DURATION_SECONDS};
+use super::{CutOverlay, EditorSession, MIN_LOOP_DURATION_SECONDS};
 use crate::timeline_model::{
     LoopStripHit, LoopStripView, MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimeRange, build_loop_strip,
     hit_loop_strip,
@@ -311,30 +311,57 @@ impl EditorSession {
         self.recenter_viewport(self.timeline_bounds(project));
     }
 
+    /// T: toggles a one-second cut preview at the playhead on the selected row's lane (else the
+    /// first visible lane).
     pub fn toggle_overlay(&mut self, project: &Project) {
-        if self.overlay_range.is_some() {
-            self.overlay_range = None;
+        if self.overlay.take().is_some() {
             return;
         }
-
-        self.overlay_range = Some(one_second_overlay_range(
-            self.timeline_bounds(project),
-            self.playhead_seconds,
-        ));
+        let Some(lane_id) = self.default_overlay_lane(project) else {
+            return;
+        };
+        self.overlay = Some(CutOverlay {
+            lane_id,
+            range: one_second_overlay_range(self.timeline_bounds(project), self.playhead_seconds),
+        });
     }
 
+    fn default_overlay_lane(&self, project: &Project) -> Option<String> {
+        let visible = |lane_id: &str| {
+            self.track_filter.matches_lane(lane_id) && !self.collapsed_lane_ids.contains(lane_id)
+        };
+        self.selected_segment_id
+            .as_deref()
+            .and_then(|segment_id| project.segment(segment_id))
+            .map(|segment| segment.lane_id.as_str())
+            .filter(|lane_id| visible(lane_id))
+            .or_else(|| {
+                project
+                    .lanes
+                    .iter()
+                    .map(|lane| lane.id.as_str())
+                    .find(|lane_id| visible(lane_id))
+            })
+            .map(str::to_string)
+    }
+
+    /// Moves an open cut preview (keeping its lane) to a one-second range at `start_seconds`.
     pub fn move_overlay_to_time(&mut self, project: &Project, start_seconds: f64) {
-        if self.overlay_range.is_none() {
-            return;
+        let bounds = self.timeline_bounds(project);
+        if let Some(overlay) = self.overlay.as_mut() {
+            overlay.range = one_second_overlay_range(bounds, start_seconds);
         }
-
-        self.overlay_range = Some(one_second_overlay_range(
-            self.timeline_bounds(project),
-            start_seconds,
-        ));
     }
 
-    pub fn set_overlay_range(&mut self, project: &Project, start_seconds: f64, end_seconds: f64) {
+    /// Places the cut preview on `lane_id` over `start_seconds..end_seconds` (clamped to the
+    /// timeline; an empty range leaves the overlay unchanged).
+    pub fn set_overlay_range(
+        &mut self,
+        project: &Project,
+        lane_id: &str,
+        start_seconds: f64,
+        end_seconds: f64,
+    ) {
         let bounds = self.timeline_bounds(project);
         let start_seconds =
             finite_seconds(start_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
@@ -344,18 +371,26 @@ impl EditorSession {
             return;
         }
 
-        self.overlay_range = Some(TimeRange {
-            start_seconds,
-            end_seconds,
+        self.overlay = Some(CutOverlay {
+            lane_id: lane_id.to_string(),
+            range: TimeRange {
+                start_seconds,
+                end_seconds,
+            },
         });
     }
 
-    pub fn overlay_contains_time(&self, time_seconds: f64) -> bool {
-        let Some(overlay_range) = self.overlay_range else {
-            return false;
-        };
-        let time_seconds = finite_seconds(time_seconds);
-        overlay_range.start_seconds <= time_seconds && time_seconds <= overlay_range.end_seconds
+    /// Range of the cut preview when it sits on `lane_id`.
+    pub fn overlay_on(&self, lane_id: &str) -> Option<TimeRange> {
+        self.overlay
+            .as_ref()
+            .filter(|overlay| overlay.lane_id == lane_id)
+            .map(|overlay| overlay.range)
+    }
+
+    /// Timeline seconds spanned by one CSS px of the lane surface.
+    pub fn seconds_per_px(&self) -> f64 {
+        self.viewport.duration_seconds() / self.timeline_width_px
     }
 
     pub fn loop_strip(&self, _project: &Project) -> LoopStripView {

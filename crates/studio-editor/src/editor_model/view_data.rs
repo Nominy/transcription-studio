@@ -139,7 +139,6 @@ impl EditorSession {
             lane_display_waveforms: &self.lane_display_waveforms,
             bounds,
             viewport: self.viewport,
-            overlay_range: self.overlay_range,
             strip_blocks,
             segment_preview,
         }

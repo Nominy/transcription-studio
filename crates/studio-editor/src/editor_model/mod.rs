@@ -30,6 +30,14 @@ const DEFAULT_TIMELINE_WIDTH_PX: f64 = 1_000.0;
 const DEFAULT_MIN_PX_PER_SEC: f64 = 200.0;
 const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 
+/// Cut-preview selection (Helper's cut preview): a time range drawn on one lane; S / Shift+S
+/// cut it out of that lane.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutOverlay {
+    pub lane_id: String,
+    pub range: TimeRange,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorSession {
     pub speed: f32,
@@ -42,7 +50,7 @@ pub struct EditorSession {
     pub loop_enabled: bool,
     pub loop_range: TimeRange,
     pub stored_loop_range: Option<TimeRange>,
-    pub overlay_range: Option<TimeRange>,
+    pub overlay: Option<CutOverlay>,
     pub viewport: TimeRange,
     pub track_filter: TrackFilter,
     pub selected_segment_id: Option<String>,
@@ -89,7 +97,7 @@ impl EditorSession {
             loop_enabled: false,
             loop_range: bounds,
             stored_loop_range: None,
-            overlay_range: None,
+            overlay: None,
             viewport,
             track_filter: TrackFilter::All,
             selected_segment_id: first_segment_id(project),

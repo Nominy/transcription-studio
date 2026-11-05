@@ -21,7 +21,6 @@ pub struct TimelineLaneView {
     pub track_height: f32,
     /// Babel's line waveform of the lane's (display) audio, once decoded.
     pub waveform: Option<Arc<LineWaveform>>,
-    pub overlay: Option<TimelineOverlayView>,
     pub blocks: Arc<[WaveformBlock]>,
     pub strip_blocks: Arc<[WaveformBlock]>,
     pub scrollbar: TimelineScrollbarView,
@@ -72,14 +71,6 @@ impl LaneColor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TimelineOverlayView {
-    pub start_seconds: f64,
-    pub end_seconds: f64,
-    pub left_percent: f32,
-    pub width_percent: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimelineScrollbarView {
     pub is_visible: bool,
     pub left_percent: f32,
@@ -101,7 +92,6 @@ pub(crate) struct TimelineLaneBuildState<'a> {
     pub(crate) lane_display_waveforms: &'a BTreeMap<String, LaneWaveform>,
     pub(crate) bounds: TimeRange,
     pub(crate) viewport: TimeRange,
-    pub(crate) overlay_range: Option<TimeRange>,
     pub(crate) strip_blocks: Option<&'a BTreeMap<String, Arc<[WaveformBlock]>>>,
     pub(crate) segment_preview: Option<&'a TimelineSegmentPreview>,
 }
@@ -316,7 +306,6 @@ pub(crate) fn build_timeline_lanes_with_segment_index(
                     DEFAULT_TRACK_HEIGHT
                 },
                 waveform,
-                overlay: timeline_overlay_view(state.overlay_range, state.viewport),
                 blocks,
                 strip_blocks,
                 scrollbar,
@@ -390,28 +379,6 @@ fn prefix_max_end_seconds(project: &Project, segments: &[usize]) -> Vec<f64> {
             max_end_seconds
         })
         .collect()
-}
-
-fn timeline_overlay_view(
-    overlay_range: Option<TimeRange>,
-    viewport: TimeRange,
-) -> Option<TimelineOverlayView> {
-    let overlay_range = overlay_range?;
-    let visible_start = overlay_range.start_seconds.max(viewport.start_seconds);
-    let visible_end = overlay_range.end_seconds.min(viewport.end_seconds);
-    if visible_end <= visible_start {
-        return None;
-    }
-
-    let viewport_duration = viewport.duration_seconds();
-    Some(TimelineOverlayView {
-        start_seconds: overlay_range.start_seconds,
-        end_seconds: overlay_range.end_seconds,
-        left_percent: (((visible_start - viewport.start_seconds) / viewport_duration) * 100.0)
-            .clamp(0.0, 100.0) as f32,
-        width_percent: (((visible_end - visible_start) / viewport_duration) * 100.0)
-            .clamp(0.0, 100.0) as f32,
-    })
 }
 
 fn timeline_scrollbar_view(bounds: TimeRange, viewport: TimeRange) -> TimelineScrollbarView {

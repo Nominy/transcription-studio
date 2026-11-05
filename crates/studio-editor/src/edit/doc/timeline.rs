@@ -10,10 +10,11 @@ use super::{EditError, EditResult, EditorDoc, Effect, Outcome, PointerModifiers,
 use crate::edit::create_region::{CreateRegionDialog, CreateRegionMode};
 use crate::edit::format::zoom_after_wheel_pixels;
 use crate::edit::structure::{
-    AuditionKey, AutoscrollMode, CUT_PREVIEW_HANDLE_HIT_FRACTION, LoopStripDrag,
-    MIN_CREATE_DRAG_DISTANCE_FRACTION, MIN_CREATED_REGION_DURATION_SECONDS, OverlayDrag,
-    OverlayDragTarget, TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION, TimelineAutoscroll,
-    WaveformCreateDrag, WaveformDrag, audition_range,
+    AuditionKey, AutoscrollMode, CUT_PREVIEW_DRAG_THRESHOLD_PX, CUT_PREVIEW_HANDLE_HIT_PX,
+    CutOverlayHit, LoopStripDrag, MIN_CREATE_DRAG_DISTANCE_FRACTION,
+    MIN_CREATED_REGION_DURATION_SECONDS, OverlayDrag, OverlayDragTarget,
+    TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION, TimelineAutoscroll, WaveformCreateDrag,
+    WaveformDrag, audition_range, cut_overlay_hit,
 };
 use crate::timeline_model::{LoopStripHit, LoopStripHitTarget, TimelineSegmentPreview};
 use crate::track_filter::TrackFilter;
@@ -175,9 +176,30 @@ impl EditorDoc {
         Outcome::none()
     }
 
-    /// T: toggles the 1-second cut-preview overlay at the playhead.
+    /// T: toggles the 1-second cut-preview overlay at the playhead (on the selected row's lane).
     pub fn toggle_overlay(&mut self) {
         self.session.toggle_overlay(self.workflow.project());
+    }
+
+    /// What a left press at `time_seconds` on `lane_id` grabs of the cut preview with the
+    /// current modifiers: an edge within [`CUT_PREVIEW_HANDLE_HIT_PX`] resizes, secondary inside
+    /// the range moves it, a plain body press is locked. `None` off the preview (or on another
+    /// lane). Alt draws a new preview instead (see [`Self::press_waveform`]).
+    pub fn cut_overlay_target(
+        &self,
+        lane_id: &str,
+        time_seconds: f64,
+    ) -> Option<OverlayDragTarget> {
+        let range = self.session.overlay_on(lane_id)?;
+        let handle_seconds = CUT_PREVIEW_HANDLE_HIT_PX * self.session.seconds_per_px();
+        let hit = cut_overlay_hit(range, time_seconds, handle_seconds)?;
+        let inside = range.start_seconds <= time_seconds && time_seconds <= range.end_seconds;
+        Some(match hit {
+            _ if self.pointer.modifiers.secondary && inside => OverlayDragTarget::Body,
+            CutOverlayHit::StartHandle => OverlayDragTarget::StartHandle,
+            CutOverlayHit::EndHandle => OverlayDragTarget::EndHandle,
+            CutOverlayHit::Body => OverlayDragTarget::Locked,
+        })
     }
 
     /// Escape outside text inputs: cancels autoscroll, else closes the find bar / edit
@@ -251,13 +273,13 @@ impl EditorDoc {
             if drag.target == OverlayDragTarget::Locked {
                 return;
             }
-            drag.has_moved |=
-                (fraction - drag.start_fraction).abs() >= MIN_CREATE_DRAG_DISTANCE_FRACTION;
+            drag.has_moved |= (hit.time_seconds - drag.grab_time_seconds).abs()
+                >= CUT_PREVIEW_DRAG_THRESHOLD_PX * self.session.seconds_per_px();
             let drag = drag.clone();
-            let bounds = self.session.timeline_bounds(self.workflow.project());
+            let project = self.workflow.project();
+            let bounds = self.session.timeline_bounds(project);
             if let Some((start, end)) = drag.range_at(bounds, hit.time_seconds) {
-                self.session
-                    .set_overlay_range(self.workflow.project(), start, end);
+                self.session.set_overlay_range(project, lane_id, start, end);
             }
             return;
         }
@@ -309,8 +331,9 @@ impl EditorDoc {
     }
 
     /// Left press on the hovered waveform point of `lane_id`:
-    /// - Alt on empty audio/body: start drawing a cut-preview overlay;
-    /// - inside the overlay: resize by an edge, secondary-drag moves it, else locked;
+    /// - Alt (not on a region handle): start drawing a cut preview on this lane;
+    /// - on this lane's cut preview: an edge resizes it, secondary-drag inside moves it, else
+    ///   locked (see [`Self::cut_overlay_target`]);
     /// - empty waveform: start a create-region drag;
     /// - region + secondary: split at the pointer (with Shift: smart split by word timings);
     /// - region + Shift or held Q/W/E/R: audition the region / boundary window;
@@ -332,12 +355,11 @@ impl EditorDoc {
         );
 
         if modifiers.alt && !modifiers.shift && !modifiers.secondary && !on_handle {
-            self.session.overlay_range = None;
+            self.session.overlay = None;
             self.pointer.overlay_drag = Some(OverlayDrag {
                 lane_id: lane_id.to_string(),
                 target: OverlayDragTarget::Create,
                 grab_time_seconds: hit.time_seconds,
-                start_fraction: hover.fraction,
                 original_start_seconds: hit.time_seconds,
                 original_end_seconds: hit.time_seconds,
                 has_moved: false,
@@ -345,31 +367,15 @@ impl EditorDoc {
             return Ok(Outcome::none());
         }
 
-        if let Some(overlay) = self.session.overlay_range
-            && self.session.overlay_contains_time(hit.time_seconds)
+        if let Some(target) = self.cut_overlay_target(lane_id, hit.time_seconds)
+            && let Some(range) = self.session.overlay_on(lane_id)
         {
-            let target = if modifiers.secondary {
-                OverlayDragTarget::Body
-            } else {
-                let start = self.viewport_fraction(overlay.start_seconds);
-                let end = self.viewport_fraction(overlay.end_seconds);
-                let near_left = (hover.fraction - start).abs() <= CUT_PREVIEW_HANDLE_HIT_FRACTION;
-                let near_right = (hover.fraction - end).abs() <= CUT_PREVIEW_HANDLE_HIT_FRACTION;
-                if near_left && !near_right {
-                    OverlayDragTarget::StartHandle
-                } else if near_right {
-                    OverlayDragTarget::EndHandle
-                } else {
-                    OverlayDragTarget::Locked
-                }
-            };
             self.pointer.overlay_drag = Some(OverlayDrag {
                 lane_id: lane_id.to_string(),
                 target,
                 grab_time_seconds: hit.time_seconds,
-                start_fraction: hover.fraction,
-                original_start_seconds: overlay.start_seconds,
-                original_end_seconds: overlay.end_seconds,
+                original_start_seconds: range.start_seconds,
+                original_end_seconds: range.end_seconds,
                 has_moved: false,
             });
             return Ok(Outcome::none());

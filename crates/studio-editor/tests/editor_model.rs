@@ -1202,42 +1202,39 @@ fn timeline_lanes_expose_babel_track_control_state() {
 }
 
 #[test]
-fn timeline_lanes_expose_babel_one_second_overlay_when_enabled() {
+fn one_second_overlay_opens_on_the_selected_rows_lane_and_clamps_to_the_timeline() {
     let project = sample_project();
     let mut session = EditorSession::for_project(&project);
     session.seek_to_time(&project, 12.25);
-    session.viewport = TimeRange {
-        start_seconds: 12.0,
-        end_seconds: 17.0,
-    };
+    let selected_lane = session
+        .selected_segment_id
+        .as_deref()
+        .and_then(|id| project.segment(id))
+        .map(|segment| segment.lane_id.clone())
+        .expect("a selected row");
 
     session.toggle_overlay(&project);
 
-    let lane = session.timeline_lanes(&project).remove(0);
-    let overlay = lane
-        .overlay
-        .as_ref()
-        .expect("enabled overlay should be visible on timeline lanes");
-    assert_eq!(overlay.start_seconds, 12.25);
-    assert_eq!(overlay.end_seconds, 13.25);
-    assert!(
-        (overlay.width_percent - (1.0 / session.viewport.duration_seconds() * 100.0) as f32).abs()
-            < 0.001
-    );
+    let overlay = session.overlay.clone().expect("T opens the overlay");
+    assert_eq!(overlay.lane_id, selected_lane);
+    assert_eq!(overlay.range.start_seconds, 12.25);
+    assert_eq!(overlay.range.end_seconds, 13.25);
+    assert_eq!(session.overlay_on(&selected_lane), Some(overlay.range));
 
     let bounds = TimeRange::for_project(&project);
     session.move_overlay_to_time(&project, bounds.end_seconds - 0.2);
 
     let overlay = session
-        .overlay_range
+        .overlay
+        .clone()
         .expect("overlay state should still be stored outside the visible viewport");
-    assert_eq!(overlay.end_seconds, bounds.end_seconds);
-    assert!((overlay.end_seconds - overlay.start_seconds - 1.0).abs() < 0.001);
-    assert!(session.timeline_lanes(&project).remove(0).overlay.is_none());
+    assert_eq!(overlay.lane_id, selected_lane);
+    assert_eq!(overlay.range.end_seconds, bounds.end_seconds);
+    assert!((overlay.range.end_seconds - overlay.range.start_seconds - 1.0).abs() < 0.001);
 
     session.toggle_overlay(&project);
 
-    assert!(session.timeline_lanes(&project)[0].overlay.is_none());
+    assert!(session.overlay.is_none());
 }
 
 #[test]

@@ -659,7 +659,7 @@ impl TranscriptView {
             let doc = self.model.read(cx).doc();
             let focus = KeyFocus {
                 target: FocusTarget::TranscriptText,
-                cut_preview_active: doc.session().overlay_range.is_some(),
+                cut_preview_active: doc.session().overlay.is_some(),
                 tag_suggestions_open: doc.tag_suggestions(&segment_id).is_some(),
             };
             let has_selection = doc

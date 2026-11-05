@@ -5,8 +5,8 @@ mod ruler;
 mod waveform;
 
 pub use builder::{
-    LaneColor, TimelineLaneHeader, TimelineLaneView, TimelineOverlayView, TimelineScrollbarView,
-    TimelineSegmentIndex, TimelineSegmentPreview,
+    LaneColor, TimelineLaneHeader, TimelineLaneView, TimelineScrollbarView, TimelineSegmentIndex,
+    TimelineSegmentPreview,
 };
 pub(crate) use builder::{
     MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimelineLaneBuildState, build_timeline_lane_headers,

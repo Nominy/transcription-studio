@@ -5,8 +5,8 @@ use super::{EditError, EditResult, EditorDoc, Effect, Outcome};
 use crate::edit::silence::{
     AudioTrimPlan, AutoSegmentMergePlan, CUT_PREVIEW_MIN_SECONDS, audio_trim_plan_for_segment,
     auto_insert_plans_for_caret, auto_segment_merge_plans, auto_segment_split_plans,
-    cut_preview_lane_id, cut_preview_scroll_target, merge_auto_insert_adjacent_segments,
-    nearest_same_lane_segment, segment_is_silent, visible_transcription_segments,
+    cut_preview_scroll_target, merge_auto_insert_adjacent_segments, nearest_same_lane_segment,
+    segment_is_silent, visible_transcription_segments,
 };
 use crate::edit::structure::{
     SplitError, merge_neighbor_segment_id, split_ratio, split_text_by_word_ratio,
@@ -235,27 +235,26 @@ impl EditorDoc {
 
     // ---- cut preview ------------------------------------------------------------------
 
-    /// S / Shift+S: cuts the overlay range out of the selected (or first overlapping) lane;
-    /// with `smart_split` a row covering the whole range gets its text split at the range
-    /// midpoint (word timings first, like Ctrl+Shift+Click); clears the overlay and selects the
-    /// row after the cut.
+    /// S / Shift+S: cuts the overlay range out of the lane the cut preview was drawn on; with
+    /// `smart_split` a row covering the whole range gets its text split at the range midpoint
+    /// (word timings first, like Ctrl+Shift+Click); clears the overlay and selects the row
+    /// after the cut.
     pub fn commit_cut_preview(&mut self, smart_split: bool) -> EditResult {
         self.guard("Cut preview")?;
-        let range = self.session.overlay_range.ok_or_else(|| {
-            EditError::Unavailable("Cut preview unavailable: no active overlay range.".into())
-        })?;
+        let (lane_id, range) = self
+            .session
+            .overlay
+            .as_ref()
+            .map(|overlay| (overlay.lane_id.clone(), overlay.range))
+            .ok_or_else(|| {
+                EditError::Unavailable("Cut preview unavailable: no active overlay range.".into())
+            })?;
         if range.duration_seconds() < CUT_PREVIEW_MIN_SECONDS {
             return Err(EditError::Unavailable(
                 "Cut preview must be at least 1.00s.".into(),
             ));
         }
         let project = self.workflow.project();
-        let lane_id =
-            cut_preview_lane_id(project, Some(&self.session), range).ok_or_else(|| {
-                EditError::Unavailable(
-                    "Cut preview unavailable: no selected or overlapping lane.".into(),
-                )
-            })?;
         if !project.segments.iter().any(|segment| {
             segment.lane_id == lane_id
                 && segment.end_seconds > range.start_seconds
@@ -296,7 +295,7 @@ impl EditorDoc {
         })?;
         self.mark_dirty();
         self.reconcile(true);
-        self.session.overlay_range = None;
+        self.session.overlay = None;
         let status = format!(
             "Cut {:.3}s-{:.3}s on {}{}{note}.",
             range.start_seconds,
@@ -316,9 +315,16 @@ impl EditorDoc {
 
     /// L with an overlay: loops the overlay range (no project edit).
     pub fn loop_cut_preview(&mut self) -> EditResult {
-        let range = self.session.overlay_range.ok_or_else(|| {
-            EditError::Unavailable("Selection loop unavailable: no active overlay range.".into())
-        })?;
+        let range = self
+            .session
+            .overlay
+            .as_ref()
+            .map(|overlay| overlay.range)
+            .ok_or_else(|| {
+                EditError::Unavailable(
+                    "Selection loop unavailable: no active overlay range.".into(),
+                )
+            })?;
         self.session.set_loop_range_from_drag(
             self.workflow.project(),
             range.start_seconds,

@@ -143,10 +143,7 @@ fn cut_preview_commit_smart_splits_middle_segment_and_clears_overlay() {
         "one two three four five six",
     )]);
     let _ = doc.select_segment("annotation-1");
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.5,
-        end_seconds: 4.0,
-    });
+    set_overlay(&mut doc, "lane-1", 2.5, 4.0);
 
     ok(doc.commit_cut_preview(true));
 
@@ -159,9 +156,32 @@ fn cut_preview_commit_smart_splits_middle_segment_and_clears_overlay() {
     assert_eq!(right.start_seconds, 4.0);
     assert_eq!(right.end_seconds, 6.0);
     assert_eq!(right.text, "four five six");
-    assert!(doc.session().overlay_range.is_none());
+    assert!(doc.session().overlay.is_none());
     assert_eq!(selected(&doc), Some("annotation-1__studio_1"));
     assert!(doc.session().is_dirty);
+}
+
+#[test]
+fn cut_preview_commit_cuts_the_lane_it_was_drawn_on_not_the_selected_rows() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 1.0, 6.0, "one two three four five six"),
+        seg("b", "lane-2", 1.0, 6.0, "uno dos tres cuatro cinco seis"),
+    ]);
+    let _ = doc.select_segment("a");
+    set_overlay(&mut doc, "lane-2", 2.5, 4.0);
+
+    ok(doc.commit_cut_preview(true));
+
+    let project = doc.project();
+    let untouched = project.segment("a").unwrap();
+    assert_eq!((untouched.start_seconds, untouched.end_seconds), (1.0, 6.0));
+    let left = project.segment("b").unwrap();
+    let right = project.segment("b__studio_1").unwrap();
+    assert_eq!((left.start_seconds, left.end_seconds), (1.0, 2.5));
+    assert_eq!((right.start_seconds, right.end_seconds), (4.0, 6.0));
+    assert_eq!(left.text, "uno dos tres");
+    assert_eq!(right.text, "cuatro cinco seis");
+    assert_eq!(selected(&doc), Some("b__studio_1"));
 }
 
 #[test]
@@ -179,10 +199,7 @@ fn cut_preview_commit_without_overlay_is_unavailable() {
 fn cut_preview_commit_rejects_overlay_shorter_than_one_second() {
     let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "text")]);
     let _ = doc.select_segment("annotation-1");
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 2.5,
-    });
+    set_overlay(&mut doc, "lane-1", 2.0, 2.5);
     let before = doc.project().segments.clone();
 
     let error = doc.commit_cut_preview(false).unwrap_err();
@@ -195,10 +212,7 @@ fn cut_preview_commit_rejects_overlay_shorter_than_one_second() {
 fn cut_preview_commit_is_refused_on_read_only_task() {
     let mut doc = read_only_doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "text")]);
     let _ = doc.select_segment("annotation-1");
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 4.0,
-    });
+    set_overlay(&mut doc, "lane-1", 2.0, 4.0);
 
     let error = doc.commit_cut_preview(true).unwrap_err();
 
@@ -210,10 +224,8 @@ fn cut_preview_commit_is_refused_on_read_only_task() {
 fn cut_preview_loop_sets_loop_range_without_editing_project() {
     let mut doc = stable_sample_doc();
     let before = doc.project().segments.clone();
-    doc.session_mut().overlay_range = Some(TimeRange {
-        start_seconds: 2.0,
-        end_seconds: 5.0,
-    });
+    let lane_id = doc.project().lanes[0].id.clone();
+    set_overlay(&mut doc, &lane_id, 2.0, 5.0);
 
     ok(doc.loop_cut_preview());
 
