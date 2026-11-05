@@ -104,6 +104,15 @@ impl EditorSession {
         }
     }
 
+    /// Recenters the timeline on the playhead when it lies outside the visible window (a
+    /// visible playhead keeps the user's view).
+    pub fn reveal_playhead(&mut self, project: &Project) {
+        let viewport = self.viewport;
+        if !(viewport.start_seconds..=viewport.end_seconds).contains(&self.playhead_seconds) {
+            self.recenter_viewport(self.timeline_bounds(project));
+        }
+    }
+
     pub fn set_speed(&mut self, speed: f32) {
         if speed.is_finite() && speed > 0.0 {
             self.speed = speed;

@@ -99,15 +99,17 @@ impl EditorDoc {
         Outcome::none().extend(self.restart_if_playing())
     }
 
-    /// Alt+X: playhead back 1s (not before the timeline start).
+    /// Alt+X: playhead back 1s (not before the timeline start); the timeline recenters on it
+    /// when it lands outside the visible window.
     pub fn rewind_one_second(&mut self) -> Outcome {
         let start = self
             .session
             .timeline_bounds(self.workflow.project())
             .start_seconds;
         let target = (self.session.playhead_seconds - 1.0).max(start);
-        self.seek(target)
-            .with_status(format!("Rewound playback to {target:.2}s."))
+        let outcome = self.seek(target);
+        self.session.reveal_playhead(self.workflow.project());
+        outcome.with_status(format!("Rewound playback to {target:.2}s."))
     }
 
     pub fn set_speed(&mut self, speed: f32) -> Outcome {

@@ -1563,6 +1563,34 @@ fn playback_speed_rewind_and_speaker_workflow_update_session() {
     assert!(!session.collapsed_lane_ids.contains(&speaker_two));
 }
 
+#[test]
+fn rewind_past_the_visible_window_brings_the_playhead_into_view() {
+    let mut doc = stable_sample_doc();
+    let window = |start_seconds: f64| TimeRange {
+        start_seconds,
+        end_seconds: start_seconds + 6.0,
+    };
+    set_playhead(&mut doc, 50.5);
+    doc.session_mut().viewport = window(50.0);
+
+    let _ = perform(&mut doc, EditorAction::RewindPlaybackOneSecond);
+
+    let viewport = doc.session().viewport;
+    assert_eq!(doc.session().playhead_seconds, 49.5);
+    assert!(
+        viewport.start_seconds < 49.5 && 49.5 < viewport.end_seconds,
+        "paused rewind out of view shifts the timeline to the playhead ({viewport:?})"
+    );
+
+    doc.session_mut().viewport = window(45.0);
+    let _ = perform(&mut doc, EditorAction::RewindPlaybackOneSecond);
+    assert_eq!(
+        doc.session().viewport,
+        window(45.0),
+        "a playhead still in view keeps the view"
+    );
+}
+
 // ---- timeline defaults ----------------------------------------------------------------
 
 #[test]
