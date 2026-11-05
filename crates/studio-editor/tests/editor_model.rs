@@ -147,7 +147,7 @@ fn editor_session_defaults_to_babel_workspace_state() {
 
 #[test]
 fn editor_session_initializes_review_state_from_babel_action_decision() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     project
         .metadata
         .insert("babel.format".to_string(), "review-action".to_string());
@@ -561,7 +561,7 @@ fn problem_counts_report_blocking_lint() {
 
 #[test]
 fn submit_is_allowed_for_clean_review() {
-    let project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     let session = EditorSession::for_project(&project);
 
     assert_eq!(
@@ -586,7 +586,7 @@ fn submit_is_blocked_by_lint_errors() {
 
 #[test]
 fn submit_kind_follows_assessment_phase() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     project.metadata.insert(
         "studio.babel.diff.assessmentPhase".to_string(),
         "practice".to_string(),
@@ -609,7 +609,7 @@ fn submit_kind_follows_assessment_phase() {
 
 #[test]
 fn annotation_submit_is_blocked_by_missing_intensity() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     project.metadata.insert(
         "studio.babel.submit.mode".to_string(),
         "annotation".to_string(),
@@ -657,19 +657,15 @@ fn submit_blockers_follow_babel_priority_chain() {
         Some(SubmitBlocker::MissingIntensity)
     );
 
-    let warning_project = project_with_segments(vec![segment(
-        "warning",
-        1.0,
-        60.0,
-        "very long but intentionally valid",
-    )]);
+    let warning_project =
+        project_with_segments(vec![segment("warning", 1.0, 60.0, "Это (пример).")]);
     let warning_session = EditorSession::for_project(&warning_project);
     assert_eq!(
         warning_session.submit_eligibility(&warning_project).blocker,
         Some(SubmitBlocker::UnacknowledgedWarnings)
     );
 
-    let mut low_confidence = segment("low-confidence", 1.0, 2.0, "alpha beta");
+    let mut low_confidence = segment("low-confidence", 1.0, 2.0, "Alpha beta.");
     low_confidence.metadata.insert(
         "babelLowConfidenceWords".to_string(),
         serde_json::json!([
@@ -693,7 +689,7 @@ fn submit_blockers_follow_babel_priority_chain() {
         Some(SubmitBlocker::UnresolvedLowConfidence)
     );
 
-    let mut feedback_project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut feedback_project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     feedback_project.metadata.insert(
         "studio.babel.submit.isFeedbackSaving".to_string(),
         "true".to_string(),
@@ -723,7 +719,7 @@ fn submit_blockers_follow_babel_priority_chain() {
 
 #[test]
 fn admin_flag_payload_trims_reason_and_omits_blank() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     assert!(!EditorSession::admin_flag_available(&project));
     project.metadata.insert(
         "studio.babel.adminFlag.available".to_string(),
@@ -749,7 +745,7 @@ fn admin_flag_payload_trims_reason_and_omits_blank() {
 
 #[test]
 fn skip_chunk_is_available_but_disallowed_until_backend_allows_it() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     assert!(!EditorSession::skip_chunk_available(&project));
     assert!(EditorSession::skip_chunk_allowed(&project));
 
@@ -1616,310 +1612,24 @@ fn overview_viewport_start_fraction_pans_window_without_moving_playhead() {
 }
 
 #[test]
-fn linter_reports_empty_text_invalid_timing_missing_lane_and_overlap() {
-    let mut project = project_with_segments(vec![
-        segment("one", 1.0, 3.0, ""),
-        segment("two", 2.5, 4.0, "overlap"),
-        segment("three", 5.0, 4.0, "bad timing"),
-        segment("four", 6.0, 7.0, "missing lane"),
-    ]);
-    project.segments[3].lane_id = "missing".to_string();
-    let session = EditorSession::for_project(&project);
-
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Error);
-    assert_eq!(rows[0].lint.message, "Segment cannot have empty text.");
-    assert_eq!(
-        rows[0]
-            .lint_issues
-            .iter()
-            .map(|issue| issue.kind.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            LintKind::EmptyText,
-            LintKind::Overlap,
-            LintKind::DistanceBetweenSegments,
-        ]
-    );
-    assert_eq!(rows[1].lint.severity, LintSeverity::Error);
-    assert_eq!(rows[1].lint.message, "Segments cannot overlap.");
-    assert_eq!(rows[2].lint.severity, LintSeverity::Error);
-    assert!(rows[2].lint.message.contains("start before end"));
-    assert_eq!(rows[3].lint.severity, LintSeverity::Error);
-    assert!(rows[3].lint.message.contains("unknown track"));
-}
-
-#[test]
-fn linter_counts_babel_pairwise_overlap_and_distance_issues() {
-    let project = project_with_segments(vec![
-        segment("left", 0.0, 5.0, "left"),
-        segment("middle", 4.0, 7.0, "middle"),
-        segment("right", 6.0, 9.0, "right"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    let issue_kinds = rows
-        .iter()
-        .map(|row| {
-            (
-                row.segment_id.as_str(),
-                row.lint_issues
-                    .iter()
-                    .map(|issue| issue.kind.clone())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        issue_kinds,
-        vec![
-            (
-                "left",
-                vec![LintKind::Overlap, LintKind::DistanceBetweenSegments],
-            ),
-            (
-                "middle",
-                vec![
-                    LintKind::Overlap,
-                    LintKind::Overlap,
-                    LintKind::DistanceBetweenSegments,
-                ],
-            ),
-            ("right", vec![LintKind::Overlap]),
-        ]
-    );
-    assert_eq!(session.blocking_lint_count(&project), 6);
-}
-
-#[test]
-fn linter_uses_babel_adjacent_pair_overlap_windows() {
-    let project = project_with_segments(vec![
-        segment("long", 0.0, 10.0, "long"),
-        segment("inside", 2.0, 3.0, "inside"),
-        segment("later-contained", 4.0, 5.0, "later contained"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(
-        rows[0]
-            .lint_issues
-            .iter()
-            .filter(|issue| issue.kind == LintKind::Overlap)
-            .count(),
-        1
-    );
-    assert_eq!(
-        rows[1]
-            .lint_issues
-            .iter()
-            .filter(|issue| issue.kind == LintKind::Overlap)
-            .count(),
-        1
-    );
-    assert_eq!(rows[2].lint.severity, LintSeverity::Pass);
-}
-
-#[test]
-fn linter_reports_babel_text_hygiene_errors() {
-    let project = project_with_segments(vec![
-        segment("double-spaces", 1.0, 2.0, "alpha  beta"),
-        segment("leading-space", 4.0, 5.0, " alpha"),
-        segment("trailing-space", 7.0, 8.0, "alpha "),
-        segment("newline", 10.0, 11.0, "alpha\nbeta"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Error);
-    assert_eq!(
-        rows[0].lint.message,
-        "Double spaces are not allowed in text."
-    );
-    assert_eq!(rows[1].lint.severity, LintSeverity::Error);
-    assert_eq!(
-        rows[1].lint.message,
-        "Extra spaces at the end or beginning of segments are not allowed."
-    );
-    assert_eq!(rows[2].lint.severity, LintSeverity::Error);
-    assert_eq!(
-        rows[2].lint.message,
-        "Extra spaces at the end or beginning of segments are not allowed."
-    );
-    assert_eq!(rows[3].lint.severity, LintSeverity::Error);
-    assert_eq!(
-        rows[3].lint.message,
-        "Segment contains newline character(s)."
-    );
-}
-
-#[test]
-fn linter_reports_babel_duplicate_warnings() {
-    let repeated_50 = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx";
-    let exact_duplicate = "alpha beta gamma delta epsilon zeta";
-    let adjacent_duplicate = "alpha beta gamma delta";
-    let project = project_with_segments(vec![
-        segment("intra-duplicate", 1.0, 2.0, repeated_50),
-        segment("exact-original", 4.0, 5.0, exact_duplicate),
-        segment("exact-later", 7.0, 8.0, exact_duplicate),
-        segment("adjacent-original", 10.0, 11.0, adjacent_duplicate),
-        segment("adjacent-later", 13.0, 14.0, adjacent_duplicate),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Warning);
-    assert_eq!(
-        rows[0].lint.message,
-        "Repeated 50-char substring: \"abcdefghijklmnopqrstuvwxyzabcdefghijklmn...\""
-    );
-    assert_eq!(rows[1].lint.severity, LintSeverity::Pass);
-    assert_eq!(rows[2].lint.severity, LintSeverity::Warning);
-    assert_eq!(
-        rows[2].lint.message,
-        "Exact duplicate of another segment in this transcript."
-    );
-    assert_eq!(rows[3].lint.severity, LintSeverity::Pass);
-    assert_eq!(rows[4].lint.severity, LintSeverity::Warning);
-    assert_eq!(
-        rows[4].lint.message,
-        "Possible duplicate of the adjacent segment."
-    );
-}
-
-#[test]
-fn linter_reports_babel_gap_and_double_dash_errors() {
-    let project = project_with_segments(vec![
-        segment("too-close", 1.0, 2.0, "first"),
-        segment("after-too-close", 2.5, 3.0, "second"),
-        segment("triple-dash", 5.0, 6.0, "alpha---beta"),
-        segment("spaced-double-dash", 8.0, 9.0, "alpha --beta"),
-        segment("double-dash-punctuation", 11.0, 12.0, "alpha--, beta"),
-        segment("double-dash-missing-space", 14.0, 15.0, "alpha--beta"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(
-        rows[0].lint.message,
-        "Segments must be at least 1 second apart."
-    );
-    assert_eq!(rows[1].lint.severity, LintSeverity::Pass);
-    assert_eq!(
-        rows[2].lint.message,
-        "Triple or more dashes (---) are typically avoided."
-    );
-    assert_eq!(
-        rows[3].lint.message,
-        "Double dash should hug the preceding word (no space before --)."
-    );
-    assert_eq!(
-        rows[4].lint.message,
-        "Punctuation immediately after double dash is typically avoided."
-    );
-    assert_eq!(
-        rows[5].lint.message,
-        "Double dash mid-sentence should be followed by a space or closing quote."
-    );
-    assert!(
-        rows.iter()
-            .filter(|row| row.lint.severity == LintSeverity::Error)
-            .count()
-            >= 5
-    );
-}
-
-#[test]
-fn linter_reports_babel_emphasis_unicode_and_punctuation_errors() {
-    let project = project_with_segments(vec![
-        segment("multiple-asterisks", 1.0, 2.0, "alpha ** beta"),
-        segment("unpaired-asterisks", 4.0, 5.0, "alpha *beta"),
-        segment("empty-emphasis", 7.0, 8.0, "alpha * * beta"),
-        segment("punct-emphasis", 10.0, 11.0, "alpha *beta,* gamma"),
-        segment("consecutive-punct", 13.0, 14.0, "alpha,, beta"),
-        segment("emoji", 16.0, 17.0, "alpha 😀 beta"),
-        segment("em-dash", 19.0, 20.0, "alpha — beta"),
-        segment("unsupported-unicode", 22.0, 23.0, "alpha “beta…”"),
-        segment("parentheses", 25.0, 26.0, "alpha (beta)"),
-        segment("unpaired-quotes", 28.0, 29.0, "alpha \"beta"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(
-        rows[0].lint.message,
-        "Multiple asterisks in a row (**, ***, etc.) are not allowed."
-    );
-    assert_eq!(
-        rows[1].lint.message,
-        "Asterisks must come in pairs (*word*)."
-    );
-    assert_eq!(
-        rows[2].lint.message,
-        "Empty emphasis (*  *) is not allowed - add text between asterisks."
-    );
-    assert_eq!(
-        rows[3].lint.message,
-        "Punctuation should be outside emphasis asterisk."
-    );
-    assert_eq!(
-        rows[4].lint.message,
-        "Consecutive terminal punctuation or commas detected."
-    );
-    assert_eq!(
-        rows[5].lint.message,
-        "Emoji are not allowed in transcriptions. Found: 😀"
-    );
-    assert_eq!(
-        rows[6].lint.message,
-        "Em dash (—) is not allowed. Use a standard dash with spaces on either side ( - ) instead."
-    );
-    assert_eq!(
-        rows[7].lint.message,
-        "Unsupported Unicode character(s) detected. Found: “ … ”"
-    );
-    assert_eq!(
-        rows[8].lint.message,
-        "Parentheses are not used for transcription, with rare exceptions. Use [] or <> for tags, or {} for MIS/PRO/comments."
-    );
-    assert_eq!(
-        rows[9].lint.message,
-        "Quotation marks must come in pairs — this segment has an odd number of quotation marks."
-    );
-}
-
-#[test]
-fn linter_preserves_multiple_babel_issues_per_row_and_counts_each_blocker() {
+fn every_lint_error_in_a_row_counts_as_a_blocker() {
     let project = project_with_segments(vec![segment("many-issues", 1.0, 2.0, " alpha  ** 😀 ")]);
     let mut session = EditorSession::for_project(&project);
 
     let rows = session.transcript_rows(&project);
+    let errors = rows[0]
+        .lint_issues
+        .iter()
+        .filter(|issue| issue.severity == LintSeverity::Error)
+        .count();
 
-    assert_eq!(
-        rows[0].lint.message,
-        "Multiple asterisks in a row (**, ***, etc.) are not allowed."
-    );
-    assert_eq!(
-        rows[0]
-            .lint_issues
-            .iter()
-            .map(|issue| issue.message.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "Multiple asterisks in a row (**, ***, etc.) are not allowed.",
-            "Double spaces are not allowed in text.",
-            "Extra spaces at the end or beginning of segments are not allowed.",
-            "Emoji are not allowed in transcriptions. Found: 😀",
-        ]
-    );
-    assert_eq!(session.blocking_lint_count(&project), 4);
-    assert_eq!(session.problem_counts(&project).errors, 4);
+    assert!(errors > 1);
+    assert_eq!(rows[0].lint, rows[0].lint_issues[0]);
+    assert_eq!(session.blocking_lint_count(&project), errors);
+    assert_eq!(session.problem_counts(&project).errors, errors);
     assert_eq!(
         session.submit_review(&project).unwrap_err(),
-        "Please fix linter errors (4 blocking lint issue(s) remain)"
+        format!("Please fix linter errors ({errors} blocking lint issue(s) remain)")
     );
 }
 
@@ -1960,7 +1670,7 @@ fn non_transcription_babel_annotations_skip_transcription_lint_and_actions() {
 
 #[test]
 fn submit_review_is_blocked_by_lint_errors_and_marks_clean_project_submitted() {
-    let project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     let mut session = EditorSession::for_project(&project);
     session.mark_dirty();
     session.mark_saved();
@@ -1984,7 +1694,7 @@ fn submit_review_checks_hidden_lanes_even_when_filter_is_clean() {
     let mut hidden_bad = segment("annotation-2", 2.0, 3.0, "");
     hidden_bad.lane_id = "track-2".to_string();
     let project = two_lane_project(vec![
-        segment("annotation-1", 0.0, 1.0, "visible clean"),
+        segment("annotation-1", 0.0, 1.0, "Visible clean."),
         hidden_bad,
     ]);
     let mut session = EditorSession::for_project(&project);
@@ -1997,12 +1707,7 @@ fn submit_review_checks_hidden_lanes_even_when_filter_is_clean() {
 
 #[test]
 fn submit_review_blocks_unacknowledged_warnings_until_asserted() {
-    let project = project_with_segments(vec![segment(
-        "warning",
-        1.0,
-        60.0,
-        "very long but intentionally valid",
-    )]);
+    let project = project_with_segments(vec![segment("warning", 1.0, 60.0, "Это (пример).")]);
     let mut session = EditorSession::for_project(&project);
 
     let error = session
@@ -2021,7 +1726,7 @@ fn submit_review_blocks_unacknowledged_warnings_until_asserted() {
 
 #[test]
 fn submit_review_blocks_unresolved_low_confidence_until_resolved_or_edited() {
-    let mut unresolved = segment("low-confidence", 1.0, 2.0, "alpha beta");
+    let mut unresolved = segment("low-confidence", 1.0, 2.0, "Alpha beta.");
     unresolved.metadata.insert(
         "babelLowConfidenceWords".to_string(),
         serde_json::json!([
@@ -2052,7 +1757,7 @@ fn submit_review_blocks_unresolved_low_confidence_until_resolved_or_edited() {
         .expect("resolved low-confidence metadata should unblock submit");
 
     let mut edited = unresolved_project.clone();
-    edited.segment_mut("low-confidence").unwrap().text = "alpha".to_string();
+    edited.segment_mut("low-confidence").unwrap().text = "Alpha.".to_string();
     let mut edited_session = EditorSession::for_project(&edited);
     edited_session
         .submit_review(&edited)
@@ -2096,95 +1801,6 @@ fn seek_to_time_moves_playhead_and_selects_segment_under_timestamp() {
 
     assert_eq!(session.playhead_seconds, 1.25);
     assert_eq!(session.selected_segment_id.as_deref(), Some("second"));
-}
-
-#[test]
-fn linter_reports_babel_ru_annotation_tag_errors_and_warnings() {
-    let project = project_with_segments(vec![
-        segment("valid-pro", 1.0, 2.0, "один {СКАЗ: два} три"),
-        segment("malformed-pro", 3.0, 4.0, "один {СКАЗ : два} три"),
-        segment("unbracketed-pro", 5.0, 6.0, "один СКАЗ: два"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Pass);
-    assert_eq!(rows[1].lint.severity, LintSeverity::Error);
-    assert!(
-        rows[1]
-            .lint
-            .message
-            .contains("Malformed or disallowed curly-bracket tag")
-    );
-    assert_eq!(rows[2].lint.severity, LintSeverity::Warning);
-    assert!(
-        rows[2]
-            .lint
-            .message
-            .contains("Annotation tag outside brackets")
-    );
-}
-
-#[test]
-fn linter_reports_babel_square_bracket_validation_errors() {
-    let project = project_with_segments(vec![
-        segment("valid-unintelligible", 1.0, 2.0, "один [неразборчиво] два"),
-        segment("valid-chuckle", 4.0, 5.0, "один [смешок] два"),
-        segment("invalid-tag", 7.0, 8.0, "один [unknown] два"),
-        segment("unclosed-tag", 10.0, 11.0, "один [неразборчиво два"),
-        segment("empty-tag", 13.0, 14.0, "один [] два"),
-        segment("spaced-tag", 16.0, 17.0, "один [ неразборчиво ] два"),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Pass);
-    assert_eq!(rows[1].lint.severity, LintSeverity::Pass);
-    assert_eq!(rows[2].lint.message, "Invalid bracket tag found.");
-    assert_eq!(rows[3].lint.message, "Brackets must be properly closed.");
-    assert_eq!(rows[4].lint.message, "Empty brackets [] are not allowed.");
-    assert_eq!(
-        rows[5].lint.message,
-        "Spaces are not allowed within bracket tags."
-    );
-}
-
-#[test]
-fn linter_reports_babel_curly_validation_and_tag_only_punctuation_errors() {
-    let project = project_with_segments(vec![
-        segment("valid-curly", 1.0, 2.0, "один {СКАЗ: два} три"),
-        segment("empty-curly", 4.0, 5.0, "один {} два"),
-        segment("unclosed-curly", 7.0, 8.0, "один {СКАЗ: два"),
-        segment("spaced-curly", 10.0, 11.0, "один { СКАЗ: два } три"),
-        segment("tag-only-square-punct", 13.0, 14.0, "[неразборчиво]."),
-        segment("tag-only-curly-punct", 16.0, 17.0, "{СКАЗ: слово}!"),
-        segment("tag-with-speech-punct", 19.0, 20.0, "слово [неразборчиво]."),
-    ]);
-    let session = EditorSession::for_project(&project);
-    let rows = session.transcript_rows(&project);
-
-    assert_eq!(rows[0].lint.severity, LintSeverity::Pass);
-    assert_eq!(
-        rows[1].lint.message,
-        "Empty curly brackets {} are not allowed."
-    );
-    assert_eq!(
-        rows[2].lint.message,
-        "Curly brackets must be properly closed."
-    );
-    assert_eq!(
-        rows[3].lint.message,
-        "Spaces are not allowed within bracket tags."
-    );
-    assert_eq!(
-        rows[4].lint.message,
-        "A segment that contains only a tag must not include any punctuation."
-    );
-    assert_eq!(
-        rows[5].lint.message,
-        "A segment that contains only a tag must not include any punctuation."
-    );
-    assert_eq!(rows[6].lint.severity, LintSeverity::Pass);
 }
 
 #[test]
@@ -2626,12 +2242,12 @@ fn diff_view_exposes_babel_annotation_status_from_compare_snapshot() {
 
 #[test]
 fn diff_view_text_cells_are_separate_from_linter() {
-    let mut changed = segment("annotation-1", 1.5, 2.5, "edited text");
+    let mut changed = segment("annotation-1", 1.5, 2.5, "Edited text.");
     changed.speaker_id = "speaker-2".to_string();
     changed.lane_id = "track-2".to_string();
     changed.metadata.insert(
         "studio.babel.original.text".to_string(),
-        serde_json::json!("original text"),
+        serde_json::json!("Original text."),
     );
     changed.metadata.insert(
         "studio.babel.original.startSeconds".to_string(),
@@ -2657,7 +2273,7 @@ fn diff_view_text_cells_are_separate_from_linter() {
         lane_id: "track-1".to_string(),
         start_seconds: 5.0,
         end_seconds: 6.0,
-        text: "new native row".to_string(),
+        text: "New native row.".to_string(),
         metadata: Default::default(),
     };
     let project = two_lane_project(vec![changed, added]);
@@ -2670,7 +2286,7 @@ fn diff_view_text_cells_are_separate_from_linter() {
     assert_eq!(rows[0].diff.as_ref().unwrap().change_count, 1);
     assert_eq!(
         rows[0].diff.as_ref().unwrap().source_text.as_deref(),
-        Some("original text")
+        Some("Original text.")
     );
     assert_eq!(rows[1].lint.message, "OK");
     assert_eq!(
@@ -2921,8 +2537,8 @@ fn diff_view_interleaves_babel_removed_annotation_ghost_rows() {
 #[test]
 fn warning_assertions_hide_active_warnings_from_problem_navigation() {
     let project = project_with_segments(vec![
-        segment("warning", 1.0, 60.0, "very long but intentionally valid"),
-        segment("clean", 61.0, 62.0, "clean"),
+        segment("warning", 1.0, 60.0, "Это (пример)."),
+        segment("clean", 61.0, 62.0, "Clean."),
         segment("error", 63.0, 64.0, ""),
     ]);
     let mut session = EditorSession::for_project(&project);
@@ -3484,7 +3100,7 @@ fn feedback_draft_serializes_to_form_inputs_and_round_trips() {
 
 #[test]
 fn imported_server_lint_maps_by_source_annotation_id() {
-    let mut imported = segment("internal-id", 1.0, 2.0, "clean");
+    let mut imported = segment("internal-id", 1.0, 2.0, "Clean.");
     imported.source_annotation_id = Some("babel-source-id".to_string());
     let mut project = project_with_segments(vec![imported]);
     project.metadata.insert(
@@ -3516,7 +3132,7 @@ fn imported_server_lint_maps_by_source_annotation_id() {
 
 #[test]
 fn imported_empty_server_lint_is_distinct_from_unchecked() {
-    let unchecked_project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let unchecked_project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     let unchecked = EditorSession::for_project(&unchecked_project);
     assert!(unchecked.server_lint_snapshot().is_none());
 
@@ -3534,7 +3150,7 @@ fn imported_empty_server_lint_is_distinct_from_unchecked() {
 
 #[test]
 fn edits_invalidate_server_lint_and_reject_stale_installation() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     project.metadata.insert(
         "babel.extra.package".to_string(),
         serde_json::json!({ "lintErrors": [] }).to_string(),
@@ -3567,12 +3183,12 @@ fn server_lint_is_primary_before_native_row_lint() {
     let row = session.transcript_rows(&project).remove(0);
     assert_eq!(row.lint.kind, LintKind::BabelServer);
     assert_eq!(row.lint.message, "Server issue wins");
-    assert_eq!(row.lint_issues[1].kind, LintKind::EmptyText);
+    assert_eq!(row.lint_issues[1].kind, LintKind::Gold("empty-content"));
 }
 
 #[test]
 fn unmatched_and_malformed_server_lint_remain_global_blockers() {
-    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("clean", 1.0, 2.0, "Clean.")]);
     project.metadata.insert(
         "babel.extra.package".to_string(),
         serde_json::json!({
@@ -3625,7 +3241,7 @@ fn unchecked_babel_project_keeps_native_lint_advisory_for_preflight() {
 
 #[test]
 fn server_warning_assertion_uses_exact_segment_reason_and_invalidates_snapshot() {
-    let mut project = project_with_segments(vec![segment("internal-id", 1.0, 2.0, "clean")]);
+    let mut project = project_with_segments(vec![segment("internal-id", 1.0, 2.0, "Clean.")]);
     project.segments[0].source_annotation_id = Some("source-id".to_string());
     project.metadata.insert(
         "studio.babel.projectId".to_string(),

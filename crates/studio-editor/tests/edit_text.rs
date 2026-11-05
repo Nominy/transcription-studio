@@ -407,46 +407,34 @@ fn tag_suggestions_use_contains_matching_like_babel() {
 }
 
 #[test]
-fn tag_suggestions_use_project_config_for_russian_gold_only_tags() {
+fn tag_suggestions_offer_gold_non_background_tags_for_any_russian_project() {
+    // ru-tx-gold: its background-noise tags are not offered, Gold's non-background ones are.
     let config = config_for_project_id("0bf29f0c-371a-506a-8b77-5fffd14e5762");
 
-    let bracket = suggestions_for_text("[муз", "[муз".len(), &config);
+    let background = suggestions_for_text("[муз", "[муз".len(), &config);
+    let other_noise = suggestions_for_text("[друг", "[друг".len(), &config);
     let style = suggestions_for_text("<под", "<под".len(), &config);
 
-    assert_eq!(labels(&bracket), vec!["музыка"]);
-    assert_eq!(bracket[0].kind, TagSuggestionKind::Bracket);
+    assert!(background.is_empty());
+    assert_eq!(labels(&other_noise), vec!["другой-звук"]);
+    assert_eq!(other_noise[0].kind, TagSuggestionKind::Bracket);
     assert_eq!(labels(&style), vec!["<подражание>"]);
     assert_eq!(style[0].kind, TagSuggestionKind::StyleOpen);
 }
 
 #[test]
-fn russian_silver_tag_suggestions_only_offer_unintelligible_bracket_tag() {
-    let config = config_for_project_id("73f8e130-9fb4-5c17-b142-5a2e75d89b6d");
-
-    let bracket = suggestions_for_text("[", 1, &config);
-    let style = suggestions_for_text("<", 1, &config);
-    let curly = suggestions_for_text("{", 1, &config);
-
-    assert_eq!(labels(&bracket), vec!["неразборчиво"]);
-    assert_eq!(bracket[0].kind, TagSuggestionKind::Bracket);
-    assert!(style.is_empty());
-    assert!(curly.is_empty());
-}
-
-#[test]
-fn doc_tag_suggestions_follow_project_tag_config() {
+fn doc_tag_suggestions_follow_project_language() {
     let mut project = project(vec![seg("a", "lane-1", 0.0, 2.0, "")]);
-    project.metadata.insert(
-        META_BABEL_PROJECT_ID.to_string(),
-        "73f8e130-9fb4-5c17-b142-5a2e75d89b6d".to_string(),
-    );
+    project
+        .metadata
+        .insert("language".to_string(), "EN".to_string());
     let mut doc = EditorDoc::from_project(project);
 
-    set_text_with_caret_at_end(&mut doc, "a", "[");
+    set_text_with_caret_at_end(&mut doc, "a", "[lau");
     let list = doc.tag_suggestions("a").expect("bracket suggestions");
-    assert_eq!(labels(&list.items), vec!["неразборчиво"]);
+    assert_eq!(labels(&list.items), vec!["laugh"]);
 
-    set_text_with_caret_at_end(&mut doc, "a", "<");
+    set_text_with_caret_at_end(&mut doc, "a", "[сме");
     assert!(doc.tag_suggestions("a").is_none());
 }
 

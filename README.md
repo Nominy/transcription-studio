@@ -7,7 +7,7 @@ Native Rust desktop editor for Babel transcription correction, built with [gpui]
 | Crate | Role |
 |---|---|
 | `studio-app` | gpui application (`studio-app.exe`): auth, dashboard, settings, editor UI |
-| `studio-editor` | UI-free editor domain: workflow + undo, linter + project lint/tag profiles (`assets/project-profiles.json`), transcript/timeline models, `edit::EditorDoc` editing operations, keymap, startup routes |
+| `studio-editor` | UI-free editor domain: workflow + undo, linter (see Lint), transcript/timeline models, `edit::EditorDoc` editing operations, keymap, startup routes |
 | `studio-services` | UI-free services on a shared tokio runtime: Babel client, native Clerk auth, review/drafting backend, feedback, sub-accounts, relay launcher, updater, preferences, recovery |
 | `studio-audio` | rodio playback engine (multi-lane mix, seek, loop, audition, per-lane enhanced PCM blended live with the original) and the enhanced-audio disk cache |
 | `studio-inference` | "This PC" AI: downloads the pinned Gold inference runtime (`gold-inference.json`), hosts its inference page in a hidden WebView2 with WebGPU and implements the shared `InferenceBackend` over it (timing, draft, enhance, align, model install/test) |
@@ -32,6 +32,16 @@ git config core.hooksPath .githooks
 ```
 
 `STUDIO_OPEN_DEMO_ON_START=1` opens the bundled two-speaker sample task (no network); `STUDIO_AUDIO_SILENT=1` mutes output.
+
+## Lint
+
+Studio lints exactly like the two linters it replaces: Babel's native linter ("Gold") with its `gold-non-bg` configuration for the task's language, plus the Babel Helper extension's custom-linter rules, merged the way Helper merges them. A task's language comes from its Babel project/queue id (`crates/studio-editor/assets/project-languages.json`); rule data is generated from the recovered Babel bundle and Helper sources by `tools/lint-parity/generate.mjs`, which also writes the parity fixture `crates/studio-editor/tests/fixtures/lint-parity.json` that the Rust linter must reproduce:
+
+```powershell
+node tools/lint-parity/generate.mjs ..\babel
+```
+
+Gold's `foreign-tag-dictionary` and `foreign-tag-code` rules need word dictionaries Babel fetches from its server, so Studio does not run them.
 
 ## Babel service
 

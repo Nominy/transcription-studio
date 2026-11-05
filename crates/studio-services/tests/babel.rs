@@ -662,7 +662,11 @@ async fn fixture_task_stages_presigned_audio_and_merges_route_metadata() {
             .map(String::as_str),
         Some("project-1")
     );
-    assert!(project.metadata.contains_key("studio.babel.lintTagProfile"));
+    assert!(
+        project
+            .metadata
+            .contains_key("studio.babel.lintTagLanguage")
+    );
     let presign_requests = babel.join();
     assert!(contains(
         &presign_requests[0],

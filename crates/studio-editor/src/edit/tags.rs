@@ -56,7 +56,7 @@ pub fn suggestions_for_draft(
             return Vec::new();
         }
         return config
-            .style_tags
+            .style_tags()
             .iter()
             .map(|tag| selection_wrap_suggestion(tag))
             .collect();
@@ -78,12 +78,14 @@ pub fn suggestions_for_text(
     };
 
     let partial = trigger.partial.to_lowercase();
-    let tags = match trigger.kind {
-        TagSuggestionKind::Bracket => config.bracket_tags,
-        TagSuggestionKind::StyleOpen | TagSuggestionKind::StyleClose => config.style_tags,
-        TagSuggestionKind::Curly => config.curly_tags,
+    let tags: Vec<&str> = match trigger.kind {
+        TagSuggestionKind::Bracket => config.bracket_tags().to_vec(),
+        TagSuggestionKind::StyleOpen | TagSuggestionKind::StyleClose => {
+            config.style_tags().to_vec()
+        }
+        TagSuggestionKind::Curly => config.curly_tags().iter().map(String::as_str).collect(),
     };
-    tags.iter()
+    tags.into_iter()
         .filter(|tag| tag_matches_partial(tag, &partial, trigger.kind))
         .map(|tag| suggestion_for_tag(tag, trigger))
         .collect()

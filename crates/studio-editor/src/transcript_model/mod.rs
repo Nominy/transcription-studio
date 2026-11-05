@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 
 use crate::babel_metadata::project_is_read_only;
 use crate::linter::{
-    LintKind, LintStatus, ProjectLintAnalysis, ServerLintSnapshot, server_lint_issues_for_segment,
-    warning_key,
+    LintKind, LintStatus, ProjectLintAnalysis, ServerLintSnapshot, UNRESOLVED_LOW_CONFIDENCE_RULE,
+    combine_server_and_local_issues, server_lint_issues_for_segment, warning_key,
 };
 use crate::track_filter::TrackFilter;
 use diff::{
@@ -168,12 +168,10 @@ pub(crate) fn build_transcript_rows(
         .map(|segment| {
             let annotation_kind = TranscriptAnnotationKind::from_segment(segment);
             let annotation_type_label = annotation_kind.label();
-            let mut raw_lint_issues = server_lint_issues_for_segment(server_lint_snapshot, segment);
-            raw_lint_issues.extend(if annotation_kind.is_transcription() {
-                lint_analysis.lint_segment_issues(segment)
-            } else {
-                lint_analysis.lint_region_issues(segment)
-            });
+            let raw_lint_issues = combine_server_and_local_issues(
+                server_lint_issues_for_segment(server_lint_snapshot, segment),
+                lint_analysis.lint_segment_issues(segment),
+            );
             let has_asserted_warning = raw_lint_issues.iter().any(|issue| {
                 warning_key(segment, issue).is_some_and(|key| asserted_warning_keys.contains(&key))
             });
@@ -193,7 +191,7 @@ pub(crate) fn build_transcript_rows(
             };
             let has_unresolved_low_confidence = lint_issues
                 .iter()
-                .any(|issue| issue.kind == LintKind::UnresolvedLowConfidence);
+                .any(|issue| issue.kind == LintKind::Gold(UNRESOLVED_LOW_CONFIDENCE_RULE));
             let availability = row_availability
                 .get(&segment.id)
                 .copied()

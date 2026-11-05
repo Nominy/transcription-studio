@@ -1,7 +1,8 @@
 use super::EditorSession;
 use crate::babel_metadata::project_is_babel_backed;
 use crate::linter::{
-    LintKind, LintSeverity, ServerLintIssue, server_lint_issue_matches_segment, warning_key,
+    LintKind, LintSeverity, ServerLintIssue, UNRESOLVED_LOW_CONFIDENCE_RULE,
+    server_lint_issue_matches_segment, warning_key,
 };
 use studio_core::Project;
 
@@ -42,7 +43,7 @@ impl EditorSession {
         self.transcript_rows_for_filter(project, &crate::track_filter::TrackFilter::All)
             .into_iter()
             .flat_map(|row| row.lint_issues)
-            .filter(|issue| issue.kind == LintKind::UnresolvedLowConfidence)
+            .filter(|issue| issue.kind == LintKind::Gold(UNRESOLVED_LOW_CONFIDENCE_RULE))
             .collect()
     }
 

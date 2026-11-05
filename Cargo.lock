@@ -6853,6 +6853,7 @@ name = "studio-editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "regex",
  "serde",
  "serde_json",
  "studio-babel",
@@ -6862,6 +6863,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "time",
+ "unicode-normalization",
+ "unicode-segmentation",
 ]
 
 [[package]]
