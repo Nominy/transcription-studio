@@ -71,7 +71,6 @@ editor_actions! {
     ToggleActiveWarningAssertion,
     DeleteSelectedSegment,
     BackToProjects,
-    ToggleLoop,
     ToggleOverlay,
     GhostCursorPrevious,
     GhostCursorNext,
@@ -233,13 +232,6 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         &["alt-left"],
     ),
     def(
-        A::ToggleLoop,
-        TIMELINE,
-        "Toggle loop on/off",
-        Timeline,
-        &["l"],
-    ),
-    def(
         A::ToggleOverlay,
         TIMELINE,
         "Toggle 1-second overlay",
@@ -291,7 +283,7 @@ pub const ACTION_DEFS: &[ActionDef] = &[
     def(
         A::EscapePressed,
         DIALOG,
-        "Close active dialog or clear loop",
+        "Close active dialog or cancel cut selection",
         Timeline,
         &["escape"],
     ),
@@ -455,7 +447,7 @@ pub const ACTION_DEFS: &[ActionDef] = &[
     def(
         A::LoopCutPreviewOverlay,
         CUT,
-        "Loop active cut preview range",
+        "Loop playback over the cut selection (again: stop)",
         CutPreview,
         &["l"],
     ),

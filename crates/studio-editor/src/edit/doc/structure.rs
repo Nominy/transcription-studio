@@ -331,28 +331,28 @@ impl EditorDoc {
         Ok(effects.into_iter().fold(outcome, Outcome::with))
     }
 
-    /// L with an overlay: loops the overlay range (no project edit).
+    /// L with a cut selection: toggles looping playback over it (no project edit). Turning the
+    /// loop on moves a playhead outside the selection to its start.
     pub fn loop_cut_preview(&mut self) -> EditResult {
-        let range = self
-            .session
-            .overlay
-            .as_ref()
-            .map(|overlay| overlay.range)
-            .ok_or_else(|| {
-                EditError::Unavailable(
-                    "Selection loop unavailable: no active overlay range.".into(),
-                )
-            })?;
-        self.session.set_loop_range_from_drag(
-            self.workflow.project(),
-            range.start_seconds,
-            range.end_seconds,
-        );
-        Ok(Outcome::status(format!(
-            "Looping cut preview {:.3}s-{:.3}s.",
+        let overlay = self.session.overlay.as_mut().ok_or_else(|| {
+            EditError::Unavailable("Selection loop unavailable: no cut selection.".into())
+        })?;
+        overlay.looping = !overlay.looping;
+        if !overlay.looping {
+            return Ok(Outcome::status("Stopped looping the selection."));
+        }
+        let range = overlay.range;
+        let status = format!(
+            "Looping selection {:.3}s-{:.3}s (L stops, Escape clears).",
             range.start_seconds, range.end_seconds
-        ))
-        .extend(self.restart_if_playing()))
+        );
+        let playhead = self.session.playhead_seconds;
+        let outcome = if (range.start_seconds..range.end_seconds).contains(&playhead) {
+            Outcome::none()
+        } else {
+            self.seek(range.start_seconds)
+        };
+        Ok(outcome.with_status(status))
     }
 
     // ---- decoded-audio timing ---------------------------------------------------------

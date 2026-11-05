@@ -1,19 +1,15 @@
 //! The timeline's left rail controls: one header per lane (label, mute, collapse, vertical
-//! zoom) and the loop toggle. Each is its own view, mounted cached in the timeline rows, so
-//! the playback frames that repaint the timeline surfaces reuse them; they re-render on doc
-//! changes only.
+//! zoom). Each is its own view, mounted cached in the lane rows, so the playback frames that
+//! repaint the timeline surfaces reuse them; they re-render on doc changes only.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderScale, SliderState};
-use gpui_kit::component::{
-    ActiveTheme, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
-use studio_editor::edit::EditorAction;
 use studio_editor::timeline_model::TimelineLaneHeader;
 
-use super::{RAIL_WIDTH, lane_color, shortcut_hint};
+use super::{RAIL_WIDTH, lane_color};
 use crate::editor::model::EditorModel;
 
 /// Cache style of a rail cell: the fixed rail width, the full row height.
@@ -218,56 +214,5 @@ impl Render for LaneHeader {
             .child(div().w(rems(0.1875)).h_full().flex_none().bg(color))
             .child(header)
             .into_any_element()
-    }
-}
-
-/// Loop on/off button in the rail cell of the loop strip row.
-pub(super) struct LoopToggle {
-    model: Entity<EditorModel>,
-    _subscription: Subscription,
-}
-
-impl LoopToggle {
-    pub(super) fn new(model: Entity<EditorModel>, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&model, |_, _, cx| cx.notify());
-        Self {
-            model,
-            _subscription: subscription,
-        }
-    }
-}
-
-impl Render for LoopToggle {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let strip = {
-            let doc = self.model.read(cx).doc();
-            doc.session().loop_strip(doc.project())
-        };
-        let toggle = Button::new("loop-toggle")
-            .ghost()
-            .xsmall()
-            .icon(IconName::Repeat)
-            .label(if strip.is_enabled { "Loop on" } else { "Loop" })
-            .selected(strip.is_enabled)
-            .disabled(!strip.has_range)
-            .tooltip(if strip.has_range {
-                shortcut_hint(cx, "Toggle loop", EditorAction::ToggleLoop)
-            } else {
-                "Drag on the loop strip to set a loop range".into()
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.model
-                    .update(cx, |model, cx| model.run(cx, |doc| doc.toggle_loop()));
-            }));
-        let theme = cx.theme();
-        h_flex()
-            .w(RAIL_WIDTH)
-            .h_full()
-            .flex_none()
-            .px_1()
-            .bg(theme.muted.opacity(0.4))
-            .border_r_1()
-            .border_color(theme.border)
-            .child(toggle)
     }
 }

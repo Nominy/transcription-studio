@@ -1,6 +1,6 @@
-//! Transport (play/pause, tick, seek, speed, zoom, wheel, loop, overlay), Escape handling,
-//! waveform pointer gestures (hover/press/release, drags, autoscroll, loop strip, audition) and
-//! timeline-default persistence in project metadata.
+//! Transport (play/pause, tick, seek, speed, zoom, wheel, overlay), Escape handling, waveform
+//! pointer gestures (hover/press/release, drags, autoscroll, audition) and timeline-default
+//! persistence in project metadata.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,12 +11,11 @@ use crate::edit::create_region::{CreateRegionDialog, CreateRegionMode};
 use crate::edit::format::zoom_after_wheel_pixels;
 use crate::edit::structure::{
     AuditionKey, AutoscrollMode, CUT_PREVIEW_DRAG_THRESHOLD_PX, CUT_PREVIEW_HANDLE_HIT_PX,
-    CutOverlayHit, LoopStripDrag, MIN_CREATE_DRAG_DISTANCE_FRACTION,
-    MIN_CREATED_REGION_DURATION_SECONDS, OverlayDrag, OverlayDragTarget,
-    TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION, TimelineAutoscroll, WaveformCreateDrag,
-    WaveformDrag, audition_range, cut_overlay_hit,
+    CutOverlayHit, MIN_CREATE_DRAG_DISTANCE_FRACTION, MIN_CREATED_REGION_DURATION_SECONDS,
+    OverlayDrag, OverlayDragTarget, TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION,
+    TimelineAutoscroll, WaveformCreateDrag, WaveformDrag, audition_range, cut_overlay_hit,
 };
-use crate::timeline_model::{LoopStripHit, LoopStripHitTarget, TimelineSegmentPreview};
+use crate::timeline_model::TimelineSegmentPreview;
 use crate::track_filter::TrackFilter;
 
 const META_TIMELINE_ZOOM: &str = "studio.native.timeline.zoom";
@@ -171,11 +170,6 @@ impl EditorDoc {
         true
     }
 
-    pub fn toggle_loop(&mut self) -> Outcome {
-        self.session.toggle_loop(self.workflow.project());
-        Outcome::none()
-    }
-
     /// T: toggles the 1-second cut-preview overlay at the playhead (on the selected row's lane).
     pub fn toggle_overlay(&mut self) {
         self.session.toggle_overlay(self.workflow.project());
@@ -203,9 +197,9 @@ impl EditorDoc {
     }
 
     /// Escape outside text inputs: cancels autoscroll, else closes the find bar / edit
-    /// annotation / add region dialog, else cancels the cut selection, else clears a stored
-    /// loop, else performs the helper play/pause toggle (pausing focuses the restored row).
-    /// App-level dialogs are the UI's.
+    /// annotation / add region dialog, else cancels the cut selection (ending its loop), else
+    /// performs the helper play/pause toggle (pausing focuses the restored row). App-level
+    /// dialogs are the UI's.
     pub fn escape(&mut self) -> Outcome {
         if self.cancel_autoscroll() {
             return Outcome::none();
@@ -217,13 +211,13 @@ impl EditorDoc {
         if self.edit_annotation.take().is_some() || self.create_region.take().is_some() {
             return Outcome::none();
         }
-        if self.session.overlay.take().is_some() {
+        if let Some(overlay) = self.session.overlay.take() {
             self.pointer.overlay_drag = None;
-            return Outcome::none();
-        }
-        if self.session.stored_loop_range.is_some() {
-            self.session.clear_loop(self.workflow.project());
-            return Outcome::none();
+            return if overlay.looping {
+                Outcome::status("Selection cleared; stopped looping.")
+            } else {
+                Outcome::none()
+            };
         }
         self.try_helper_unfocused_toggle().unwrap_or_else(|| {
             Outcome::status("Helper focus toggle unavailable: no selected segment.")
@@ -496,8 +490,7 @@ impl EditorDoc {
         Ok(Outcome::none())
     }
 
-    /// Global pointer release / capture loss: finishes any waveform drag and ends autoscroll and
-    /// loop-strip drags.
+    /// Global pointer release / capture loss: finishes any waveform drag and ends autoscroll.
     pub fn release_pointer(&mut self) -> EditResult {
         let lane_id = self
             .pointer
@@ -512,7 +505,6 @@ impl EditorDoc {
                     .map(|d| d.lane_id.clone())
             });
         self.cancel_autoscroll();
-        self.pointer.loop_drag = None;
         match lane_id {
             Some(lane_id) => self.release_waveform(&lane_id),
             None => Ok(Outcome::none()),
@@ -583,58 +575,6 @@ impl EditorDoc {
 
     pub fn cancel_autoscroll(&mut self) -> bool {
         self.pointer.autoscroll.take().is_some()
-    }
-
-    /// Pointer over the loop strip; drives an active loop drag.
-    pub fn hover_loop_strip(&mut self, hit: LoopStripHit) {
-        self.pointer.loop_hover = Some(hit);
-        let Some(drag) = self.pointer.loop_drag.clone() else {
-            return;
-        };
-        let project = self.workflow.project();
-        match drag.target {
-            LoopStripHitTarget::StartHandle => {
-                self.session.set_loop_start(project, hit.time_seconds)
-            }
-            LoopStripHitTarget::EndHandle => self.session.set_loop_end(project, hit.time_seconds),
-            LoopStripHitTarget::RangeBody => self.session.move_loop_range(
-                project,
-                drag.original_start_seconds,
-                drag.original_end_seconds,
-                drag.grab_time_seconds,
-                hit.time_seconds,
-            ),
-            LoopStripHitTarget::Empty => self.session.set_loop_range_from_drag(
-                project,
-                drag.grab_time_seconds,
-                hit.time_seconds,
-            ),
-        }
-    }
-
-    /// Press on the loop strip: empty area draws a new loop; handles/body edit the stored loop.
-    pub fn press_loop_strip(&mut self) {
-        let Some(hit) = self.pointer.loop_hover else {
-            return;
-        };
-        let (start, end) = if hit.target == LoopStripHitTarget::Empty {
-            (hit.time_seconds, hit.time_seconds)
-        } else {
-            let Some(range) = self.session.stored_loop_range else {
-                return;
-            };
-            (range.start_seconds, range.end_seconds)
-        };
-        self.pointer.loop_drag = Some(LoopStripDrag {
-            target: hit.target,
-            grab_time_seconds: hit.time_seconds,
-            original_start_seconds: start,
-            original_end_seconds: end,
-        });
-    }
-
-    pub fn release_loop_strip(&mut self) {
-        self.pointer.loop_drag = None;
     }
 
     fn drag_active_on(&self, lane_id: &str) -> bool {

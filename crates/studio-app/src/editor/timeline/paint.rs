@@ -1,4 +1,4 @@
-//! Immediate-mode painters for the timeline surfaces (lane bodies, ruler, loop strip,
+//! Immediate-mode painters for the timeline surfaces (lane bodies, ruler, scrollbar,
 //! overview). Lane waveforms are drawn exactly as Babel's wavesurfer draws them (see
 //! [`studio_waveform::LineWaveform`]); the overview draws a per-frame column scan of its
 //! peak buffer.
@@ -10,8 +10,7 @@ use std::sync::Arc;
 use gpui_kit::*;
 use studio_editor::linter::LintSeverity;
 use studio_editor::timeline_model::{
-    LoopStripView, OverviewWaveformBlock, TimeRange, TimelineRulerNotchKind, TimelineRulerView,
-    WaveformBlock,
+    OverviewWaveformBlock, TimeRange, TimelineRulerNotchKind, TimelineRulerView, WaveformBlock,
 };
 use studio_editor::transcript_model::format_mm_ss;
 use studio_waveform::{LineFrame, LineView, LineWaveform, WaveformRenderModel, js_round};
@@ -153,8 +152,8 @@ pub struct LaneScene {
     pub selected: Option<String>,
     pub hovered: Option<String>,
     pub marks: RegionMarks,
-    pub overlay: Option<TimeRange>,
-    pub loop_range: Option<TimeRange>,
+    /// The cut selection on this lane and whether playback loops over it.
+    pub overlay: Option<(TimeRange, bool)>,
     pub hover_seconds: Option<f64>,
     pub autoscroll_anchor: Option<f32>,
     pub magnifier_seconds: Option<f64>,
@@ -263,8 +262,8 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
     }
 }
 
-/// What sits under the waveform, so the peaks stay legible: the stored loop and the region
-/// fills (stronger when hovered/selected), for `viewport` drawn across `bounds`.
+/// What sits under the waveform, so the peaks stay legible: the region fills (stronger when
+/// hovered/selected), for `viewport` drawn across `bounds`.
 fn paint_region_fills(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -274,15 +273,6 @@ fn paint_region_fills(
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
     let x_of = |seconds: f64| x_at(viewport, seconds, width);
-    if let Some(range) = scene.loop_range {
-        let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
-        if x1 > 0.0 && x0 < width {
-            window.paint_quad(fill(
-                column(bounds, x0, x1, 0.0, height),
-                scene.palette.accent.opacity(0.07),
-            ));
-        }
-    }
     for block in scene.blocks.iter() {
         let x0 = x_of(block.start_seconds);
         let x1 = x_of(block.end_seconds);
@@ -306,7 +296,8 @@ fn paint_region_fills(
 
 /// What sits over the waveform, for `viewport` drawn across `bounds`: region edges (dashed
 /// outline for annotations), the selection frame, lint/diff bars, labels and the
-/// hovered/selected region's time chips when there is room, and the cut preview overlay.
+/// hovered/selected region's time chips when there is room, and the cut selection (accent
+/// edges and a "Loop" chip while playback loops over it).
 fn paint_region_decorations(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -436,16 +427,35 @@ fn paint_region_decorations(
         }
     }
 
-    if let Some(range) = scene.overlay {
+    if let Some((range, looping)) = scene.overlay {
         let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
         if x1 > 0.0 && x0 < width {
+            let (color, half_edge) = if looping {
+                (palette.accent, 1.5 * s)
+            } else {
+                (palette.warning, 1.0)
+            };
             let area = column(bounds, x0, x1, 0.0, height);
-            window.paint_quad(fill(area, palette.warning.opacity(0.18)));
+            window.paint_quad(fill(area, color.opacity(0.18)));
             for edge in [x0, x1] {
                 window.paint_quad(fill(
-                    column(bounds, edge - 1.0, edge + 1.0, 0.0, height),
-                    palette.warning,
+                    column(bounds, edge - half_edge, edge + half_edge, 0.0, height),
+                    color,
                 ));
+            }
+            if looping {
+                let label = shape("Loop".into(), px(TIME_SIZE * s), color, window);
+                paint_chip(
+                    &label,
+                    point(
+                        bounds.left() + px(x0.max(0.0) + 4.0 * s),
+                        bounds.top() + px(4. * s),
+                    ),
+                    palette,
+                    s,
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -789,48 +799,6 @@ pub fn paint_ruler(
             BorderStyle::Solid,
         ));
     }
-}
-
-/// Loop strip: stored loop range (dimmed while disabled), its handles and the playhead.
-pub fn paint_loop_strip(
-    bounds: Bounds<Pixels>,
-    strip: &LoopStripView,
-    viewport: TimeRange,
-    palette: Palette,
-    window: &mut Window,
-) {
-    let s = crate::zoom::ui_scale(window);
-    let width = f32::from(bounds.size.width);
-    let height = bounds.size.height;
-    let at = |x: f32, w: f32| {
-        Bounds::new(
-            point(bounds.left() + px(x.clamp(0.0, width)), bounds.top()),
-            size(px(w), height),
-        )
-    };
-    if strip.has_range && strip.width_percent > 0.0 {
-        let color = if strip.is_enabled {
-            palette.accent
-        } else {
-            palette.muted
-        };
-        let x0 = strip.left_percent / 100.0 * width;
-        let w = (strip.width_percent / 100.0 * width).max(1.0);
-        window.paint_quad(fill(at(x0, w), color.opacity(0.45)));
-        for (seconds, x) in [
-            (
-                strip.start_seconds,
-                x_at(viewport, strip.start_seconds, width),
-            ),
-            (strip.end_seconds, x_at(viewport, strip.end_seconds, width)),
-        ] {
-            if seconds >= viewport.start_seconds && seconds <= viewport.end_seconds {
-                window.paint_quad(fill(at(x - 2.0 * s, 4.0 * s), color));
-            }
-        }
-    }
-    let playhead_x = strip.playhead_percent / 100.0 * width;
-    window.paint_quad(fill(at(playhead_x - 0.75, 1.5), palette.playhead));
 }
 
 /// One overview lane row: its peaks (if decoded) and colour.

@@ -14,7 +14,7 @@ use studio_editor::edit::structure::AuditionKey;
 use studio_editor::edit::{
     EditError, EditorAction, EditorDoc, Effect, Outcome, PointerModifiers, TextSelection,
 };
-use studio_editor::timeline_model::{LoopStripHit, LoopStripHitTarget, TimeRange};
+use studio_editor::timeline_model::TimeRange;
 use studio_editor::track_filter::TrackFilter;
 use studio_waveform::WaveformHitTarget;
 
@@ -240,24 +240,141 @@ fn cut_preview_commit_is_refused_on_read_only_task() {
     assert_eq!(ids(&doc), vec!["annotation-1".to_string()]);
 }
 
+fn set_viewport(doc: &mut EditorDoc, start_seconds: f64, end_seconds: f64) {
+    doc.session_mut().viewport = TimeRange {
+        start_seconds,
+        end_seconds,
+    };
+}
+
+fn assert_loop_range(doc: &EditorDoc, start_seconds: f64, end_seconds: f64) {
+    let range = doc.session().loop_range().expect("the selection loops");
+    assert_close(range.start_seconds, start_seconds);
+    assert_close(range.end_seconds, end_seconds);
+}
+
+/// Drags on `lane-1` from `from` to `to` with the current modifiers.
+fn drag_lane_1(doc: &mut EditorDoc, from: f64, to: f64) {
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::Waveform, None, from));
+    let _ = ok(doc.press_waveform("lane-1"));
+    doc.hover_waveform("lane-1", hit(WaveformHitTarget::Waveform, None, to));
+    let _ = ok(doc.release_waveform("lane-1"));
+}
+
 #[test]
-fn cut_preview_loop_sets_loop_range_without_editing_project() {
-    let mut doc = stable_sample_doc();
+fn l_loops_playback_over_the_selection_until_l_again() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
     let before = doc.project().segments.clone();
-    let lane_id = doc.project().lanes[0].id.clone();
-    set_overlay(&mut doc, &lane_id, 2.0, 5.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 3.0);
+    set_playhead(&mut doc, 0.0);
 
-    ok(doc.loop_cut_preview());
+    perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
 
-    assert!(doc.session().loop_enabled);
-    assert_eq!(
-        doc.session().stored_loop_range,
-        Some(TimeRange {
-            start_seconds: 2.0,
-            end_seconds: 5.0,
-        })
-    );
+    assert_loop_range(&doc, 2.0, 3.0);
+    assert_close(doc.session().playhead_seconds, 2.0);
     assert_eq!(doc.project().segments, before);
+
+    let _ = doc.toggle_playback();
+    let speed = f64::from(doc.session().speed);
+    set_playhead(&mut doc, 2.9);
+    let outcome = doc.tick(0.2);
+    assert!(doc.session().is_playing);
+    assert_close(doc.session().playhead_seconds, 2.9 + 0.2 * speed - 1.0);
+    assert!(outcome.has_effect(&Effect::RestartPlayback));
+
+    let outcome = perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
+
+    assert_eq!(doc.session().loop_range(), None);
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("Stopped looping the selection.")
+    );
+    assert_eq!(
+        overlay_range(&doc).map(|range| range.end_seconds),
+        Some(3.0)
+    );
+    set_playhead(&mut doc, 2.9);
+    doc.tick(0.2);
+    assert_close(doc.session().playhead_seconds, 2.9 + 0.2 * speed);
+}
+
+#[test]
+fn resizing_or_moving_a_looping_selection_keeps_looping_over_the_new_range() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 4.0);
+    perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
+
+    drag_lane_1(&mut doc, 4.0, 3.0);
+    assert_loop_range(&doc, 2.0, 3.0);
+
+    doc.set_modifiers(PointerModifiers {
+        secondary: true,
+        ..PointerModifiers::default()
+    });
+    drag_lane_1(&mut doc, 2.5, 4.5);
+    doc.set_modifiers(PointerModifiers::default());
+    assert_loop_range(&doc, 4.0, 5.0);
+
+    // Playback runs into the moved range and wraps at its end.
+    let _ = doc.toggle_playback();
+    let speed = f64::from(doc.session().speed);
+    set_playhead(&mut doc, 4.9);
+    doc.tick(0.2);
+    assert_close(doc.session().playhead_seconds, 4.9 + 0.2 * speed - 1.0);
+
+    // A playhead the range shrank behind starts over at the loop start.
+    set_playhead(&mut doc, 4.8);
+    drag_lane_1(&mut doc, 5.0, 4.5);
+    assert_loop_range(&doc, 4.0, 4.5);
+    let outcome = doc.tick(0.1);
+    assert_close(doc.session().playhead_seconds, 4.0);
+    assert!(outcome.has_effect(&Effect::RestartPlayback));
+}
+
+#[test]
+fn escape_cancels_a_looping_selection_and_playback_runs_on() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    set_overlay(&mut doc, "lane-1", 2.0, 3.0);
+    perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
+    let _ = doc.toggle_playback();
+
+    let outcome = perform(&mut doc, EditorAction::EscapePressed);
+
+    assert!(doc.session().overlay.is_none());
+    assert_eq!(doc.session().loop_range(), None);
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("Selection cleared; stopped looping.")
+    );
+    assert!(
+        doc.session().is_playing,
+        "Escape only cancels the selection"
+    );
+    let speed = f64::from(doc.session().speed);
+    set_playhead(&mut doc, 2.9);
+    doc.tick(0.2);
+    assert_close(doc.session().playhead_seconds, 2.9 + 0.2 * speed);
+}
+
+#[test]
+fn a_newly_drawn_selection_starts_unlooped() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 8.0, "text")]);
+    set_viewport(&mut doc, 0.0, 10.0);
+    set_overlay(&mut doc, "lane-1", 2.0, 3.0);
+    perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
+
+    doc.set_modifiers(PointerModifiers {
+        alt: true,
+        ..PointerModifiers::default()
+    });
+    drag_lane_1(&mut doc, 5.0, 6.0);
+
+    assert_eq!(
+        overlay_range(&doc).map(|range| range.start_seconds),
+        Some(5.0)
+    );
+    assert_eq!(doc.session().loop_range(), None);
 }
 
 // ---- decoded-audio timing -------------------------------------------------------------
@@ -648,11 +765,6 @@ fn window_unfocus_cancels_captured_pointer_drags_and_audition_holds() {
         secondary: true,
         ..PointerModifiers::default()
     });
-    doc.hover_loop_strip(LoopStripHit {
-        target: LoopStripHitTarget::Empty,
-        time_seconds: 2.0,
-    });
-    doc.press_loop_strip();
     doc.hover_waveform(
         "track-speaker-2",
         hit(WaveformHitTarget::Waveform, None, 2.0),
@@ -660,7 +772,6 @@ fn window_unfocus_cancels_captured_pointer_drags_and_audition_holds() {
     doc.press_autoscroll("track-speaker-2");
     doc.set_audition_key(AuditionKey::BeforeStart, true);
 
-    assert!(doc.pointer().loop_drag.is_some());
     assert!(doc.pointer().autoscroll.is_some());
     assert!(
         doc.pointer()
@@ -671,7 +782,6 @@ fn window_unfocus_cancels_captured_pointer_drags_and_audition_holds() {
 
     ok(doc.window_unfocused());
 
-    assert!(doc.pointer().loop_drag.is_none());
     assert!(doc.pointer().autoscroll.is_none());
     assert!(doc.pointer().held_audition_keys.is_empty());
     assert_eq!(doc.pointer().modifiers, PointerModifiers::default());
@@ -1388,56 +1498,52 @@ fn timeline_defaults_persist_in_project_metadata_and_hydrate_on_reload() {
 
 // ---- Escape precedence ----------------------------------------------------------------
 
-fn stable_doc_with_loop() -> EditorDoc {
+fn stable_doc_with_looping_selection() -> EditorDoc {
     let mut doc = stable_sample_doc();
-    let project = doc.project().clone();
-    doc.session_mut()
-        .set_loop_range_from_drag(&project, 3.5, 5.1);
-    assert!(doc.session().stored_loop_range.is_some());
+    set_overlay(&mut doc, "track-speaker-1", 3.5, 5.1);
+    perform(&mut doc, EditorAction::LoopCutPreviewOverlay);
+    assert!(doc.session().loop_range().is_some());
     doc
 }
 
 #[test]
-fn escape_closes_create_region_dialog_before_clearing_timeline_loop() {
-    let mut doc = stable_doc_with_loop();
+fn escape_closes_create_region_dialog_before_cancelling_looping_selection() {
+    let mut doc = stable_doc_with_looping_selection();
     doc.open_create_region("track-speaker-1", 12.0, 12.8);
 
     let _ = perform(&mut doc, EditorAction::EscapePressed);
 
     assert!(doc.create_region().is_none());
-    assert!(doc.session().loop_enabled);
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 
     let _ = perform(&mut doc, EditorAction::EscapePressed);
 
-    let project = doc.project().clone();
-    assert!(doc.session().loop_enabled);
-    assert!(doc.session().stored_loop_range.is_none());
-    assert!(!doc.session().loop_strip(&project).has_range);
+    assert!(doc.session().overlay.is_none());
+    assert!(doc.session().loop_range().is_none());
 }
 
 #[test]
-fn escape_dismisses_edit_annotation_then_create_region_then_loop() {
-    let mut doc = stable_doc_with_loop();
+fn escape_dismisses_edit_annotation_then_create_region_then_selection() {
+    let mut doc = stable_doc_with_looping_selection();
     doc.open_create_region("track-speaker-1", 12.0, 12.8);
     ok(doc.open_edit_annotation("annotation-1"));
 
     let _ = doc.escape();
     assert!(doc.edit_annotation().is_none());
     assert!(doc.create_region().is_some());
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 
     let _ = doc.escape();
     assert!(doc.create_region().is_none());
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 
     let _ = doc.escape();
-    assert!(doc.session().stored_loop_range.is_none());
+    assert!(doc.session().loop_range().is_none());
 }
 
 #[test]
-fn escape_closes_find_bar_before_dialogs_and_loop() {
-    let mut doc = stable_doc_with_loop();
+fn escape_closes_find_bar_before_dialogs_and_selection() {
+    let mut doc = stable_doc_with_looping_selection();
     doc.open_create_region("track-speaker-1", 12.0, 12.8);
     let _ = doc.open_find();
 
@@ -1445,7 +1551,7 @@ fn escape_closes_find_bar_before_dialogs_and_loop() {
 
     assert!(!doc.find_state().open);
     assert!(doc.create_region().is_some());
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 }
 
 #[test]
@@ -1464,7 +1570,7 @@ fn captured_escape_closes_find_bar_before_create_region_input_reset() {
 
 #[test]
 fn escape_cancels_autoscroll_before_closing_find_bar() {
-    let mut doc = stable_doc_with_loop();
+    let mut doc = stable_doc_with_looping_selection();
     let _ = doc.open_find();
     doc.hover_waveform(
         "track-speaker-1",
@@ -1478,11 +1584,11 @@ fn escape_cancels_autoscroll_before_closing_find_bar() {
 
     assert!(doc.pointer().autoscroll.is_none());
     assert!(doc.find_state().open);
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 
     let _ = doc.escape();
     assert!(!doc.find_state().open);
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 }
 
 #[test]

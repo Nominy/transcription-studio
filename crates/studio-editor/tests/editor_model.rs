@@ -24,10 +24,7 @@ use studio_editor::editor_model::{
     AssessmentPhase, EditorSession, ProblemCounts, ReviewState, SaveStatus,
 };
 use studio_editor::linter::{LintKind, LintSeverity, ServerLintIssue, ServerLintSnapshot};
-use studio_editor::timeline_model::{
-    LaneColor, LaneWaveform, LoopStripClientMetrics, LoopStripHitTarget, TimeRange,
-    WaveformPeakSource, client_x_to_loop_time,
-};
+use studio_editor::timeline_model::{LaneColor, LaneWaveform, TimeRange, WaveformPeakSource};
 use studio_editor::track_filter::TrackFilter;
 use studio_editor::transcript_model::{
     AnnotationDiffStatus, TranscriptActionCommand, TranscriptActionMenuEntry,
@@ -139,7 +136,7 @@ fn editor_session_defaults_to_babel_workspace_state() {
     assert_eq!(session.zoom, 1.0);
     assert!(!session.is_playing);
     assert!(!session.diff_view);
-    assert!(!session.loop_enabled);
+    assert!(session.loop_range().is_none());
     assert_eq!(session.track_filter, TrackFilter::All);
     assert_eq!(session.review_state, ReviewState::Draft);
     assert_eq!(session.selected_segment_id.as_deref(), Some("annotation-1"));
@@ -2269,166 +2266,46 @@ fn speed_steps_move_between_babel_speed_options_and_saturate() {
 }
 
 #[test]
-fn loop_toggle_matches_babel_stored_range_state() {
+fn loop_range_is_the_cut_selection_while_it_loops() {
     let project = sample_project();
+    let lane_id = project.lanes[0].id.clone();
+    let other_lane_id = project.lanes[1].id.clone();
     let mut session = EditorSession::for_project(&project);
-    session.select_segment(&project, "annotation-2");
+    assert_eq!(session.loop_range(), None);
 
-    session.toggle_loop(&project);
+    session.set_overlay_range(&project, &lane_id, 3.5, 5.1);
+    assert_eq!(session.loop_range(), None, "a new selection does not loop");
 
-    assert!(!session.loop_enabled);
-    assert!(session.stored_loop_range.is_none());
-    assert!(!session.loop_strip(&project).has_range);
-
-    session.set_loop_range_from_drag(&project, 3.5, 5.1);
-
-    assert!(session.loop_enabled);
-    assert_eq!(session.stored_loop_range, Some(session.loop_range));
-    assert!(session.loop_strip(&project).has_range);
-
-    session.toggle_loop(&project);
-
-    assert!(!session.loop_enabled);
-    assert_eq!(session.stored_loop_range, Some(session.loop_range));
-    assert!(session.loop_strip(&project).has_range);
-
-    session.toggle_loop(&project);
-
-    assert!(session.loop_enabled);
-    assert_eq!(session.loop_range.start_seconds, 3.5);
-    assert_eq!(session.loop_range.end_seconds, 5.1);
-}
-
-#[test]
-fn loop_strip_reports_visible_range_geometry_and_hit_targets() {
-    let project = sample_project();
-    let mut session = EditorSession::for_project(&project);
-    session.select_segment(&project, "annotation-2");
-    session.set_zoom(&project, 4.0);
-    session.set_loop_range_from_drag(&project, 3.5, 5.1);
-
-    let strip = session.loop_strip(&project);
-
-    assert!(strip.has_range);
-    assert!(strip.is_enabled);
-    assert_eq!(strip.start_seconds, 3.5);
-    assert_eq!(strip.end_seconds, 5.1);
-    assert!(strip.left_percent >= 0.0);
-    assert!(strip.width_percent > 0.0);
-    assert!(strip.playhead_percent >= strip.left_percent);
-
-    let start_fraction = strip.left_percent / 100.0;
-    let body_fraction = (strip.left_percent + strip.width_percent / 2.0) / 100.0;
-    let end_fraction = (strip.left_percent + strip.width_percent) / 100.0;
-
-    assert_eq!(
-        session.loop_strip_hit(&project, start_fraction).target,
-        LoopStripHitTarget::StartHandle
-    );
-    assert_eq!(
-        session.loop_strip_hit(&project, body_fraction).target,
-        LoopStripHitTarget::RangeBody
-    );
-    assert_eq!(
-        session.loop_strip_hit(&project, end_fraction).target,
-        LoopStripHitTarget::EndHandle
-    );
-    assert_eq!(
-        session.loop_strip_hit(&project, 0.01).target,
-        LoopStripHitTarget::Empty
-    );
-}
-
-#[test]
-fn loop_client_x_conversion_matches_babel_scroll_metrics() {
-    let metrics = LoopStripClientMetrics {
-        container_left: 100.0,
-        scroll_left: 50.0,
-        duration: 20.0,
-        zoom_value: 10.0,
-    };
-
-    assert_eq!(client_x_to_loop_time(None, 150.0), 0.0);
-    assert_eq!(client_x_to_loop_time(Some(metrics), 150.0), 10.0);
-    assert_eq!(client_x_to_loop_time(Some(metrics), 0.0), 0.0);
-    assert_eq!(client_x_to_loop_time(Some(metrics), 500.0), 20.0);
-
-    let viewport = TimeRange {
-        start_seconds: 5.0,
-        end_seconds: 10.0,
-    };
-    let derived = LoopStripClientMetrics::for_viewport(viewport, 20.0, 1_000.0);
-    assert_eq!(derived.zoom_value, 200.0);
-    assert_eq!(derived.scroll_left, 1_000.0);
-    assert_eq!(client_x_to_loop_time(Some(derived), 500.0), 7.5);
-}
-
-#[test]
-fn loop_handle_drag_matches_babel_hundredth_second_edge_math() {
-    let project = project_with_segments(vec![segment("one", 0.0, 10.0, "one")]);
-    let mut session = EditorSession::for_project(&project);
-
-    session.loop_range = TimeRange {
+    session.overlay.as_mut().expect("selection").looping = true;
+    let looped = TimeRange {
         start_seconds: 3.5,
         end_seconds: 5.1,
     };
-    session.stored_loop_range = Some(session.loop_range);
-    session.set_loop_start(&project, 5.5);
-
-    assert!((session.loop_range.start_seconds - 5.09).abs() < 0.000_001);
-    assert_eq!(session.loop_range.end_seconds, 5.1);
-
-    session.loop_range = TimeRange {
-        start_seconds: 0.0,
-        end_seconds: 0.005,
-    };
-    session.stored_loop_range = Some(session.loop_range);
-    session.set_loop_start(&project, 0.0);
-
-    assert!((session.loop_range.start_seconds - -0.005).abs() < 0.000_001);
-    assert_eq!(session.loop_range.end_seconds, 0.005);
-
-    session.loop_range = TimeRange {
-        start_seconds: 9.995,
-        end_seconds: 10.0,
-    };
-    session.stored_loop_range = Some(session.loop_range);
-    session.set_loop_end(&project, 10.0);
-
-    assert_eq!(session.loop_range.start_seconds, 9.995);
-    assert!((session.loop_range.end_seconds - 10.005).abs() < 0.000_001);
-}
-
-#[test]
-fn enabled_loop_range_does_not_follow_subsequent_segment_selection_like_babel() {
-    let project = sample_project();
-    let mut session = EditorSession::for_project(&project);
-    session.select_segment(&project, "annotation-2");
-    session.set_loop_range_from_drag(&project, 3.5, 5.1);
+    assert_eq!(session.loop_range(), Some(looped));
 
     session.select_segment(&project, "annotation-3");
+    assert_eq!(
+        session.loop_range(),
+        Some(looped),
+        "row selection does not move the loop"
+    );
 
-    assert!(session.loop_enabled);
-    assert_eq!(session.selected_segment_id.as_deref(), Some("annotation-3"));
-    assert_eq!(session.loop_range.start_seconds, 3.5);
-    assert_eq!(session.loop_range.end_seconds, 5.1);
-    assert_eq!(session.stored_loop_range, Some(session.loop_range));
-}
+    session.set_overlay_range(&project, &lane_id, 3.5, 4.0);
+    assert_eq!(
+        session.loop_range(),
+        Some(TimeRange {
+            start_seconds: 3.5,
+            end_seconds: 4.0,
+        }),
+        "resizing keeps the loop on the new range"
+    );
 
-#[test]
-fn loop_clear_removes_babel_stored_range() {
-    let project = sample_project();
-    let mut session = EditorSession::for_project(&project);
-    session.set_loop_range_from_drag(&project, 3.5, 5.1);
-
-    assert!(session.loop_enabled);
-    assert!(session.stored_loop_range.is_some());
-
-    session.clear_loop(&project);
-
-    assert!(session.loop_enabled);
-    assert!(session.stored_loop_range.is_none());
-    assert!(!session.loop_strip(&project).has_range);
+    session.set_overlay_range(&project, &other_lane_id, 3.5, 4.0);
+    assert_eq!(
+        session.loop_range(),
+        None,
+        "another lane's selection is new"
+    );
 }
 
 #[test]
@@ -2449,11 +2326,13 @@ fn transport_advances_playhead_with_speed_and_respects_loop_range() {
     assert!(session.viewport.start_seconds <= session.playhead_seconds);
     assert!(session.viewport.end_seconds >= session.playhead_seconds);
 
-    session.set_loop_range_from_drag(&project, 3.5, 5.1);
+    let lane_id = project.lanes[0].id.clone();
+    session.set_overlay_range(&project, &lane_id, 3.5, 5.1);
+    session.overlay.as_mut().expect("selection").looping = true;
     session.seek_to_time(&project, 4.5);
     session.advance_transport(&project, 0.4);
 
-    assert!(session.loop_enabled);
+    assert!(session.loop_range().is_some());
     assert!((session.playhead_seconds - 3.7).abs() < f64::EPSILON * 8.0);
     assert!(session.is_playing);
 }

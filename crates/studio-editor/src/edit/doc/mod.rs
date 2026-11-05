@@ -34,14 +34,12 @@ use super::find::FindState;
 use super::format::format_time;
 use super::navigate::{self, HelperFocusRestore};
 use super::structure::{
-    AuditionKey, LoopStripDrag, OverlayDrag, SplitError, TimelineAutoscroll, WaveformCreateDrag,
-    WaveformDrag,
+    AuditionKey, OverlayDrag, SplitError, TimelineAutoscroll, WaveformCreateDrag, WaveformDrag,
 };
 use super::text::TextMoveError;
 use super::time::TimeEditError;
 use crate::editor_model::{EditorSession, ProblemCounts};
 use crate::linter::LintSeverity;
-use crate::timeline_model::LoopStripHit;
 use crate::timing::WordTimings;
 use crate::transcript_model::{TranscriptRowView, speaker_label};
 use crate::workflow::StudioWorkflow;
@@ -185,8 +183,6 @@ pub struct PointerState {
     pub waveform_drag: Option<WaveformDrag>,
     pub create_drag: Option<WaveformCreateDrag>,
     pub autoscroll: Option<TimelineAutoscroll>,
-    pub loop_hover: Option<LoopStripHit>,
-    pub loop_drag: Option<LoopStripDrag>,
 }
 
 /// Helper-mode focus tracking (which row owns the caret around playback toggles).

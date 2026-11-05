@@ -170,7 +170,6 @@ impl EditorSession {
         {
             self.open_actions_segment_id = None;
         }
-        self.reconcile_loop_range_with_project(project);
         self.asserted_warning_keys.retain(|key| {
             project
                 .segments

@@ -1,12 +1,12 @@
-//! Multi-lane waveform timeline: loop strip, ruler, lanes (header rail + waveform body) and the
-//! horizontal scrollbar.
+//! Multi-lane waveform timeline: ruler, lanes (header rail + waveform body) and the horizontal
+//! scrollbar.
 //!
 //! Lane bodies are painted on canvases from the shared peak buffers of the lanes' render
 //! models; lane views are rebuilt only when the doc generation, viewport or drag preview
 //! change. Pointer-rate state (hover, playhead, cut preview) is read from the doc every frame.
-//! Pointer gestures map to [`WaveformHit`]s and drive the doc's waveform, loop-strip and
-//! autoscroll state machines; drags keep tracking the pointer outside the surface through
-//! window-level listeners registered while a capture is active.
+//! Pointer gestures map to [`WaveformHit`]s and drive the doc's waveform and autoscroll state
+//! machines; drags keep tracking the pointer outside the surface through window-level
+//! listeners registered while a capture is active.
 
 pub mod geometry;
 pub mod overview;
@@ -28,8 +28,8 @@ use studio_editor::edit::{EditorAction, EditorDoc, PointerModifiers};
 use studio_editor::editor_model::CutOverlay;
 use studio_editor::linter::LintSeverity;
 use studio_editor::timeline_model::{
-    LaneColor, LoopStripHit, LoopStripHitTarget, TimeRange, TimelineLaneView, TimelineSegmentIndex,
-    TimelineSegmentPreview, build_babel_timeline_ruler_for_viewport,
+    LaneColor, TimeRange, TimelineLaneView, TimelineSegmentIndex, TimelineSegmentPreview,
+    build_babel_timeline_ruler_for_viewport,
 };
 use studio_waveform::{WaveformHit, WaveformHitTarget};
 
@@ -37,13 +37,11 @@ use crate::editor::model::{EditorEvent, EditorModel};
 use crate::keymap::{ActiveKeymap, IS_MAC};
 use geometry::{HANDLE_HIT_PX, Thumb, fraction_at, hit_test, x_at};
 use paint::{
-    LaneScene, Palette, RegionMark, RegionMarks, paint_lane, paint_loop_strip, paint_ruler,
-    paint_scrollbar,
+    LaneScene, Palette, RegionMark, RegionMarks, paint_lane, paint_ruler, paint_scrollbar,
 };
-use rail::{LaneHeader, LoopToggle, rail_cell_style};
+use rail::{LaneHeader, rail_cell_style};
 
 const RAIL_WIDTH: Rems = rems(11.);
-const LOOP_HEIGHT: Rems = rems(1.375);
 const RULER_HEIGHT: Rems = rems(1.375);
 const SCROLLBAR_HEIGHT: Rems = rems(0.875);
 const COLLAPSED_LANE_HEIGHT: Rems = rems(2.5);
@@ -100,15 +98,14 @@ pub fn visible_lane_rows(doc: &EditorDoc) -> LaneRows {
 }
 
 /// Height the timeline needs to show `rows` (see [`visible_lane_rows`]; collapsed lanes at
-/// [`COLLAPSED_LANE_HEIGHT`]) under the loop strip and ruler, above the scrollbar.
+/// [`COLLAPSED_LANE_HEIGHT`]) under the ruler, above the scrollbar.
 pub fn natural_height(rows: LaneRows, rem_size: Pixels) -> Pixels {
-    let height = LOOP_HEIGHT.0
-        + RULER_HEIGHT.0
+    let height = RULER_HEIGHT.0
         + SCROLLBAR_HEIGHT.0
         + rows.expanded as f32 * rows.lane_height.0
         + rows.collapsed as f32 * COLLAPSED_LANE_HEIGHT.0;
-    // Outer border (top and bottom), the loop row's bottom border and one per lane.
-    rem_size * height + px((3 + rows.expanded + rows.collapsed) as f32)
+    // Outer border (top and bottom) and one per lane.
+    rem_size * height + px((2 + rows.expanded + rows.collapsed) as f32)
 }
 
 /// Lane accent as a gpui color.
@@ -169,7 +166,6 @@ struct LanesKey {
 #[derive(Clone)]
 enum Capture {
     Lane(String),
-    LoopStrip,
     Scrollbar { grab: f32 },
 }
 
@@ -182,11 +178,9 @@ pub struct TimelineView {
     lanes: Option<(LanesKey, Rc<[TimelineLaneView]>)>,
     marks: Option<(u64, RegionMarks)>,
     lane_bounds: HashMap<String, SurfaceBounds>,
-    loop_bounds: SurfaceBounds,
     scrollbar_bounds: SurfaceBounds,
     capture: Option<Capture>,
     lane_headers: HashMap<String, Entity<LaneHeader>>,
-    loop_toggle: Entity<LoopToggle>,
     /// Interface zoom of the last render; scales hit tolerances (see [`crate::zoom`]).
     scale: f32,
     _subscriptions: Vec<Subscription>,
@@ -194,7 +188,6 @@ pub struct TimelineView {
 
 impl TimelineView {
     pub fn new(model: Entity<EditorModel>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let loop_toggle = cx.new(|cx| LoopToggle::new(model.clone(), cx));
         let subscriptions = vec![
             cx.observe(&model, |_, _, cx| cx.notify()),
             cx.subscribe(&model, |_, _, event: &EditorEvent, cx| {
@@ -210,11 +203,9 @@ impl TimelineView {
             lanes: None,
             marks: None,
             lane_bounds: HashMap::new(),
-            loop_bounds: SurfaceBounds::default(),
             scrollbar_bounds: SurfaceBounds::default(),
             capture: None,
             lane_headers: HashMap::new(),
-            loop_toggle,
             scale: 1.0,
             _subscriptions: subscriptions,
         }
@@ -413,41 +404,6 @@ impl TimelineView {
         }
     }
 
-    // ---- loop strip -----------------------------------------------------------------------
-
-    fn loop_hit(&self, position: Point<Pixels>, cx: &App) -> LoopStripHit {
-        let bounds = self.loop_bounds.get();
-        let fraction = fraction_at(
-            f32::from(position.x - bounds.left()),
-            f32::from(bounds.size.width),
-        );
-        let doc = self.model.read(cx).doc();
-        doc.session().loop_strip_hit(doc.project(), fraction)
-    }
-
-    fn hover_loop(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let hit = self.loop_hit(position, cx);
-        if self.model.read(cx).doc().pointer().loop_hover == Some(hit) {
-            return;
-        }
-        self.model.update(cx, |model, cx| {
-            model.update_doc(cx, |doc| doc.hover_loop_strip(hit));
-        });
-    }
-
-    fn loop_pressed(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        cx.stop_propagation();
-        let hit = self.loop_hit(event.position, cx);
-        self.model.update(cx, |model, cx| {
-            model.update_doc(cx, |doc| {
-                doc.hover_loop_strip(hit);
-                doc.press_loop_strip();
-            });
-        });
-        self.capture = Some(Capture::LoopStrip);
-        cx.notify();
-    }
-
     // ---- scrollbar ------------------------------------------------------------------------
 
     fn scrollbar_fraction(&self, position: Point<Pixels>) -> f32 {
@@ -494,7 +450,6 @@ impl TimelineView {
         let modifiers = pointer_modifiers(&event.modifiers, cx);
         match self.capture.clone() {
             Some(Capture::Lane(lane_id)) => self.hover_lane(&lane_id, position, modifiers, cx),
-            Some(Capture::LoopStrip) => self.hover_loop(position, cx),
             Some(Capture::Scrollbar { grab }) => self.drag_scrollbar(position, grab, cx),
             None => {
                 let autoscroll_lane = self
@@ -529,9 +484,6 @@ impl TimelineView {
             MouseButton::Left => match self.capture.take() {
                 Some(Capture::Lane(lane_id)) => self.model.update(cx, |model, cx| {
                     model.edit(cx, |doc| doc.release_waveform(&lane_id));
-                }),
-                Some(Capture::LoopStrip) => self.model.update(cx, |model, cx| {
-                    model.update_doc(cx, |doc| doc.release_loop_strip());
                 }),
                 Some(Capture::Scrollbar { .. }) | None => {}
             },
@@ -600,8 +552,7 @@ impl TimelineView {
                 .overlay
                 .as_ref()
                 .filter(|overlay| overlay.lane_id == lane.lane_id)
-                .map(|overlay| overlay.range),
-            loop_range: frame.loop_range,
+                .map(|overlay| (overlay.range, overlay.looping)),
             hover_seconds: hover.map(|hit| hit.time_seconds),
             autoscroll_anchor: frame
                 .autoscroll
@@ -800,59 +751,6 @@ impl TimelineView {
         overlays
     }
 
-    fn render_loop_row(&self, frame: &Frame, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let strip = frame.loop_strip;
-        let viewport = frame.viewport;
-        let palette = frame.palette;
-        let bounds_cell = Rc::clone(&self.loop_bounds);
-        let cursor = match (frame.loop_drag, frame.loop_hover) {
-            (true, Some(LoopStripHitTarget::RangeBody)) => CursorStyle::ClosedHand,
-            (_, Some(LoopStripHitTarget::StartHandle | LoopStripHitTarget::EndHandle)) => {
-                CursorStyle::ResizeLeftRight
-            }
-            (_, Some(LoopStripHitTarget::RangeBody)) => CursorStyle::OpenHand,
-            _ => CursorStyle::Crosshair,
-        };
-        let toggle = self.loop_toggle.clone().cached(rail_cell_style());
-        h_flex()
-            .h(LOOP_HEIGHT)
-            .flex_none()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(toggle)
-            .child(
-                div()
-                    .id("loop-strip")
-                    .relative()
-                    .flex_1()
-                    .h_full()
-                    .bg(theme.muted.opacity(0.25))
-                    .cursor(cursor)
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                        if this.capture.is_some() {
-                            this.captured_move(event, cx);
-                        } else {
-                            this.hover_loop(event.position, cx);
-                        }
-                    }))
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::loop_pressed))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::release_left))
-                    .child(
-                        canvas(
-                            move |bounds, _, _| bounds_cell.set(bounds),
-                            move |bounds, _, window, _| {
-                                paint_loop_strip(bounds, &strip, viewport, palette, window)
-                            },
-                        )
-                        .absolute()
-                        .inset_0()
-                        .size_full(),
-                    ),
-            )
-            .into_any_element()
-    }
-
     fn render_ruler_row(&self, frame: &Frame, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let viewport = frame.viewport;
@@ -1015,10 +913,6 @@ struct Frame {
     overlay_hover: Option<(String, OverlayDragTarget)>,
     /// Alt alone is held: a press draws a new cut preview.
     alt_create: bool,
-    loop_strip: studio_editor::timeline_model::LoopStripView,
-    loop_range: Option<TimeRange>,
-    loop_hover: Option<LoopStripHitTarget>,
-    loop_drag: bool,
     thumb: Option<Thumb>,
     marks: RegionMarks,
     read_only: bool,
@@ -1083,10 +977,6 @@ impl Frame {
             overlay_hover,
             alt_create: modifiers.alt && !modifiers.shift && !modifiers.secondary,
             hover,
-            loop_strip: session.loop_strip(project),
-            loop_range: session.stored_loop_range.filter(|_| session.loop_enabled),
-            loop_hover: pointer.loop_hover.map(|hit| hit.target),
-            loop_drag: pointer.loop_drag.is_some(),
             thumb: Thumb::for_viewport(session.timeline_bounds(project), session.viewport),
             marks,
             read_only: doc.is_read_only(),
@@ -1173,7 +1063,6 @@ impl Render for TimelineView {
             .enumerate()
             .map(|(index, lane)| self.render_lane(index, lane, &frame, cx))
             .collect();
-        let loop_row = self.render_loop_row(&frame, cx);
         let ruler_row = self.render_ruler_row(&frame, cx);
         let scrollbar_row = self.render_scrollbar_row(&frame, cx);
         let capture = self.render_capture(cx);
@@ -1195,7 +1084,6 @@ impl Render for TimelineView {
             .border_color(theme.border)
             .rounded(theme.radius)
             .on_scroll(cx.listener(Self::on_scroll))
-            .child(loop_row)
             .child(ruler_row)
             .child(
                 // Lanes keep Babel's height; when the card is capped they scroll.

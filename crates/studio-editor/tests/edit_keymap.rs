@@ -304,12 +304,12 @@ fn legacy_iced_json_format_is_accepted() {
 #[test]
 fn legacy_and_new_formats_can_be_mixed_and_resaved_in_new_format() {
     let keymap = Keymap::from_json(
-        r#"{"deleteSelectedSegment": {"code": "KeyK", "modifiers": ["alt"]}, "toggleLoop": "alt-l"}"#,
+        r#"{"deleteSelectedSegment": {"code": "KeyK", "modifiers": ["alt"]}, "toggleOverlay": "alt-l"}"#,
     );
     let value: serde_json::Value = serde_json::from_str(&keymap.to_json()).expect("valid json");
     assert_eq!(
         value,
-        serde_json::json!({ "deleteSelectedSegment": "alt-k", "toggleLoop": "alt-l" })
+        serde_json::json!({ "deleteSelectedSegment": "alt-k", "toggleOverlay": "alt-l" })
     );
 }
 
@@ -321,7 +321,7 @@ fn from_json_ignores_unknown_invalid_and_fixed_entries() {
             "tagSuggestionAccept": "alt-y",
             "notAnAction": "alt-v",
             "deleteSelectedSegment": 42,
-            "toggleLoop": "hyper-q",
+            "openFind": "hyper-q",
             "toggleOverlay": {"code": "Unidentified", "modifiers": []},
             "playPause": {"code": "KeyP", "modifiers": ["hyper"]}
         }"#,
@@ -355,11 +355,11 @@ fn non_configurable_override_is_rejected() {
 fn invalid_override_keystroke_is_rejected() {
     let mut keymap = Keymap::default();
     assert!(matches!(
-        keymap.set_override(EditorAction::ToggleLoop, "hyper-q"),
+        keymap.set_override(EditorAction::ToggleOverlay, "hyper-q"),
         Err(KeymapError::InvalidKeystroke(_))
     ));
     assert!(matches!(
-        keymap.set_override(EditorAction::ToggleLoop, ""),
+        keymap.set_override(EditorAction::ToggleOverlay, ""),
         Err(KeymapError::InvalidKeystroke(_))
     ));
     assert_eq!(keymap, Keymap::default());
@@ -439,8 +439,13 @@ fn default_keymap_has_no_conflicts() {
 fn conflicts_with_detects_clash_in_overlapping_context() {
     let keymap = Keymap::default();
     assert_eq!(
-        keymap.conflicts_with(EditorAction::ToggleOverlay, "l", false),
-        vec![EditorAction::ToggleLoop],
+        keymap.conflicts_with(EditorAction::ToggleOverlay, "d", false),
+        vec![EditorAction::DeleteSelectedSegment]
+    );
+    assert!(
+        keymap
+            .conflicts_with(EditorAction::ToggleOverlay, "l", false)
+            .is_empty(),
         "cut-preview `l` lives in a context exclusive with the timeline"
     );
     assert_eq!(
@@ -451,9 +456,15 @@ fn conflicts_with_detects_clash_in_overlapping_context() {
 
 #[test]
 fn conflicts_with_global_action_reports_every_context() {
-    let conflicts = Keymap::default().conflicts_with(EditorAction::OpenFind, "l", false);
-    assert!(conflicts.contains(&EditorAction::ToggleLoop));
-    assert!(conflicts.contains(&EditorAction::LoopCutPreviewOverlay));
+    let keymap = Keymap::default();
+    assert_eq!(
+        keymap.conflicts_with(EditorAction::OpenFind, "l", false),
+        vec![EditorAction::LoopCutPreviewOverlay]
+    );
+    assert_eq!(
+        keymap.conflicts_with(EditorAction::OpenFind, "t", false),
+        vec![EditorAction::ToggleOverlay]
+    );
 }
 
 #[test]
@@ -461,7 +472,7 @@ fn conflicts_with_ignores_the_action_itself_and_exclusive_contexts() {
     let keymap = Keymap::default();
     assert!(
         keymap
-            .conflicts_with(EditorAction::ToggleLoop, "l", false)
+            .conflicts_with(EditorAction::LoopCutPreviewOverlay, "l", false)
             .is_empty()
     );
     assert!(
@@ -472,7 +483,7 @@ fn conflicts_with_ignores_the_action_itself_and_exclusive_contexts() {
     );
     assert!(
         keymap
-            .conflicts_with(EditorAction::ToggleLoop, "hyper-q", false)
+            .conflicts_with(EditorAction::ToggleOverlay, "hyper-q", false)
             .is_empty()
     );
 }
@@ -499,14 +510,14 @@ fn conflicts_with_resolves_secondary_per_platform() {
 fn override_creating_a_clash_is_reported_by_conflicts() {
     let mut keymap = Keymap::default();
     keymap
-        .set_override(EditorAction::ToggleOverlay, "l")
+        .set_override(EditorAction::ToggleOverlay, "d")
         .expect("configurable");
 
     let conflicts = keymap.conflicts(false);
     assert_eq!(conflicts.len(), 1);
-    assert_eq!(conflicts[0].first, EditorAction::ToggleLoop);
+    assert_eq!(conflicts[0].first, EditorAction::DeleteSelectedSegment);
     assert_eq!(conflicts[0].second, EditorAction::ToggleOverlay);
-    assert_eq!(Some(conflicts[0].chord.clone()), KeyChord::parse("l"));
+    assert_eq!(Some(conflicts[0].chord.clone()), KeyChord::parse("d"));
 }
 
 // ---- routing: transport / navigation ----------------------------------------------------
@@ -527,7 +538,7 @@ fn hotkey_mapping_covers_transport_navigation_and_workflow_actions() {
         Some(EditorAction::Redo)
     );
     assert_eq!(resolve("secondary-y", WORKSPACE), Some(EditorAction::Redo));
-    assert_eq!(resolve("l", WORKSPACE), Some(EditorAction::ToggleLoop));
+    assert_eq!(resolve("l", WORKSPACE), None);
     assert_eq!(resolve("t", WORKSPACE), Some(EditorAction::ToggleOverlay));
     assert_eq!(
         resolve("secondary-j", WORKSPACE),
@@ -828,8 +839,8 @@ fn helper_cut_preview_overlay_hotkeys_route_only_with_overlay() {
 }
 
 #[test]
-fn cut_preview_l_wins_over_timeline_loop_only_while_overlay_exists() {
-    assert_eq!(resolve("l", WORKSPACE), Some(EditorAction::ToggleLoop));
+fn cut_preview_l_loops_only_while_overlay_exists() {
+    assert_eq!(resolve("l", WORKSPACE), None);
     assert_eq!(
         resolve("l", CUT_PREVIEW),
         Some(EditorAction::LoopCutPreviewOverlay)
@@ -1255,7 +1266,7 @@ fn perform_focus_next_segment_focuses_adjacent_row_from_start_without_seeking() 
 }
 
 #[test]
-fn perform_toggle_overlay_and_loop() {
+fn perform_toggle_overlay_and_selection_loop() {
     let mut doc = three_row_doc();
 
     ok(doc
@@ -1267,27 +1278,31 @@ fn perform_toggle_overlay_and_loop() {
         .expect("doc action"));
     assert!(doc.session().overlay.is_none());
 
-    let project = doc.project().clone();
-    doc.session_mut()
-        .set_loop_range_from_drag(&project, 3.5, 5.1);
-    assert!(doc.session().loop_enabled);
+    set_overlay(&mut doc, "lane-2", 3.5, 5.1);
     ok(doc
-        .perform(EditorAction::ToggleLoop, None)
+        .perform(EditorAction::LoopCutPreviewOverlay, None)
         .expect("doc action"));
-    assert!(!doc.session().loop_enabled);
+    assert_eq!(doc.session().loop_range(), overlay_range(&doc));
     ok(doc
-        .perform(EditorAction::ToggleLoop, None)
+        .perform(EditorAction::LoopCutPreviewOverlay, None)
         .expect("doc action"));
-    assert!(doc.session().loop_enabled);
-    assert!(doc.session().stored_loop_range.is_some());
+    assert_eq!(doc.session().loop_range(), None);
+    assert!(doc.session().overlay.is_some(), "L off keeps the selection");
+}
+
+fn looping_selection_doc() -> studio_editor::edit::EditorDoc {
+    let mut doc = three_row_doc();
+    set_overlay(&mut doc, "lane-2", 3.5, 5.1);
+    ok(doc
+        .perform(EditorAction::LoopCutPreviewOverlay, None)
+        .expect("doc action"));
+    assert!(doc.session().loop_range().is_some());
+    doc
 }
 
 #[test]
-fn escape_closes_create_region_dialog_before_clearing_timeline_loop() {
-    let mut doc = three_row_doc();
-    let project = doc.project().clone();
-    doc.session_mut()
-        .set_loop_range_from_drag(&project, 3.5, 5.1);
+fn escape_closes_create_region_dialog_before_cancelling_looping_selection() {
+    let mut doc = looping_selection_doc();
     doc.open_create_region("lane-2", 12.0, 12.8);
     assert!(doc.create_region().is_some());
 
@@ -1295,23 +1310,18 @@ fn escape_closes_create_region_dialog_before_clearing_timeline_loop() {
         .perform(EditorAction::EscapePressed, None)
         .expect("doc action"));
     assert!(doc.create_region().is_none());
-    assert!(doc.session().loop_enabled);
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 
     ok(doc
         .perform(EditorAction::EscapePressed, None)
         .expect("doc action"));
-    assert!(doc.session().loop_enabled);
-    assert!(doc.session().stored_loop_range.is_none());
-    assert!(!doc.session().loop_strip(&project).has_range);
+    assert!(doc.session().overlay.is_none());
+    assert!(doc.session().loop_range().is_none());
 }
 
 #[test]
-fn escape_closes_find_bar_before_dialogs_and_loop() {
-    let mut doc = three_row_doc();
-    let project = doc.project().clone();
-    doc.session_mut()
-        .set_loop_range_from_drag(&project, 3.5, 5.1);
+fn escape_closes_find_bar_before_dialogs_and_selection() {
+    let mut doc = looping_selection_doc();
     doc.open_create_region("lane-2", 12.0, 12.8);
     let _ = doc.open_find();
 
@@ -1321,7 +1331,7 @@ fn escape_closes_find_bar_before_dialogs_and_loop() {
 
     assert!(!doc.find_state().open);
     assert!(doc.create_region().is_some());
-    assert!(doc.session().stored_loop_range.is_some());
+    assert!(doc.session().loop_range().is_some());
 }
 
 #[test]

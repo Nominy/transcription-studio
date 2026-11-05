@@ -183,25 +183,6 @@ const GLOBAL_CONTROLS: &[CapabilityHotkey] = &[
     },
 ];
 
-const LOOP_CONTROLS: &[CapabilityHotkey] = &[
-    CapabilityHotkey {
-        keys: &["Drag"],
-        description: "Set loop region (on loop bar)",
-    },
-    CapabilityHotkey {
-        keys: &["L"],
-        description: "Toggle loop on/off",
-    },
-    CapabilityHotkey {
-        keys: &["Escape"],
-        description: "Clear loop region",
-    },
-    CapabilityHotkey {
-        keys: &["Double-click"],
-        description: "Clear loop (on loop bar)",
-    },
-];
-
 const OVERLAY_CONTROLS: &[CapabilityHotkey] = &[
     CapabilityHotkey {
         keys: &["T"],
@@ -256,10 +237,6 @@ const RECOVERED_BABEL_HOTKEY_SECTIONS: &[StaticHotkeySection] = &[
     StaticHotkeySection {
         title: "1-Second Overlay",
         rows: OVERLAY_CONTROLS,
-    },
-    StaticHotkeySection {
-        title: "Loop Controls",
-        rows: LOOP_CONTROLS,
     },
     StaticHotkeySection {
         title: "Segment Controls (Click on segment)",
@@ -340,7 +317,7 @@ const TIMELINE_SELECTION_HOTKEYS: &[CapabilityHotkey] = &[
     },
     CapabilityHotkey {
         keys: &["L"],
-        description: "Loop active cut preview range",
+        description: "Loop playback over the cut selection (again: stop; Escape clears)",
     },
 ];
 

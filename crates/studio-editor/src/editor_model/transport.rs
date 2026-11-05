@@ -1,8 +1,5 @@
 use super::{CutOverlay, EditorSession, MIN_LOOP_DURATION_SECONDS};
-use crate::timeline_model::{
-    LoopStripHit, LoopStripView, MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimeRange, build_loop_strip,
-    hit_loop_strip,
-};
+use crate::timeline_model::{MAX_VERTICAL_ZOOM, MIN_VERTICAL_ZOOM, TimeRange};
 use studio_core::Project;
 
 /// Playback speeds offered by the speed control, ascending.
@@ -53,13 +50,18 @@ impl EditorSession {
 
         let mut next_playhead = self.playhead_seconds + elapsed_seconds * self.speed as f64;
 
-        if self.loop_enabled {
-            let loop_duration = self.loop_range.duration_seconds();
-            if loop_duration > MIN_LOOP_DURATION_SECONDS
-                && next_playhead >= self.loop_range.end_seconds
-            {
-                let overflow = next_playhead - self.loop_range.end_seconds;
-                next_playhead = self.loop_range.start_seconds + overflow % loop_duration;
+        if let Some(range) = self.loop_range()
+            && range.duration_seconds() > MIN_LOOP_DURATION_SECONDS
+        {
+            if next_playhead >= range.end_seconds {
+                // Crossing the end keeps the overshoot; a playhead already past the end (the
+                // selection moved or shrank behind it) starts over at the loop start.
+                next_playhead = if self.playhead_seconds < range.end_seconds {
+                    range.start_seconds
+                        + (next_playhead - range.end_seconds) % range.duration_seconds()
+                } else {
+                    range.start_seconds
+                };
             }
         } else if next_playhead >= bounds.end_seconds {
             next_playhead = bounds.end_seconds;
@@ -299,18 +301,6 @@ impl EditorSession {
         self.diff_view = !self.diff_view;
     }
 
-    pub fn toggle_loop(&mut self, project: &Project) {
-        if self.stored_loop_range.is_none() {
-            return;
-        }
-
-        self.loop_enabled = !self.loop_enabled;
-        if let Some(loop_range) = self.stored_loop_range {
-            self.loop_range = loop_range;
-        }
-        self.recenter_viewport(self.timeline_bounds(project));
-    }
-
     /// T: toggles a one-second cut preview at the playhead on the selected row's lane (else the
     /// first visible lane).
     pub fn toggle_overlay(&mut self, project: &Project) {
@@ -323,6 +313,7 @@ impl EditorSession {
         self.overlay = Some(CutOverlay {
             lane_id,
             range: one_second_overlay_range(self.timeline_bounds(project), self.playhead_seconds),
+            looping: false,
         });
     }
 
@@ -354,7 +345,8 @@ impl EditorSession {
     }
 
     /// Places the cut preview on `lane_id` over `start_seconds..end_seconds` (clamped to the
-    /// timeline; an empty range leaves the overlay unchanged).
+    /// timeline; an empty range leaves the overlay unchanged). Editing the selection on its
+    /// lane keeps its loop; a selection on another lane starts unlooped.
     pub fn set_overlay_range(
         &mut self,
         project: &Project,
@@ -370,13 +362,17 @@ impl EditorSession {
         if end_seconds <= start_seconds {
             return;
         }
-
+        let looping = self
+            .overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.lane_id == lane_id && overlay.looping);
         self.overlay = Some(CutOverlay {
             lane_id: lane_id.to_string(),
             range: TimeRange {
                 start_seconds,
                 end_seconds,
             },
+            looping,
         });
     }
 
@@ -388,113 +384,17 @@ impl EditorSession {
             .map(|overlay| overlay.range)
     }
 
+    /// The range playback loops over: the cut selection while it loops (L).
+    pub fn loop_range(&self) -> Option<TimeRange> {
+        self.overlay
+            .as_ref()
+            .filter(|overlay| overlay.looping)
+            .map(|overlay| overlay.range)
+    }
+
     /// Timeline seconds spanned by one CSS px of the lane surface.
     pub fn seconds_per_px(&self) -> f64 {
         self.viewport.duration_seconds() / self.timeline_width_px
-    }
-
-    pub fn loop_strip(&self, _project: &Project) -> LoopStripView {
-        build_loop_strip(
-            self.loop_enabled,
-            self.stored_loop_range,
-            self.viewport,
-            self.playhead_seconds,
-        )
-    }
-
-    pub fn loop_strip_hit(&self, project: &Project, fraction: f32) -> LoopStripHit {
-        hit_loop_strip(self.loop_strip(project), self.viewport, fraction)
-    }
-
-    pub fn set_loop_start(&mut self, _project: &Project, start_seconds: f64) {
-        self.loop_range.start_seconds = finite_seconds(start_seconds)
-            .min(self.loop_range.end_seconds - MIN_LOOP_DURATION_SECONDS);
-        self.stored_loop_range = Some(self.loop_range);
-        self.loop_enabled = true;
-    }
-
-    pub fn set_loop_end(&mut self, _project: &Project, end_seconds: f64) {
-        self.loop_range.end_seconds = finite_seconds(end_seconds)
-            .max(self.loop_range.start_seconds + MIN_LOOP_DURATION_SECONDS);
-        self.stored_loop_range = Some(self.loop_range);
-        self.loop_enabled = true;
-    }
-
-    pub fn move_loop_range(
-        &mut self,
-        project: &Project,
-        original_start_seconds: f64,
-        original_end_seconds: f64,
-        grab_time_seconds: f64,
-        current_time_seconds: f64,
-    ) {
-        let bounds = self.timeline_bounds(project);
-        let duration = (original_end_seconds - original_start_seconds)
-            .max(MIN_LOOP_DURATION_SECONDS)
-            .min(bounds.duration_seconds());
-        let delta = finite_seconds(current_time_seconds) - finite_seconds(grab_time_seconds);
-        let max_start = bounds.end_seconds - duration;
-        let start = (original_start_seconds + delta).clamp(bounds.start_seconds, max_start);
-        self.loop_range = TimeRange {
-            start_seconds: start,
-            end_seconds: start + duration,
-        };
-        self.stored_loop_range = Some(self.loop_range);
-        self.loop_enabled = true;
-    }
-
-    pub fn set_loop_range_from_drag(
-        &mut self,
-        project: &Project,
-        anchor_seconds: f64,
-        current_seconds: f64,
-    ) {
-        let bounds = self.timeline_bounds(project);
-        let anchor = finite_seconds(anchor_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
-        let current =
-            finite_seconds(current_seconds).clamp(bounds.start_seconds, bounds.end_seconds);
-        let start_seconds = anchor.min(current);
-        let end_seconds = anchor.max(current);
-        self.loop_range = TimeRange {
-            start_seconds,
-            end_seconds,
-        };
-        self.stored_loop_range = Some(self.loop_range);
-        self.loop_enabled = true;
-    }
-
-    pub fn clear_loop(&mut self, project: &Project) {
-        self.loop_enabled = true;
-        self.stored_loop_range = None;
-        self.loop_range = self.timeline_bounds(project);
-    }
-}
-
-impl EditorSession {
-    pub(super) fn reconcile_loop_range_with_project(&mut self, project: &Project) {
-        let bounds = self.timeline_bounds(project);
-        let Some(loop_range) = self.stored_loop_range else {
-            self.loop_range = bounds;
-            return;
-        };
-
-        let start = loop_range
-            .start_seconds
-            .clamp(bounds.start_seconds, bounds.end_seconds);
-        let end = loop_range
-            .end_seconds
-            .clamp(bounds.start_seconds, bounds.end_seconds);
-        if end - start < MIN_LOOP_DURATION_SECONDS {
-            self.stored_loop_range = None;
-            self.loop_range = bounds;
-            return;
-        }
-
-        self.loop_range = TimeRange {
-            start_seconds: start,
-            end_seconds: end,
-        };
-        self.stored_loop_range = Some(self.loop_range);
     }
 }
 

@@ -409,12 +409,3 @@ impl TimelineAutoscroll {
         Some(distance * elapsed_seconds * TIMELINE_AUTOSCROLL_SPEED_MULTIPLIER)
     }
 }
-
-/// Drag on the loop strip.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoopStripDrag {
-    pub target: crate::timeline_model::LoopStripHitTarget,
-    pub grab_time_seconds: f64,
-    pub original_start_seconds: f64,
-    pub original_end_seconds: f64,
-}

@@ -31,11 +31,14 @@ const DEFAULT_MIN_PX_PER_SEC: f64 = 200.0;
 const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 
 /// Cut-preview selection (Helper's cut preview): a time range drawn on one lane; S / Shift+S
-/// cut it out of that lane.
+/// cut it out of that lane, L loops playback over it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CutOverlay {
     pub lane_id: String,
     pub range: TimeRange,
+    /// Playback loops over `range` (all lanes) while set; moving or resizing the selection
+    /// keeps looping over the new range.
+    pub looping: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,9 +50,6 @@ pub struct EditorSession {
     pub is_playing: bool,
     pub playhead_seconds: f64,
     pub diff_view: bool,
-    pub loop_enabled: bool,
-    pub loop_range: TimeRange,
-    pub stored_loop_range: Option<TimeRange>,
     pub overlay: Option<CutOverlay>,
     pub viewport: TimeRange,
     pub track_filter: TrackFilter,
@@ -94,9 +94,6 @@ impl EditorSession {
             is_playing: false,
             playhead_seconds: bounds.start_seconds,
             diff_view: false,
-            loop_enabled: false,
-            loop_range: bounds,
-            stored_loop_range: None,
             overlay: None,
             viewport,
             track_filter: TrackFilter::All,

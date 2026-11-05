@@ -129,7 +129,7 @@ pub fn ok(result: Result<Outcome, studio_editor::edit::EditError>) -> Outcome {
     result.unwrap_or_else(|error| panic!("operation failed: {error}"))
 }
 
-/// Places the cut preview on `lane_id` over `start..end`.
+/// Places the (unlooped) cut preview on `lane_id` over `start..end`.
 pub fn set_overlay(doc: &mut EditorDoc, lane_id: &str, start: f64, end: f64) {
     doc.session_mut().overlay = Some(CutOverlay {
         lane_id: lane_id.to_string(),
@@ -137,6 +137,7 @@ pub fn set_overlay(doc: &mut EditorDoc, lane_id: &str, start: f64, end: f64) {
             start_seconds: start,
             end_seconds: end,
         },
+        looping: false,
     });
 }
 

@@ -30,7 +30,6 @@ impl EditorDoc {
             A::FindPrevious => ok(self.find_previous()),
             A::ToggleActiveWarningAssertion => Some(self.toggle_warning_assertion(None)),
             A::DeleteSelectedSegment => Some(self.delete_selected()),
-            A::ToggleLoop => ok(self.toggle_loop()),
             A::ToggleOverlay => {
                 self.toggle_overlay();
                 ok(Outcome::none())
