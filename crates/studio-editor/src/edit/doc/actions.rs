@@ -34,7 +34,7 @@ impl EditorDoc {
                 self.toggle_overlay();
                 ok(Outcome::none())
             }
-            A::SwitchGhostCursorLane => Some(self.switch_ghost_cursor_lane()),
+            A::SwitchGhostCursorLane => Some(self.switch_ghost_cursor_lane(focused_segment)),
             A::CreateRegionSubmit => self
                 .create_region
                 .is_some()

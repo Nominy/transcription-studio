@@ -185,62 +185,79 @@ impl EditorDoc {
             }))
     }
 
-    /// Tab: switches the pending ghost cursor to the next speaker lane with visible rows
-    /// (Helper `toggleGhostCursorLane`): that lane's row under the playhead, else its latest
-    /// started row, else its first row. Playback then keeps the ghost on that lane.
-    pub fn switch_ghost_cursor_lane(&mut self) -> EditResult {
-        let pending = self
+    /// Tab (Helper `toggleGhostCursorLane`): moves the cursor to the next speaker lane with
+    /// visible rows, onto that lane's row for the cursor's time ([`navigate::lane_row_at`]).
+    /// While a row's text editor has focus (`focused_segment`), focus moves there with the
+    /// caret at the text spoken at that time (the playhead, clamped into the focused row).
+    /// Otherwise the pending ghost cursor moves (at the playhead) and playback keeps it on
+    /// that lane.
+    pub fn switch_ghost_cursor_lane(&mut self, focused_segment: Option<&str>) -> EditResult {
+        let ghost = self
             .helper
             .pending
-            .clone()
+            .as_ref()
             .filter(|_| self.helper.focused_segment_id.is_none())
-            .ok_or_else(|| EditError::Unavailable("No ghost cursor to move.".into()))?;
+            .map(|pending| pending.segment_id.as_str());
+        let source_id = focused_segment
+            .or(ghost)
+            .ok_or_else(|| EditError::Unavailable("No cursor to move to another lane.".into()))?;
         let project = self.workflow.project();
         let session = &self.session;
-        let in_lane = |segment: &Segment, lane_id: &str| {
-            segment.lane_id == lane_id && navigate::segment_is_visible(session, segment)
+        let source = project
+            .segment(source_id)
+            .ok_or_else(|| EditError::SegmentNotFound(source_id.to_string()))?;
+        let playhead = session.playhead_seconds;
+        let seconds = match focused_segment {
+            Some(_) => playhead.clamp(source.start_seconds, source.end_seconds),
+            None => playhead,
         };
         let lanes: Vec<&str> = project
             .lanes
             .iter()
             .map(|lane| lane.id.as_str())
             .filter(|lane_id| {
-                project
-                    .segments
-                    .iter()
-                    .any(|segment| in_lane(segment, lane_id))
+                project.segments.iter().any(|segment| {
+                    segment.lane_id == *lane_id && navigate::segment_is_visible(session, segment)
+                })
             })
             .collect();
         if lanes.len() < 2 {
             return Err(EditError::Unavailable(
-                "No other speaker lane for the ghost cursor.".into(),
+                "No other speaker lane to move the cursor to.".into(),
             ));
         }
-        let current = project
-            .segment(&pending.segment_id)
-            .and_then(|segment| lanes.iter().position(|id| *id == segment.lane_id));
+        let current = lanes.iter().position(|id| *id == source.lane_id);
         let lane_id = lanes[current.map_or(0, |index| (index + 1) % lanes.len())];
-        let segment_id = navigate::lane_row_at_playhead(project, session, lane_id)
-            .or_else(|| {
-                project
-                    .segments
-                    .iter()
-                    .filter(|segment| in_lane(segment, lane_id))
-                    .min_by(|l, r| l.start_seconds.total_cmp(&r.start_seconds))
-            })
-            .map(|segment| segment.id.clone())
-            .ok_or_else(|| EditError::Unavailable("No row for the ghost cursor.".into()))?;
+        let target = navigate::lane_row_at(project, session, lane_id, seconds)
+            .ok_or_else(|| EditError::Unavailable("No row to move the cursor to.".into()))?;
+        let caret = focused_segment.map(|_| self.spoken_offset_at(target, seconds, 0));
+        let segment_id = target.id.clone();
+
         self.session
             .select_segment_without_seek(self.workflow.project(), &segment_id);
-        self.sync_pending_restore_to_segment(&segment_id);
-        if let Some(pending) = self.helper.pending.as_mut() {
-            pending.lane_locked = true;
+        let mut outcome = Outcome::none().with(Effect::RevealSegment {
+            segment_id: segment_id.clone(),
+            center: true,
+        });
+        if let Some(caret) = caret {
+            self.helper.focused_segment_id = Some(segment_id.clone());
+            self.helper.pending = None;
+            outcome = outcome.with(self.apply_restore(HelperFocusRestore {
+                segment_id,
+                blur_playhead_seconds: playhead,
+                restore_playhead_seconds: playhead,
+                restore_offset: caret,
+                synthetic: false,
+                lane_locked: false,
+            }));
+        } else {
+            self.sync_pending_restore_to_segment(&segment_id);
+            if let Some(pending) = self.helper.pending.as_mut() {
+                pending.lane_locked = true;
+            }
         }
         self.touch();
-        Ok(Outcome::none().with(Effect::RevealSegment {
-            segment_id,
-            center: true,
-        }))
+        Ok(outcome)
     }
 
     /// Previous/next row with a lint problem (seeks; restarts playback when playing).
@@ -380,13 +397,18 @@ impl EditorDoc {
         })
     }
 
-    /// `char` offset of the row's (draft) text spoken at the playhead: through the lane's word
-    /// timings when they match the text, else proportional (snapped to word starts); never
-    /// before `baseline_offset`. Restore baselines and the playing ghost both use it, so a
+    /// `char` offset of the row's (draft) text spoken at the playhead (see
+    /// [`Self::spoken_offset_at`]). Restore baselines and the playing ghost both use it, so a
     /// baseline never runs ahead of the timed ghost.
     fn spoken_offset(&self, segment: &Segment, baseline_offset: usize) -> usize {
+        self.spoken_offset_at(segment, self.session.playhead_seconds, baseline_offset)
+    }
+
+    /// `char` offset of the row's (draft) text spoken at `seconds`: through the lane's word
+    /// timings when they match the text, else proportional (snapped to word starts); never
+    /// before `baseline_offset`.
+    fn spoken_offset_at(&self, segment: &Segment, seconds: f64, baseline_offset: usize) -> usize {
         let text = self.drafts.text_or(segment);
-        let playhead = self.session.playhead_seconds;
         self.word_timings
             .lane(&segment.lane_id)
             .and_then(|lane| {
@@ -394,13 +416,11 @@ impl EditorDoc {
                     text,
                     lane,
                     crate::timing::TimeRange::new(segment.start_seconds, segment.end_seconds),
-                    playhead,
+                    seconds,
                 )
             })
             .map(|offset| offset.max(baseline_offset).min(text.chars().count()))
-            .unwrap_or_else(|| {
-                proportional_restore_offset(text, segment, playhead, baseline_offset)
-            })
+            .unwrap_or_else(|| proportional_restore_offset(text, segment, seconds, baseline_offset))
     }
 
     /// Marks a row's text editor as focused/unfocused by the user (click into/out of a row).

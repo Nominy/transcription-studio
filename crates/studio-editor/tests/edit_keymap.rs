@@ -582,9 +582,7 @@ fn unparsable_keystroke_resolves_to_nothing() {
 #[test]
 fn hotkey_mapping_preserves_text_input_editing() {
     for focus in [INPUT, TRANSCRIPT_TEXT] {
-        for keystroke in [
-            "space", "right", "left", "q", "d", "shift-1", "tab", "enter",
-        ] {
+        for keystroke in ["space", "right", "left", "q", "d", "shift-1", "enter"] {
             assert_eq!(
                 resolve(keystroke, focus),
                 None,
@@ -620,9 +618,13 @@ fn hotkey_mapping_routes_plain_tab_to_ghost_cursor_lane_switch() {
         resolve("tab", WORKSPACE),
         Some(EditorAction::SwitchGhostCursorLane)
     );
+    assert_eq!(
+        resolve("tab", TRANSCRIPT_TEXT),
+        Some(EditorAction::SwitchGhostCursorLane),
+        "Tab also moves the writing cursor while a row is being edited"
+    );
     assert_eq!(resolve("shift-tab", WORKSPACE), None);
     assert_eq!(resolve("secondary-tab", WORKSPACE), None);
-    assert_eq!(resolve("tab", TRANSCRIPT_TEXT), None);
     assert_eq!(resolve("tab", INPUT), None);
 }
 

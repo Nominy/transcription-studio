@@ -1250,21 +1250,86 @@ fn helper_ghost_cursor_lane_switch_needs_another_visible_lane() {
     ok(doc.switch_speaker_workflow_lane("Speaker 1"));
     play_ghost_from(&mut doc, "annotation-1", 2.0);
 
-    let error = doc.switch_ghost_cursor_lane().unwrap_err();
+    let error = doc.switch_ghost_cursor_lane(None).unwrap_err();
 
     assert!(matches!(error, EditError::Unavailable(_)));
     assert_eq!(pending_segment(&doc), Some("annotation-1"));
 }
 
 #[test]
-fn ghost_cursor_lane_switch_without_pending_restore_is_unavailable() {
+fn ghost_cursor_lane_switch_without_a_cursor_is_unavailable() {
     let mut doc = stable_sample_doc();
     let _ = doc.select_segment_without_seek("annotation-1");
 
-    let error = doc.switch_ghost_cursor_lane().unwrap_err();
+    let error = doc.switch_ghost_cursor_lane(None).unwrap_err();
 
     assert!(matches!(error, EditError::Unavailable(_)));
     assert_eq!(selected(&doc), Some("annotation-1"));
+}
+
+fn focused_caret(outcome: &Outcome) -> Option<(&str, usize)> {
+    outcome.effects.iter().find_map(|effect| match effect {
+        Effect::FocusText { segment_id, caret } => Some((segment_id.as_str(), *caret)),
+        _ => None,
+    })
+}
+
+fn tab_in_text(doc: &mut EditorDoc, segment_id: &str) -> Outcome {
+    doc.set_text_focus(Some(segment_id));
+    ok(doc
+        .perform(EditorAction::SwitchGhostCursorLane, Some(segment_id))
+        .expect("the document handles the lane switch"))
+}
+
+/// annotation-5 (Speaker 1, 65.08–65.41 s) is spoken during annotation-4 (Speaker 2,
+/// 10.93–109.29 s).
+#[test]
+fn tab_while_stopped_moves_the_writing_cursor_to_the_other_lane_at_the_playhead() {
+    let mut doc = stable_sample_doc();
+    set_playhead(&mut doc, 65.2);
+
+    let outcome = tab_in_text(&mut doc, "annotation-5");
+    let (segment_id, caret) = focused_caret(&outcome).expect("focus moves");
+    assert_eq!(segment_id, "annotation-4");
+    let text_len = draft_text(&doc, "annotation-4").chars().count();
+    assert!(
+        caret > 0 && caret < text_len,
+        "the caret lands mid-row, where 65.2 s is spoken (got {caret} of {text_len})"
+    );
+    assert_eq!(
+        doc.helper().focused_segment_id.as_deref(),
+        Some("annotation-4")
+    );
+    assert_eq!(selected(&doc), Some("annotation-4"));
+    assert!(!doc.session().is_playing);
+    assert_eq!(
+        doc.session().playhead_seconds,
+        65.2,
+        "switching never seeks"
+    );
+
+    let outcome = tab_in_text(&mut doc, "annotation-4");
+    assert_eq!(
+        focused_caret(&outcome).map(|(id, _)| id),
+        Some("annotation-5")
+    );
+}
+
+#[test]
+fn tab_in_a_row_away_from_the_playhead_uses_that_row_s_time() {
+    let mut doc = stable_sample_doc();
+    set_playhead(&mut doc, 0.0);
+
+    let outcome = tab_in_text(&mut doc, "annotation-4");
+
+    assert_eq!(
+        focused_caret(&outcome),
+        Some((
+            "annotation-3",
+            draft_text(&doc, "annotation-3").chars().count()
+        )),
+        "from annotation-4's start, Speaker 1's latest started row, caret at its end"
+    );
 }
 
 #[test]

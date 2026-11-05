@@ -132,7 +132,7 @@ pub fn snap_to_word_boundary(text: &str, offset: usize) -> usize {
 /// Row the pending ghost cursor should follow during playback: keep the tracked lane while it
 /// has active speech, else follow any active lane, else park at the latest started row
 /// (tracked lane first). A [`HelperFocusRestore::lane_locked`] ghost stays on its lane (see
-/// [`lane_row_at_playhead`]). `None` when the pending row is still under the playhead.
+/// [`lane_row_at`]). `None` when the pending row is still under the playhead.
 pub fn playback_follow_target(
     project: &Project,
     session: &EditorSession,
@@ -146,7 +146,7 @@ pub fn playback_follow_target(
         return None;
     }
     let target = if pending.lane_locked {
-        lane_row_at_playhead(project, session, &pending_segment.lane_id)
+        lane_row_at(project, session, &pending_segment.lane_id, playhead)
     } else {
         let visible = || {
             project
@@ -170,27 +170,28 @@ pub fn playback_follow_target(
         .filter(|id| *id != pending.segment_id)
 }
 
-/// Visible transcription row of `lane_id` for the playhead: the one under it, else the latest
-/// one already started (Helper `findLaneEntryByPlaybackTime`).
-pub fn lane_row_at_playhead<'a>(
+/// Visible transcription row of `lane_id` for `seconds`: the one under it, else the latest
+/// one already started (Helper `findLaneEntryByPlaybackTime`), else the lane's first row.
+pub fn lane_row_at<'a>(
     project: &'a Project,
     session: &EditorSession,
     lane_id: &str,
+    seconds: f64,
 ) -> Option<&'a Segment> {
-    let playhead = session.playhead_seconds;
     let lane = || {
         project.segments.iter().filter(move |segment| {
             segment.lane_id == lane_id && segment_is_visible(session, segment)
         })
     };
     lane()
-        .filter(|segment| is_active(segment, playhead))
+        .filter(|segment| is_active(segment, seconds))
         .min_by(by_start)
         .or_else(|| {
             lane()
-                .filter(|segment| segment.start_seconds <= playhead)
+                .filter(|segment| segment.start_seconds <= seconds)
                 .max_by(by_end)
         })
+        .or_else(|| lane().min_by(by_start))
 }
 
 fn is_active(segment: &Segment, playhead: f64) -> bool {

@@ -27,6 +27,9 @@ pub enum KeyContext {
     /// Like [`KeyContext::Timeline`], but only while a cut-preview overlay exists; these
     /// bindings take precedence over timeline bindings on the same keystroke.
     CutPreview,
+    /// Wherever [`KeyContext::Timeline`] or [`KeyContext::TranscriptText`] applies (not in
+    /// dialog inputs); those contexts take precedence on the same keystroke.
+    Transcript,
     /// Only while a non-transcript input has focus (add-region dialog fields, find bar,
     /// lane zoom input).
     Dialog,
@@ -38,6 +41,8 @@ impl KeyContext {
         use KeyContext::*;
         match (self, other) {
             (Global, _) | (_, Global) => true,
+            (Transcript, Dialog) | (Dialog, Transcript) => false,
+            (Transcript, _) | (_, Transcript) => true,
             (CutPreview, Timeline) | (Timeline, CutPreview) => false,
             (left, right) => left == right,
         }
@@ -153,7 +158,7 @@ const fn fixed(
 }
 
 use EditorAction as A;
-use KeyContext::{CutPreview, Dialog, Global, Timeline, TranscriptText};
+use KeyContext::{CutPreview, Dialog, Global, Timeline, Transcript, TranscriptText};
 
 const GLOBAL: &str = "Global Controls";
 const TIMELINE: &str = "Timeline";
@@ -241,7 +246,7 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         A::SwitchGhostCursorLane,
         NAV,
         "Switch ghost cursor lane",
-        Timeline,
+        Transcript,
         &["tab"],
     ),
     def(
@@ -821,18 +826,28 @@ impl Keymap {
     }
 
     /// Routes a key press (gpui keystroke string) to an action given the focus.
-    /// Precedence: tag-suggestion keys > focused-input context > cut preview > timeline > global.
+    /// Precedence: tag-suggestion keys > focused-input context > cut preview > timeline >
+    /// transcript > global.
     pub fn resolve(&self, keystroke: &str, focus: KeyFocus, mac: bool) -> Option<EditorAction> {
         let chord = KeyChord::parse(keystroke)?.resolved(mac);
         let contexts: &[KeyContext] = match focus.target {
-            FocusTarget::TranscriptText => &[KeyContext::TranscriptText, KeyContext::Global],
+            FocusTarget::TranscriptText => &[
+                KeyContext::TranscriptText,
+                KeyContext::Transcript,
+                KeyContext::Global,
+            ],
             FocusTarget::Input => &[KeyContext::Dialog, KeyContext::Global],
             FocusTarget::Workspace if focus.cut_preview_active => &[
                 KeyContext::CutPreview,
                 KeyContext::Timeline,
+                KeyContext::Transcript,
                 KeyContext::Global,
             ],
-            FocusTarget::Workspace => &[KeyContext::Timeline, KeyContext::Global],
+            FocusTarget::Workspace => &[
+                KeyContext::Timeline,
+                KeyContext::Transcript,
+                KeyContext::Global,
+            ],
         };
         let matches = |action: &EditorAction| {
             self.bindings(*action)
