@@ -23,8 +23,9 @@ pub const CUT_PREVIEW_HANDLE_HIT_PX: f64 = 12.0;
 /// Pointer travel (CSS px) before an Alt-press draws a cut preview (Helper's
 /// `CUT_PREVIEW_DRAG_THRESHOLD`).
 pub const CUT_PREVIEW_DRAG_THRESHOLD_PX: f64 = 5.0;
-/// Minimum cut-preview overlay length.
-pub const CUT_PREVIEW_MIN_DURATION_SECONDS: f64 = 1.0;
+/// Minimum cut-preview overlay length (Helper's `CUT_PREVIEW_SAFETY_MIN_SECONDS`), so
+/// selections well under a second can be drawn, resized and cut.
+pub const CUT_PREVIEW_MIN_DURATION_SECONDS: f64 = 0.008;
 /// Pointer travel that turns a held middle-click autoscroll into "drag" mode.
 pub const TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION: f32 = 0.004;
 /// Autoscroll distance below which the viewport does not move.
@@ -109,8 +110,8 @@ pub fn merge_neighbor_segment_id(
     .map(|candidate| candidate.id.clone())
 }
 
-/// Cut-preview range spanning `anchor`..`current`, at least 1s (or the whole timeline when
-/// shorter), clamped to `bounds`.
+/// Cut-preview range spanning `anchor`..`current`, at least [`CUT_PREVIEW_MIN_DURATION_SECONDS`]
+/// (or the whole timeline when shorter), clamped to `bounds`.
 pub fn anchored_cut_preview_bounds(
     bounds: TimeRange,
     anchor_seconds: f64,

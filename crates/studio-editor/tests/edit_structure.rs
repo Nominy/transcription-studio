@@ -745,7 +745,7 @@ fn secondary_waveform_body_drag_inside_active_overlay_moves_overlay_without_edit
 }
 
 #[test]
-fn cut_preview_overlay_edge_drag_resizes_with_one_second_floor() {
+fn cut_preview_overlay_edge_drag_resizes_below_a_second() {
     let mut doc = stable_sample_doc();
     let lane_id = doc.project().lanes[0].id.clone();
     set_viewport(&mut doc, 0.0, 10.0);
@@ -767,7 +767,7 @@ fn cut_preview_overlay_edge_drag_resizes_with_one_second_floor() {
 
     let overlay = overlay_range(&doc).unwrap();
     assert!((overlay.start_seconds - 2.6).abs() < 0.001);
-    assert!((overlay.end_seconds - 3.6).abs() < 0.001);
+    assert!((overlay.end_seconds - 2.8).abs() < 0.001);
     assert_eq!(overlay_lane(&doc), Some(lane_id.as_str()));
     assert!(!doc.session().is_dirty);
 }
@@ -861,7 +861,7 @@ fn alt_drag_updates_the_cut_preview_on_every_pointer_move() {
     doc.hover_waveform("lane-1", hit(WaveformHitTarget::RegionBody, Some("a"), 3.0));
     let _ = ok(doc.press_waveform("lane-1"));
     for (time, expected) in [
-        (3.06, (3.0, 4.0)),
+        (3.06, (3.0, 3.06)),
         (4.5, (3.0, 4.5)),
         (5.25, (3.0, 5.25)),
         (1.5, (1.5, 3.0)),

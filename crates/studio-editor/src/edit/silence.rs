@@ -28,8 +28,6 @@ const AUTO_INSERT_SEGMENT_MIN_DURATION_SECONDS: f64 = 0.0015;
 pub const AUTO_INSERT_SEGMENT_MERGE_WINDOW_SECONDS: f64 = 1.0;
 /// Auto-segmentation splits on silences at least this long.
 pub const AUTO_SEGMENT_MIN_SILENCE_SECONDS: f64 = 1.0;
-/// Minimum cut-preview overlay length that can be committed.
-pub const CUT_PREVIEW_MIN_SECONDS: f64 = 1.0;
 
 /// New boundaries for one segment after trimming to audio.
 #[derive(Debug, Clone, PartialEq)]

@@ -3,10 +3,10 @@
 
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome};
 use crate::edit::silence::{
-    AudioTrimPlan, AutoSegmentMergePlan, CUT_PREVIEW_MIN_SECONDS, audio_trim_plan_for_segment,
-    auto_insert_plans_for_caret, auto_segment_merge_plans, auto_segment_split_plans,
-    cut_preview_scroll_target, merge_auto_insert_adjacent_segments, nearest_same_lane_segment,
-    segment_is_silent, visible_transcription_segments,
+    AudioTrimPlan, AutoSegmentMergePlan, audio_trim_plan_for_segment, auto_insert_plans_for_caret,
+    auto_segment_merge_plans, auto_segment_split_plans, cut_preview_scroll_target,
+    merge_auto_insert_adjacent_segments, nearest_same_lane_segment, segment_is_silent,
+    visible_transcription_segments,
 };
 use crate::edit::structure::{
     SplitError, merge_neighbor_segment_id, split_ratio, split_text_by_word_ratio,
@@ -249,17 +249,18 @@ impl EditorDoc {
             .ok_or_else(|| {
                 EditError::Unavailable("Cut preview unavailable: no active overlay range.".into())
             })?;
-        if range.duration_seconds() < CUT_PREVIEW_MIN_SECONDS {
-            return Err(EditError::Unavailable(
-                "Cut preview must be at least 1.00s.".into(),
-            ));
-        }
         let project = self.workflow.project();
-        if !project.segments.iter().any(|segment| {
-            segment.lane_id == lane_id
-                && segment.end_seconds > range.start_seconds
-                && segment.start_seconds < range.end_seconds
-        }) {
+        let affected: Vec<String> = project
+            .segments
+            .iter()
+            .filter(|segment| {
+                segment.lane_id == lane_id
+                    && segment.end_seconds > range.start_seconds
+                    && segment.start_seconds < range.end_seconds
+            })
+            .map(|segment| segment.id.clone())
+            .collect();
+        if affected.is_empty() {
             return Err(EditError::Unavailable(
                 "Cut preview found no overlapping segment on the target lane.".into(),
             ));
@@ -275,16 +276,18 @@ impl EditorDoc {
             .flatten()
             .and_then(|segment| {
                 smart_split_text(
-                    &segment.text,
+                    self.drafts.text_or(segment),
                     self.word_timings.lane(&lane_id),
                     TimeRange::new(segment.start_seconds, segment.end_seconds),
                     (range.start_seconds + range.end_seconds) / 2.0,
                 )
+                .map(|parts| (segment.id.clone(), parts))
             });
         let note = split
             .as_ref()
-            .map_or("", |parts| split_source_note(parts.source));
-        let split_texts = split.map(|parts| (parts.first, parts.second));
+            .map_or("", |(_, parts)| split_source_note(parts.source));
+        let split_source = split.as_ref().map(|(id, _)| id.clone());
+        let split_texts = split.map(|(_, parts)| (parts.first, parts.second));
         self.apply("Cut preview", |workflow| {
             workflow.cut_lane_range(
                 &lane_id,
@@ -293,6 +296,22 @@ impl EditorDoc {
                 split_texts,
             )
         })?;
+        // The cut moved the rows' bounds (and split the source's text): their drafts follow,
+        // keeping text typed into trimmed rows, so nothing is left pending and Undo works.
+        let mut effects = Vec::new();
+        for segment_id in &affected {
+            match self.workflow.project().segment(segment_id).cloned() {
+                Some(segment) if split_source.as_deref() != Some(segment_id.as_str()) => {
+                    if let Some(draft) = self.drafts.get_mut(segment_id) {
+                        draft.replace_times(segment.start_seconds, segment.end_seconds);
+                    }
+                }
+                _ => self.drafts.refresh(self.workflow.project(), segment_id),
+            }
+            effects.push(Effect::DraftChanged {
+                segment_id: segment_id.clone(),
+            });
+        }
         self.mark_dirty();
         self.reconcile(true);
         self.session.overlay = None;
@@ -303,14 +322,13 @@ impl EditorDoc {
             self.lane_label(&lane_id),
             if smart_split { " with smart split" } else { "" }
         );
-        Ok(
-            match cut_preview_scroll_target(self.workflow.project(), &lane_id, range) {
-                Some(target) => self
-                    .select_segment_without_seek(&target)
-                    .with_status(status),
-                None => Outcome::status(status),
-            },
-        )
+        let outcome = match cut_preview_scroll_target(self.workflow.project(), &lane_id, range) {
+            Some(target) => self
+                .select_segment_without_seek(&target)
+                .with_status(status),
+            None => Outcome::status(status),
+        };
+        Ok(effects.into_iter().fold(outcome, Outcome::with))
     }
 
     /// L with an overlay: loops the overlay range (no project edit).
