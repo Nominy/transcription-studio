@@ -1175,64 +1175,93 @@ fn helper_ghost_cursor_pending_target_follows_segment_navigation() {
     );
 }
 
-#[test]
-fn helper_ghost_cursor_row_moves_on_tab_while_paused_and_playing() {
-    let mut doc = stable_sample_doc();
-    let start = segment_start(&doc, "annotation-1");
-    let _ = doc.select_segment_without_seek("annotation-1");
-    set_playhead(&mut doc, start);
+/// Fixture lanes: Speaker 1 rows annotation-1 (1.2–3.4 s) and annotation-3 (5.4–7.2 s);
+/// Speaker 2 rows annotation-2 (3.5–5.1 s) and annotation-4 (10.9 s–).
+fn play_ghost_from(doc: &mut EditorDoc, segment_id: &str, playhead: f64) {
+    let _ = doc.select_segment_without_seek(segment_id);
+    set_playhead(doc, playhead);
     let _ = doc.helper_toggle_playback();
-    let _ = doc.toggle_playback();
-    assert!(!doc.session().is_playing);
+    assert!(doc.session().is_playing);
+    assert_eq!(pending_segment(doc), Some(segment_id));
+}
 
-    let outcome = perform(&mut doc, EditorAction::GhostCursorNext);
-    assert_eq!(pending_segment(&doc), Some("annotation-2"));
+fn play_to(doc: &mut EditorDoc, seconds: f64) {
+    set_playhead(doc, seconds);
+    let _ = doc.tick(0.01);
+}
+
+#[test]
+fn helper_ghost_cursor_tab_switches_lane_and_playback_keeps_it_there() {
+    let mut doc = stable_sample_doc();
+    play_ghost_from(&mut doc, "annotation-1", 2.0);
+
+    let outcome = perform(&mut doc, EditorAction::SwitchGhostCursorLane);
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-2"),
+        "before the other lane speaks, its first row takes the ghost"
+    );
     assert_eq!(selected(&doc), Some("annotation-2"));
     assert!(doc.ghost_cursor("annotation-2").is_some());
     assert!(outcome.has_effect(&Effect::RevealSegment {
         segment_id: "annotation-2".to_string(),
         center: true,
     }));
+    assert!(doc.session().is_playing, "switching lanes keeps playing");
 
-    let _ = doc.toggle_playback();
-    assert!(doc.session().is_playing);
-    let outcome = perform(&mut doc, EditorAction::GhostCursorNext);
-    assert_eq!(pending_segment(&doc), Some("annotation-3"));
-    assert!(
-        doc.session().is_playing,
-        "tab ghost cursor row moves must not interrupt playback"
+    play_to(&mut doc, 6.0);
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-2"),
+        "the switched ghost stays on its lane while the other lane speaks"
     );
-    assert!(!outcome.has_effect(&Effect::StopPlayback));
+    play_to(&mut doc, 11.0);
+    assert_eq!(pending_segment(&doc), Some("annotation-4"));
 
-    let _ = perform(&mut doc, EditorAction::GhostCursorPrevious);
-    assert_eq!(pending_segment(&doc), Some("annotation-2"));
+    let _ = perform(&mut doc, EditorAction::SwitchGhostCursorLane);
+    assert_eq!(
+        pending_segment(&doc),
+        Some("annotation-3"),
+        "back on Speaker 1: its latest row already started"
+    );
 }
 
 #[test]
-fn helper_ghost_cursor_tab_navigation_skips_hidden_lane_rows() {
+fn helper_ghost_cursor_follows_the_speaking_lane_again_after_a_new_ghost() {
     let mut doc = stable_sample_doc();
-    ok(doc.switch_speaker_workflow_lane("Speaker 1"));
-    let start = segment_start(&doc, "annotation-1");
-    let _ = doc.select_segment_without_seek("annotation-1");
-    set_playhead(&mut doc, start);
+    play_ghost_from(&mut doc, "annotation-1", 2.0);
+    let _ = perform(&mut doc, EditorAction::SwitchGhostCursorLane);
     let _ = doc.helper_toggle_playback();
-    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+    assert!(!doc.session().is_playing);
 
-    ok(doc.move_ghost_cursor(1));
+    ok(doc.transcript_escape("annotation-2"));
+    play_to(&mut doc, 6.0);
 
     assert_eq!(
         pending_segment(&doc),
         Some("annotation-3"),
-        "tab skips rows on collapsed/filtered lanes"
+        "the lane switch ends with its ghost"
     );
 }
 
 #[test]
-fn ghost_cursor_move_without_pending_restore_is_unavailable() {
+fn helper_ghost_cursor_lane_switch_needs_another_visible_lane() {
+    let mut doc = stable_sample_doc();
+    ok(doc.switch_speaker_workflow_lane("Speaker 1"));
+    play_ghost_from(&mut doc, "annotation-1", 2.0);
+
+    let error = doc.switch_ghost_cursor_lane().unwrap_err();
+
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(pending_segment(&doc), Some("annotation-1"));
+}
+
+#[test]
+fn ghost_cursor_lane_switch_without_pending_restore_is_unavailable() {
     let mut doc = stable_sample_doc();
     let _ = doc.select_segment_without_seek("annotation-1");
 
-    let error = doc.move_ghost_cursor(1).unwrap_err();
+    let error = doc.switch_ghost_cursor_lane().unwrap_err();
 
     assert!(matches!(error, EditError::Unavailable(_)));
     assert_eq!(selected(&doc), Some("annotation-1"));

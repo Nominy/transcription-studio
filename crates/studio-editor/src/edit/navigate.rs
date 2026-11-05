@@ -19,6 +19,9 @@ pub struct HelperFocusRestore {
     pub restore_offset: usize,
     /// Created without a focused editor (space/escape from the timeline).
     pub synthetic: bool,
+    /// Tab switched the ghost cursor to this row's lane: playback keeps it on that lane
+    /// (Helper's manual ghost projection) instead of following whichever lane speaks.
+    pub lane_locked: bool,
 }
 
 /// Ghost caret shown in an unfocused row while a restore is pending.
@@ -128,49 +131,82 @@ pub fn snap_to_word_boundary(text: &str, offset: usize) -> usize {
 
 /// Row the pending ghost cursor should follow during playback: keep the tracked lane while it
 /// has active speech, else follow any active lane, else park at the latest started row
-/// (tracked lane first). `None` when the pending row is still under the playhead.
+/// (tracked lane first). A [`HelperFocusRestore::lane_locked`] ghost stays on its lane (see
+/// [`lane_row_at_playhead`]). `None` when the pending row is still under the playhead.
 pub fn playback_follow_target(
     project: &Project,
     session: &EditorSession,
-    pending_segment_id: &str,
+    pending: &HelperFocusRestore,
 ) -> Option<String> {
-    let pending = project.segment(pending_segment_id)?;
+    let pending_segment = project.segment(&pending.segment_id)?;
     let playhead = session.playhead_seconds;
     if !playhead.is_finite()
-        || (pending.start_seconds <= playhead && playhead < pending.end_seconds)
+        || (pending_segment.start_seconds <= playhead && playhead < pending_segment.end_seconds)
     {
         return None;
     }
-    let visible = || {
-        project
-            .segments
-            .iter()
-            .filter(|segment| segment_is_visible(session, segment))
+    let target = if pending.lane_locked {
+        lane_row_at_playhead(project, session, &pending_segment.lane_id)
+    } else {
+        let visible = || {
+            project
+                .segments
+                .iter()
+                .filter(|segment| segment_is_visible(session, segment))
+        };
+        let same_lane = |segment: &&Segment| segment.lane_id == pending_segment.lane_id;
+        let active = |segment: &&Segment| is_active(segment, playhead);
+        let started = |segment: &&Segment| segment.start_seconds <= playhead;
+        visible()
+            .filter(same_lane)
+            .filter(active)
+            .min_by(by_start)
+            .or_else(|| visible().filter(active).min_by(by_start))
+            .or_else(|| visible().filter(same_lane).filter(started).max_by(by_end))
+            .or_else(|| visible().filter(started).max_by(by_end))
     };
-    let active =
-        |segment: &&Segment| segment.start_seconds <= playhead && playhead < segment.end_seconds;
-    let by_start = |l: &&Segment, r: &&Segment| {
-        l.start_seconds
-            .total_cmp(&r.start_seconds)
-            .then_with(|| l.id.cmp(&r.id))
-    };
-    let by_end = |l: &&Segment, r: &&Segment| {
-        l.end_seconds
-            .total_cmp(&r.end_seconds)
-            .then_with(|| l.id.cmp(&r.id))
-    };
-    let same_lane = |segment: &&Segment| segment.lane_id == pending.lane_id;
-    let started = |segment: &&Segment| segment.start_seconds <= playhead;
-
-    visible()
-        .filter(same_lane)
-        .filter(active)
-        .min_by(by_start)
-        .or_else(|| visible().filter(active).min_by(by_start))
-        .or_else(|| visible().filter(same_lane).filter(started).max_by(by_end))
-        .or_else(|| visible().filter(started).max_by(by_end))
+    target
         .map(|segment| segment.id.clone())
-        .filter(|id| id != pending_segment_id)
+        .filter(|id| *id != pending.segment_id)
+}
+
+/// Visible transcription row of `lane_id` for the playhead: the one under it, else the latest
+/// one already started (Helper `findLaneEntryByPlaybackTime`).
+pub fn lane_row_at_playhead<'a>(
+    project: &'a Project,
+    session: &EditorSession,
+    lane_id: &str,
+) -> Option<&'a Segment> {
+    let playhead = session.playhead_seconds;
+    let lane = || {
+        project.segments.iter().filter(move |segment| {
+            segment.lane_id == lane_id && segment_is_visible(session, segment)
+        })
+    };
+    lane()
+        .filter(|segment| is_active(segment, playhead))
+        .min_by(by_start)
+        .or_else(|| {
+            lane()
+                .filter(|segment| segment.start_seconds <= playhead)
+                .max_by(by_end)
+        })
+}
+
+fn is_active(segment: &Segment, playhead: f64) -> bool {
+    segment.start_seconds <= playhead && playhead < segment.end_seconds
+}
+
+fn by_start(l: &&Segment, r: &&Segment) -> std::cmp::Ordering {
+    l.start_seconds
+        .total_cmp(&r.start_seconds)
+        .then_with(|| l.id.cmp(&r.id))
+}
+
+fn by_end(l: &&Segment, r: &&Segment) -> std::cmp::Ordering {
+    l.end_seconds
+        .total_cmp(&r.end_seconds)
+        .then_with(|| l.id.cmp(&r.id))
 }
 
 fn normalize_speaker_workflow_label(label: &str) -> String {

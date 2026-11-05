@@ -373,8 +373,8 @@ const CAPABILITY_DESCRIPTORS: &[CapabilityDescriptor] = &[
                 description: "Pause and blur / resume and restore cursor",
             },
             CapabilityHotkey {
-                keys: &["Tab", "/", "Shift", "Tab"],
-                description: "Move ghost cursor to next/previous row",
+                keys: &["Tab"],
+                description: "Switch ghost cursor lane",
             },
         ],
     ),

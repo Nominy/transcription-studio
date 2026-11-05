@@ -32,8 +32,8 @@ impl ActiveKeymap {
             .map(Keymap::from_json)
             .unwrap_or_default();
         cx.set_global(Self(keymap));
-        // gpui-kit's root binds Tab/Shift+Tab to focus traversal; in the editor they are
-        // shortcuts (ghost cursor to next/previous row), so the keys reach the keymap.
+        // gpui-kit's root binds Tab/Shift+Tab to focus traversal, which the editor doesn't
+        // use; unbound, Tab reaches the keymap (switch ghost cursor lane).
         cx.bind_keys([
             KeyBinding::new("tab", NoAction, Some("Root")),
             KeyBinding::new("shift-tab", NoAction, Some("Root")),

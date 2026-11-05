@@ -142,6 +142,7 @@ impl EditorDoc {
             restore_playhead_seconds: playhead,
             restore_offset: 0,
             synthetic: false,
+            lane_locked: false,
         };
         self.helper.focused_segment_id = Some(segment_id.clone());
         self.helper.pending = Some(restore.clone());
@@ -184,45 +185,57 @@ impl EditorDoc {
             }))
     }
 
-    /// Tab/Shift+Tab: moves the pending ghost cursor to the next/previous visible row.
-    pub fn move_ghost_cursor(&mut self, direction: i32) -> EditResult {
+    /// Tab: switches the pending ghost cursor to the next speaker lane with visible rows
+    /// (Helper `toggleGhostCursorLane`): that lane's row under the playhead, else its latest
+    /// started row, else its first row. Playback then keeps the ghost on that lane.
+    pub fn switch_ghost_cursor_lane(&mut self) -> EditResult {
         let pending = self
             .helper
             .pending
             .clone()
             .filter(|_| self.helper.focused_segment_id.is_none())
             .ok_or_else(|| EditError::Unavailable("No ghost cursor to move.".into()))?;
-        let rows = visible_transcription_rows(self.workflow.project(), &self.session);
-        let next = match rows.iter().position(|(id, _)| *id == pending.segment_id) {
-            Some(index) => {
-                let next = step_index(index, direction, rows.len());
-                if next == index {
-                    return Err(EditError::Unavailable(
-                        "Ghost cursor reached transcript edge.".into(),
-                    ));
-                }
-                Some(next)
-            }
-            // The pending row is hidden (its lane was collapsed): jump to the nearest visible
-            // row in the requested direction.
-            None => self
-                .workflow
-                .project()
-                .segment(&pending.segment_id)
-                .and_then(|segment| {
-                    let anchor = segment.start_seconds;
-                    if direction < 0 {
-                        rows.iter().rposition(|(_, start)| *start < anchor)
-                    } else {
-                        rows.iter().position(|(_, start)| *start > anchor)
-                    }
-                }),
+        let project = self.workflow.project();
+        let session = &self.session;
+        let in_lane = |segment: &Segment, lane_id: &str| {
+            segment.lane_id == lane_id && navigate::segment_is_visible(session, segment)
+        };
+        let lanes: Vec<&str> = project
+            .lanes
+            .iter()
+            .map(|lane| lane.id.as_str())
+            .filter(|lane_id| {
+                project
+                    .segments
+                    .iter()
+                    .any(|segment| in_lane(segment, lane_id))
+            })
+            .collect();
+        if lanes.len() < 2 {
+            return Err(EditError::Unavailable(
+                "No other speaker lane for the ghost cursor.".into(),
+            ));
         }
-        .ok_or_else(|| EditError::Unavailable("Ghost cursor reached transcript edge.".into()))?;
-        let segment_id = rows[next].0.clone();
+        let current = project
+            .segment(&pending.segment_id)
+            .and_then(|segment| lanes.iter().position(|id| *id == segment.lane_id));
+        let lane_id = lanes[current.map_or(0, |index| (index + 1) % lanes.len())];
+        let segment_id = navigate::lane_row_at_playhead(project, session, lane_id)
+            .or_else(|| {
+                project
+                    .segments
+                    .iter()
+                    .filter(|segment| in_lane(segment, lane_id))
+                    .min_by(|l, r| l.start_seconds.total_cmp(&r.start_seconds))
+            })
+            .map(|segment| segment.id.clone())
+            .ok_or_else(|| EditError::Unavailable("No row for the ghost cursor.".into()))?;
         self.session
             .select_segment_without_seek(self.workflow.project(), &segment_id);
         self.sync_pending_restore_to_segment(&segment_id);
+        if let Some(pending) = self.helper.pending.as_mut() {
+            pending.lane_locked = true;
+        }
         self.touch();
         Ok(Outcome::none().with(Effect::RevealSegment {
             segment_id,
@@ -506,7 +519,10 @@ impl EditorDoc {
             previous.synthetic,
             Some(previous.blur_playhead_seconds),
         ) {
-            self.helper.pending = Some(restore);
+            self.helper.pending = Some(HelperFocusRestore {
+                lane_locked: previous.lane_locked,
+                ..restore
+            });
             self.helper.focused_segment_id = None;
         }
     }
@@ -519,11 +535,9 @@ impl EditorDoc {
         let Some(pending) = self.helper.pending.as_ref() else {
             return;
         };
-        let Some(target) = navigate::playback_follow_target(
-            self.workflow.project(),
-            &self.session,
-            &pending.segment_id,
-        ) else {
+        let Some(target) =
+            navigate::playback_follow_target(self.workflow.project(), &self.session, pending)
+        else {
             return;
         };
         self.session
@@ -546,6 +560,7 @@ impl EditorDoc {
             restore_playhead_seconds: playhead,
             restore_offset: self.spoken_offset(segment, 0),
             synthetic,
+            lane_locked: false,
         })
     }
 }

@@ -615,15 +615,12 @@ fn secondary_z_is_row_local_undo_inside_transcript_text_and_project_undo_outside
 }
 
 #[test]
-fn hotkey_mapping_routes_plain_tab_to_ghost_cursor_row_navigation() {
+fn hotkey_mapping_routes_plain_tab_to_ghost_cursor_lane_switch() {
     assert_eq!(
         resolve("tab", WORKSPACE),
-        Some(EditorAction::GhostCursorNext)
+        Some(EditorAction::SwitchGhostCursorLane)
     );
-    assert_eq!(
-        resolve("shift-tab", WORKSPACE),
-        Some(EditorAction::GhostCursorPrevious)
-    );
+    assert_eq!(resolve("shift-tab", WORKSPACE), None);
     assert_eq!(resolve("secondary-tab", WORKSPACE), None);
     assert_eq!(resolve("tab", TRANSCRIPT_TEXT), None);
     assert_eq!(resolve("tab", INPUT), None);
@@ -983,7 +980,7 @@ fn tag_suggestion_flag_is_ignored_outside_transcript_text() {
     );
     assert_eq!(
         resolve("tab", workspace_with_flag),
-        Some(EditorAction::GhostCursorNext)
+        Some(EditorAction::SwitchGhostCursorLane)
     );
 }
 
