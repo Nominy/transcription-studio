@@ -17,6 +17,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -73,8 +74,9 @@ const WHEEL_LINE_PIXELS: f32 = 20.0;
 /// width within them.
 const TOOLTIP_MIN_WIDTH: f32 = 160.0;
 const TOOLTIP_MAX_WIDTH: f32 = 420.0;
-/// How far the region tooltip's left end sits left of the pointer (px at 100% zoom).
-const TOOLTIP_POINTER_INSET: f32 = 12.0;
+/// How long the region tooltip outlives the pointer leaving its region, so a slow move
+/// across the lane's bottom edge still reaches it.
+const TOOLTIP_GRACE: Duration = Duration::from_millis(350);
 
 /// Visible lanes (at least one expanded row).
 pub fn visible_lane_rows(doc: &EditorDoc) -> LaneRows {
@@ -197,6 +199,9 @@ pub struct TimelineView {
     /// Lane-local x of the region tooltip's left end: follows the pointer, frozen while the
     /// pointer is over the tooltip.
     tooltip_x: f32,
+    /// The pointer left the tooltip's region: it stays until this instant (the task wakes the
+    /// view to drop it), unless the pointer reaches the tooltip or another region first.
+    tooltip_grace: Option<(Instant, Task<()>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -224,6 +229,7 @@ impl TimelineView {
             tooltip: None,
             tooltip_hovered: false,
             tooltip_x: 0.0,
+            tooltip_grace: None,
             _subscriptions: subscriptions,
         }
     }
@@ -688,24 +694,49 @@ impl TimelineView {
     }
 
     /// Region whose text tooltip shows: the region body under the pointer, else the last
-    /// tooltip while the pointer is over it; none during drags and autoscroll.
-    fn tooltip_target(&self, frame: &Frame) -> Option<(String, String)> {
+    /// tooltip while the pointer is over it or for [`TOOLTIP_GRACE`] after it left the region
+    /// (time to reach the tooltip across the lane's bottom edge at any speed); none during
+    /// drags and autoscroll.
+    fn tooltip_target(
+        &mut self,
+        frame: &Frame,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, String)> {
         if self.capture.is_some() || frame.autoscroll.is_some() || frame.overlay_drag.is_some() {
+            self.tooltip_grace = None;
             return None;
         }
-        match &frame.hover {
-            Some((lane_id, hit)) if hit.target == WaveformHitTarget::RegionBody => hit
-                .region_id
-                .clone()
-                .map(|segment_id| (lane_id.clone(), segment_id)),
-            _ if self.tooltip_hovered => self.tooltip.clone(),
-            _ => None,
+        if let Some((lane_id, hit)) = &frame.hover
+            && hit.target == WaveformHitTarget::RegionBody
+            && let Some(segment_id) = hit.region_id.clone()
+        {
+            self.tooltip_grace = None;
+            return Some((lane_id.clone(), segment_id));
+        }
+        if self.tooltip_hovered {
+            return self.tooltip.clone();
+        }
+        let previous = self.tooltip.clone()?;
+        match self.tooltip_grace {
+            Some((until, _)) if Instant::now() >= until => {
+                self.tooltip_grace = None;
+                None
+            }
+            Some(_) => Some(previous),
+            None => {
+                let timer = cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TOOLTIP_GRACE).await;
+                    this.update(cx, |_, cx| cx.notify()).ok();
+                });
+                self.tooltip_grace = Some((Instant::now() + TOOLTIP_GRACE, timer));
+                Some(previous)
+            }
         }
     }
 
-    /// One-line text tooltip of a region, anchored right under its lane and following the
-    /// pointer horizontally (it stays put once the pointer moves onto it, so it can be
-    /// reached), as wide as the region's visible part within
+    /// One-line text tooltip of a region, anchored right under its lane and centred under the
+    /// pointer within the region's visible edges (it stays put once the pointer leaves the
+    /// region, so it can be reached), as wide as the region's visible part within
     /// [`TOOLTIP_MIN_WIDTH`]..[`TOOLTIP_MAX_WIDTH`]. Clicking it edits the row's text.
     fn region_tooltip(
         &mut self,
@@ -737,12 +768,14 @@ impl TimelineView {
         let tooltip_width =
             (right - left).clamp(TOOLTIP_MIN_WIDTH * scale, TOOLTIP_MAX_WIDTH * scale);
         if !self.tooltip_hovered
-            && let Some((_, hit)) = frame.hover.as_ref().filter(|(lane, _)| lane == lane_id)
+            && let Some((_, hit)) = frame.hover.as_ref().filter(|(lane, hit)| {
+                lane == lane_id && hit.target == WaveformHitTarget::RegionBody
+            })
         {
-            // The pointer sits just inside the tooltip's left end, so moving straight down
-            // lands on it.
             let pointer = x_at(frame.viewport, hit.time_seconds, width);
-            self.tooltip_x = (pointer - TOOLTIP_POINTER_INSET * scale)
+            self.tooltip_x = (pointer - tooltip_width / 2.0)
+                .min(right - tooltip_width)
+                .max(left)
                 .min(width - tooltip_width)
                 .max(0.0);
         }
@@ -1154,7 +1187,7 @@ impl Render for TimelineView {
             .map(|(index, lane)| self.render_lane(index, lane, &frame, cx))
             .collect();
         let tooltip = self
-            .tooltip_target(&frame)
+            .tooltip_target(&frame, cx)
             .and_then(|target| Some((self.region_tooltip(&lanes, &target, &frame, cx)?, target)));
         self.tooltip_hovered &= tooltip.is_some();
         let (tooltip, tooltip_target) = tooltip.unzip();
