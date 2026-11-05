@@ -1,4 +1,5 @@
-//! Pure timeline geometry: time ↔ x mapping, waveform hit testing and scrollbar thumbs.
+//! Pure timeline geometry: time ↔ x mapping, waveform hit testing, scrollbar thumbs and the
+//! cut selection's length chip.
 
 use studio_editor::timeline_model::{TimeRange, WaveformBlock};
 use studio_waveform::{WaveformHit, WaveformHitTarget};
@@ -85,6 +86,43 @@ pub fn hit_test(
     }
 }
 
+/// Cut selection length shown on its chip: hundredths under 10 s (`0.30 s`), tenths under a
+/// minute (`12.5 s`), then `m:ss.s`.
+pub fn selection_length_label(seconds: f64) -> String {
+    let seconds = seconds.max(0.0);
+    if seconds < 9.995 {
+        format!("{seconds:.2} s")
+    } else if seconds < 59.95 {
+        format!("{seconds:.1} s")
+    } else {
+        let tenths = (seconds * 10.0).round() as u64;
+        format!("{}:{:02}.{}", tenths / 600, tenths % 600 / 10, tenths % 10)
+    }
+}
+
+/// Left edge (px) of the cut selection's `chips_width` px chip group, the selection spanning
+/// `x0..x1` over a surface `width` px wide: inside its visible part, `pad` from its left edge,
+/// when the group fits there; else just past its right edge; else just before its left edge;
+/// `None` (hidden) when the group fits nowhere on the surface.
+pub fn selection_chip_left(
+    x0: f32,
+    x1: f32,
+    width: f32,
+    chips_width: f32,
+    pad: f32,
+) -> Option<f32> {
+    let (left, right) = (x0.max(0.0), x1.min(width));
+    if right - left >= chips_width + 2.0 * pad {
+        return Some(left + pad);
+    }
+    let after = x1 + pad;
+    if after >= 0.0 && after + chips_width <= width {
+        return Some(after);
+    }
+    let before = x0 - pad - chips_width;
+    (before >= 0.0 && x0 - pad <= width).then_some(before)
+}
+
 /// A viewport thumb on a track spanning `bounds` (scrollbar, overview window).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Thumb {
@@ -147,7 +185,6 @@ mod tests {
     fn block(id: &str, start: f64, end: f64) -> WaveformBlock {
         WaveformBlock {
             segment_id: id.into(),
-            label: String::new(),
             tooltip: String::new(),
             is_transcription: true,
             start_seconds: start,
@@ -204,5 +241,41 @@ mod tests {
         let grab = thumb.grab_offset(0.8);
         assert!((Thumb::viewport_start_at(bounds, 0.8, grab) - 75.0).abs() < 1e-4);
         assert_eq!(Thumb::for_viewport(bounds, bounds), None);
+    }
+
+    #[test]
+    fn selection_length_label_precision_follows_magnitude() {
+        assert_eq!(selection_length_label(0.3), "0.30 s");
+        assert_eq!(selection_length_label(1.254), "1.25 s");
+        assert_eq!(selection_length_label(9.999), "10.0 s");
+        assert_eq!(selection_length_label(42.34), "42.3 s");
+        assert_eq!(selection_length_label(59.97), "1:00.0");
+        assert_eq!(selection_length_label(125.26), "2:05.3");
+        assert_eq!(selection_length_label(-1.0), "0.00 s");
+    }
+
+    #[test]
+    fn selection_chips_sit_inside_then_after_then_before_the_selection() {
+        // Wide enough: inside, padded from the visible left edge.
+        assert_eq!(
+            selection_chip_left(100.0, 300.0, 1000.0, 80.0, 4.0),
+            Some(104.0)
+        );
+        assert_eq!(
+            selection_chip_left(-50.0, 300.0, 1000.0, 80.0, 4.0),
+            Some(4.0)
+        );
+        // Too narrow: just past the right edge.
+        assert_eq!(
+            selection_chip_left(100.0, 130.0, 1000.0, 80.0, 4.0),
+            Some(134.0)
+        );
+        // No room on the right: just before the left edge.
+        assert_eq!(
+            selection_chip_left(900.0, 950.0, 1000.0, 80.0, 4.0),
+            Some(816.0)
+        );
+        // Room nowhere: hidden.
+        assert_eq!(selection_chip_left(40.0, 70.0, 100.0, 80.0, 4.0), None);
     }
 }

@@ -159,6 +159,31 @@ impl EditorDoc {
         .with(focus))
     }
 
+    /// Click on a timeline region's tooltip: selects the row without seeking and focuses its
+    /// text editor with the caret at the end of its text.
+    pub fn edit_segment_text(&mut self, segment_id: &str) -> EditResult {
+        self.guard("Text editing")?;
+        let draft = self
+            .drafts
+            .get_mut(segment_id)
+            .ok_or_else(|| EditError::NoDraft(segment_id.to_string()))?;
+        let caret = draft.text().chars().count();
+        draft.set_selection(TextSelection::caret(caret));
+        self.session
+            .select_segment_without_seek(self.workflow.project(), segment_id);
+        self.helper.focused_segment_id = Some(segment_id.to_string());
+        self.touch();
+        Ok(Outcome::none()
+            .with(Effect::RevealSegment {
+                segment_id: segment_id.to_string(),
+                center: false,
+            })
+            .with(Effect::FocusText {
+                segment_id: segment_id.to_string(),
+                caret,
+            }))
+    }
+
     /// Tab/Shift+Tab: moves the pending ghost cursor to the next/previous visible row.
     pub fn move_ghost_cursor(&mut self, direction: i32) -> EditResult {
         let pending = self

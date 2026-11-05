@@ -19,5 +19,5 @@ pub use ruler::{
 };
 pub use waveform::{
     LaneWaveform, OverviewLaneWaveformView, OverviewWaveformBlock, OverviewWaveformView,
-    WaveformBlock, WaveformPeakSource, WaveformRenderCacheStats, waveform_region_label,
+    WaveformBlock, WaveformPeakSource, WaveformRenderCacheStats,
 };

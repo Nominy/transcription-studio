@@ -16,7 +16,7 @@ use studio_editor::timeline_model::{
 use studio_editor::transcript_model::format_mm_ss;
 use studio_waveform::{LineFrame, LineView, LineWaveform, WaveformRenderModel, js_round};
 
-use super::geometry::{Thumb, x_at};
+use super::geometry::{Thumb, selection_chip_left, selection_length_label, x_at};
 
 // Sizes below are px at 100% interface zoom; painters multiply them by
 // `crate::zoom::ui_scale(window)`. Positions derived from the surface bounds are not scaled.
@@ -25,7 +25,6 @@ const MAGNIFIER_WIDTH: f32 = 180.0;
 const MAGNIFIER_MAX_HEIGHT: f32 = 150.0;
 const MAGNIFIER_SCALE: f32 = 3.0;
 const MAGNIFIER_INSET: f32 = 6.0;
-const LABEL_SIZE: f32 = 11.;
 const LABEL_LINE: f32 = 15.;
 const TIME_SIZE: f32 = 10.;
 const CHIP_PAD: f32 = 4.0;
@@ -44,10 +43,11 @@ fn shape(text: SharedString, font_size: Pixels, color: Hsla, window: &Window) ->
         .shape_line(text, font_size, &[run], None)
 }
 
-/// Small rounded label (timestamps over the waveform).
+/// Small rounded label (timestamps and cut selection chips over the waveform).
 fn paint_chip(
     line: &ShapedLine,
     origin: Point<Pixels>,
+    border: Hsla,
     palette: Palette,
     scale: f32,
     window: &mut Window,
@@ -62,7 +62,7 @@ fn paint_chip(
         px(3. * scale),
         palette.popover,
         px(1.),
-        palette.grid,
+        border,
         BorderStyle::Solid,
     ));
     let _ = line.paint(
@@ -225,6 +225,7 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
                 paint_chip(
                     &label,
                     point(bounds.left() + px(left), bounds.top() + px(20. * s)),
+                    palette.grid,
                     palette,
                     s,
                     window,
@@ -297,9 +298,9 @@ fn paint_region_fills(
 }
 
 /// What sits over the waveform, for `viewport` drawn across `bounds`: region edges (dashed
-/// outline for annotations), the selection frame, lint/diff bars, labels and the
-/// hovered/selected region's time chips when there is room, and the cut selection (accent
-/// edges and a "Loop" chip while playback loops over it).
+/// outline for annotations), the selection frame, lint/diff bars and the hovered/selected
+/// region's time chips when there is room, and the cut selection (accent edges, its length
+/// chip and a "Loop" chip before it while playback loops over it).
 fn paint_region_decorations(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -360,33 +361,7 @@ fn paint_region_decorations(
             ));
         }
 
-        let visible_left = x0.max(0.0);
-        let visible_width = x1.min(width) - visible_left;
-        if !block.label.is_empty() && visible_width > 36.0 * s {
-            let clip = column(
-                bounds,
-                visible_left + 4.0 * s,
-                x1.min(width) - 3.0 * s,
-                0.0,
-                height,
-            );
-            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                let label = shape(
-                    block.label.clone().into(),
-                    px(LABEL_SIZE * s),
-                    palette.text,
-                    window,
-                );
-                let _ = label.paint(
-                    point(clip.left(), bounds.top() + px(5. * s)),
-                    px(LABEL_LINE * s),
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
-            });
-        }
+        let visible_width = x1.min(width) - x0.max(0.0);
         if (selected || hovered)
             && !scene.collapsed
             && visible_width > 96.0 * s
@@ -403,6 +378,7 @@ fn paint_region_decorations(
                 paint_chip(
                     &start,
                     point(bounds.left() + px(x0 + 4.0 * s), top),
+                    palette.grid,
                     palette,
                     s,
                     window,
@@ -420,6 +396,7 @@ fn paint_region_decorations(
                 paint_chip(
                     &end,
                     point(bounds.left() + px(left), top),
+                    palette.grid,
                     palette,
                     s,
                     window,
@@ -447,19 +424,35 @@ fn paint_region_decorations(
                     color,
                 ));
             }
-            if looping {
-                let label = shape("Loop".into(), px(TIME_SIZE * s), color, window);
-                paint_chip(
-                    &label,
-                    point(
-                        bounds.left() + px(x0.max(0.0) + 4.0 * s),
-                        bounds.top() + px(4. * s),
-                    ),
-                    palette,
-                    s,
-                    window,
-                    cx,
-                );
+            // The length chip (after "Loop" while looping) sits inside the selection when it
+            // fits, else just outside an edge; text stays neutral so red/green both read.
+            let chip_width = |line: &ShapedLine| f32::from(line.width()) + 2.0 * CHIP_PAD * s;
+            let gap = 3.0 * s;
+            let loop_chip = looping.then(|| shape("Loop".into(), px(TIME_SIZE * s), color, window));
+            let length_chip = shape(
+                selection_length_label(range.duration_seconds()).into(),
+                px(TIME_SIZE * s),
+                palette.text,
+                window,
+            );
+            let group_width = loop_chip
+                .as_ref()
+                .map_or(0.0, |chip| chip_width(chip) + gap)
+                + chip_width(&length_chip);
+            if let Some(mut left) = selection_chip_left(x0, x1, width, group_width, 4.0 * s) {
+                let top = bounds.top() + px(4. * s);
+                for chip in loop_chip.iter().chain([&length_chip]) {
+                    paint_chip(
+                        chip,
+                        point(bounds.left() + px(left), top),
+                        color,
+                        palette,
+                        s,
+                        window,
+                        cx,
+                    );
+                    left += chip_width(chip) + gap;
+                }
             }
         }
     }

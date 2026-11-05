@@ -69,7 +69,10 @@ fn lane_height(doc: &EditorDoc) -> Rems {
 
 /// Pixels per wheel "line" (Windows reports three lines per notch).
 const WHEEL_LINE_PIXELS: f32 = 20.0;
-const TOOLTIP_WIDTH: Rems = rems(20.);
+/// Region tooltip width bounds (px at 100% interface zoom): it spans the region's visible
+/// width within them.
+const TOOLTIP_MIN_WIDTH: f32 = 160.0;
+const TOOLTIP_MAX_WIDTH: f32 = 420.0;
 
 /// Visible lanes (at least one expanded row).
 pub fn visible_lane_rows(doc: &EditorDoc) -> LaneRows {
@@ -184,6 +187,11 @@ pub struct TimelineView {
     lane_headers: HashMap<String, Entity<LaneHeader>>,
     /// Interface zoom of the last render; scales hit tolerances (see [`crate::zoom`]).
     scale: f32,
+    /// `(lane id, segment id)` of the region whose text tooltip showed last frame.
+    tooltip: Option<(String, String)>,
+    /// The pointer is over the region tooltip: it stays open after the pointer leaves the
+    /// lane.
+    tooltip_hovered: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -208,6 +216,8 @@ impl TimelineView {
             capture: None,
             lane_headers: HashMap::new(),
             scale: 1.0,
+            tooltip: None,
+            tooltip_hovered: false,
             _subscriptions: subscriptions,
         }
     }
@@ -653,7 +663,8 @@ impl TimelineView {
                 );
             }
             if let Some(hit) = hover.filter(|_| frame.capture_lane.is_none()) {
-                body = body.children(self.region_overlays(lane, hit, frame, lane_bounds, cx));
+                body =
+                    body.children(self.annotation_edit_button(lane, hit, frame, lane_bounds, cx));
             }
         }
 
@@ -670,86 +681,147 @@ impl TimelineView {
         }
     }
 
-    /// Text tooltip for the hovered region and the edit affordance of annotation regions.
-    fn region_overlays(
+    /// Region whose text tooltip shows: the region body under the pointer, else the last
+    /// tooltip while the pointer is over it; none during drags and autoscroll.
+    fn tooltip_target(&self, frame: &Frame) -> Option<(String, String)> {
+        if self.capture.is_some() || frame.autoscroll.is_some() || frame.overlay_drag.is_some() {
+            return None;
+        }
+        match &frame.hover {
+            Some((lane_id, hit)) if hit.target == WaveformHitTarget::RegionBody => hit
+                .region_id
+                .clone()
+                .map(|segment_id| (lane_id.clone(), segment_id)),
+            _ if self.tooltip_hovered => self.tooltip.clone(),
+            _ => None,
+        }
+    }
+
+    /// One-line text tooltip of a region, anchored right under its lane at the region's visible
+    /// left edge (the pointer can move from the region onto it) and as wide as the region's
+    /// visible part within [`TOOLTIP_MIN_WIDTH`]..[`TOOLTIP_MAX_WIDTH`]. Clicking it edits the
+    /// row's text.
+    fn region_tooltip(
+        &self,
+        lanes: &[TimelineLaneView],
+        (lane_id, segment_id): &(String, String),
+        frame: &Frame,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let lane = lanes
+            .iter()
+            .find(|lane| lane.lane_id == *lane_id && !lane.is_collapsed)?;
+        let block = lane
+            .blocks
+            .iter()
+            .find(|block| block.segment_id == *segment_id)?;
+        let text = block
+            .tooltip
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let bounds = self.lane_bounds.get(lane_id)?.get();
+        let width = f32::from(bounds.size.width);
+        let left = x_at(frame.viewport, block.start_seconds, width).max(0.0);
+        let right = x_at(frame.viewport, block.end_seconds, width).min(width);
+        if text.is_empty() || right <= left {
+            return None;
+        }
+        let scale = self.scale;
+        let tooltip_width =
+            (right - left).clamp(TOOLTIP_MIN_WIDTH * scale, TOOLTIP_MAX_WIDTH * scale);
+        let theme = cx.theme();
+        let (hover_bg, hover_fg) = (theme.accent, theme.accent_foreground);
+        let segment_id = segment_id.clone();
+        let tooltip = div()
+            .id("region-tooltip")
+            .w(px(tooltip_width))
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .shadow_md()
+            .text_xs()
+            .text_color(theme.popover_foreground)
+            .truncate()
+            .block_mouse_except_scroll()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.tooltip_hovered != *hovered {
+                    this.tooltip_hovered = *hovered;
+                    cx.notify();
+                }
+            }))
+            .when(!frame.read_only, |tooltip| {
+                tooltip
+                    .cursor_pointer()
+                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tooltip = None;
+                        this.tooltip_hovered = false;
+                        this.model.update(cx, |model, cx| {
+                            model.edit(cx, |doc| doc.edit_segment_text(&segment_id));
+                        });
+                    }))
+            })
+            .child(text);
+        Some(
+            deferred(
+                anchored()
+                    .position(point(bounds.left() + px(left), bounds.bottom()))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(tooltip),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
+    /// "Edit annotation" button of the hovered annotation region.
+    fn annotation_edit_button(
         &self,
         lane: &TimelineLaneView,
         hit: &WaveformHit,
         frame: &Frame,
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(block) = hit
+    ) -> Option<AnyElement> {
+        let block = hit
             .region_id
             .as_deref()
-            .and_then(|id| lane.blocks.iter().find(|block| block.segment_id == id))
-        else {
-            return Vec::new();
-        };
-        let theme = cx.theme();
+            .and_then(|id| lane.blocks.iter().find(|block| block.segment_id == id))?;
         let scale = self.scale;
         let width = f32::from(bounds.size.width);
-        let mut overlays = Vec::new();
-        let pointer_x = x_at(frame.viewport, hit.time_seconds, width);
-        let text = block.tooltip.trim();
-        if hit.target == WaveformHitTarget::RegionBody && !text.is_empty() && width > 0.0 {
-            let origin = point(
-                bounds.left() + px(pointer_x + 14.0 * scale),
-                bounds.top() + px(24.0 * scale),
-            );
-            overlays.push(
-                deferred(
-                    anchored()
-                        .position(origin)
-                        .snap_to_window_with_margin(px(8.))
-                        .child(
-                            div()
-                                .w(TOOLTIP_WIDTH)
-                                .px_2()
-                                .py_1()
-                                .rounded(theme.radius)
-                                .border_1()
-                                .border_color(theme.border)
-                                .bg(theme.popover)
-                                .shadow_md()
-                                .text_xs()
-                                .text_color(theme.popover_foreground)
-                                .line_clamp(6)
-                                .child(text.to_string()),
-                        ),
+        if block.is_transcription || frame.read_only || width <= 0.0 {
+            return None;
+        }
+        let right = x_at(frame.viewport, block.end_seconds, width).min(width);
+        let left = x_at(frame.viewport, block.start_seconds, width).max(0.0);
+        if right - left <= 32.0 * scale {
+            return None;
+        }
+        let segment_id = block.segment_id.clone();
+        Some(
+            div()
+                .absolute()
+                .left(px(right - 28.0 * scale))
+                .top(px(6.0 * scale))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new("edit-annotation")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Pencil)
+                        .tooltip("Edit annotation")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.update(cx, |model, cx| {
+                                model.edit(cx, |doc| doc.open_edit_annotation(&segment_id));
+                            });
+                        })),
                 )
-                .with_priority(1)
                 .into_any_element(),
-            );
-        }
-        if !block.is_transcription && !frame.read_only && width > 0.0 {
-            let right = x_at(frame.viewport, block.end_seconds, width).min(width);
-            let left = x_at(frame.viewport, block.start_seconds, width).max(0.0);
-            if right - left > 32.0 * scale {
-                let segment_id = block.segment_id.clone();
-                overlays.push(
-                    div()
-                        .absolute()
-                        .left(px(right - 28.0 * scale))
-                        .top(px(6.0 * scale))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(
-                            Button::new("edit-annotation")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Pencil)
-                                .tooltip("Edit annotation")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.model.update(cx, |model, cx| {
-                                        model.edit(cx, |doc| doc.open_edit_annotation(&segment_id));
-                                    });
-                                })),
-                        )
-                        .into_any_element(),
-                );
-            }
-        }
-        overlays
+        )
     }
 
     fn render_ruler_row(&self, frame: &Frame, cx: &App) -> AnyElement {
@@ -1064,6 +1136,12 @@ impl Render for TimelineView {
             .enumerate()
             .map(|(index, lane)| self.render_lane(index, lane, &frame, cx))
             .collect();
+        let tooltip = self
+            .tooltip_target(&frame)
+            .and_then(|target| Some((self.region_tooltip(&lanes, &target, &frame, cx)?, target)));
+        self.tooltip_hovered &= tooltip.is_some();
+        let (tooltip, tooltip_target) = tooltip.unzip();
+        self.tooltip = tooltip_target;
         let ruler_row = self.render_ruler_row(&frame, cx);
         let scrollbar_row = self.render_scrollbar_row(&frame, cx);
         let capture = self.render_capture(cx);
@@ -1097,6 +1175,7 @@ impl Render for TimelineView {
             )
             .child(scrollbar_row)
             .children(capture)
+            .children(tooltip)
     }
 }
 

@@ -418,7 +418,6 @@ impl WaveformBlockStaticCacheKey {
 #[derive(Clone, Debug)]
 struct WaveformBlockStatic {
     segment_id: String,
-    label: String,
     tooltip: String,
     peaks: Arc<[f32]>,
     peak_source: WaveformPeakSource,
@@ -442,7 +441,6 @@ impl WaveformBlockStatic {
 
         Self {
             segment_id: segment.id.clone(),
-            label: waveform_region_label(&segment.text),
             tooltip: segment.text.clone(),
             peaks,
             peak_source,
@@ -452,7 +450,6 @@ impl WaveformBlockStatic {
     fn synthetic(segment: &Segment) -> Self {
         Self {
             segment_id: segment.id.clone(),
-            label: waveform_region_label(&segment.text),
             tooltip: segment.text.clone(),
             peaks: Arc::<[f32]>::from(waveform_peaks(&segment.id, WAVEFORM_PEAK_COUNT)),
             peak_source: WaveformPeakSource::Synthetic,
@@ -525,7 +522,6 @@ pub enum WaveformPeakSource {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaveformBlock {
     pub segment_id: String,
-    pub label: String,
     pub tooltip: String,
     pub is_transcription: bool,
     pub start_seconds: f64,
@@ -567,7 +563,6 @@ impl WaveformBlock {
 
         Self {
             segment_id: static_block.segment_id,
-            label: static_block.label,
             tooltip: static_block.tooltip,
             is_transcription: TranscriptAnnotationKind::from_segment(segment).is_transcription(),
             start_seconds: segment.start_seconds.min(segment.end_seconds),
@@ -619,18 +614,6 @@ fn clamp_waveform_block_position(position: f64, total_duration_seconds: f64) -> 
     }
 }
 
-pub fn waveform_region_label(text: &str) -> String {
-    const MAX_CHARS: usize = 28;
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= MAX_CHARS {
-        return normalized;
-    }
-
-    let mut label = normalized.chars().take(MAX_CHARS).collect::<String>();
-    label.push_str("...");
-    label
-}
-
 fn waveform_peaks(seed: &str, count: usize) -> Vec<f32> {
     let mut hash = 0u32;
     for byte in seed.bytes() {
@@ -662,7 +645,7 @@ mod tests {
     };
 
     #[test]
-    fn waveform_block_carries_babel_region_label_and_full_tooltip_text() {
+    fn waveform_block_carries_full_tooltip_text() {
         let segment = Segment {
             id: "annotation-1".to_string(),
             source_annotation_id: None,
@@ -685,7 +668,6 @@ mod tests {
             None,
         );
 
-        assert_eq!(block.label, "This is a long transcription...");
         assert_eq!(
             block.tooltip,
             "This is a long transcription region that needs a compact waveform label."
@@ -831,7 +813,6 @@ mod tests {
                 },
                 WaveformBlockStatic {
                     segment_id: segment_id.clone(),
-                    label: segment_id.clone(),
                     tooltip: segment_id,
                     peaks: Arc::from([index as f32]),
                     peak_source: WaveformPeakSource::Audio,

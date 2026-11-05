@@ -1223,3 +1223,59 @@ fn commit_pending_drafts_refuses_invalid_drafts() {
     assert!(matches!(err, EditError::Draft { action: "Save", .. }));
     assert_eq!(text_of(&doc, "annotation-1"), "Здравствуйте.");
 }
+
+// ---- timeline tooltip: edit a row's text ----------------------------------------------------
+
+#[test]
+fn edit_segment_text_selects_row_without_seeking_and_focuses_draft_end() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one"),
+        seg("b", "lane-1", 3.0, 5.0, "two"),
+    ]);
+    doc.select_segment("a");
+    doc.session_mut().playhead_seconds = 1.0;
+    set_text_with_caret(&mut doc, "b", "héllo wörld", 0);
+
+    let outcome = ok(doc.edit_segment_text("b"));
+
+    assert_eq!(doc.session().selected_segment_id.as_deref(), Some("b"));
+    assert_eq!(doc.session().playhead_seconds, 1.0);
+    assert_eq!(doc.helper().focused_segment_id.as_deref(), Some("b"));
+    assert_eq!(
+        doc.draft("b").expect("draft").selection(),
+        TextSelection::caret(11)
+    );
+    assert!(outcome.has_effect(&Effect::RevealSegment {
+        segment_id: "b".to_string(),
+        center: false,
+    }));
+    assert!(outcome.has_effect(&Effect::FocusText {
+        segment_id: "b".to_string(),
+        caret: 11,
+    }));
+}
+
+#[test]
+fn edit_segment_text_refuses_read_only_tasks_and_missing_rows() {
+    let mut read_only = read_only_doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one"),
+        seg("b", "lane-1", 3.0, 5.0, "two"),
+    ]);
+    read_only.select_segment("a");
+    assert!(matches!(
+        read_only.edit_segment_text("b"),
+        Err(EditError::ReadOnly { .. })
+    ));
+    assert_eq!(
+        read_only.session().selected_segment_id.as_deref(),
+        Some("a")
+    );
+    assert_eq!(read_only.helper().focused_segment_id, None);
+
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 2.0, "one")]);
+    assert!(matches!(
+        doc.edit_segment_text("gone"),
+        Err(EditError::NoDraft(id)) if id == "gone"
+    ));
+    assert_eq!(doc.helper().focused_segment_id, None);
+}
