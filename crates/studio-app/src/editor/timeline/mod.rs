@@ -73,6 +73,8 @@ const WHEEL_LINE_PIXELS: f32 = 20.0;
 /// width within them.
 const TOOLTIP_MIN_WIDTH: f32 = 160.0;
 const TOOLTIP_MAX_WIDTH: f32 = 420.0;
+/// How far the region tooltip's left end sits left of the pointer (px at 100% zoom).
+const TOOLTIP_POINTER_INSET: f32 = 12.0;
 
 /// Visible lanes (at least one expanded row).
 pub fn visible_lane_rows(doc: &EditorDoc) -> LaneRows {
@@ -192,6 +194,9 @@ pub struct TimelineView {
     /// The pointer is over the region tooltip: it stays open after the pointer leaves the
     /// lane.
     tooltip_hovered: bool,
+    /// Lane-local x of the region tooltip's left end: follows the pointer, frozen while the
+    /// pointer is over the tooltip.
+    tooltip_x: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -218,6 +223,7 @@ impl TimelineView {
             scale: 1.0,
             tooltip: None,
             tooltip_hovered: false,
+            tooltip_x: 0.0,
             _subscriptions: subscriptions,
         }
     }
@@ -697,12 +703,12 @@ impl TimelineView {
         }
     }
 
-    /// One-line text tooltip of a region, anchored right under its lane at the region's visible
-    /// left edge (the pointer can move from the region onto it) and as wide as the region's
-    /// visible part within [`TOOLTIP_MIN_WIDTH`]..[`TOOLTIP_MAX_WIDTH`]. Clicking it edits the
-    /// row's text.
+    /// One-line text tooltip of a region, anchored right under its lane and following the
+    /// pointer horizontally (it stays put once the pointer moves onto it, so it can be
+    /// reached), as wide as the region's visible part within
+    /// [`TOOLTIP_MIN_WIDTH`]..[`TOOLTIP_MAX_WIDTH`]. Clicking it edits the row's text.
     fn region_tooltip(
-        &self,
+        &mut self,
         lanes: &[TimelineLaneView],
         (lane_id, segment_id): &(String, String),
         frame: &Frame,
@@ -730,6 +736,17 @@ impl TimelineView {
         let scale = self.scale;
         let tooltip_width =
             (right - left).clamp(TOOLTIP_MIN_WIDTH * scale, TOOLTIP_MAX_WIDTH * scale);
+        if !self.tooltip_hovered
+            && let Some((_, hit)) = frame.hover.as_ref().filter(|(lane, _)| lane == lane_id)
+        {
+            // The pointer sits just inside the tooltip's left end, so moving straight down
+            // lands on it.
+            let pointer = x_at(frame.viewport, hit.time_seconds, width);
+            self.tooltip_x = (pointer - TOOLTIP_POINTER_INSET * scale)
+                .min(width - tooltip_width)
+                .max(0.0);
+        }
+        let tooltip_x = self.tooltip_x;
         let theme = cx.theme();
         let (hover_bg, hover_fg) = (theme.accent, theme.accent_foreground);
         let segment_id = segment_id.clone();
@@ -769,7 +786,7 @@ impl TimelineView {
         Some(
             deferred(
                 anchored()
-                    .position(point(bounds.left() + px(left), bounds.bottom()))
+                    .position(point(bounds.left() + px(tooltip_x), bounds.bottom()))
                     .snap_to_window_with_margin(px(8.))
                     .child(tooltip),
             )
