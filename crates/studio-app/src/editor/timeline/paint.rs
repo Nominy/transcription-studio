@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::*;
+use studio_editor::edit::structure::CUT_PREVIEW_MIN_CUT_SECONDS;
 use studio_editor::linter::LintSeverity;
 use studio_editor::timeline_model::{
     OverviewWaveformBlock, TimeRange, TimelineRulerNotchKind, TimelineRulerView, WaveformBlock,
@@ -124,6 +125,7 @@ pub struct Palette {
     pub hover: Hsla,
     pub accent: Hsla,
     pub danger: Hsla,
+    pub success: Hsla,
     pub warning: Hsla,
     pub info: Hsla,
     pub popover: Hsla,
@@ -430,11 +432,13 @@ fn paint_region_decorations(
     if let Some((range, looping)) = scene.overlay {
         let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
         if x1 > 0.0 && x0 < width {
-            let (color, half_edge) = if looping {
-                (palette.accent, 1.5 * s)
+            // Green: long enough to cut (Babel's 1 s gap rule); red: loop only.
+            let color = if range.duration_seconds() >= CUT_PREVIEW_MIN_CUT_SECONDS {
+                palette.success
             } else {
-                (palette.warning, 1.0)
+                palette.danger
             };
+            let half_edge = if looping { 1.5 * s } else { 1.0 };
             let area = column(bounds, x0, x1, 0.0, height);
             window.paint_quad(fill(area, color.opacity(0.18)));
             for edge in [x0, x1] {

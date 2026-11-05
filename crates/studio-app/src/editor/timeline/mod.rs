@@ -124,6 +124,7 @@ fn palette(cx: &App) -> Palette {
         hover: theme.muted_foreground.opacity(0.6),
         accent: theme.info,
         danger: theme.danger,
+        success: theme.success,
         warning: theme.warning,
         info: theme.info,
         popover: theme.popover,

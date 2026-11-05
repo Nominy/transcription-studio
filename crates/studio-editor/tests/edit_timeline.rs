@@ -196,17 +196,24 @@ fn cut_preview_commit_without_overlay_is_unavailable() {
 }
 
 #[test]
-fn cut_preview_commit_cuts_a_selection_shorter_than_a_second() {
+fn a_selection_shorter_than_a_second_loops_but_refuses_to_cut() {
     let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "one two")]);
     let _ = doc.select_segment("annotation-1");
     set_overlay(&mut doc, "lane-1", 2.0, 2.3);
+    let before = doc.project().segments.clone();
 
-    ok(doc.commit_cut_preview(false));
+    let error = doc.commit_cut_preview(false).unwrap_err();
 
-    let left = doc.project().segment("annotation-1").unwrap();
-    assert_eq!((left.start_seconds, left.end_seconds), (1.0, 2.0));
-    let right = doc.project().segment("annotation-1__studio_1").unwrap();
-    assert_eq!((right.start_seconds, right.end_seconds), (2.3, 6.0));
+    assert!(matches!(error, EditError::Unavailable(_)));
+    assert_eq!(doc.project().segments, before);
+    assert!(doc.session().overlay.is_some());
+    ok(doc.loop_cut_preview());
+    assert!(
+        doc.session()
+            .overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.looping)
+    );
 }
 
 #[test]

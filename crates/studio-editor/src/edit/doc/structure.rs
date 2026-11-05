@@ -9,7 +9,8 @@ use crate::edit::silence::{
     visible_transcription_segments,
 };
 use crate::edit::structure::{
-    SplitError, merge_neighbor_segment_id, split_ratio, split_text_by_word_ratio,
+    CUT_PREVIEW_MIN_CUT_SECONDS, SplitError, merge_neighbor_segment_id, split_ratio,
+    split_text_by_word_ratio,
 };
 use crate::edit::text::join_segment_text;
 use crate::edit::text_placement::{baseline_groups, place_group_text};
@@ -249,6 +250,13 @@ impl EditorDoc {
             .ok_or_else(|| {
                 EditError::Unavailable("Cut preview unavailable: no active overlay range.".into())
             })?;
+        if range.duration_seconds() < CUT_PREVIEW_MIN_CUT_SECONDS {
+            return Err(EditError::Unavailable(
+                "Cut needs a selection of at least 1 second (segments must be 1 second apart); \
+                 shorter selections can still loop (L)."
+                    .into(),
+            ));
+        }
         let project = self.workflow.project();
         let affected: Vec<String> = project
             .segments
