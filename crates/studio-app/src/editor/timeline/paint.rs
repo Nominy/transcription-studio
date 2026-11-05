@@ -161,6 +161,18 @@ pub struct LaneScene {
     pub palette: Palette,
 }
 
+/// The part of `bounds` between `x0..x1` (px from its left edge, clamped to its width) and
+/// `y0..y0 + h` (px from its top), at least 1 px wide.
+fn column(bounds: Bounds<Pixels>, x0: f32, x1: f32, y0: f32, h: f32) -> Bounds<Pixels> {
+    let width = f32::from(bounds.size.width);
+    let x0 = x0.clamp(0.0, width);
+    let x1 = x1.clamp(0.0, width);
+    Bounds::new(
+        point(bounds.left() + px(x0), bounds.top() + px(y0)),
+        size(px((x1 - x0).max(1.0)), px(h)),
+    )
+}
+
 pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window, cx: &mut App) {
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
@@ -170,45 +182,8 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
     let palette = scene.palette;
     let s = crate::zoom::ui_scale(window);
     let x_of = |seconds: f64| x_at(scene.viewport, seconds, width);
-    let column = |x0: f32, x1: f32, y0: f32, h: f32| {
-        let x0 = x0.clamp(0.0, width);
-        let x1 = x1.clamp(0.0, width);
-        Bounds::new(
-            point(bounds.left() + px(x0), bounds.top() + px(y0)),
-            size(px((x1 - x0).max(1.0)), px(h)),
-        )
-    };
 
-    if let Some(range) = scene.loop_range {
-        let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
-        if x1 > 0.0 && x0 < width {
-            window.paint_quad(fill(
-                column(x0, x1, 0.0, height),
-                palette.accent.opacity(0.07),
-            ));
-        }
-    }
-
-    // Region fills sit under the waveform so the peaks stay legible.
-    for block in scene.blocks.iter() {
-        let x0 = x_of(block.start_seconds);
-        let x1 = x_of(block.end_seconds);
-        if x1 < 0.0 || x0 > width {
-            continue;
-        }
-        let id = Some(block.segment_id.as_str());
-        let alpha = if scene.selected.as_deref() == id {
-            0.26
-        } else if scene.hovered.as_deref() == id {
-            0.18
-        } else {
-            0.10
-        };
-        window.paint_quad(fill(
-            column(x0, x1, 0.0, height),
-            scene.color.opacity(alpha),
-        ));
-    }
+    paint_region_fills(window, bounds, scene.viewport, scene);
 
     let playhead_x = x_of(scene.playhead_seconds);
     if !scene.collapsed
@@ -227,6 +202,123 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
         );
     }
 
+    paint_region_decorations(window, bounds, scene.viewport, scene, s, cx);
+
+    if let Some(seconds) = scene.hover_seconds {
+        let x = x_of(seconds);
+        if (0.0..=width).contains(&x) {
+            window.paint_quad(fill(column(bounds, x, x + 1.0, 0.0, height), palette.hover));
+            if !scene.collapsed {
+                let label = shape(
+                    format_mm_ss(seconds).into(),
+                    px(TIME_SIZE * s),
+                    palette.text,
+                    window,
+                );
+                let chip_width = f32::from(label.width()) + 2.0 * CHIP_PAD * s;
+                let left = if x + 6.0 * s + chip_width > width {
+                    x - 6.0 * s - chip_width
+                } else {
+                    x + 6.0 * s
+                };
+                paint_chip(
+                    &label,
+                    point(bounds.left() + px(left), bounds.top() + px(20. * s)),
+                    palette,
+                    s,
+                    window,
+                    cx,
+                );
+            }
+        }
+    }
+
+    if (0.0..=width).contains(&playhead_x) {
+        window.paint_quad(fill(
+            column(bounds, playhead_x - 0.75, playhead_x + 0.75, 0.0, height),
+            palette.playhead,
+        ));
+    }
+
+    if let Some(anchor) = scene.autoscroll_anchor {
+        let x = anchor.clamp(0.0, 1.0) * width;
+        window.paint_quad(fill(
+            column(bounds, x, x + 1.0, 0.0, height),
+            palette.accent,
+        ));
+        window.paint_quad(quad(
+            column(bounds, x - 6.0 * s, x + 6.0 * s, 4.0 * s, 12.0 * s),
+            px(6. * s),
+            palette.accent,
+            px(0.),
+            transparent_black(),
+            BorderStyle::Solid,
+        ));
+    }
+
+    if let Some(seconds) = scene.magnifier_seconds
+        && let Some(waveform) = scene.waveform.as_deref()
+    {
+        paint_magnifier(window, bounds, scene, waveform, seconds, s, cx);
+    }
+}
+
+/// What sits under the waveform, so the peaks stay legible: the stored loop and the region
+/// fills (stronger when hovered/selected), for `viewport` drawn across `bounds`.
+fn paint_region_fills(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    viewport: TimeRange,
+    scene: &LaneScene,
+) {
+    let width = f32::from(bounds.size.width);
+    let height = f32::from(bounds.size.height);
+    let x_of = |seconds: f64| x_at(viewport, seconds, width);
+    if let Some(range) = scene.loop_range {
+        let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
+        if x1 > 0.0 && x0 < width {
+            window.paint_quad(fill(
+                column(bounds, x0, x1, 0.0, height),
+                scene.palette.accent.opacity(0.07),
+            ));
+        }
+    }
+    for block in scene.blocks.iter() {
+        let x0 = x_of(block.start_seconds);
+        let x1 = x_of(block.end_seconds);
+        if x1 < 0.0 || x0 > width {
+            continue;
+        }
+        let id = Some(block.segment_id.as_str());
+        let alpha = if scene.selected.as_deref() == id {
+            0.26
+        } else if scene.hovered.as_deref() == id {
+            0.18
+        } else {
+            0.10
+        };
+        window.paint_quad(fill(
+            column(bounds, x0, x1, 0.0, height),
+            scene.color.opacity(alpha),
+        ));
+    }
+}
+
+/// What sits over the waveform, for `viewport` drawn across `bounds`: region edges (dashed
+/// outline for annotations), the selection frame, lint/diff bars, labels and the
+/// hovered/selected region's time chips when there is room, and the cut preview overlay.
+fn paint_region_decorations(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    viewport: TimeRange,
+    scene: &LaneScene,
+    s: f32,
+    cx: &mut App,
+) {
+    let width = f32::from(bounds.size.width);
+    let height = f32::from(bounds.size.height);
+    let palette = scene.palette;
+    let x_of = |seconds: f64| x_at(viewport, seconds, width);
     for block in scene.blocks.iter() {
         let x0 = x_of(block.start_seconds);
         let x1 = x_of(block.end_seconds);
@@ -236,12 +328,12 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
         let id = block.segment_id.as_str();
         let selected = scene.selected.as_deref() == Some(id);
         let hovered = scene.hovered.as_deref() == Some(id);
-        let area = column(x0, x1, 0.0, height);
+        let area = column(bounds, x0, x1, 0.0, height);
         if block.is_transcription {
             for edge in [x0, x1] {
                 if (0.0..=width).contains(&edge) {
                     window.paint_quad(fill(
-                        column(edge - 0.5, edge + 0.5, 0.0, height),
+                        column(bounds, edge - 0.5, edge + 0.5, 0.0, height),
                         scene.color.opacity(0.7),
                     ));
                 }
@@ -266,11 +358,11 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
             _ => None,
         };
         if let Some(color) = lint_color {
-            window.paint_quad(fill(column(x0, x1, 0.0, 3.0 * s), color));
+            window.paint_quad(fill(column(bounds, x0, x1, 0.0, 3.0 * s), color));
         }
         if mark.changed {
             window.paint_quad(fill(
-                column(x0, x1, height - 3.0 * s, 3.0 * s),
+                column(bounds, x0, x1, height - 3.0 * s, 3.0 * s),
                 palette.info,
             ));
         }
@@ -278,7 +370,13 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
         let visible_left = x0.max(0.0);
         let visible_width = x1.min(width) - visible_left;
         if !block.label.is_empty() && visible_width > 36.0 * s {
-            let clip = column(visible_left + 4.0 * s, x1.min(width) - 3.0 * s, 0.0, height);
+            let clip = column(
+                bounds,
+                visible_left + 4.0 * s,
+                x1.min(width) - 3.0 * s,
+                0.0,
+                height,
+            );
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
                 let label = shape(
                     block.label.clone().into(),
@@ -341,74 +439,20 @@ pub fn paint_lane(bounds: Bounds<Pixels>, scene: &LaneScene, window: &mut Window
     if let Some(range) = scene.overlay {
         let (x0, x1) = (x_of(range.start_seconds), x_of(range.end_seconds));
         if x1 > 0.0 && x0 < width {
-            let area = column(x0, x1, 0.0, height);
+            let area = column(bounds, x0, x1, 0.0, height);
             window.paint_quad(fill(area, palette.warning.opacity(0.18)));
             for edge in [x0, x1] {
                 window.paint_quad(fill(
-                    column(edge - 1.0, edge + 1.0, 0.0, height),
+                    column(bounds, edge - 1.0, edge + 1.0, 0.0, height),
                     palette.warning,
                 ));
             }
         }
     }
-
-    if let Some(seconds) = scene.hover_seconds {
-        let x = x_of(seconds);
-        if (0.0..=width).contains(&x) {
-            window.paint_quad(fill(column(x, x + 1.0, 0.0, height), palette.hover));
-            if !scene.collapsed {
-                let label = shape(
-                    format_mm_ss(seconds).into(),
-                    px(TIME_SIZE * s),
-                    palette.text,
-                    window,
-                );
-                let chip_width = f32::from(label.width()) + 2.0 * CHIP_PAD * s;
-                let left = if x + 6.0 * s + chip_width > width {
-                    x - 6.0 * s - chip_width
-                } else {
-                    x + 6.0 * s
-                };
-                paint_chip(
-                    &label,
-                    point(bounds.left() + px(left), bounds.top() + px(20. * s)),
-                    palette,
-                    s,
-                    window,
-                    cx,
-                );
-            }
-        }
-    }
-
-    if (0.0..=width).contains(&playhead_x) {
-        window.paint_quad(fill(
-            column(playhead_x - 0.75, playhead_x + 0.75, 0.0, height),
-            palette.playhead,
-        ));
-    }
-
-    if let Some(anchor) = scene.autoscroll_anchor {
-        let x = anchor.clamp(0.0, 1.0) * width;
-        window.paint_quad(fill(column(x, x + 1.0, 0.0, height), palette.accent));
-        window.paint_quad(quad(
-            column(x - 6.0 * s, x + 6.0 * s, 4.0 * s, 12.0 * s),
-            px(6. * s),
-            palette.accent,
-            px(0.),
-            transparent_black(),
-            BorderStyle::Solid,
-        ));
-    }
-
-    if let Some(seconds) = scene.magnifier_seconds
-        && let Some(waveform) = scene.waveform.as_deref()
-    {
-        paint_magnifier(window, bounds, scene, waveform, seconds, s);
-    }
 }
 
-/// Zoomed inset around the dragged boundary.
+/// Zoomed inset around the dragged boundary: the lane body (regions under and over the
+/// waveform, as in the lane) at `MAGNIFIER_SCALE`× around `seconds`.
 fn paint_magnifier(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -416,6 +460,7 @@ fn paint_magnifier(
     waveform: &LineWaveform,
     seconds: f64,
     scale: f32,
+    cx: &mut App,
 ) {
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
@@ -431,12 +476,13 @@ fn paint_magnifier(
         point(bounds.left() + px(left), bounds.top() + px(inset)),
         size(px(box_width), px(box_height)),
     );
+    let radius = px(6. * scale);
     window.paint_quad(quad(
         area,
-        px(6. * scale),
+        radius,
         scene.palette.popover,
-        px(1.),
-        scene.palette.grid,
+        px(0.),
+        transparent_black(),
         BorderStyle::Solid,
     ));
     let span = scene.viewport.duration_seconds() * f64::from(box_width / MAGNIFIER_SCALE)
@@ -446,6 +492,7 @@ fn paint_magnifier(
         end_seconds: seconds + span / 2.0,
     };
     window.with_content_mask(Some(ContentMask { bounds: area }), |window| {
+        paint_region_fills(window, area, range, scene);
         if let Some(frame) = waveform.frame_uncached(&line_view(window, area, waveform, range)) {
             paint_line(
                 window,
@@ -457,6 +504,7 @@ fn paint_magnifier(
                 scene.color,
             );
         }
+        paint_region_decorations(window, area, range, scene, scale, cx);
         let center = area.center().x;
         window.paint_quad(fill(
             Bounds::new(
@@ -466,6 +514,15 @@ fn paint_magnifier(
             scene.palette.playhead,
         ));
     });
+    // The frame goes on top, so regions running into the box's edges never cover it.
+    window.paint_quad(quad(
+        area,
+        radius,
+        transparent_black(),
+        px(1.),
+        scene.palette.grid,
+        BorderStyle::Solid,
+    ));
 }
 
 /// The wavesurfer view of `range` across `bounds`. Bounds are logical px; at interface zoom

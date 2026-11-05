@@ -586,9 +586,7 @@ impl DenoiseControl {
             .icon(icon)
             .when_some(color, |button, color| button.text_color(color))
             .child(
-                stable_text(label.unwrap_or_default(), ["100%"])
-                    .text_right()
-                    .font_features(tabular_figures()),
+                stable_text(label.unwrap_or_default(), ["100%"]).font_features(tabular_figures()),
             )
             .accessibility_label("Denoise status")
             .tooltip("Denoise status")

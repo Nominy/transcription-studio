@@ -321,17 +321,14 @@ impl TransportStrip {
                         Button::new("drop-claim")
                             .outline()
                             .small()
-                            .child(
-                                stable_text(
-                                    if drop.is_dropping {
-                                        "Dropping..."
-                                    } else {
-                                        "Drop Claim"
-                                    },
-                                    ["Dropping...", "Drop Claim"],
-                                )
-                                .text_center(),
-                            )
+                            .child(stable_text(
+                                if drop.is_dropping {
+                                    "Dropping..."
+                                } else {
+                                    "Drop Claim"
+                                },
+                                ["Dropping...", "Drop Claim"],
+                            ))
                             .accessibility_label("Drop Claim")
                             .tooltip("Drop action for another worker")
                             .loading(drop_pending)
@@ -382,7 +379,7 @@ impl TransportStrip {
                     Button::new("save-progress")
                         .outline()
                         .small()
-                        .child(stable_text(save_label, SAVE_LABELS).text_center())
+                        .child(stable_text(save_label, SAVE_LABELS))
                         .accessibility_label(save_label)
                         .tooltip(save_tooltip)
                         .loading(saving)
@@ -399,17 +396,14 @@ impl TransportStrip {
                     // opens the feedback drawer when that is what blocks).
                     Button::new("submit-review")
                         .small()
-                        .child(
-                            stable_text(
-                                if submit_pending {
-                                    "Submitting..."
-                                } else {
-                                    submit_copy.trigger
-                                },
-                                ["Submitting...", submit_copy.trigger],
-                            )
-                            .text_center(),
-                        )
+                        .child(stable_text(
+                            if submit_pending {
+                                "Submitting..."
+                            } else {
+                                submit_copy.trigger
+                            },
+                            ["Submitting...", submit_copy.trigger],
+                        ))
                         .accessibility_label(submit_copy.trigger)
                         .tooltip(submit_tooltip)
                         .loading(submit_pending)

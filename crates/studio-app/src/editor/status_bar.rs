@@ -123,10 +123,11 @@ impl Render for StatusBar {
             .children(save.map(|(text, color)| div().flex_none().text_color(color).child(text)))
             .children(audio)
             // Fixed slots (widest value, tabular figures): a changing value never moves the
-            // labels to its left.
+            // labels to its left. The cluster is anchored to the bar's right edge, so the
+            // values align right within their slots.
             .child(
                 stable_text(selection, [format!("Segment {total} of {total}")])
-                    .text_right()
+                    .items_end()
                     .font_features(tabular_figures()),
             )
             .child(
@@ -138,7 +139,7 @@ impl Render for StatusBar {
                         (bounds.end_seconds - bounds.start_seconds).max(visible)
                     )],
                 )
-                .text_right()
+                .items_end()
                 .font_features(tabular_figures()),
             )
             .child(
@@ -146,7 +147,7 @@ impl Render for StatusBar {
                     format_speed(session.speed),
                     SPEED_OPTIONS.iter().map(|option| format_speed(*option)),
                 )
-                .text_right()
+                .items_end()
                 .font_features(tabular_figures()),
             )
             .child(

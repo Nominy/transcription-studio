@@ -118,7 +118,10 @@ impl Toolbar {
         // As wide as the widest state, so saving never moves the overview beside it.
         tag.outline()
             .small()
-            .child(stable_text(label, ["Saving…", "Save failed", "Unsaved", "Saved"]).text_center())
+            .child(stable_text(
+                label,
+                ["Saving…", "Save failed", "Unsaved", "Saved"],
+            ))
             .into_any_element()
     }
 }
@@ -199,7 +202,6 @@ impl Render for Toolbar {
                     format_speed(speed),
                     SPEED_OPTIONS.iter().map(|option| format_speed(*option)),
                 )
-                .text_center()
                 .font_features(tabular_figures()),
             )
             .accessibility_label(format_speed(speed))

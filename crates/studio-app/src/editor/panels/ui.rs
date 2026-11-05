@@ -93,12 +93,15 @@ pub fn tabular_figures() -> FontFeatures {
 
 /// `text` laid out at the width of the widest of itself and `variants` (the other values the
 /// label shows), so changing the value never moves its neighbours. The variants are laid out
-/// invisibly at zero height under the shown text; align it with `text_center`/`text_right`.
+/// invisibly at zero height under the shown text. The shown text is centred in the slot;
+/// `items_start`/`items_end` anchor it to an edge instead. (Text alignment cannot do this:
+/// unwrapped text ignores `text_align`.)
 pub fn stable_text(
     text: impl Into<SharedString>,
     variants: impl IntoIterator<Item = impl Into<SharedString>>,
 ) -> Div {
     v_flex()
+        .items_center()
         .whitespace_nowrap()
         .child(div().child(text.into()))
         .children(variants.into_iter().map(|variant| {

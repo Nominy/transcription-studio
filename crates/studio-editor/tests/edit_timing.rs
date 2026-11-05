@@ -161,6 +161,55 @@ fn pausing_focuses_the_timed_ghost_cursor_not_a_proportional_estimate() {
 }
 
 #[test]
+fn repeated_escape_keeps_the_ghost_and_caret_on_the_timed_word() {
+    // "один" is spoken for most of the row, so the time ratio runs far ahead of the speech:
+    // a proportional estimate would sit on "три"/"четыре" while "один" is still spoken.
+    let text = "один два три четыре пять шесть";
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 10.0, text)]);
+    install_timings(
+        &mut doc,
+        "lane-1",
+        &[
+            ("один", 0.0, 8.0),
+            ("два", 8.1, 8.4),
+            ("три", 8.5, 8.8),
+            ("четыре", 8.9, 9.3),
+            ("пять", 9.4, 9.6),
+            ("шесть", 9.7, 9.9),
+        ],
+    );
+    doc.select_segment_without_seek("a");
+    // Space from the timeline starts playback with a ghost cursor at the row start.
+    ok(doc.perform(EditorAction::PlayPause, None).unwrap());
+    for playhead in [1.0, 2.5, 4.0, 5.5, 7.0] {
+        doc.session_mut().playhead_seconds = playhead;
+        let ghost = doc.ghost_cursor("a").unwrap().char_offset;
+        assert!(
+            ghost <= 4,
+            "at {playhead}s the ghost stays on the spoken \"один\", got {ghost}"
+        );
+        // Escape while playing (row blurred): pauses and puts the caret on the ghost.
+        let outcome = ok(doc.perform(EditorAction::EscapePressed, None).unwrap());
+        assert!(!doc.session().is_playing);
+        assert!(outcome.has_effect(&Effect::FocusText {
+            segment_id: "a".to_string(),
+            caret: ghost,
+        }));
+        // Escape in the focused row while paused: blurs, leaves a ghost and plays on.
+        ok(doc
+            .perform(EditorAction::TranscriptEscape, Some("a"))
+            .unwrap());
+        assert!(doc.session().is_playing);
+    }
+    doc.session_mut().playhead_seconds = 8.6;
+    assert_eq!(
+        doc.ghost_cursor("a").unwrap().char_offset,
+        10,
+        "inside \"три\" once it is spoken"
+    );
+}
+
+#[test]
 fn draft_rows_replace_timed_lanes_and_restore_needs_unchanged_structure() {
     let mut doc = doc(vec![
         seg("a", "lane-1", 0.0, 2.0, "old one"),

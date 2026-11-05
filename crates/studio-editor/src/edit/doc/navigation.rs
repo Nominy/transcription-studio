@@ -1,6 +1,8 @@
 //! Selection and transcript navigation, track filter / lane visibility, speaker workflow, and
 //! the helper focus workflow (Space/Escape toggles with caret restore and ghost cursor).
 
+use studio_core::Segment;
+
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome};
 use crate::edit::draft::TextSelection;
 use crate::edit::navigate::{
@@ -294,7 +296,8 @@ impl EditorDoc {
     }
 
     /// Escape inside a row's text editor: pauses when playing (caret stays); otherwise blurs
-    /// the editor, leaves a ghost cursor at the playhead-proportional offset and plays.
+    /// the editor, leaves a ghost cursor at the spoken offset (word timings, else
+    /// playhead-proportional) and plays.
     pub fn transcript_escape(&mut self, segment_id: &str) -> EditResult {
         if self.workflow.project().segment(segment_id).is_none() {
             return Err(EditError::SegmentNotFound(segment_id.to_string()));
@@ -326,34 +329,40 @@ impl EditorDoc {
             return None;
         }
         let segment = self.workflow.project().segment(segment_id)?;
-        let text = self.drafts.text_or(segment);
         let char_offset = if self.session.is_playing {
-            self.word_timings
-                .lane(&segment.lane_id)
-                .and_then(|lane| {
-                    crate::timing::offset_at_time(
-                        text,
-                        lane,
-                        crate::timing::TimeRange::new(segment.start_seconds, segment.end_seconds),
-                        self.session.playhead_seconds,
-                    )
-                })
-                .map(|offset| offset.max(restore.restore_offset).min(text.chars().count()))
-                .unwrap_or_else(|| {
-                    proportional_restore_offset(
-                        text,
-                        segment,
-                        self.session.playhead_seconds,
-                        restore.restore_offset,
-                    )
-                })
+            self.spoken_offset(segment, restore.restore_offset)
         } else {
-            restore.restore_offset.min(text.chars().count())
+            restore
+                .restore_offset
+                .min(self.drafts.text_or(segment).chars().count())
         };
         Some(GhostCursor {
             segment_id: segment_id.to_string(),
             char_offset,
         })
+    }
+
+    /// `char` offset of the row's (draft) text spoken at the playhead: through the lane's word
+    /// timings when they match the text, else proportional (snapped to word starts); never
+    /// before `baseline_offset`. Restore baselines and the playing ghost both use it, so a
+    /// baseline never runs ahead of the timed ghost.
+    fn spoken_offset(&self, segment: &Segment, baseline_offset: usize) -> usize {
+        let text = self.drafts.text_or(segment);
+        let playhead = self.session.playhead_seconds;
+        self.word_timings
+            .lane(&segment.lane_id)
+            .and_then(|lane| {
+                crate::timing::offset_at_time(
+                    text,
+                    lane,
+                    crate::timing::TimeRange::new(segment.start_seconds, segment.end_seconds),
+                    playhead,
+                )
+            })
+            .map(|offset| offset.max(baseline_offset).min(text.chars().count()))
+            .unwrap_or_else(|| {
+                proportional_restore_offset(text, segment, playhead, baseline_offset)
+            })
     }
 
     /// Marks a row's text editor as focused/unfocused by the user (click into/out of a row).
@@ -398,7 +407,7 @@ impl EditorDoc {
     /// Pausing focuses where the ghost cursor is shown — its row (synced to the playhead first,
     /// as the next playback tick would) and offset, timed through word timings when the lane
     /// has them (Helper `getGhostCursorTarget`). Without a shown ghost, the row under the
-    /// playhead gets a proportional offset.
+    /// playhead gets the spoken offset at the playhead.
     fn restore_helper_focus_for_current_playhead(&mut self) -> Result<Effect, String> {
         self.sync_pending_restore_to_playback();
         let project = self.workflow.project();
@@ -497,6 +506,7 @@ impl EditorDoc {
         self.sync_pending_restore_to_segment(&target);
     }
 
+    /// Restore target in `segment_id` at the spoken offset (see [`Self::spoken_offset`]).
     fn restore_for_segment(
         &self,
         segment_id: &str,
@@ -505,12 +515,11 @@ impl EditorDoc {
     ) -> Option<HelperFocusRestore> {
         let segment = self.workflow.project().segment(segment_id)?;
         let playhead = self.session.playhead_seconds;
-        let text = self.drafts.text_or(segment);
         Some(HelperFocusRestore {
             segment_id: segment_id.to_string(),
             blur_playhead_seconds: blur_playhead_seconds.unwrap_or(playhead),
             restore_playhead_seconds: playhead,
-            restore_offset: proportional_restore_offset(text, segment, playhead, 0),
+            restore_offset: self.spoken_offset(segment, 0),
             synthetic,
         })
     }
