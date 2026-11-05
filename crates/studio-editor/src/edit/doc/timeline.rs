@@ -203,8 +203,9 @@ impl EditorDoc {
     }
 
     /// Escape outside text inputs: cancels autoscroll, else closes the find bar / edit
-    /// annotation / add region dialog, else clears a stored loop, else performs the helper
-    /// play/pause toggle (pausing focuses the restored row). App-level dialogs are the UI's.
+    /// annotation / add region dialog, else cancels the cut selection, else clears a stored
+    /// loop, else performs the helper play/pause toggle (pausing focuses the restored row).
+    /// App-level dialogs are the UI's.
     pub fn escape(&mut self) -> Outcome {
         if self.cancel_autoscroll() {
             return Outcome::none();
@@ -214,6 +215,10 @@ impl EditorDoc {
             return Outcome::none();
         }
         if self.edit_annotation.take().is_some() || self.create_region.take().is_some() {
+            return Outcome::none();
+        }
+        if self.session.overlay.take().is_some() {
+            self.pointer.overlay_drag = None;
             return Outcome::none();
         }
         if self.session.stored_loop_range.is_some() {

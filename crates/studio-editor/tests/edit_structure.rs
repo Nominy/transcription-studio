@@ -946,6 +946,19 @@ fn t_opens_the_cut_preview_on_the_selected_rows_lane() {
     assert!(doc.session().overlay.is_none());
 }
 
+#[test]
+fn escape_cancels_the_cut_preview_before_toggling_playback() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.5, 2.0, "one")]);
+    let _ = doc.select_segment("a");
+    doc.toggle_overlay();
+    assert!(doc.session().overlay.is_some());
+
+    let _ = doc.escape();
+
+    assert!(doc.session().overlay.is_none());
+    assert!(!doc.session().is_playing);
+}
+
 // ---- create by drag -------------------------------------------------------------------
 
 #[test]
