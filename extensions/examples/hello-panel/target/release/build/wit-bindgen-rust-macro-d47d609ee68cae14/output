@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=build.rs
+cargo:rustc-env=DEBUG_OUTPUT_DIR=C:\Users\User\Desktop\dev\transcription-studio\extensions\examples\hello-panel\target\release\build\wit-bindgen-rust-macro-d47d609ee68cae14\out

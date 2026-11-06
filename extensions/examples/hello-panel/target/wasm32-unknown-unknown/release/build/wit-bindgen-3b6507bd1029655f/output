@@ -1,0 +1,2 @@
+cargo:rustc-link-lib=static=wit_bindgen_cabi0_46_0
+cargo:rustc-link-search=native=C:\Users\User\Desktop\dev\transcription-studio\extensions\examples\hello-panel\target\wasm32-unknown-unknown\release\build\wit-bindgen-3b6507bd1029655f\out

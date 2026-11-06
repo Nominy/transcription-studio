@@ -6,97 +6,79 @@
 
 # From audio, every word.
 
-**A segment-based transcription editor with audio.** Listen, adjust timing, assign speakers and edit the words in one native desktop workspace. Start with your own recordings, without an account.
+A segment-based transcription editor for Windows: listen, fix timing, assign speakers and edit the text in one native window.
+Local projects need no account; AI, checks and formats are extensions you can switch off.
 
-**English** · [Русский](README.ru.md)
+**English** · [Русский](README.ru.md) · [Website](https://nominy.github.io/exaudio/) · [Get started](docs/getting-started.md) · [Releases](https://github.com/Nominy/exaudio/releases) · [Issues](https://github.com/Nominy/exaudio/issues)
 
-[Website](https://nominy.github.io/exaudio/) · [Get started](docs/getting-started.md) · [Releases](https://github.com/Nominy/exaudio/releases) · [Feedback](https://github.com/Nominy/exaudio/issues)
-
-![Exaudio editing an original synthetic two-speaker demo](site/assets/editor-synthetic.webp)
+![Exaudio editor: a synthetic interview after an AI draft — waveform timeline and 11 segments with speaker and timing](site/assets/editor-interview-draft.webp)
 
 ## Download
 
-| Windows x64 | Download |
+| Windows x64 | Link |
 | --- | --- |
-| Stable installer | [Exaudio-win-Setup.exe](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Setup.exe) |
-| Stable portable archive | [Exaudio-win-Portable.zip](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Portable.zip) |
-| Experimental alpha installer | [Exaudio-alpha-Setup.exe](https://reviewgen.ovh/exaudio/alpha/win-x64/Exaudio-alpha-Setup.exe) |
+| Installer (stable) | [Exaudio-win-Setup.exe](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Setup.exe) |
+| Portable archive (stable) | [Exaudio-win-Portable.zip](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Portable.zip) |
+| Alpha installer (separate feed) | [Exaudio-alpha-Setup.exe](https://reviewgen.ovh/exaudio/alpha/win-x64/Exaudio-alpha-Setup.exe) |
 
-Stable releases use `v*` tags and GitHub Releases; alpha uses a **separate VPS feed**, not the stable release channel. Back up projects before testing alpha. macOS packages are manual alpha only; no stable macOS or Linux binary is offered here. See [distribution and updates](docs/releasing.md).
+Stable releases are `v*` tags on GitHub Releases with a `SHA256SUMS` file. Alpha comes from a separate VPS feed, not the stable update channel; back up projects before testing it. macOS has manual alpha packages only; there is no stable macOS or Linux binary. See [distribution and updates](docs/releasing.md).
 
-**Windows packages are unsigned.** SmartScreen may warn about an unknown publisher. Use the project's Releases for stable downloads and compare the published `SHA256SUMS`. Evaluate the source before running it; do not disable Windows protection.
+**Windows packages are unsigned.** SmartScreen may warn about an unknown publisher. Download only from this project's Releases, compare the `SHA256SUMS` entry, and do not disable Windows protection.
 
-### Requirements
+Requirements: Windows 10/11 x64, an audio output and writable space for projects. Local AI additionally needs WebView2, a WebGPU-capable GPU with current drivers, and separately downloaded models (their own licenses; size, RAM/VRAM and disk depend on the model). Internet is needed for downloads, updates and remote services, not for editing local recordings.
 
-- Windows 10/11, **x64**, an audio output, and writable space for projects and source audio.
-- No Rust toolchain or service account is needed for local editing with a packaged build.
-- Optional local AI on Windows uses **WebView2 and WebGPU**. Compatible GPU/drivers, RAM/VRAM and disk requirements depend on the selected models; there is no universal model-independent minimum.
-- The inference runtime and **model weights download separately**, under their own licenses. Internet access is needed for downloads, updates and online services, not for manual editing of local recordings.
+## Features
 
-## A focused core, a complete toolkit
+- **Segments & speakers.** Each line has a speaker, start and end. Split at the playhead, merge neighbours, trim to audio, rename or add speakers from the row menu.
+- **Timeline & waveform.** One lane per audio file, zoomable waveforms, an overview strip, playback speed, loop, undo/redo. Drag on the waveform to create a segment.
+- **Local AI.** Align words, draft a transcript, fill gaps and denoise — on your GPU through WebView2/WebGPU, or on a remote server. Every result is a draft you review.
+- **Checks.** A Checks column flags empty text, overlaps on the same track and stray spaces, with safe one-click fixes. Extensions add their own rules.
+- **Import / export.** SRT, WebVTT and plain text in and out through the Formats extension (**Commands → Import transcript…** / **Export…**). The native project folder keeps a copy of the audio and every segment.
+- **Extensions.** Commands, panels, checks, formats and modes come from extensions: bundled ones are native Rust, installable ones are sandboxed WASM.
 
-The core is the **segment editor and audio**, not a mandatory linter, AI backend or service integration.
+Start shows one tile per installed mode. **Local** opens audio and projects on this computer without an account. **Babel**, **Babel error review** and **Babel file** are optional modes supplied by the author's Babel integration; they need their own service access and are not needed for Local. Exaudio is not an official Babel product and does not claim Babel endorsement.
 
-- Edit transcript text and segment boundaries alongside audio waveforms and speaker lanes.
-- Seek between segments, change playback speed, find text, undo and redo edits.
-- Open local audio and native projects; save an editable project for later.
-- Import/export **SRT, WebVTT and plain text** through the Formats extension. With an audio project open, use **Commands → Import transcript…** or **Export…**.
-- Add basic checks, AI tools and task-service workflows through extensions.
-- Customize keyboard shortcuts; Windows defaults include `Space` for play/pause outside text inputs, `←` / `→` for segment navigation, `Ctrl+Z` for undo and `Ctrl+F` for find.
+## Quick start
 
-The default build is **batteries included**: Local, Formats, basic checks, Gold AI tools and Babel integration are selected by Cargo features. Included code is not the same as configured service access or downloaded models. A minimal build can omit these features.
+1. Run the installer, or extract the portable archive to a writable folder and start `Exaudio.exe`.
+2. On Start, choose **Local → Open audio…**. Each file becomes a lane; WAV, MP3 and FLAC are good starting points (OGG, M4A, MP4, WebM and MKV containers also open, depending on the codec inside).
+3. Listen and edit: drag on the waveform to add a segment, `S` splits at the playhead, `D` deletes, `Space` plays, `←`/`→` move between segments, `Ctrl+Z`/`Ctrl+Y` undo/redo, `Ctrl+F` finds. Open the shortcuts dialog for the full, rebindable list.
+4. Optional AI: in the AI extension pick **This PC** (install the runtime and models, run the device test) or the remote server, then use **Align words**, **Draft with AI** or **Denoise** and check the result before keeping it.
+5. **Save** the native project (a folder with `project.json` and `audio/`), then **Export…** SRT, WebVTT or TXT when you need a delivery file. Unsaved-work snapshots, settings and extensions live under `%APPDATA%\Exaudio`.
 
-## Choose your mode
+Step by step: [Getting started](docs/getting-started.md).
 
-Start shows one tile per installed mode. Pick a tile; a platform mode asks you to sign in the first time you open it and remembers the account afterwards (manage accounts under **Settings › Advanced › Accounts**).
+## Extensions
 
-| Mode | Purpose | Access |
-| --- | --- | --- |
-| **Local** | Open audio and projects on this computer | No account |
-| **Babel** | Optional first-party Exaudio integration with Babel transcription tasks | Babel account (direct, or relay access provided by your operator) |
-| **Babel error review** | Error review tasks on the same platform | Same Babel account |
-| **Babel file** | Edit an exported Babel task offline | No account |
+Installable extensions are `.exaudio` packages (WebAssembly components) built with the [Rust SDK](sdk/rust/README.md) against the typed [WIT API](wit/exaudio-extension.wit). They contribute commands, panels, checks, formats and modes, and access documents, audio, storage and network hosts only through explicit grants. Bundled native extensions run with the application's privileges.
 
-Modes are add-on contributions and declare the add-ons they require. Keep dependencies enabled while the corresponding mode is open. **Exaudio is not an official Babel product and does not claim Babel endorsement.** Babel is not a prerequisite for Local.
+The public catalog lives in [`Nominy/exaudio-extensions`](https://github.com/Nominy/exaudio-extensions) ([`index.json`](https://raw.githubusercontent.com/Nominy/exaudio-extensions/main/index.json)). Authors keep source and versioned packages in their own repositories; the index lists releases, compatibility, digests and requested permissions. Review the author, source and permissions before installing — a catalog entry is not a security endorsement.
 
-## Extensions and privacy
+## Build from source
 
-Native Rust extensions supply bundled tools. Installable **WebAssembly components** use the [Rust SDK](sdk/rust/README.md) and the typed [WIT API](wit/exaudio-extension.wit) to contribute commands, panels, diagnostics, formats and modes.
-
-The [GitHub marketplace index](https://github.com/Nominy/exaudio-extensions) describes extension releases; extension authors host source and versioned packages in their own GitHub repositories. The index endpoint is [`index.json`](https://raw.githubusercontent.com/Nominy/exaudio-extensions/main/index.json). Inspect the author, source, compatibility and requested permissions before installing: inclusion in an index is not a security endorsement.
-
-WASM document, audio, storage and network-host access require explicit grants. Bundled native code has the application's privileges, not an OS sandbox. Local editing does not require uploading your recording. Remote AI may send audio/text to a provider; Babel and Relay communicate with their services. Review permissions and provider terms before using sensitive material. Local processing does not make remote features offline.
-
-## First project
-
-1. Install Exaudio, or extract the portable archive to a writable folder.
-2. On Start, select **Local → Open audio…**. Each chosen audio file becomes a lane; WAV, MP3 and FLAC are good starting points. You can also open a saved project or restore unsaved work from the same screen.
-3. Listen, create or adjust segments, assign speakers and edit the text. AI is optional: configure its backend and install/test local models before requesting transcription.
-4. Save the native project. Export subtitles or text when needed, but keep the project and original audio as your editable source.
-
-[Step-by-step guide / Пошаговое руководство](docs/getting-started.md)
-
-## Build and contribute
-
-Windows development needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools + Windows SDK, and CMake. Internal crate names keep the `studio-*` prefix; the product and its extension ids are Exaudio.
+Windows needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools with the Windows SDK, and CMake. Internal crates keep the `studio-*` prefix.
 
 ```powershell
-# General-purpose toolkit including AI tools, without Babel
-cargo run -p studio-app --no-default-features --features local,formats,basic-checks,gold --locked
-
-# Local editor without the Babel/AI feature set
-cargo run -p studio-app --no-default-features --features local,formats,basic-checks --locked
-
-# Core shell without bundled modes or tools
-cargo run -p studio-app --no-default-features --locked
+git clone https://github.com/Nominy/exaudio.git
+cd exaudio
+cargo run -p studio-app
 ```
 
-The full default `cargo run -p studio-app --locked` selects all bundled features, including Babel, and builds from a clean clone: the Babel linter's rule data is tracked in `extensions/babel-lint/assets`. Only the parity tooling (`tools/lint-parity`, `tools/waveform-parity`) and the linter parity tests need the private, SHA-pinned Babel data bundle (`tools/babel-data.json`, fetched by authorized maintainers with `powershell -File tools/update-babel-data.ps1 -Fetch`); those tests skip when it is absent. Helper, reviewer/drafting and Babel integration code are first-party developments by the Exaudio author. See [development prerequisites and checks](docs/development.md) for bundle details, contributor workflow and the extension SDK.
+The default build includes Local, Formats, basic checks, the Gold AI tools and the Babel integration, and builds from a clean clone. Feature subsets:
 
-Contributions are welcome: reproducible bug reports, code, extensions, translations and accessibility improvements. Use a synthetic recording in reports; never attach credentials, private tasks or someone else's audio. Discuss substantial changes in an [issue](https://github.com/Nominy/exaudio/issues) first.
+```powershell
+# AI tools, no Babel
+cargo run -p studio-app --no-default-features --features local,formats,basic-checks,gold --locked
+# Local editor only
+cargo run -p studio-app --no-default-features --features local,formats,basic-checks --locked
+```
 
-## License and acknowledgements
+Only the parity tooling and the linter parity tests need the private Babel data bundle (`tools/babel-data.json`); they skip when it is absent. See [development](docs/development.md) for checks, the contributor workflow and the extension SDK.
 
-Exaudio source is [MIT licensed](LICENSE), including its author's first-party extensions. External dependencies, model weights and independently authored extension packages retain their own licenses. Any assets copied verbatim from an upstream service require their own provenance review.
+## Contributing
 
-Built on Rust, GPUI / gpui-kit, Wasmtime and the wider open-source audio ecosystem. The Exaudio wordmark uses outlined Outfit lettering (SIL OFL 1.1), generated by `tools/brand/render.py`. See [acknowledgements and redistribution notes](docs/development.md#licenses-and-acknowledgements).
+Bug reports, code, extensions, translations and accessibility fixes are welcome. Use a synthetic recording in reports and tests; never attach credentials, private tasks or someone else's audio. Discuss substantial changes in an [issue](https://github.com/Nominy/exaudio/issues) first.
+
+## License
+
+[MIT](LICENSE), including the author's first-party extensions. Dependencies, model weights and third-party extension packages keep their own licenses. Built on Rust, GPUI / gpui-kit and Wasmtime; the wordmark uses outlined Outfit lettering (SIL OFL 1.1). See [acknowledgements](docs/development.md#licenses-and-acknowledgements).

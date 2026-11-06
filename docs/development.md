@@ -93,7 +93,7 @@ Open `site/index.html` for a quick static preview. For browser automation that r
 
 Visual acceptance should cover RU/EN, retained language after reload, light/dark themes, 320/375/768/1440 px widths, keyboard-only navigation, visible focus, 200% zoom, reduced motion, blocked local storage and the no-JavaScript Russian page. Check that all download/issue/SDK links resolve once their repositories and releases exist. A visually successful preview does not establish that a release exists.
 
-The layout does not pretend that brand artwork is an application screenshot. Add a real integrated-app capture using the synthetic demo as `site/assets/editor-synthetic.webp`, then insert a `figure.app-screenshot` after the hero in `site/index.html`, with actual image dimensions and bilingual caption/alt text. Do not add an image reference before the file exists. Never show private tasks or credentials.
+Screenshots in `site/assets/*.webp` (`editor-interview-draft`, `start-screen`, `speaker-menu`, `ai-draft-dialog`) are real captures of the app with the synthetic "Interview" demo, cropped below the window title bar and converted with `magick <shot>.png -crop WxH+0+31 +repage -quality 82 <name>.webp` at ≤1600 px wide. `img` elements carry actual dimensions, a Russian `alt` and an English `data-en-alt`. Never show private tasks, credentials or someone else's recording; the README hero image is the same `editor-interview-draft.webp`.
 
 ## Licenses and acknowledgements
 
