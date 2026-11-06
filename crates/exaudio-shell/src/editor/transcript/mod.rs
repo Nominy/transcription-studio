@@ -477,9 +477,9 @@ impl TranscriptView {
             input.focus(window, cx);
         });
         self.model.update(cx, |model, cx| {
-            model.update_doc(cx, |doc| {
+            model.edit(cx, |doc| {
                 doc.set_selection(segment_id, selection);
-                doc.set_text_focus(Some(segment_id));
+                doc.set_text_focus(Some(segment_id))
             });
         });
         cx.notify();
@@ -620,7 +620,7 @@ impl TranscriptView {
             InputEvent::Focus => {
                 self.text_focused = true;
                 self.model.update(cx, |model, cx| {
-                    model.update_doc(cx, |doc| doc.set_text_focus(Some(&segment_id)));
+                    model.edit(cx, |doc| doc.set_text_focus(Some(&segment_id)));
                 });
                 cx.notify();
             }
@@ -631,13 +631,9 @@ impl TranscriptView {
                 }
                 self.text_focused = false;
                 self.text_row = None;
-                // Another grid's editor may already hold the doc's text focus.
+                // Enter and clicks elsewhere land here: the row's typed text commits.
                 self.model.update(cx, |model, cx| {
-                    model.update_doc(cx, |doc| {
-                        if doc.helper().focused_segment_id.as_deref() == Some(&*segment_id) {
-                            doc.set_text_focus(None);
-                        }
-                    });
+                    model.edit(cx, |doc| doc.blur_text(&segment_id));
                 });
                 cx.notify();
             }
@@ -740,7 +736,8 @@ impl TranscriptView {
         }
 
         match keystroke_string(keystroke).as_str() {
-            // Enter leaves the row (no line breaks in transcript text).
+            // Enter leaves the row (no line breaks in transcript text); the blur that follows
+            // commits its text (`InputEvent::Blur`).
             "enter" | "shift-enter" => {
                 self.blur_text(window, cx);
                 cx.stop_propagation();

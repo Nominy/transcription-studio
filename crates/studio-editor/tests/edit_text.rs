@@ -15,7 +15,8 @@ use studio_editor::edit::time::{
     CommitTimeCellEdit, CommitTimeCellResult, TimeEditError, TimeEditState, TimeField,
     TimeRangeEdit, commit_time_cell_edit,
 };
-use studio_editor::edit::{EditError, EditorDoc, Effect, TextSelection};
+use studio_editor::edit::{EditError, EditorDoc, Effect, Outcome, TextSelection};
+use studio_editor::track_filter::TrackFilter;
 
 #[test]
 fn an_empty_transcript_has_no_core_text_diagnostic() {
@@ -785,6 +786,140 @@ fn commit_pending_drafts_refuses_invalid_drafts() {
 
     assert!(matches!(err, EditError::Draft { action: "Save", .. }));
     assert_eq!(text_of(&doc, "annotation-1"), "Здравствуйте.");
+}
+
+// ---- commit on Enter / blur ---------------------------------------------------------------
+
+#[test]
+fn typing_in_a_focused_row_leaves_the_project_untouched() {
+    let mut doc = stable_sample_doc();
+    ok(doc.set_text_focus(Some("annotation-1")));
+    set_text_with_caret_at_end(&mut doc, "annotation-1", "Typed, not committed.");
+
+    assert_eq!(text_of(&doc, "annotation-1"), "Здравствуйте.");
+    assert_eq!(draft_text(&doc, "annotation-1"), "Typed, not committed.");
+    assert!(doc.has_pending_drafts());
+    assert!(!doc.can_undo());
+    let segment = doc.project().segment("annotation-1").unwrap();
+    assert!(doc.drafts().draft_lint(segment).is_none());
+}
+
+#[test]
+fn enter_commits_the_typed_text_as_one_undo_step_and_drops_the_local_history() {
+    let mut doc = stable_sample_doc();
+    ok(doc.set_text_focus(Some("annotation-1")));
+    set_text_with_caret_at_end(&mut doc, "annotation-1", "Typed then");
+    set_text_with_caret_at_end(&mut doc, "annotation-1", "Typed then committed.");
+
+    let outcome = ok(doc.blur_text("annotation-1"));
+
+    assert_eq!(text_of(&doc, "annotation-1"), "Typed then committed.");
+    assert!(has_draft_changed(&outcome.effects, "annotation-1"));
+    assert!(!doc.has_pending_drafts());
+    assert_eq!(doc.helper().focused_segment_id, None);
+    assert!(!doc.draft("annotation-1").unwrap().can_undo());
+    assert_eq!(ok(doc.commit_pending_drafts("Save")), Outcome::none());
+
+    ok(doc.undo());
+
+    assert_eq!(text_of(&doc, "annotation-1"), "Здравствуйте.");
+    assert_eq!(draft_text(&doc, "annotation-1"), "Здравствуйте.");
+    assert!(!doc.can_undo());
+}
+
+#[test]
+fn blurring_an_unchanged_row_adds_no_undo_step() {
+    let mut doc = stable_sample_doc();
+    ok(doc.set_text_focus(Some("annotation-1")));
+
+    let outcome = ok(doc.set_text_focus(None));
+
+    assert_eq!(outcome, Outcome::none());
+    assert!(!doc.can_undo());
+    assert!(!is_dirty(&doc));
+    assert_eq!(doc.helper().focused_segment_id, None);
+}
+
+#[test]
+fn focusing_another_row_commits_the_row_left_behind() {
+    let mut doc = stable_sample_doc();
+    ok(doc.set_text_focus(Some("annotation-1")));
+    set_text_with_caret_at_end(&mut doc, "annotation-1", "Left behind.");
+
+    ok(doc.set_text_focus(Some("annotation-2")));
+
+    assert_eq!(text_of(&doc, "annotation-1"), "Left behind.");
+    assert_eq!(
+        doc.helper().focused_segment_id.as_deref(),
+        Some("annotation-2")
+    );
+    assert!(!doc.has_pending_drafts());
+}
+
+#[test]
+fn helper_focus_moves_commit_the_row_left_behind() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one"),
+        seg("b", "lane-1", 3.0, 5.0, "two"),
+    ]);
+    doc.select_segment("a");
+    ok(doc.set_text_focus(Some("a")));
+    set_text_with_caret_at_end(&mut doc, "a", "one more");
+
+    let outcome = ok(doc.focus_adjacent_segment(1));
+
+    assert_eq!(text_of(&doc, "a"), "one more");
+    assert!(has_draft_changed(&outcome.effects, "a"));
+    assert_eq!(doc.helper().focused_segment_id.as_deref(), Some("b"));
+
+    set_text_with_caret_at_end(&mut doc, "b", "two more");
+    ok(doc.edit_segment_text("a"));
+
+    assert_eq!(text_of(&doc, "b"), "two more");
+    assert_eq!(doc.helper().focused_segment_id.as_deref(), Some("a"));
+}
+
+#[test]
+fn escape_blur_commits_the_typed_text_before_playing() {
+    let mut doc = stable_sample_doc();
+    ok(doc.set_text_focus(Some("annotation-1")));
+    set_text_with_caret_at_end(&mut doc, "annotation-1", "Escaped.");
+
+    let outcome = ok(doc.transcript_escape("annotation-1"));
+
+    assert!(outcome.has_effect(&Effect::BlurText));
+    assert!(doc.session().is_playing);
+    assert_eq!(text_of(&doc, "annotation-1"), "Escaped.");
+    assert!(!doc.has_pending_drafts());
+}
+
+#[test]
+fn blur_commits_a_row_that_lost_the_helper_focus_while_hidden() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one"),
+        seg("b", "lane-2", 3.0, 5.0, "two"),
+    ]);
+    ok(doc.set_text_focus(Some("a")));
+    set_text_with_caret_at_end(&mut doc, "a", "one hidden");
+    doc.set_track_filter(TrackFilter::lane("lane-2", "Speaker 2"));
+    assert_eq!(doc.helper().focused_segment_id, None);
+
+    ok(doc.blur_text("a"));
+
+    assert_eq!(text_of(&doc, "a"), "one hidden");
+    assert!(!doc.has_pending_drafts());
+}
+
+#[test]
+fn blur_of_a_removed_row_is_a_no_op() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 2.0, "one")]);
+    ok(doc.set_text_focus(Some("a")));
+    doc.select_segment("a");
+    ok(doc.delete_selected());
+
+    let outcome = ok(doc.blur_text("a"));
+
+    assert_eq!(outcome, Outcome::none());
 }
 
 // ---- timeline tooltip: edit a row's text ----------------------------------------------------

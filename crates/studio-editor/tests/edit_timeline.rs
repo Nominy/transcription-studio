@@ -1633,6 +1633,76 @@ fn timeline_defaults_persist_in_project_metadata_and_hydrate_on_reload() {
     );
 }
 
+// ---- initial viewport -----------------------------------------------------------------
+
+#[test]
+fn first_audio_opens_a_segmentless_timeline_on_its_first_thirty_seconds() {
+    let mut doc = doc(Vec::new());
+    let collapsed = doc.session().viewport;
+    assert!(collapsed.end_seconds <= collapsed.start_seconds);
+
+    install_audio(&mut doc, "lane-1", audio_with_speech(116.0, 100, &[]));
+
+    let viewport = doc.session().viewport;
+    assert_close(viewport.start_seconds, 0.0);
+    assert!(
+        (viewport.end_seconds - 30.0).abs() < 0.01,
+        "the view opens on the first 30 s of 116 s ({viewport:?})"
+    );
+    assert!(doc.session().zoom < 1.0);
+
+    // A second track's audio keeps the view.
+    install_audio(&mut doc, "lane-2", audio_with_speech(90.0, 100, &[]));
+    assert_eq!(doc.session().viewport, viewport);
+}
+
+#[test]
+fn first_audio_shorter_than_thirty_seconds_shows_the_whole_file() {
+    let mut doc = doc(Vec::new());
+
+    install_audio(&mut doc, "lane-1", audio_with_speech(12.0, 100, &[]));
+
+    let viewport = doc.session().viewport;
+    assert_close(viewport.start_seconds, 0.0);
+    assert!(
+        (viewport.end_seconds - 12.0).abs() < 0.01,
+        "a 12 s file is shown whole ({viewport:?})"
+    );
+}
+
+#[test]
+fn audio_arriving_after_a_zoom_change_keeps_that_zoom() {
+    let mut doc = doc(Vec::new());
+    // 1000 px / (0.5 × 200 px/s) = 10 s visible.
+    doc.set_zoom(0.5);
+
+    install_audio(&mut doc, "lane-1", audio_with_speech(116.0, 100, &[]));
+
+    let viewport = doc.session().viewport;
+    assert!((doc.session().zoom - 0.5).abs() < f32::EPSILON);
+    assert_close(viewport.start_seconds, 0.0);
+    assert!(
+        (viewport.end_seconds - 10.0).abs() < 0.01,
+        "the user's zoom decides the visible seconds ({viewport:?})"
+    );
+}
+
+#[test]
+fn audio_growing_a_segment_bounded_timeline_shows_the_zoomed_seconds_from_the_start() {
+    let mut doc = doc(vec![seg("a", "lane-1", 1.0, 3.0, "text")]);
+    assert!((doc.session().viewport.end_seconds - 3.0).abs() < 0.001);
+
+    install_audio(&mut doc, "lane-1", audio_with_speech(116.0, 100, &[]));
+
+    let viewport = doc.session().viewport;
+    assert!((doc.session().zoom - 1.0).abs() < f32::EPSILON);
+    assert_close(viewport.start_seconds, 0.0);
+    assert!(
+        (viewport.end_seconds - 5.0).abs() < 0.01,
+        "zoom 1 shows 5 s per 1000 px once the audio extends the bounds ({viewport:?})"
+    );
+}
+
 // ---- Escape precedence ----------------------------------------------------------------
 
 fn stable_doc_with_looping_selection() -> EditorDoc {

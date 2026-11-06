@@ -21,6 +21,10 @@ const DEFAULT_ZOOM: f32 = 1.0;
 const DEFAULT_TIMELINE_WIDTH_PX: f64 = 1_000.0;
 /// Minimum pixels per second at zoom 1: the viewport shows `lane width / (zoom × 200)` seconds.
 const DEFAULT_MIN_PX_PER_SEC: f64 = 200.0;
+/// Seconds a timeline opens on when its first audio gives it an extent (a project without
+/// segments); the whole file when shorter. Segments give an extent up front, so projects with
+/// them open at [`DEFAULT_ZOOM`] like Babel.
+const INITIAL_VIEW_SECONDS: f64 = 30.0;
 const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 
 /// Cut-preview selection (Helper's cut preview): a time range drawn on one lane; S / Shift+S
@@ -290,6 +294,30 @@ impl EditorSession {
         self.lane_waveforms.insert(lane_id.into(), waveform);
     }
 
+    /// Opens the view on a timeline that just gained its extent (its first audio): the first
+    /// [`INITIAL_VIEW_SECONDS`] (the whole file when shorter) at the zoom fitting them into the
+    /// lane width, from the start. A zoom already changed from the default keeps its scale.
+    pub fn show_initial_view(&mut self, project: &Project) {
+        let bounds = self.timeline_bounds(project);
+        if self.zoom == DEFAULT_ZOOM {
+            let visible_seconds = INITIAL_VIEW_SECONDS.min(bounds.duration_seconds());
+            let zoom = self.timeline_width_px / (visible_seconds * DEFAULT_MIN_PX_PER_SEC);
+            self.zoom = (zoom as f32).clamp(0.05, 10.0);
+        }
+        self.viewport = viewport_centered_on(
+            bounds,
+            bounds.start_seconds,
+            self.zoom,
+            self.timeline_width_px,
+        );
+    }
+
+    /// The timeline bounds grew (audio arrived): the viewport keeps its start and shows the
+    /// seconds the zoom gives it, as [`Self::set_timeline_width`] does.
+    pub fn fit_viewport_to_zoom(&mut self, project: &Project) {
+        self.fit_viewport_to_zoom_within(self.timeline_bounds(project));
+    }
+
     /// Paints `waveform` for the lane instead of its original (`None` restores the original).
     /// Returns the replaced display waveform with its caches.
     pub fn set_lane_display_waveform(
@@ -325,7 +353,10 @@ impl EditorSession {
             return;
         }
         self.timeline_width_px = width_px;
-        let bounds = self.timeline_bounds(project);
+        self.fit_viewport_to_zoom_within(self.timeline_bounds(project));
+    }
+
+    fn fit_viewport_to_zoom_within(&mut self, bounds: TimeRange) {
         let duration = self.visible_duration(bounds);
         if duration >= bounds.duration_seconds() {
             self.viewport = bounds;

@@ -12,7 +12,7 @@ use exaudio_marketplace::InstallProvenance;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, IconName, Selectable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Disableable, IconName, Selectable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use model::{DEFAULT_INDEX, ExtensionsEvent, ExtensionsModel, Preview, Removal};
@@ -1100,16 +1100,6 @@ impl Render for ExtensionsView {
             .overflow_y_scroll()
             .p_6()
             .gap_4()
-            .child(
-                h_flex()
-                    .gap_3()
-                    .child(
-                        Button::new("extensions-close")
-                            .label(text(cx, "Close", "Закрыть"))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(div().text_xl().child(text(cx, "Extensions", "Расширения"))),
-            )
             .child(
                 h_flex()
                     .gap_2()

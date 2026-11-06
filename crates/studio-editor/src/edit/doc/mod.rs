@@ -430,13 +430,24 @@ impl EditorDoc {
             )
     }
 
-    /// Installs decoded audio / peaks for a lane.
+    /// Installs decoded audio / peaks for a lane. The audio may grow the timeline bounds: a
+    /// timeline without extent (a project without segments) opens its view on it
+    /// ([`EditorSession::show_initial_view`]); one with segments keeps its start and shows the
+    /// seconds its zoom gives it ([`EditorSession::fit_viewport_to_zoom`]).
     pub fn set_lane_waveform(
         &mut self,
         lane_id: impl Into<String>,
         waveform: crate::timeline_model::LaneWaveform,
     ) {
+        let project = self.workflow.project();
+        let bounds = self.session.timeline_bounds(project);
+        let had_extent = bounds.end_seconds > bounds.start_seconds;
         self.session.set_lane_waveform(lane_id, waveform);
+        if had_extent {
+            self.session.fit_viewport_to_zoom(project);
+        } else {
+            self.session.show_initial_view(project);
+        }
         self.touch();
     }
 

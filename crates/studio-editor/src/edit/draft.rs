@@ -320,7 +320,7 @@ pub fn parse_draft_times(
     Ok((start_seconds, end_seconds))
 }
 
-/// Lint shown for a row while its draft differs from the project.
+/// Lint shown for a row whose draft time cells are invalid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DraftLint {
     pub severity: Severity,
@@ -467,28 +467,20 @@ impl Drafts {
         Ok(updates)
     }
 
-    /// Lint override for a row whose draft is invalid or pending; `None` means "use the row lint".
+    /// Lint override for a row whose draft time cells are invalid; `None` means "use the row
+    /// lint". Typed text is not pending work: it commits when the row's editor loses focus.
     pub fn draft_lint(&self, segment: &Segment) -> Option<DraftLint> {
         let draft = self.map.get(&segment.id)?;
-        let error = |message: String| {
-            Some(DraftLint {
-                severity: Severity::Error,
-                message,
-            })
+        let message = match parse_draft_times(segment, draft) {
+            Ok((start_seconds, end_seconds)) if start_seconds >= end_seconds => {
+                DraftError::StartNotBeforeEnd.to_string()
+            }
+            Ok(_) => return None,
+            Err(reason) => reason.to_string(),
         };
-        let (start_seconds, end_seconds) = match parse_draft_times(segment, draft) {
-            Ok(times) => times,
-            Err(reason) => return error(reason.to_string()),
-        };
-        if start_seconds >= end_seconds {
-            return error(DraftError::StartNotBeforeEnd.to_string());
-        }
-        (segment.start_seconds != start_seconds
-            || segment.end_seconds != end_seconds
-            || segment.text != draft.text)
-            .then(|| DraftLint {
-                severity: Severity::Warning,
-                message: "Draft pending".to_string(),
-            })
+        Some(DraftLint {
+            severity: Severity::Error,
+            message,
+        })
     }
 }

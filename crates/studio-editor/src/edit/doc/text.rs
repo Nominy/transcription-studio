@@ -147,6 +147,32 @@ impl EditorDoc {
         }))
     }
 
+    /// Enter, or focus leaving a row: applies the row's typed text to the project as one undo
+    /// step when it differs from the segment text (time cells commit on their own), then
+    /// reloads the draft from the project, dropping its local text history. A row that no
+    /// longer exists has nothing to commit.
+    pub fn commit_text_draft(&mut self, segment_id: &str) -> EditResult {
+        let Some(segment) = self.workflow.project().segment(segment_id) else {
+            return Ok(Outcome::none());
+        };
+        let Some(draft) = self.drafts.get(segment_id) else {
+            return Ok(Outcome::none());
+        };
+        if draft.text() == segment.text {
+            return Ok(Outcome::none());
+        }
+        let text = draft.text().to_string();
+        self.apply("Text edit", |workflow| {
+            workflow.apply_text_edit(segment_id, text)
+        })?;
+        self.drafts.refresh(self.workflow.project(), segment_id);
+        self.clear_tag_ui_for(segment_id);
+        self.mark_dirty();
+        Ok(Outcome::none().with(Effect::DraftChanged {
+            segment_id: segment_id.to_string(),
+        }))
+    }
+
     /// Segment ids whose drafts differ from the project.
     pub fn pending_draft_segment_ids(&self) -> Result<Vec<String>, crate::edit::draft::DraftError> {
         self.drafts.pending_segment_ids(self.workflow.project())
@@ -178,8 +204,9 @@ impl EditorDoc {
         Ok(project)
     }
 
-    /// Commits every pending draft as a single undo step (before save/submit/export).
-    /// `action` names the caller in messages ("Save", "Submit").
+    /// Commits every pending draft as a single undo step (before save/submit/export): text
+    /// still being typed in a focused row and rows a cross-row move touched. Nothing pending
+    /// means no undo step. `action` names the caller in messages ("Save", "Submit").
     pub fn commit_pending_drafts(&mut self, action: &'static str) -> EditResult {
         let updates = self
             .drafts

@@ -144,7 +144,7 @@ impl EditorDoc {
             synthetic: false,
             lane_locked: false,
         };
-        self.helper.focused_segment_id = Some(segment_id.clone());
+        let left = self.set_text_focus(Some(&segment_id))?;
         self.helper.pending = Some(restore.clone());
         let focus = self.apply_restore(restore);
         self.touch();
@@ -153,6 +153,7 @@ impl EditorDoc {
         } else {
             "Helper focus moved to next segment from start."
         })
+        .extend(left.effects)
         .with(Effect::RevealSegment {
             segment_id,
             center: true,
@@ -172,9 +173,9 @@ impl EditorDoc {
         draft.set_selection(TextSelection::caret(caret));
         self.session
             .select_segment_without_seek(self.workflow.project(), segment_id);
-        self.helper.focused_segment_id = Some(segment_id.to_string());
+        let left = self.set_text_focus(Some(segment_id))?;
         self.touch();
-        Ok(Outcome::none()
+        Ok(left
             .with(Effect::RevealSegment {
                 segment_id: segment_id.to_string(),
                 center: false,
@@ -240,7 +241,7 @@ impl EditorDoc {
             center: true,
         });
         if let Some(caret) = caret {
-            self.helper.focused_segment_id = Some(segment_id.clone());
+            outcome = outcome.extend(self.set_text_focus(Some(&segment_id))?.effects);
             self.helper.pending = None;
             outcome = outcome.with(self.apply_restore(HelperFocusRestore {
                 segment_id,
@@ -352,25 +353,28 @@ impl EditorDoc {
     }
 
     /// Escape inside a row's text editor: pauses when playing (caret stays); otherwise blurs
-    /// the editor, leaves a ghost cursor at the spoken offset (word timings, else
-    /// playhead-proportional) and plays.
+    /// the editor (committing its typed text), leaves a ghost cursor at the spoken offset
+    /// (word timings, else playhead-proportional) and plays.
     pub fn transcript_escape(&mut self, segment_id: &str) -> EditResult {
         if self.workflow.project().segment(segment_id).is_none() {
             return Err(EditError::SegmentNotFound(segment_id.to_string()));
         }
         self.session
             .select_segment_without_seek(self.workflow.project(), segment_id);
-        self.helper.focused_segment_id = Some(segment_id.to_string());
+        let focused = self.set_text_focus(Some(segment_id))?;
         self.touch();
         if self.session.is_playing {
             return Ok(self
                 .set_paused(true)
+                .extend(focused.effects)
                 .with_status("Helper focus toggle paused playback from focused transcript row."));
         }
+        let committed = self.set_text_focus(None)?;
         self.helper.pending = self.restore_for_segment(segment_id, false, None);
-        self.helper.focused_segment_id = None;
         Ok(Outcome::none()
             .with(Effect::BlurText)
+            .extend(focused.effects)
+            .extend(committed.effects)
             .extend(self.set_paused(false).effects))
     }
 
@@ -425,8 +429,32 @@ impl EditorDoc {
     }
 
     /// Marks a row's text editor as focused/unfocused by the user (click into/out of a row).
-    pub fn set_text_focus(&mut self, segment_id: Option<&str>) {
+    /// The row that loses focus commits its typed text ([`Self::commit_text_draft`]).
+    pub fn set_text_focus(&mut self, segment_id: Option<&str>) -> EditResult {
+        let previous = self.helper.focused_segment_id.take();
         self.helper.focused_segment_id = segment_id.map(str::to_string);
+        match previous {
+            Some(previous) if segment_id != Some(previous.as_str()) => {
+                self.commit_text_draft(&previous)
+            }
+            _ => Ok(Outcome::none()),
+        }
+    }
+
+    /// A row's text editor lost keyboard focus (Enter, a click elsewhere): commits its typed
+    /// text and releases the helper focus when the row still held it (another grid's editor
+    /// may already hold it).
+    pub fn blur_text(&mut self, segment_id: &str) -> EditResult {
+        if self.helper.focused_segment_id.as_deref() == Some(segment_id) {
+            self.helper.focused_segment_id = None;
+        }
+        self.commit_text_draft(segment_id)
+    }
+
+    /// Releases the helper focus where no `Result` flows: a refused commit becomes the status.
+    fn release_text_focus(&mut self) -> Outcome {
+        self.set_text_focus(None)
+            .unwrap_or_else(|error| Outcome::status(error.to_string()))
     }
 
     pub(super) fn try_helper_unfocused_toggle(&mut self) -> Option<Outcome> {
@@ -434,7 +462,7 @@ impl EditorDoc {
             let focus = self.restore_helper_focus_for_current_playhead();
             let outcome = self.set_paused(true);
             return Some(match focus {
-                Ok(effect) => outcome.with(effect),
+                Ok(focus) => outcome.extend(focus.effects),
                 Err(status) => outcome.with_status(status),
             });
         }
@@ -451,8 +479,8 @@ impl EditorDoc {
             }
         };
         self.helper.pending = self.restore_for_segment(&segment_id, true, None);
-        self.helper.focused_segment_id = None;
-        Some(self.set_paused(false))
+        let released = self.release_text_focus();
+        Some(released.extend(self.set_paused(false).effects))
     }
 
     pub(super) fn set_paused(&mut self, paused: bool) -> Outcome {
@@ -477,7 +505,7 @@ impl EditorDoc {
     /// as the next playback tick would) and offset, timed through word timings when the lane
     /// has them (Helper `getGhostCursorTarget`). Without a shown ghost, the row under the
     /// playhead gets the spoken offset at the playhead.
-    fn restore_helper_focus_for_current_playhead(&mut self) -> Result<Effect, String> {
+    fn restore_helper_focus_for_current_playhead(&mut self) -> Result<Outcome, String> {
         self.sync_pending_restore_to_playback();
         let project = self.workflow.project();
         let session = &self.session;
@@ -520,10 +548,12 @@ impl EditorDoc {
         }
         self.session
             .select_segment_without_seek(self.workflow.project(), &segment_id);
-        self.helper.focused_segment_id = Some(segment_id);
+        let left = self
+            .set_text_focus(Some(&segment_id))
+            .map_err(|error| error.to_string())?;
         self.helper.pending = None;
         self.touch();
-        Ok(self.apply_restore(restore))
+        Ok(left.with(self.apply_restore(restore)))
     }
 
     fn apply_restore(&mut self, restore: HelperFocusRestore) -> Effect {

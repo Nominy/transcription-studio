@@ -84,12 +84,16 @@ fn tile(cx: &App) -> Div {
 pub fn render(shell: ShellHandle, _window: &mut Window, cx: &App) -> impl IntoElement + use<> {
     let registry = cx.global::<ContributionRegistry>();
     let mut modes = registry.modes();
-    // Modes that open without an account come first (Local), the rest by label.
+    // Local first, then other modes that open without an account, then the rest by label.
     modes.sort_by_cached_key(|mode| {
         let needs_provider = registry
             .mode_manifest(&mode.id)
             .is_some_and(|manifest| manifest.provider.is_some());
-        (needs_provider, mode.label.to_lowercase())
+        (
+            mode.id != "exaudio.local",
+            needs_provider,
+            mode.label.to_lowercase(),
+        )
     });
     let settings = shell.clone();
     let extensions = shell.clone();
