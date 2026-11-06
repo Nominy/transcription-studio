@@ -1,4 +1,4 @@
-//! Babel platform data Sonus doesn't carry in its source, embedded from the pinned private Babel
+//! Babel platform data Exaudio doesn't carry in its source, embedded from the pinned private Babel
 //! data bundle that `build.rs` reads from the build cache (`babel-data.json`; fetch or republish
 //! it with `tools/update-babel-data.ps1`).
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Exaudio</title>
+  <!-- App icon: the mark on an ink tile, no ring. Rasterised to .ico/.png by tools/brand/render.py. -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#14161C"/>
+  <g stroke="#D99A2B" stroke-width="5.5" stroke-linecap="round">
+    <path d="M17 24.5V39.5"/>
+    <path d="M25.5 17V47"/>
+    <path d="M34 26.5V37.5"/>
+  </g>
+  <path d="M40 32H48.5" stroke="#F4F1EA" stroke-width="5.5" stroke-linecap="round"/>
+</svg>

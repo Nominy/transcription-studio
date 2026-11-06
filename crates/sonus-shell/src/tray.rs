@@ -93,7 +93,7 @@ mod windows_tray {
         let menu = Menu::new();
         let item = |id: &str, label: &str| MenuItem::with_id(MenuId::new(id), label, true, None);
         menu.append_items(&[
-            &item(RESTORE_ID, "Open Sonus"),
+            &item(RESTORE_ID, "Open Exaudio"),
             &PredefinedMenuItem::separator(),
             &item(EXIT_ID, "Exit"),
         ])
@@ -127,7 +127,7 @@ mod windows_tray {
         }));
 
         let icon = TrayIconBuilder::new()
-            .with_tooltip("Sonus")
+            .with_tooltip("Exaudio")
             .with_icon(app_icon()?)
             .with_menu(Box::new(menu))
             .build()
@@ -155,7 +155,7 @@ mod windows_tray {
         }
     }
 
-    /// The Sonus mark: the exe's icon resource (id 1, `build.rs`), at the system small-icon size
+    /// The Exaudio mark: the exe's icon resource (id 1, `build.rs`), at the system small-icon size
     /// so Windows picks the pixel-hinted 16/20/24 px frame instead of scaling a large one.
     fn app_icon() -> Result<Icon, String> {
         // SAFETY: plain metric queries with no pointers.

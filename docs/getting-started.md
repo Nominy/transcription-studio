@@ -1,4 +1,4 @@
-# Your first Sonus project / Первый проект в Sonus
+# Your first Exaudio project / Первый проект в Exaudio
 
 [English](#english) · [Русский](#русский) · [Downloads / Загрузки](../README.md#download)
 
@@ -6,9 +6,9 @@
 
 ### 1. Install
 
-Use the stable [Windows x64 installer](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Setup.exe), or extract the [portable ZIP](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Portable.zip) to a writable folder and start `Sonus.exe`.
+Use the stable [Windows x64 installer](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Setup.exe), or extract the [portable ZIP](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Portable.zip) to a writable folder and start `Exaudio.exe`.
 
-Windows 10/11 x64 is the primary target. Packages are unsigned: SmartScreen may identify an unknown publisher. Check that the file came from `Nominy/sonus` Releases and compare `SHA256SUMS` before deciding to run it. Do not disable Windows protection. No Rust installation is needed.
+Windows 10/11 x64 is the primary target. Packages are unsigned: SmartScreen may identify an unknown publisher. Check that the file came from `Nominy/exaudio` Releases and compare `SHA256SUMS` before deciding to run it. Do not disable Windows protection. No Rust installation is needed.
 
 Alpha is experimental and uses a separate feed. Do not use an alpha build as your only copy of a project. See [release channels](releasing.md) for alpha and manual macOS packages.
 
@@ -18,7 +18,7 @@ Start lists one tile per installed mode. Choose **Local**, then **Open audio…*
 
 Use **Open project…** to continue a previously saved native project, **Recent** to reopen one you worked on before, or **Unsaved work › Restore** to pick up a recovery snapshot. Keep the project's original audio available. No account or AI configuration is needed for Local.
 
-Platform modes such as **Babel** and **Babel error review** are optional tiles supplied by Sonus add-ons. The first time you open one, Sonus asks you to sign in (direct account or relay access from your operator); afterwards the tile opens straight into the mode. Accounts are managed under **Settings › Advanced › Accounts** (sign out, add another account). The integration is developed by the Sonus author, not an official Babel product. A mode's required add-ons must remain enabled while that mode is open.
+Platform modes such as **Babel** and **Babel error review** are optional tiles supplied by Exaudio add-ons. The first time you open one, Exaudio asks you to sign in (direct account or relay access from your operator); afterwards the tile opens straight into the mode. Accounts are managed under **Settings › Advanced › Accounts** (sign out, add another account). The integration is developed by the Exaudio author, not an official Babel product. A mode's required add-ons must remain enabled while that mode is open.
 
 ### 3. Listen and edit
 
@@ -54,15 +54,15 @@ unchanged. Plain text replaces the selected segment's text and keeps its timing.
 - **No sound:** check the selected output device, system volume, playback state and whether the source audio is still available.
 - **No AI result:** confirm that the extension and backend are configured, installation has finished, and the device test succeeds. A model download is not part of the ordinary application installer.
 - **A mode is unavailable:** check its required add-ons and service access. Local does not require signing in. If a platform tile keeps asking you to sign in, open **Settings › Advanced › Accounts** and sign out of the stale account first.
-- **Need help:** open an [issue](https://github.com/Nominy/sonus/issues) with the app/Windows version, mode, active extensions, reproduction steps and exact error. Attach only a synthetic, non-sensitive example; redact keys, account identifiers and private task content.
+- **Need help:** open an [issue](https://github.com/Nominy/exaudio/issues) with the app/Windows version, mode, active extensions, reproduction steps and exact error. Attach only a synthetic, non-sensitive example; redact keys, account identifiers and private task content.
 
 ## Русский
 
 ### 1. Установка
 
-Скачайте стабильный [установщик Windows x64](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Setup.exe) или распакуйте [portable ZIP](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Portable.zip) в папку с правом записи и запустите `Sonus.exe`.
+Скачайте стабильный [установщик Windows x64](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Setup.exe) или распакуйте [portable ZIP](https://github.com/Nominy/exaudio/releases/latest/download/Exaudio-win-Portable.zip) в папку с правом записи и запустите `Exaudio.exe`.
 
-Основная платформа — Windows 10/11 x64. Пакеты не подписаны: SmartScreen может предупредить о неизвестном издателе. Перед запуском проверьте источник `Nominy/sonus` Releases и опубликованный `SHA256SUMS`. Не отключайте защиту Windows. Устанавливать Rust не нужно.
+Основная платформа — Windows 10/11 x64. Пакеты не подписаны: SmartScreen может предупредить о неизвестном издателе. Перед запуском проверьте источник `Nominy/exaudio` Releases и опубликованный `SHA256SUMS`. Не отключайте защиту Windows. Устанавливать Rust не нужно.
 
 Alpha — экспериментальный отдельный канал. Не храните единственную копию проекта только в альфа-сборке. Сведения об alpha и ручных пакетах macOS — в [описании каналов](releasing.md).
 
@@ -72,7 +72,7 @@ Alpha — экспериментальный отдельный канал. Не
 
 Кнопка **Открыть проект…** продолжает работу с сохранённым родным проектом, список **Недавние** открывает прежние проекты, а **Несохранённая работа › Восстановить** возвращает снимок восстановления. Сохраняйте доступ к исходному аудио. Для Local не нужны аккаунт и настройка ИИ.
 
-Платформенные режимы **Babel** и **Babel error review** — необязательные плитки, которые добавляют дополнения Sonus. При первом открытии Sonus попросит войти (прямой аккаунт или доступ через relay от вашего оператора); дальше плитка открывает режим сразу. Аккаунты находятся в **Настройки › Дополнительно › Аккаунты** (выход, добавление ещё одного аккаунта). Интеграция — собственная разработка автора Sonus, а не официальный продукт Babel. Пока режим открыт, требуемые ему дополнения должны оставаться включёнными.
+Платформенные режимы **Babel** и **Babel error review** — необязательные плитки, которые добавляют дополнения Exaudio. При первом открытии Exaudio попросит войти (прямой аккаунт или доступ через relay от вашего оператора); дальше плитка открывает режим сразу. Аккаунты находятся в **Настройки › Дополнительно › Аккаунты** (выход, добавление ещё одного аккаунта). Интеграция — собственная разработка автора Exaudio, а не официальный продукт Babel. Пока режим открыт, требуемые ему дополнения должны оставаться включёнными.
 
 ### 3. Прослушивание и правки
 
@@ -108,4 +108,4 @@ Alpha — экспериментальный отдельный канал. Не
 - **Нет звука:** проверьте аудиовыход, системную громкость, состояние воспроизведения и доступность исходной записи.
 - **Нет результата ИИ:** проверьте расширение, бэкенд, завершение установки и тест устройства. Модели не входят в обычный установщик приложения.
 - **Недоступен режим:** проверьте необходимые дополнения и доступ к сервису. Local не требует входа. Если плитка платформы снова и снова просит войти, сначала выйдите из устаревшего аккаунта в **Настройки › Дополнительно › Аккаунты**.
-- **Нужна помощь:** создайте [issue](https://github.com/Nominy/sonus/issues) с версиями приложения/Windows, режимом, расширениями, шагами и точной ошибкой. Прикладывайте только синтетические примеры без чувствительных данных; удаляйте ключи, идентификаторы аккаунтов и приватное содержимое заданий.
+- **Нужна помощь:** создайте [issue](https://github.com/Nominy/exaudio/issues) с версиями приложения/Windows, режимом, расширениями, шагами и точной ошибкой. Прикладывайте только синтетические примеры без чувствительных данных; удаляйте ключи, идентификаторы аккаунтов и приватное содержимое заданий.

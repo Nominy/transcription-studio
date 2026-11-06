@@ -28,7 +28,7 @@ The SDK GitHub repository and full source commit are mandatory generator inputs.
 a real published commit containing the SDK/WIT and validator; do not invent an available
 `v0.3.0` tag while publication is still pending. This command does not verify remote
 availability, download dependencies, create a GitHub repository or publish a release.
-The generated repository has no filesystem dependency on the Sonus checkout.
+The generated repository has no filesystem dependency on the Exaudio checkout.
 
 The workflow builds a real WASM component, packages/validates it, derives byte/hash/source
 index metadata, and publishes a new versioned author-repository GitHub release. Only its
@@ -45,7 +45,7 @@ Workspace dependency: `sonus-marketplace = { path = "crates/sonus-marketplace" }
 The crates declare their own semver, sha2, zip and fs2 dependencies and reuse shared
 sonus-extension, reqwest, serde, serde_json, thiserror, tempfile, tokio and url dependencies.
 
-Run from the Sonus repository (replace uppercase arguments with real files/identities):
+Run from the Exaudio repository (replace uppercase arguments with real files/identities):
 
 ```text
 cargo run -p sonus-extension-index -- validate-index tools/extension-index/template/index.json

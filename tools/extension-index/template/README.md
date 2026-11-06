@@ -1,4 +1,4 @@
-# Sonus extension release index
+# Exaudio extension release index
 
 This repository is a reviewed catalog, not an extension source monorepo. `index.json`
 is the published schema-1 index. Each entry belongs to one author's GitHub repository;
@@ -12,7 +12,7 @@ this empty index and add only published, reviewed releases. There are no example
   review process before publishing your index.
 - Protect the default branch and require maintainer review of pull requests. Configure
   your GitHub repository settings; the local template does not create those settings.
-- CI should run the trusted Sonus `sonus-extension-index validate-index` executable on
+- CI should run the trusted Exaudio `sonus-extension-index validate-index` executable on
   both the proposed catalog and the previous default-branch catalog. Pin the validator
   source commit or a verified tool release in your own CI. Never execute a contributor's
   build scripts or untrusted CI changes with privileged credentials.
@@ -21,8 +21,8 @@ this empty index and add only published, reviewed releases. There are no example
 
 An author's repository contains their source, license, `manifest.json`, and their own
 build instructions. Build and test the extension as a WASM component matching the
-Sonus extension host ABI. This index does not build or execute submitted repository source.
-See the Sonus repository's WASM SDK/examples for the actual host ABI.
+Exaudio extension host ABI. This index does not build or execute submitted repository source.
+See the Exaudio repository's WASM SDK/examples for the actual host ABI.
 
 Publish a ZIP archive with a `.sonusext` filename containing exactly:
 

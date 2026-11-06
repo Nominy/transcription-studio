@@ -1,10 +1,10 @@
-# Sonus architecture
+# Exaudio architecture
 
 Implementation target for the platform cutover; this document does not claim that every
 interface below is already available. Public release requires the shipped capabilities to
 be implemented and exercised end to end.
 
-Sonus is a segment-based transcript editor with multi-lane audio playback. That is the whole
+Exaudio is a segment-based transcript editor with multi-lane audio playback. That is the whole
 core. Everything else — AI transcription, linting, file formats, task platforms such as Babel —
 is an **extension**; platforms are **modes** (Start-screen tiles) contributed by extensions,
 and the accounts they sign in with are **providers**. Built-in features use exactly the same
@@ -371,7 +371,7 @@ whichever account happens to be selected.
 
 ## 5. Distribution
 
-Sonus ships **batteries included**: the release bundles the first-party extensions above.
+Exaudio ships **batteries included**: the release bundles the first-party extensions above.
 Users can open audio, edit, check, export and open every bundled mode from Start without
 separately finding extensions; platform modes ask for sign-in on first open. AI runtime/model
 downloads remain explicit, with download size, licensing and
@@ -397,7 +397,7 @@ Index contributions are pull requests.
 
 The index has a versioned schema. Each extension record identifies the stable extension ID,
 GitHub owner/repository, display metadata, license, categories and released versions.
-Each version records the exact manifest, Sonus API compatibility, dependencies, declared
+Each version records the exact manifest, Exaudio API compatibility, dependencies, declared
 permissions, release tag, immutable source commit, asset name, byte size and SHA-256 digest.
 Records may mark a release withdrawn with a reason. Renames or transfers cannot silently
 reassign an existing extension ID.

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Exaudio</title>
+  <circle cx="32" cy="32" r="29.5" fill="none" stroke="#F4F1EA" stroke-width="3"/>
+  <g stroke="#D99A2B" stroke-width="5" stroke-linecap="round">
+    <path d="M17 24.5V39.5"/>
+    <path d="M25.5 18V46"/>
+    <path d="M34 26.5V37.5"/>
+  </g>
+  <path d="M40 32H48" stroke="#F4F1EA" stroke-width="5" stroke-linecap="round"/>
+</svg>

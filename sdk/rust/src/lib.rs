@@ -1,6 +1,6 @@
 //! Build with `cargo build --target wasm32-unknown-unknown --release`, then
 //! `wasm-tools component new <module.wasm> -o extension.wasm`.
-//! The SDK uses only Sonus imports. Do not use std filesystem, network, clock or
+//! The SDK uses only Exaudio host imports. Do not use std filesystem, network, clock or
 //! random APIs: the host deliberately does not link WASI capabilities.
 pub mod bindings {
     wit_bindgen::generate!({ path: "../../wit", world: "extension", pub_export_macro: true });

@@ -11,7 +11,7 @@ param(
     [string]$RemoteRoot = "/root/sonus-data-private"
 )
 
-# Babel platform data Sonus can't carry in its public source (the Gold linter configuration,
+# Babel platform data Exaudio can't carry in its public source (the Gold linter configuration,
 # Babel's error-category names, the lint parity corpus with Babel's expected issues) ships as a
 # private tar bundle pinned by SHA-256 in extensions/babel-lint/babel-data.json;
 # extensions/babel-lint/build.rs embeds it from the per-user build cache. The bundle is not

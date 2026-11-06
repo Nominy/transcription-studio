@@ -1,4 +1,4 @@
-# Every push to main packages a Windows alpha build (pack id Sonus, Velopack channel
+# Every push to main packages a Windows alpha build (pack id Exaudio, Velopack channel
 # `alpha`) and publishes it to the VPS alpha feed that installed alpha builds update from.
 name: Alpha
 
@@ -22,13 +22,13 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  FEED_URL: https://reviewgen.ovh/sonus/alpha/win-x64
-  REMOTE_PATH: /var/www/sonus/alpha/win-x64
+  FEED_URL: https://reviewgen.ovh/exaudio/alpha/win-x64
+  REMOTE_PATH: /var/www/exaudio/alpha/win-x64
 
 jobs:
   package:
     name: Package Windows alpha
-    if: github.repository == 'Nominy/sonus'
+    if: github.repository == 'Nominy/exaudio'
     runs-on: windows-latest
     env:
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
@@ -137,7 +137,7 @@ jobs:
       - name: Upload the publish payload
         uses: actions/upload-artifact@v5
         with:
-          name: sonus-alpha-windows
+          name: exaudio-alpha-windows
           path: target/velopack/Publish/
           if-no-files-found: error
           compression-level: 0

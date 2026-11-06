@@ -1,6 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=sonus.rc");
-    println!("cargo:rerun-if-changed=../../assets/app/sonus.ico");
+    println!("cargo:rerun-if-changed=../../assets/app/exaudio.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         // Extension views compose several GPUI render frames. Windows' default 1 MiB
         // main stack is insufficient in debug builds; reserve 8 MiB, committed on demand.

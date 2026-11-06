@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Sonus natively on macOS and packs it with Velopack (channel `alpha`) for the VPS
+# Builds Exaudio natively on macOS and packs it with Velopack (channel `alpha`) for the VPS
 # alpha feed. Env: VERSION (default: crates/studio-app version; baked into the binary as
 # STUDIO_BUILD_VERSION), RUNTIME (osx-arm64 | osx-x64, default: host), STUDIO_ALPHA_FEED_URL
 # (alpha feed the build updates from, default: the platform feed), MACOSX_DEPLOYMENT_TARGET
@@ -10,11 +10,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 version="${VERSION:-}"
 channel="alpha"
-pack_id="Sonus"
-pack_title="Sonus"
+pack_id="Exaudio"
+pack_title="Exaudio"
 pack_authors="Nominy"
-main_exe="Sonus"
-bundle_id="io.github.nominy.sonus"
+main_exe="Exaudio"
+bundle_id="io.github.nominy.exaudio"
 stage_dir="${STAGE_DIR:-$repo_root/target/velopack/macos-stage}"
 output_dir="${OUTPUT_DIR:-$repo_root/target/velopack/Releases}"
 publish_dir="${PUBLISH_DIR:-$repo_root/target/velopack/Publish}"
@@ -97,7 +97,7 @@ export MACOSX_DEPLOYMENT_TARGET="$deployment_target"
 export STUDIO_BUILD_VERSION="$version"
 export STUDIO_UPDATE_CHANNEL="alpha"
 
-echo "Packaging Sonus $version for $runtime."
+echo "Packaging Exaudio $version for $runtime."
 echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
 if [[ -n "${STUDIO_ALPHA_FEED_URL:-}" ]]; then
   echo "STUDIO_ALPHA_FEED_URL=$STUDIO_ALPHA_FEED_URL"

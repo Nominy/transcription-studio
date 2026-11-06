@@ -13,8 +13,8 @@
   }));
   const buttons = document.querySelectorAll("[data-language]");
   const descriptions = {
-    ru: "Sonus — сегментный редактор транскрипций с аудио. Локальные проекты без аккаунта, расширения и необязательный ИИ. Для Windows.",
-    en: "Sonus is a segment-based transcription editor with audio. Local projects without an account, extensions and optional AI. For Windows.",
+    ru: "Exaudio — сегментный редактор транскрипций с аудио. Локальные проекты без аккаунта, расширения и необязательный ИИ. Для Windows.",
+    en: "Exaudio is a segment-based transcription editor with audio. Local projects without an account, extensions and optional AI. For Windows.",
   };
 
   function setLanguage(language) {
@@ -31,8 +31,8 @@
       button.setAttribute("aria-pressed", String(button.dataset.language === language));
     }
     document.title = english
-      ? "Sonus — a transcription editor with audio"
-      : "Sonus — редактор транскрипций с аудио";
+      ? "Exaudio — a transcription editor with audio"
+      : "Exaudio — редактор транскрипций с аудио";
     document.querySelector('meta[name="description"]').content = descriptions[language];
     document.querySelector('meta[property="og:title"]').content = document.title;
     document.querySelector('meta[property="og:description"]').content = descriptions[language];

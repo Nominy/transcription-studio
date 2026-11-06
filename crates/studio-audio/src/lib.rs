@@ -1,4 +1,4 @@
-//! UI-free audio decoding and playback engine for Sonus.
+//! UI-free audio decoding and playback engine for Exaudio.
 //!
 //! - Decoding ([`decode_audio_file`], [`load_lane_audio`], ...): common audio
 //!   containers and project lane file lookup. Blocking; run off the UI thread.

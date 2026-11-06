@@ -1,4 +1,4 @@
-//! Sandboxed, typed Sonus component runtime. No WASI or ambient OS imports are linked.
+//! Sandboxed, typed Exaudio component runtime. No WASI or ambient OS imports are linked.
 //! See `HostServices` for the native document owner and I/O cancellation contract.
 mod compiler;
 #[doc(hidden)]

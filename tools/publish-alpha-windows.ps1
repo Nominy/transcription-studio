@@ -13,8 +13,8 @@ known_hosts applies with accept-new.
 param(
     [string]$Version = "",
     [string]$Remote = "ethernetservers",
-    [string]$RemotePath = "/var/www/sonus/alpha/win-x64",
-    [string]$RemoteIncomingRoot = "/var/tmp/sonus-alpha-incoming",
+    [string]$RemotePath = "/var/www/exaudio/alpha/win-x64",
+    [string]$RemoteIncomingRoot = "/var/tmp/exaudio-alpha-incoming",
     [string]$OutputDir = "",
     [string]$PublishDir = "",
     [string]$SshKeyPath = "",

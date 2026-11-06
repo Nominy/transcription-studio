@@ -134,7 +134,7 @@ impl TransportStrip {
         )
     }
 
-    /// "Export" menu: Babel JSON file or Sonus project folder.
+    /// "Export" menu: Babel JSON file or Exaudio project folder.
     fn render_export(&self) -> impl IntoElement + use<> {
         let model = self.model.clone();
         Button::new("export")

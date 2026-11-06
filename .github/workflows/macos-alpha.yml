@@ -1,4 +1,4 @@
-# Manual: builds Sonus natively on GitHub-hosted macOS runners, packs it with Velopack
+# Manual: builds Exaudio natively on GitHub-hosted macOS runners, packs it with Velopack
 # (channel `alpha`) and optionally publishes it to the per-target VPS alpha feed.
 name: macOS Alpha
 
@@ -76,8 +76,8 @@ jobs:
     env:
       RUNTIME: ${{ matrix.runtime }}
       MACOSX_DEPLOYMENT_TARGET: "14.0"
-      STUDIO_ALPHA_FEED_URL: https://reviewgen.ovh/sonus/alpha/${{ matrix.feed_suffix }}
-      REMOTE_PATH: /var/www/sonus/alpha/${{ matrix.feed_suffix }}
+      STUDIO_ALPHA_FEED_URL: https://reviewgen.ovh/exaudio/alpha/${{ matrix.feed_suffix }}
+      REMOTE_PATH: /var/www/exaudio/alpha/${{ matrix.feed_suffix }}
       FEED_SUFFIX: ${{ matrix.feed_suffix }}
       PUBLISH_DIR: ${{ github.workspace }}/target/velopack/Publish
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
@@ -130,7 +130,7 @@ jobs:
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
-          keychain="$RUNNER_TEMP/sonus-signing.keychain-db"
+          keychain="$RUNNER_TEMP/exaudio-signing.keychain-db"
           cert_path="$RUNNER_TEMP/developer-id.p12"
           keychain_password="${APPLE_KEYCHAIN_PASSWORD:-temporary-keychain-password}"
 
@@ -182,7 +182,7 @@ jobs:
             echo "Unsafe remote path: $REMOTE_PATH" >&2
             exit 1
           fi
-          remote_platform_root="/var/tmp/sonus-alpha-incoming/$FEED_SUFFIX"
+          remote_platform_root="/var/tmp/exaudio-alpha-incoming/$FEED_SUFFIX"
           if [[ "$REMOTE_PATH" == "$remote_platform_root" ]] || \
              [[ "$REMOTE_PATH" == "$remote_platform_root/"* ]] || \
              [[ "$remote_platform_root" == "$REMOTE_PATH/"* ]]; then
@@ -350,7 +350,7 @@ jobs:
       - name: Upload Velopack publish payload
         uses: actions/upload-artifact@v5
         with:
-          name: sonus-alpha-${{ matrix.target }}
+          name: exaudio-alpha-${{ matrix.target }}
           path: target/velopack/Publish/
           if-no-files-found: error
           compression-level: 0

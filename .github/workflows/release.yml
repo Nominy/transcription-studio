@@ -1,4 +1,4 @@
-# Push a tag that matches crates/studio-app's version (e.g. v0.3.0) to build Sonus for
+# Push a tag that matches crates/studio-app's version (e.g. v0.3.0) to build Exaudio for
 # Windows, pack it with Velopack (channel `win`) and publish a GitHub release with the
 # installer, portable zip, update packages and SHA256SUMS. Installed stable builds update
 # from these releases; tags with a "-" become pre-releases, which stable builds ignore.
@@ -24,13 +24,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   TAG: ${{ inputs.tag || github.ref_name }}
-  REPO_URL: https://github.com/Nominy/sonus
+  REPO_URL: https://github.com/Nominy/exaudio
 
 jobs:
   release:
     name: Windows release
-    # The app's stable updater reads Nominy/sonus; forks must not publish look-alike releases.
-    if: ${{ github.repository == 'Nominy/sonus' }}
+    # The app's stable updater reads Nominy/exaudio; forks must not publish look-alike releases.
+    if: ${{ github.repository == 'Nominy/exaudio' }}
     runs-on: windows-latest
 
     steps:
@@ -55,7 +55,7 @@ jobs:
             "PRERELEASE=$prerelease"
             "STUDIO_BUILD_GIT_COMMIT=$(git rev-parse HEAD)"
           ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Releasing Sonus $version (prerelease: $prerelease)"
+          Write-Host "Releasing Exaudio $version (prerelease: $prerelease)"
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -80,11 +80,11 @@ jobs:
           $ErrorActionPreference = "Stop"
           $notes = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f "tag_name=$env:TAG" --jq .body
           if ($LASTEXITCODE -ne 0) { throw "Could not generate release notes." }
-          $download = "https://github.com/Nominy/sonus/releases/download/$env:TAG"
+          $download = "https://github.com/Nominy/exaudio/releases/download/$env:TAG"
           $body = @(
-            "**Download:** [Sonus-win-Setup.exe]($download/Sonus-win-Setup.exe) (installer) or [Sonus-win-Portable.zip]($download/Sonus-win-Portable.zip) (portable). Installed copies update themselves."
+            "**Download:** [Exaudio-win-Setup.exe]($download/Exaudio-win-Setup.exe) (installer) or [Exaudio-win-Portable.zip]($download/Exaudio-win-Portable.zip) (portable). Installed copies update themselves."
             ""
-            "Sonus is not code-signed yet: Windows SmartScreen may warn on first launch (More info -> Run anyway). Verify downloads against SHA256SUMS."
+            "Exaudio is not code-signed yet: Windows SmartScreen may warn on first launch (More info -> Run anyway). Verify downloads against SHA256SUMS."
             ""
             ($notes -join "`n")
           ) -join "`n"
@@ -142,7 +142,7 @@ jobs:
             "--token", $env:GH_TOKEN,
             "--outputDir", (Join-Path $PWD "target/velopack/Releases"),
             "--tag", $env:TAG,
-            "--releaseName", "Sonus $env:VERSION"
+            "--releaseName", "Exaudio $env:VERSION"
           )
           if ($env:PRERELEASE -eq "true") { $arguments += "--pre" }
           dotnet tool run vpk -- @arguments
@@ -163,7 +163,7 @@ jobs:
       - name: Upload the release payload
         uses: actions/upload-artifact@v5
         with:
-          name: sonus-${{ env.VERSION }}-windows
+          name: exaudio-${{ env.VERSION }}-windows
           path: target/velopack/Publish/
           if-no-files-found: error
           compression-level: 0

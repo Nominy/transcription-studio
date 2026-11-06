@@ -1,4 +1,4 @@
-//! Platform-neutral contracts for Sonus extensions and modes.
+//! Platform-neutral contracts for Exaudio extensions and modes.
 //!
 //! Extension packages and bundled implementations share manifests, version requirements and
 //! activation planning. This crate defines no checking rules, model runtime or task platform.

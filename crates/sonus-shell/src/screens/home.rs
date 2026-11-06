@@ -6,6 +6,49 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::sync::{Arc, LazyLock};
+
+/// Start heading art, parsed once; gpui rasterizes SVGs and caches them by content hash.
+static ICON: LazyLock<Arc<Image>> = LazyLock::new(|| {
+    Arc::new(Image::from_bytes(
+        ImageFormat::Svg,
+        include_bytes!("../../../../assets/brand/exaudio-icon.svg").to_vec(),
+    ))
+});
+static WORDMARK_LIGHT: LazyLock<Arc<Image>> = LazyLock::new(|| {
+    Arc::new(Image::from_bytes(
+        ImageFormat::Svg,
+        include_bytes!("../../../../assets/brand/exaudio-wordmark.svg").to_vec(),
+    ))
+});
+static WORDMARK_DARK: LazyLock<Arc<Image>> = LazyLock::new(|| {
+    Arc::new(Image::from_bytes(
+        ImageFormat::Svg,
+        include_bytes!("../../../../assets/brand/exaudio-wordmark-dark.svg").to_vec(),
+    ))
+});
+
+/// Width-to-height ratio of `exaudio-wordmark*.svg` (printed by `tools/brand/render.py`).
+const WORDMARK_ASPECT: f32 = 4.6264;
+
+/// Icon tile beside the wordmark, ink on light and paper on dark, 28 px tall.
+fn heading(cx: &App) -> Div {
+    let wordmark = if cx.theme().is_dark() {
+        WORDMARK_DARK.clone()
+    } else {
+        WORDMARK_LIGHT.clone()
+    };
+    h_flex()
+        .gap_3()
+        .items_center()
+        .child(img(ICON.clone()).size(px(28.)).flex_none())
+        .child(
+            img(wordmark)
+                .h(px(28.))
+                .w(px(28. * WORDMARK_ASPECT))
+                .flex_none(),
+        )
+}
 
 /// Provider instance chip shown on a tile only when its provider type has several accounts.
 fn account_chip(mode_id: &str, cx: &App) -> Option<(String, String)> {
@@ -49,7 +92,7 @@ pub fn render(shell: ShellHandle, _window: &mut Window, cx: &App) -> impl IntoEl
         .overflow_y_scroll()
         .p_6()
         .gap_6()
-        .child(div().text_2xl().child("Exaudio"))
+        .child(heading(cx))
         .child(
             h_flex()
                 .gap_4()

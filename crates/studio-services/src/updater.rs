@@ -17,14 +17,14 @@ use velopack::sources::{GithubSource, HttpSource, UpdateSource};
 use velopack::{UpdateCheck, UpdateManager, UpdateOptions, VelopackApp};
 
 /// GitHub repository whose (non-pre-)releases form the stable channel.
-pub const STABLE_REPO_URL: &str = "https://github.com/Nominy/sonus";
+pub const STABLE_REPO_URL: &str = "https://github.com/Nominy/exaudio";
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/sonus/alpha/mac-arm64";
+const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/exaudio/alpha/mac-arm64";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/sonus/alpha/mac-x64";
+const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/exaudio/alpha/mac-x64";
 #[cfg(not(target_os = "macos"))]
-const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/sonus/alpha/win-x64";
+const PLATFORM_ALPHA_FEED_URL: &str = "https://reviewgen.ovh/exaudio/alpha/win-x64";
 
 /// Alpha feed baked into this build (`STUDIO_ALPHA_FEED_URL` or the platform alpha feed).
 pub const ALPHA_FEED_URL: &str = match option_env!("STUDIO_ALPHA_FEED_URL") {
@@ -250,7 +250,7 @@ impl UpdateState {
             UpdatePhase::Idle => format!("Ready to check the {channel} channel."),
             UpdatePhase::Checking => "Checking for updates...".to_string(),
             UpdatePhase::UpdateAvailable => match self.available_version.as_ref() {
-                Some(version) => format!("Sonus {version} is available."),
+                Some(version) => format!("Exaudio {version} is available."),
                 None => "An update is available.".to_string(),
             },
             UpdatePhase::UpToDate => format!("You are on the latest {channel} build."),

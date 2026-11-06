@@ -1,4 +1,4 @@
-# Developing Sonus
+# Developing Exaudio
 
 For application usage, see [Get started / Начать работу](getting-started.md). For the component contract, see the [Rust extension SDK](../sdk/rust/README.md). Architecture and release procedures live in [architecture.md](architecture.md) and [releasing.md](releasing.md).
 
@@ -29,9 +29,9 @@ cargo run -p studio-app --no-default-features --locked
 cargo run -p studio-app --locked
 ```
 
-`studio-app` remains the Cargo package/binary name used during development. Packaged releases use the Sonus name. The default `batteries-included` feature selects `local`, `formats`, `basic-checks`, `gold` and `babel`; changing the build feature set is different from enabling/disabling an installed extension.
+`studio-app` remains the Cargo package/binary name used during development. Packaged releases use the Exaudio name. The default `batteries-included` feature selects `local`, `formats`, `basic-checks`, `gold` and `babel`; changing the build feature set is different from enabling/disabling an installed extension.
 
-**First-party code and build inputs:** Helper, reviewer/drafting and Babel integration extensions are the Sonus author's own developments, not proprietary third-party extensions. The general-purpose `local,formats,basic-checks,gold` build above does not require the Babel data bundle. The default all-batteries build and builds enabling `babel` currently do require it; a fresh checkout alone is not sufficient. Only concrete data/assets copied verbatim from the upstream Babel service need a separate provenance review; do not confuse those inputs with the author's extension code. Keep credentials and private task content out of source and public fixtures.
+**First-party code and build inputs:** Helper, reviewer/drafting and Babel integration extensions are the Exaudio author's own developments, not proprietary third-party extensions. The general-purpose `local,formats,basic-checks,gold` build above does not require the Babel data bundle. The default all-batteries build and builds enabling `babel` currently do require it; a fresh checkout alone is not sufficient. Only concrete data/assets copied verbatim from the upstream Babel service need a separate provenance review; do not confuse those inputs with the author's extension code. Keep credentials and private task content out of source and public fixtures.
 
 Building the app does not install AI model weights. Source builds are not Velopack installs and do not perform packaged-app update checks. Do not expect `cargo run` to follow the stable or alpha feeds.
 
@@ -96,7 +96,7 @@ Native Rust extensions have application privileges. Installable WASM components 
 
 Open `site/index.html` for a quick static preview. For browser automation that requires HTTP, serve `site/` through the development environment's observable server runner; for example the actual foreground workload can be `python -m http.server 4173 --directory site --bind 127.0.0.1`. A long-lived server belongs in a named psmux session and must be stopped when finished.
 
-`.github/workflows/pages.yml` runs only for `Nominy/sonus` on `main`, uses a hosted Linux runner and Pages OIDC permissions, and substitutes the **actual** `actions/configure-pages` `base_url` into canonical/OG URLs, `sitemap.xml` and `robots.txt`. Raw source contains the deliberate `__BASE_URL__` build token; the published artifact must not. The assembly step fails on missing or unresolved tokens. Pages must use **GitHub Actions** as its source. A local file preview is not proof of canonical URL correctness or deployment.
+`.github/workflows/pages.yml` runs only for `Nominy/exaudio` on `main`, uses a hosted Linux runner and Pages OIDC permissions, and substitutes the **actual** `actions/configure-pages` `base_url` into canonical/OG URLs, `sitemap.xml` and `robots.txt`. Raw source contains the deliberate `__BASE_URL__` build token; the published artifact must not. The assembly step fails on missing or unresolved tokens. Pages must use **GitHub Actions** as its source. A local file preview is not proof of canonical URL correctness or deployment.
 
 Visual acceptance should cover RU/EN, retained language after reload, light/dark themes, 320/375/768/1440 px widths, keyboard-only navigation, visible focus, 200% zoom, reduced motion, blocked local storage and the no-JavaScript Russian page. Check that all download/issue/SDK links resolve once their repositories and releases exist. A visually successful preview does not establish that a release exists.
 
@@ -104,13 +104,13 @@ The layout does not pretend that brand artwork is an application screenshot. Add
 
 ## Licenses and acknowledgements
 
-- Sonus source code is licensed under the root [MIT license](../LICENSE), consistent with `workspace.package.license`. Copyright and license notices must remain in redistributed copies.
+- Exaudio source code is licensed under the root [MIT license](../LICENSE), consistent with `workspace.package.license`. Copyright and license notices must remain in redistributed copies.
 - Rust dependencies retain their individual licenses. `Cargo.lock` identifies exact versions; review each upstream crate's license and include required notices with binary distribution. This short attribution list is **not** a complete dependency-license inventory.
 - The interface uses [GPUI](https://gpui.rs/) and [gpui-kit](https://crates.io/crates/gpui-kit). The vendored Windows patch retains its [Apache 2.0 notice](../vendor/gpui-pre-windows/LICENSE-APACHE).
-- Extension execution uses [Wasmtime](https://wasmtime.dev/). Audio and native codec dependencies retain their upstream licenses independently of Sonus.
-- The existing Sonus wordmark uses outlined [Outfit](https://github.com/Outfitio/Outfit-Fonts) lettering, licensed under [SIL Open Font License 1.1](https://github.com/Outfitio/Outfit-Fonts/blob/main/OFL.txt). The site ships SVG outlines, not a webfont or an external font request.
+- Extension execution uses [Wasmtime](https://wasmtime.dev/). Audio and native codec dependencies retain their upstream licenses independently of Exaudio.
+- The Exaudio wordmark uses outlined [Outfit](https://github.com/Outfitio/Outfit-Fonts) Regular lettering, licensed under [SIL Open Font License 1.1](https://github.com/Outfitio/Outfit-Fonts/blob/main/OFL.txt); `tools/brand/render.py` outlines it and renders every derived brand asset. The site ships SVG outlines, not a webfont or an external font request.
 - The synthetic demo generator identifies Piper's `ru_RU-denis-medium` and `ru_RU-dmitri-medium` voices and their [CC0 source datasets](https://github.com/OHF-Voice/voice-datasets). Model/software licenses and generated recording provenance are distinct; retain the applicable notices if redistributing voice files. No voice model weights are implied to be part of the installer.
 - Downloaded inference runtimes, model weights and third-party extension packages have their own licenses and distribution terms. Review them before redistribution; a runtime download is not covered automatically by the app's MIT license.
-- Helper, reviewer/drafting and Babel integration are first-party developments by the Sonus author. Review provenance separately for any concrete data/assets copied verbatim from the upstream Babel service. Service access still requires authorization; Sonus does not claim official Babel affiliation.
+- Helper, reviewer/drafting and Babel integration are first-party developments by the Exaudio author. Review provenance separately for any concrete data/assets copied verbatim from the upstream Babel service. Service access still requires authorization; Exaudio does not claim official Babel affiliation.
 
 For contributions, prefer a focused issue/PR with reproducible steps and synthetic fixtures. Include the feature selection and checks you actually ran; report blocked or unexercised checks explicitly rather than treating them as passing.

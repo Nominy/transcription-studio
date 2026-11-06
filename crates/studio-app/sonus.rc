@@ -1,2 +1,2 @@
 // 1: app icon (gpui loads id 1 for the window; the tray loads it by ordinal).
-1 ICON "../../assets/app/sonus.ico"
+1 ICON "../../assets/app/exaudio.ico"

@@ -34,7 +34,7 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
                 ))),
                 window_min_size: Some(size(px(880.), px(600.))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Sonus".into()),
+                    title: Some("Exaudio".into()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -58,7 +58,7 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
             let (window, root) = match opened {
                 Ok(opened) => opened,
                 Err(error) => {
-                    eprintln!("Could not open Sonus: {error:#}");
+                    eprintln!("Could not open Exaudio: {error:#}");
                     cx.quit();
                     return;
                 }

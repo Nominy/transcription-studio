@@ -4,8 +4,8 @@
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, IconName, Selectable, Sizable, Theme, ThemeMode, WindowExt as _,
-    h_flex, v_flex,
+    ActiveTheme, Disableable, IconName, Selectable, Sizable, Theme, ThemeConfig, ThemeMode,
+    ThemeRegistry, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -29,12 +29,42 @@ const LAYOUTS: [(EditorLayout, &str); 3] = [
 ];
 const LANGUAGES: [(&str, &str); 2] = [("en", "English"), ("ru", "Русский")];
 
-/// Applies the persisted theme (dark by default). Call once at startup.
+/// Brand accent (amber) and the ink it carries text in; the same on both modes.
+const ACCENT: &str = "#D99A2B";
+const ACCENT_HOVER: &str = "#E2A942";
+const ACCENT_ACTIVE: &str = "#C2881F";
+const ACCENT_FOREGROUND: &str = "#14161C";
+
+/// gpui-kit's default theme with the brand accent in place of its neutral primary.
+fn branded(config: &Rc<ThemeConfig>) -> Rc<ThemeConfig> {
+    let mut config = ThemeConfig::clone(config);
+    let colors = &mut config.colors;
+    colors.primary = Some(ACCENT.into());
+    colors.primary_hover = Some(ACCENT_HOVER.into());
+    colors.primary_active = Some(ACCENT_ACTIVE.into());
+    colors.primary_foreground = Some(ACCENT_FOREGROUND.into());
+    colors.ring = Some(ACCENT.into());
+    colors.progress_bar = Some(ACCENT.into());
+    colors.slider_bar = Some(ACCENT.into());
+    colors.sidebar_primary = Some(ACCENT.into());
+    colors.sidebar_primary_foreground = Some(ACCENT_FOREGROUND.into());
+    Rc::new(config)
+}
+
+/// Installs the branded light and dark themes, then applies the persisted mode (dark by
+/// default). Call once at startup.
 pub fn apply_saved_theme(cx: &mut App) {
     let mode = match cx.global::<AppServices>().storage.value(THEME_STORAGE_KEY) {
         Some("light") => ThemeMode::Light,
         _ => ThemeMode::Dark,
     };
+    let registry = ThemeRegistry::global(cx);
+    let light = branded(registry.default_light_theme());
+    let dark = branded(registry.default_dark_theme());
+    Theme::update(cx, |theme| {
+        theme.light_theme = light;
+        theme.dark_theme = dark;
+    });
     Theme::change(mode, None, cx);
 }
 
@@ -310,7 +340,7 @@ impl SettingsView {
         };
         ui::card(
             "Updates",
-            Some("Sonus checks for updates on launch and every few hours."),
+            Some("Exaudio checks for updates on launch and every few hours."),
             cx,
         )
         .child(ui::detail_row("Version", state.current_version.clone(), cx))

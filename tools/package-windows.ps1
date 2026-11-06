@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Builds Sonus for Windows and packs it with Velopack.
+Builds Exaudio for Windows and packs it with Velopack.
 
 .DESCRIPTION
--UpdateChannel stable packs Velopack channel `win` (GitHub Releases: Sonus-win-Setup.exe,
-Sonus-win-Portable.zip); -UpdateChannel alpha packs channel `alpha` (VPS alpha feed). The
+-UpdateChannel stable packs Velopack channel `win` (GitHub Releases: Exaudio-win-Setup.exe,
+Exaudio-win-Portable.zip); -UpdateChannel alpha packs channel `alpha` (VPS alpha feed). The
 channel and version are baked into the binary (STUDIO_UPDATE_CHANNEL, STUDIO_BUILD_VERSION),
 so the installed app updates from the feed it was packaged for.
 
@@ -28,10 +28,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PackId = "Sonus"
-$PackTitle = "Sonus"
+$PackId = "Exaudio"
+$PackTitle = "Exaudio"
 $PackAuthors = "Nominy"
-$MainExe = "Sonus.exe"
+$MainExe = "Exaudio.exe"
 $Channel = if ($UpdateChannel -eq "stable") { "win" } else { "alpha" }
 
 function Resolve-RepoPath {
@@ -276,7 +276,7 @@ $sourceExePath = Join-Path $cargoTargetDir "release/studio-app.exe"
 $sourceRelayExePath = Join-Path $cargoTargetDir "release/studio-relay.exe"
 # Isolated compiler child for untrusted extension .wasm; the app resolves it as its sibling.
 $sourceWasmWorkerPath = Join-Path $cargoTargetDir "release/sonus-wasm-worker.exe"
-$iconPath = Join-Path $repoRoot "assets/app/sonus.ico"
+$iconPath = Join-Path $repoRoot "assets/app/exaudio.ico"
 Assert-ChildPath -Parent $repoRoot -Child $stagePath
 Assert-ChildPath -Parent $repoRoot -Child $outputPath
 Assert-ChildPath -Parent $repoRoot -Child $publishPath

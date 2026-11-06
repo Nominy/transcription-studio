@@ -1,4 +1,4 @@
-# Sonus Rust component SDK
+# Exaudio Rust component SDK
 
 The API is `sonus:extension/extension@0.1.0` in `wit/sonus-extension.wit`.
 `sonus-sdk` generates guest bindings with wit-bindgen 0.46; `sonus-wasm` generates

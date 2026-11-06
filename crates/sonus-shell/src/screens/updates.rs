@@ -191,7 +191,7 @@ pub fn update_notice(cx: &App) -> Option<Div> {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(format!("Sonus {version} is available")),
+                    .child(format!("Exaudio {version} is available")),
             )
             .child(
                 div()

@@ -1,4 +1,4 @@
-//! Unpacks the Babel data bundle pinned by `babel-data.json` (Babel platform data Sonus doesn't
+//! Unpacks the Babel data bundle pinned by `babel-data.json` (Babel platform data Exaudio doesn't
 //! carry in source, see `src/data.rs`) into `OUT_DIR/babel-data`.
 //!
 //! The bundle is private: it is not downloadable, so builds read it from the per-user build

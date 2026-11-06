@@ -48,12 +48,12 @@ both languages; 301 leak jargon, identifiers or `Debug` output. This deck replac
 | transcript | transcript | расшифровка | |
 | project / document / native project | **project** | **проект** | "document" never shown |
 | mode (Local, Babel…) | **workspace** | **рабочее пространство** (short: *пространство*) | ⟨alt: *source / источник*⟩ ? |
-| extension / marketplace / package | **add-on** / **catalog** | **дополнение** / **каталог** | ⟨alt: keep *Extensions / Расширения*⟩ ? |
+| extension / marketplace / package | **extension** / **catalog** | **расширение** / **каталог** | |
 | diagnostics / lint / issues | **checks** | **проверки** | column: *Checks* / *Проверки* |
 | diagnostic severity error / warning / hint | problem / warning / tip | проблема / предупреждение / подсказка | |
 | quick fix | fix | исправить | |
 | provider / backend / inference location | **runs on** · This computer / Remote server | **где выполняется** · Этот компьютер / Удалённый сервер | "This PC" → "This computer" |
-| Gold (the AI add-on) | Gold (add-on name only) | Gold | never in button labels |
+| Gold (the AI extension) | Gold (extension name only) | Gold | never in button labels |
 | Word timestamps | **Align words** | **Выровнять слова** | |
 | Gold Draft | **Draft with AI** | **Черновик с ИИ** | dialog title: *AI draft* / *Черновик ИИ* |
 | Transcribe segment | **Fill this segment** | **Заполнить сегмент** | |
@@ -63,7 +63,7 @@ both languages; 301 leak jargon, identifiers or `Debug` output. This deck replac
 | playhead | playhead | курсор воспроизведения | |
 | loop | loop | повтор | |
 | annotation (Babel) | annotation | аннотация | Babel only |
-| relay / sub-account (Babel) | relay / sub-account | ретранслятор / доп. аккаунт | Babel only; ⟨alt RU: *реле* / *под-аккаунт*⟩ ? |
+| relay / sub-account (Babel) | relay / sub-account | ретранслятор / под-аккаунт | Babel only; ⟨alt RU: *реле* / *под-аккаунт*⟩ ? |
 | claim / submit (Babel) | take / submit | взять / отправить | Babel only |
 | timeline | timeline | таймлайн | ⟨alt RU: *шкала времени*⟩ ? |
 | waveform | waveform | волна | |
@@ -88,32 +88,32 @@ both languages; 301 leak jargon, identifiers or `Debug` output. This deck replac
 
 Start is the list of installed modes ("server list"). Each tile: label, one-line description,
 and an account chip only when its provider type has more than one account. Last tile:
-*Get more*. Footer: Settings · Add-ons. Clicking a tile opens the mode's launch window; if the
+*Get more*. Footer: Settings · Extensions. Clicking a tile opens the mode's launch window; if the
 mode needs an account that isn't set up yet, the sign-in page appears first, as part of
 opening the mode. Providers never appear by name outside Settings › Advanced › Accounts.
 
 ### 4.1 Start
 
 | Element | Current | EN | RU | Notes |
-|---|---|---|---|---|
-| Heading | `Sonus` | *(wordmark, no text)* | — | |
-| Language picker | `Language / Язык: ru [English][Русский]` | **[gone]** → Settings › General | | first run uses OS locale |
-| Tile | `Local workspace` / `Open audio and edit projects without an account.` | `Local` / `Open audio and projects on this computer` | `Локально` / `Аудио и проекты на этом компьютере` | |
+| --- | --- | --- | --- | --- |
+| Heading | `Sonus` | *(wordmark, no text)* | — |  |
+| Language picker | `Language / Язык: ru [English][Русский]` | **[gone]** → Settings › General |  | first run uses OS locale |
+| Tile | `Local workspace` / `Open audio and edit projects without an account.` | `Local` / `Open audio and projects on this computer` | `Локально` / `Аудио и проекты на этом компьютере` |  |
 | Tile | `Babel` / `Direct Babel account tasks and review` | `Babel` / `Transcription tasks` | `Babel` / `Задачи транскрипции` | needs Babel account |
 | Tile | *(new)* | `Babel error review` / `Error review tasks` | `Babel: ревью ошибок` / `Задачи ревью ошибок` | needs Babel account |
-| Tile | `Babel JSON file` / `Offline Babel file editing; no account or remote mutations` | `Babel file` / `Edit an exported task offline` | `Файл Babel` / `Редактировать экспортированную задачу без сети` | opens file picker directly |
-| Tile | `Babel Relay` | **[gone]** — sub-account code is a sign-in method of the Babel account | | |
-| Tile | — | `Get more` / `Add-ons from the catalog` | `Ещё` / `Дополнения из каталога` | → Add-ons page |
+| Tile | `Babel JSON file` / `Offline Babel file editing; no account or remote mutations` | `Babel file` / `Edit an exported task offline` | `Файл Babel` / `Редактировать экспортированную задачу офлайн` | opens file picker directly |
+| Tile | `Babel Relay` | **[gone]** — sub-account code is a sign-in method of the Babel account |  |  |
+| Tile | — | `Get more` / `Extensions from the catalog` | `Ещё` / `Расширения из каталога` | → Extensions page |
 | Account chip | — | `{label}` (tooltip `Switch account`) | `{label}` (`Сменить аккаунт`) | only when >1 account |
-| Footer | `Settings` · `Extensions` | `Settings` · `Add-ons` | `Настройки` · `Дополнения` | |
-| Mode page header | `Home` · `Settings` · `Extensions` | `Start` · `Settings` · `Add-ons` | `Начало` · `Настройки` · `Дополнения` | header for launch windows |
+| Footer | `Settings` · `Extensions` | `Settings` · `Extensions` | `Настройки` · `Расширения` |  |
+| Mode page header | `Home` · `Settings` · `Extensions` | `Start` · `Settings` · `Extensions` | `Начало` · `Настройки` · `Расширения` | header for launch windows |
 
 ### 4.2 Sign-in step (shell page wrapping the provider's setup view)
 
 | Element | EN | RU | Notes |
 |---|---|---|---|
 | Page title | `Sign in to {mode}` | `Вход: {mode}` | e.g. "Sign in to Babel" |
-| Cancel | `Cancel` (page) / `Later` (after Add-ons install) | `Отмена` / `Позже` | |
+| Cancel | `Cancel` (page) / `Later` (after Extensions install) | `Отмена` / `Позже` | |
 | Chooser title | `Which account?` | `Какой аккаунт?` | only when >1 account and none chosen |
 | Chooser row | `{label}` · `{status detail}` | | |
 | Chooser action | `Add another account` | `Добавить ещё аккаунт` | `multiple` types only |
@@ -122,21 +122,21 @@ opening the mode. Providers never appear by name outside Settings › Advanced �
 ### 4.3 Local launch window
 
 | Element | Current | EN | RU | Notes |
-|---|---|---|---|---|
-| Card title | `Start editing` | `Start` | `Начать` | |
-| Card text | `Open a native project or choose a mode. …` | `Open a recording and start editing. No account needed.` | `Откройте запись и начните редактировать. Аккаунт не нужен.` | |
+| --- | --- | --- | --- | --- |
+| Card title | `Start editing` | `Start` | `Начать` |  |
+| Card text | `Open a native project or choose a mode. …` | `Open a recording and start editing.` | `Откройте запись и начните редактировать.` |  |
 | Primary | `Open audio` | `Open audio…` | `Открыть аудио…` | WAV · MP3 · FLAC · OGG · M4A · MP4 · WebM · MKV as subtext |
-| Secondary | `Open project…` | `Open project…` | `Открыть проект…` | |
-| Secondary | `Try the demo` | `Try the demo` | `Попробовать демо` | |
+| Secondary | `Open project…` | `Open project…` | `Открыть проект…` |  |
+| Secondary | `Try the demo` | `Try the demo` | `Попробовать демо` |  |
 | Section | `Recent projects` | `Recent` | `Недавние` | rows: project name; path as tooltip; hidden when empty |
 | Section | `Recovery snapshots` | `Unsaved work` | `Несохранённая работа` | rows: project name; hidden when empty |
-| Row action | *(click path)* | `Restore` | `Восстановить` | |
-| Import progress | `{done}/{total} — {file}` | `Opening {done} of {total}: {file}` | `Открытие {done} из {total}: {file}` | |
-| Import cancel | `Cancel` | `Cancel` | `Отмена` | |
-| New project name (1 file) | `Untitled` | *(file name without extension)* | *(то же)* | |
-| New project name (N files) | `New transcript` | `New project` | `Новый проект` | |
-| Default speaker | `Speaker {n}` | `Speaker {n}` | `Спикер {n}` | |
-| Default track | `Audio` | `Track {n}` | `Дорожка {n}` | |
+| Row action | *(click path)* | `Restore` | `Восстановить` |  |
+| Import progress | `{done}/{total} — {file}` | `Opening {done} of {total}: {file}` | `Открытие {done} из {total}: {file}` |  |
+| Import cancel | `Cancel` | `Cancel` | `Отмена` |  |
+| New project name (1 file) | `Untitled` | *(file name without extension)* | *(то же)* |  |
+| New project name (N files) | `New transcript` | `New project` | `Новый проект` |  |
+| Default speaker | `Speaker {n}` | `Speaker {n}` | `Спикер {n}` |  |
+| Default track | `Audio` | `Track {n}` | `Дорожка {n}` |  |
 
 ### File dialogs (OS prompts)
 
@@ -177,9 +177,9 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 | Export | `Export…` | `Export…` | `Экспорт…` | |
 | ⋯ menu | `Commands` | `⋯` (tooltip `More`) | `Ещё` | |
 | ⋯ › | `Import transcript…` | `Import transcript…` | `Импортировать текст…` | |
-| ⋯ › | `Home` / `Settings` / `Extensions` | `Start` / `Settings…` / `Add-ons…` | `Начало` / `Настройки…` / `Дополнения…` | |
+| ⋯ › | `Home` / `Settings` / `Extensions` | `Start` / `Settings…` / `Extensions…` | `Начало` / `Настройки…` / `Расширения…` | |
 | ⋯ › | `Keyboard shortcuts` (icon) | `Keyboard shortcuts…` | `Сочетания клавиш…` | |
-| ⋯ › | `Start subaccount relay` / `Stop …` | *(Babel only)* `Start sub-account relay` / `Stop sub-account relay` | `Запустить ретранслятор` / `Остановить ретранслятор` | only when Babel add-on active |
+| ⋯ › | `Start subaccount relay` / `Stop …` | *(Babel only)* `Start sub-account relay` / `Stop sub-account relay` | `Запустить ретранслятор` / `Остановить ретранслятор` | only when Babel extension active |
 
 ### 5.2 Timeline
 
@@ -242,10 +242,10 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 ### 5.7 Keyboard shortcuts dialog
 
 | Current | EN | RU |
-|---|---|---|
+| --- | --- | --- |
 | `Keyboard Shortcuts` | `Keyboard shortcuts` | `Сочетания клавиш` |
-| `Shortcuts use physical key positions, so the same keys work across keyboard layouts.` | `Shortcuts follow key positions, so they work the same in any keyboard layout.` | `Сочетания привязаны к положению клавиш и работают одинаково в любой раскладке.` |
-| `Press the new key combination for the highlighted action, or Cancel. Escape can be bound too.` | `Press the new keys. Esc can be used as a shortcut too.` | `Нажмите новое сочетание. Esc тоже можно назначить.` |
+| `Shortcuts use physical key positions, so the same keys work across keyboard layouts.` | `[gone]` | `[gone]` |
+| `Press the new key combination for the highlighted action, or Cancel.` | `Press the new keys.` | `Нажмите новое сочетание.` |
 | `Press new key combination...` | `Press keys…` | `Нажмите клавиши…` |
 | badges `custom` / `conflict` / `fixed` | `changed` / `conflict` / `fixed` | `изменено` / `конфликт` / `фиксировано` |
 | `Change` / `Reset` / `Reset All` / `Close` / `Cancel` | `Change` / `Reset` / `Reset all` / `Close` / `Cancel` | `Изменить` / `Сбросить` / `Сбросить все` / `Закрыть` / `Отмена` |
@@ -256,10 +256,10 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 
 ---
 
-## 6. Checks (lint add-on messages)
+## 6. Checks (lint extension messages)
 
 | Current | EN | RU |
-|---|---|---|
+| --- | --- | --- |
 | `Leading horizontal whitespace` | `Starts with a space` | `Начинается с пробела` |
 | `Trailing horizontal whitespace` | `Ends with a space` | `Заканчивается пробелом` |
 | `Repeated horizontal whitespace` | `Double spaces` | `Двойные пробелы` |
@@ -267,8 +267,8 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 | `Segment has no transcript text` | `Empty segment` | `Пустой сегмент` |
 | `Timing must be finite, nonnegative and ordered` | `End time is before start time` | `Конец раньше начала` |
 | `Segment overlaps another segment in the same lane` | `Overlaps the next segment on this track` | `Пересекается со следующим сегментом на дорожке` |
-| Add-on name `Basic transcript checks` | `Basic checks` | `Базовые проверки` |
-| Add-on description | `Optional Local checks for ASCII horizontal whitespace, empty transcripts, invalid timing and same-lane overlaps. No language or punctuation conventions are enforced.` → `Flags empty segments, stray spaces, bad timing and overlaps. No spelling or style rules.` | `Отмечает пустые сегменты, лишние пробелы, ошибки тайминга и пересечения. Без правил орфографии и стиля.` |
+| Extension name `Basic transcript checks` | `Basic checks` | `Базовые проверки` |
+| Extension description | `Optional Local checks for ASCII horizontal whitespace, empty transcripts, invalid timing and same-lane overlaps. No language or punctuation conventions are enforced.` → `Flags empty segments, stray spaces, bad timing and overlaps.` | `Отмечает пустые сегменты, лишние пробелы, ошибки тайминга и пересечения.` |
 
 ---
 
@@ -279,14 +279,14 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 | dialog `Export transcript` / `Import transcript` | `Export as…` / `Import from…` | `Экспортировать как…` / `Импортировать из…` |
 | format `SubRip subtitles` / `WebVTT subtitles` / `Plain text (untimed import)` | `SubRip (.srt)` / `WebVTT (.vtt)` / `Plain text (.txt)` | same, with subtext for TXT import: `Text only, no timing` / `Только текст, без тайминга` |
 | `Open an audio project first, then choose a format.` | `Open a project first.` | `Сначала откройте проект.` |
-| `No format extension is enabled. Open Extensions to enable one.` | `No export formats are enabled. Turn one on in Add-ons.` | `Форматы экспорта отключены. Включите их в Дополнениях.` |
+| `No format extension is enabled. Open Extensions to enable one.` | `No export formats are enabled. Turn one on in Extensions.` | `Форматы экспорта отключены. Включите их в Расширениях.` |
 | `The format extension was disabled.` | `That format was just turned off.` | `Этот формат только что отключили.` |
 | `Exported {path}` | `Exported to {file}` | `Экспортировано в {file}` |
 | `Export path has no directory.` | `Choose a folder to export to.` | `Выберите папку для экспорта.` |
 | `Select a segment on the destination lane first.` | `Select a segment on the target track first.` | `Сначала выберите сегмент на нужной дорожке.` |
 | `Transcript file exceeds 32 MiB.` | `This file is too large to import (over 32 MB).` | `Файл слишком большой для импорта (больше 32 МБ).` |
 | `Plain text has no timestamps. Select an existing segment to place it without inventing timing.` | `Plain text has no timing. Select the segment to put it in.` | `В обычном тексте нет тайминга. Выберите сегмент, куда его вставить.` |
-| `Replace the selected segment's text? Its existing timing is unchanged.` | `Replace the text of the selected segment? Timing stays as is.` | `Заменить текст выбранного сегмента? Тайминг не изменится.` |
+| `Replace the selected segment's text? Its existing timing is unchanged.` | `Replace the text of the selected segment?` | `Заменить текст выбранного сегмента?` |
 | `{n} cues will be appended to this lane. Existing segments stay unchanged; source speaker labels are kept in the text.` | `Add {n} subtitles to “{track}”? Existing segments are kept. Speaker names from the file stay in the text.` | `Добавить {n} субтитров на дорожку «{track}»? Существующие сегменты сохранятся. Имена спикеров из файла останутся в тексте.` |
 | title `Confirm import` / button `Import` | `Import` / `Import` | `Импорт` / `Импортировать` |
 | `The active document changed. Start the import again.` | `The project changed meanwhile. Start the import again.` | `Проект изменился. Начните импорт заново.` |
@@ -295,7 +295,7 @@ dirty dot) · *spacer* · **AI** menu · **Export…** · **⋯** overflow. The 
 
 ---
 
-## 8. Add-ons page
+## 8. Extensions page
 
 Structure: **list with toggles** (name, one line, switch) → details on select → an
 **Advanced** disclosure at the bottom holding URL install, developer folder, catalog
@@ -304,14 +304,14 @@ source, logs, rollback.
 ### 8.1 Page
 
 | Current | EN | RU |
-|---|---|---|
-| `Extensions / Marketplace` | `Add-ons` | `Дополнения` |
-| `Bundled extensions work offline. Marketplace packages are sandboxed WASM; native DLL loading is not supported.` | `Built-in add-ons work offline. Add-ons from the catalog run in a sandbox.` | `Встроенные дополнения работают без сети. Дополнения из каталога выполняются в изолированной среде.` |
-| `Search extensions` | `Search add-ons` | `Поиск дополнений` |
+| --- | --- | --- |
+| `Extensions / Marketplace` | `Extensions` | `Расширения` |
+| `Bundled extensions work offline. Marketplace packages are sandboxed WASM; native DLL loading is not supported.` | `[gone]` | `[gone]` |
+| `Search extensions` | `Search extensions` | `Поиск расширений` |
 | `Refresh` / `Use cache / offline` / `Retry activation` / `Review rollback` | `Refresh catalog` / *(Advanced)* `Work offline` / `Retry` / `Restore previous set…` | `Обновить каталог` / `Без сети` / `Повторить` / `Вернуть предыдущий набор…` |
 | `Catalog state` + `Unavailable · bundled extensions remain available` / `Offline · validated cache only` / `Cached · …` / `Online · validated index` | `Catalog: unavailable` / `offline` / `cached` / `up to date` | `Каталог: недоступен` / `без сети` / `из кэша` / `обновлён` |
 | row `{name} · {version} · bundled/installed/developer/catalog` | `{name}` + muted `{version} · Built in / Installed / Developer / Available` | `… · Встроено / Установлено / Разработка / Доступно` |
-| `No extensions registered and no validated catalog available. Check the index source and refresh.` | `No add-ons available. Check the catalog source under Advanced.` | `Дополнения недоступны. Проверьте источник каталога в разделе «Дополнительно».` |
+| `No extensions registered and no validated catalog available. Check the index source and refresh.` | `No extensions available. Check the catalog source under Advanced.` | `Расширения недоступны. Проверьте источник каталога в разделе «Дополнительно».` |
 | `No matching extensions. Clear or change the search query.` | `Nothing matches your search.` | `По запросу ничего не найдено.` |
 | `Operation failed` | `Something went wrong` + sentence + Details | `Что-то пошло не так` + предложение + Подробности |
 | `Cancel pending work` | `Cancel` | `Отмена` |
@@ -331,7 +331,7 @@ source, logs, rollback.
 | `Original release` / `Open original GitHub release` | `Release page` / `Open on GitHub` | `Страница релиза` / `Открыть на GitHub` |
 | `Incompatible version` / `Compatible` | `Not compatible with this version of Exaudio` / *(nothing when compatible)* | `Несовместимо с этой версией Exaudio` |
 | `No compatible reviewed release is available. Refresh the index or inspect its withdrawal/API requirements.` | `No compatible version in the catalog.` | `В каталоге нет совместимой версии.` |
-| `Permissions` + rows | `This add-on can:` + rows below | `Это дополнение может:` |
+| `Permissions` + rows | `This extension can:` + rows below | `Это расширение может:` |
 | `Read document / Чтение документа` | `read your transcript` | `читать расшифровку` |
 | `Edit document / …` | `edit your transcript` | `изменять расшифровку` |
 | `Read audio samples / …` | `read the audio` | `читать аудио` |
@@ -341,12 +341,12 @@ source, logs, rollback.
 | `Private extension storage / …` | `keep its own settings` | `хранить свои настройки` |
 | `Private extension secrets / …` | `store keys and passwords` | `хранить ключи и пароли` |
 | `HTTPS network access / Сетевой доступ: {host} (exact host / точный адрес)` | `connect to {host}` | `подключаться к {host}` |
-| `Permissions: none / …` | `This add-on needs no permissions.` | `Дополнению не нужны разрешения.` |
+| `Permissions: none / …` | `This extension needs no permissions.` | `Дополнению не нужны разрешения.` |
 | `Dependencies` + `None` / `Dependency / Зависимость: {id} {version}` | `Also needs` + `nothing` / `{name} {version}` | `Также нужно` + `ничего` / `{name} {version}` |
 | `Review install` / `Review update` | `Install…` / `Update…` | `Установить…` / `Обновить…` |
 | `Disable` / `Enable` / `Uninstall` | `Turn off` / `Turn on` / `Remove` | `Выключить` / `Включить` / `Удалить` |
 | `Review / reload folder` / `Stop development extension` | `Reload` / `Stop` | `Перезагрузить` / `Остановить` |
-| `Bundled files are read-only and cannot be uninstalled from this page.` | `Built-in add-ons can be turned off but not removed.` | `Встроенные дополнения можно выключить, но не удалить.` |
+| `Bundled files are read-only and cannot be uninstalled from this page.` | `Built-in extensions can be turned off but not removed.` | `Встроенные расширения можно выключить, но не удалить.` |
 | `Close the active mode/document before disabling or uninstalling.` | `Close the open project first.` | `Сначала закройте открытый проект.` |
 
 ### 8.3 Consent dialog (replaces the preview card)
@@ -355,18 +355,18 @@ source, logs, rollback.
 |---|---|---|
 | `Review changes before approval` | `Install {name}?` / `Update {name}?` / `Turn off {name}?` / `Remove {name}?` | `Установить {name}?` / `Обновить {name}?` / `Выключить {name}?` / `Удалить {name}?` |
 | `Installation generation / Поколение установки: 0 · selected / выбрано: {id}` | **[gone]** | |
-| `UNREVIEWED DEVELOPER SOURCE / …: {path}\nSHA256: {hash}\n{bytes} bytes` | banner `This file isn't from the catalog. Only install add-ons you trust.` + Details (path, size, SHA-256) | `Этот файл не из каталога. Устанавливайте только дополнения, которым доверяете.` |
+| `UNREVIEWED DEVELOPER SOURCE / …: {path}\nSHA256: {hash}\n{bytes} bytes` | banner `This file isn't from the catalog. Only install extensions you trust.` + Details (path, size, SHA-256) | `Этот файл не из каталога. Устанавливайте только расширения, которым доверяете.` |
 | `Install { id: "…", version: Version { major: 0, … } }` (Debug) | `{name} {version}` | |
 | `NEW GRANTS / …: {id}` + permission rows | `It will be able to:` + rows from 8.2 | `Оно сможет:` |
 | `{id} ← sonus.marketplace-install` | **[gone]** | |
 | `BLOCKED / ЗАПРЕЩЕНО: {error}` | `Can't continue: {sentence}` | `Нельзя продолжить: {sentence}` |
 | `UNREVIEWED WATCHED FOLDER / …` + `Approval trusts future code changes in this folder…` | `Developer folder. Changes you make in it are loaded automatically.` | `Папка разработчика. Изменения в ней подхватываются автоматически.` |
-| `Runtime contributions, publications and subscriptions are removed on disable/uninstall. Retained rollback packages are not deleted. / …` | *(turn off)* `Its panels and commands go away. Your projects aren't changed.` | `Его панели и команды исчезнут. Проекты не изменятся.` |
-| `Restore previous COMPLETE dependency set / …, generation {n}` | `Go back to the previous set of add-ons?` | `Вернуть предыдущий набор дополнений?` |
+| `Runtime contributions, publications and subscriptions are removed on disable/uninstall. Retained rollback packages are not deleted. / …` | *(turn off)* `Its panels and commands go away.` | `Его панели и команды исчезнут.` |
+| `Restore previous COMPLETE dependency set / …, generation {n}` | `Go back to the previous set of extensions?` | `Вернуть предыдущий набор расширений?` |
 | `Approval grants exactly the permissions shown above to these versions. Dependencies are installed as one set. Cancel leaves the current installation unchanged.` | **[gone]** | |
 | `All documents: not allowed (click to opt in)` / `All documents: allowed for this session` + long paragraph | checkbox `Allow access to all projects until I quit Exaudio` | `Разрешить доступ ко всем проектам до выхода из Exaudio` |
 | `Approve and apply` / `Cancel` | `Install` / `Update` / `Turn off` / `Remove` + `Cancel` | `Установить` / `Обновить` / `Выключить` / `Удалить` + `Отмена` |
-| blockers: `This identity is installed/bundled; use a distinct developer ID or uninstall the managed package first. / …` | `An add-on with this ID is already installed.` | `Дополнение с таким ID уже установлено.` |
+| blockers: `This identity is installed/bundled; use a distinct developer ID or uninstall the managed package first. / …` | `An extension with this ID is already installed.` | `Дополнение с таким ID уже установлено.` |
 | `Enable dependency first / …: {id} {version}` | `Turn on {name} first.` | `Сначала включите {name}.` |
 | `Required by the active mode; close its document first. / …` | `The open project needs it. Close the project first.` | `Оно нужно открытому проекту. Сначала закройте проект.` |
 | `{a} requires {b} {v}; disable the dependent extension first.` | `{a} needs it. Turn off {a} first.` | `Оно нужно для «{a}». Сначала выключите «{a}».` |
@@ -377,7 +377,7 @@ source, logs, rollback.
 |---|---|---|
 | `Loading validated index / …` | `Refreshing catalog…` | `Обновление каталога…` |
 | `Catalog refresh finished / …` | `Catalog up to date` | `Каталог обновлён` |
-| `Restoring installed extensions / …` · `Restoring {i}/{n}: {owner}` · `Restored {n}/{n} managed extensions / …` | `Starting add-ons…` · `Starting {name} ({i} of {n})…` · *(nothing on success)* | `Запуск дополнений…` · `Запуск {name} ({i} из {n})…` |
+| `Restoring installed extensions / …` · `Restoring {i}/{n}: {owner}` · `Restored {n}/{n} managed extensions / …` | `Starting extensions…` · `Starting {name} ({i} of {n})…` · *(nothing on success)* | `Запуск расширений…` · `Запуск {name} ({i} из {n})…` |
 | `Inspecting local source / …` · `Local package ready for review / …` · `Developer folder ready for review / …` | `Checking file…` · *(opens consent dialog)* | `Проверка файла…` |
 | `Preparing transaction / …` · `Activating runtime and contributions / …` · `Activating / …: {owner}` · `Extension transaction completed and runtime activated / …` | `Installing…` · `Starting {name}…` · `{name} installed` | `Установка…` · `Запуск {name}…` · `{name} установлено` |
 | `Stopping / Остановка: network and staging cancel; …` | `Cancelling…` | `Отмена…` |
@@ -386,13 +386,13 @@ source, logs, rollback.
 | `Developer watcher started; …` / `Developer watcher stopped / …` / `Stopping developer extension / …` / `Extension stopped / …` | `Watching {folder}` / `Stopped watching` / `Stopping…` / `Stopped` | `Слежу за {folder}` / `Слежение остановлено` / `Остановка…` / `Остановлено` |
 | `Recovering prior installation / …: {failure}` · `Prior installation restored / …` · `RECOVERY ERROR / …` | `Something went wrong; restoring the previous state…` · `Previous state restored` · `Couldn't restore the previous state. Restart Exaudio.` + Details | `Произошла ошибка; возвращаю предыдущее состояние…` · `Предыдущее состояние восстановлено` · `Не удалось восстановить предыдущее состояние. Перезапустите Exaudio.` |
 | `{:?} · {} · {}/{total} {unit} · {:.1}s` (Debug stage) | `Downloading {name} — {done} of {total} MB` / `Verifying…` / `Unpacking…` | `Загрузка {name} — {done} из {total} МБ` / `Проверка…` / `Распаковка…` |
-| `{url}: {error}. Bundled extensions remain available. / …` | `Couldn't reach the catalog. Built-in add-ons still work.` + Details | `Не удалось открыть каталог. Встроенные дополнения работают.` |
-| `Installation state: {error}. Do not modify extensions until the store is readable.` | `Add-on settings couldn't be read. Restart Exaudio before changing add-ons.` + Details | `Не удалось прочитать настройки дополнений. Перезапустите Exaudio.` |
-| `Installed extension validation failed: {error}. Enable missing dependencies or disable the affected package, then retry activation.` / `Startup activation failed: …` | `Some add-ons couldn't start.` + per-add-on reason + `Retry` | `Некоторые дополнения не запустились.` |
+| `{url}: {error}. Bundled extensions remain available. / …` | `Couldn't reach the catalog.` + Details | `Не удалось открыть каталог.` |
+| `Installation state: {error}. Do not modify extensions until the store is readable.` | `Extension settings couldn't be read. Restart Exaudio before changing extensions.` + Details | `Не удалось прочитать настройки расширений. Перезапустите Exaudio.` |
+| `Installed extension validation failed: {error}. Enable missing dependencies or disable the affected package, then retry activation.` / `Startup activation failed: …` | `Some extensions couldn't start.` + per-extension reason + `Retry` | `Некоторые расширения не запустились.` |
 | `URL is not an exact reviewed release URL in the current index. …` | `This link isn't in the catalog. To install anyway, download the file and use “Install from file”.` | `Этой ссылки нет в каталоге. Чтобы установить всё равно, скачайте файл и используйте «Установить из файла».` |
-| `Choose a .sonusext package. / …` | `Choose an .exaudio file.` | `Выберите файл .exaudio.` |
+| `Choose a .exaudio package. / …` | `Choose an .exaudio file.` | `Выберите файл .exaudio.` |
 
-? Package extension: rename `.sonusext` → `.exaudio`? (affects catalog + packer)
+? Package extension: rename `.exaudio` → `.exaudio`? (affects catalog + packer)
 
 ### 8.5 Advanced disclosure
 
@@ -401,17 +401,17 @@ source, logs, rollback.
 | card `Install package / development` | `Advanced` | `Дополнительно` |
 | `Review URL` + placeholder | `Install from link…` + `https://…/*.exaudio` | `Установить по ссылке…` |
 | `URLs must exactly match a release in the reviewed index. Unindexed files require separate developer-source approval.` | `Only links listed in the catalog are accepted.` | `Принимаются только ссылки из каталога.` |
-| `Open .sonusext…` / `Load developer folder…` | `Install from file…` / `Open developer folder…` | `Установить из файла…` / `Открыть папку разработчика…` |
+| `Open .exaudio…` / `Load developer folder…` | `Install from file…` / `Open developer folder…` | `Установить из файла…` / `Открыть папку разработчика…` |
 | `Developer folders are explicitly trusted, watched with debounce, and never loaded as native code. …` | `Changes in a developer folder are reloaded automatically. If a reload fails, the last working version keeps running.` | `Изменения в папке разработчика подхватываются автоматически. Если перезагрузка не удалась, продолжает работать последняя рабочая версия.` |
-| card `Trusted index source` + paragraph | `Catalog source` + `Add-ons are listed and verified by this catalog. Change it only if you know who runs the new one.` | `Источник каталога` + `Этот каталог перечисляет и проверяет дополнения. Меняйте его, только если знаете, кто ведёт новый.` |
+| card `Trusted index source` + paragraph | `Catalog source` + `Extensions are listed and verified by this catalog. Change it only if you know who runs the new one.` | `Источник каталога` + `Этот каталог перечисляет и проверяет расширения. Меняйте его, только если знаете, кто ведёт новый.` |
 | `Default: {url}` / `Trust source and refresh` | `Default` link / `Use this source` | `По умолчанию` / `Использовать этот источник` |
-| card `Extension logs` + `{SystemTime:?} {msg}` | `Log` + `HH:MM:SS  {add-on}  {message}` | `Журнал` |
+| card `Extension logs` + `{SystemTime:?} {msg}` | `Log` + `HH:MM:SS  {extension}  {message}` | `Журнал` |
 
 ---
 
 ## 9. Settings
 
-Sidebar: **General · AI · Updates** (+ one entry per active platform add-on, e.g. **Babel**).
+Sidebar: **General · AI · Updates** (+ one entry per active platform extension, e.g. **Babel**).
 General ends with an **Advanced** disclosure holding *Accounts*: one row per signed-in
 account (`{label}` · `Signed in` / `Sign in again` · `Sign out`), plus `Add another account`
 for providers that allow several. The provider type's name (`Babel account`) is the group
@@ -449,7 +449,7 @@ heading. RU: `Аккаунты`, `Выйти`, `Добавить ещё акка
 | `OpenRouter API key (sk-or-…)` / `OpenRouter keys start with sk-or- and contain no spaces.` / `Check backend` / `Backend reachable` / `Backend check failed` | `OpenRouter key` / `Keys start with sk-or-.` / `Test key` / `Key works` / `Key doesn't work` | `Ключ OpenRouter` / `Ключ начинается с sk-or-.` / `Проверить ключ` / `Ключ работает` / `Ключ не работает` |
 | `Polish model` / `Service tier` + raw `default flex priority` / `Reasoning effort` + raw `none … xhigh` | *(Advanced)* `Model` / `Priority` + `Standard` `Cheaper` `Faster` / `Thinking` + `Default` `Off` `Minimal` `Low` `Medium` `High` `Very high` | `Модель` / `Приоритет` + `Обычный` `Дешевле` `Быстрее` / `Размышление` + `По умолчанию` `Выкл.` `Минимум` `Низкое` `Среднее` `Высокое` `Очень высокое` |
 | `Denoise` / `Speech enhancement for the Original/Enhanced mix.` / `Where to denoise` / `Denoise automatically when a task opens` | `Denoise` / `Removes background noise. You can mix the original and cleaned audio in the editor.` / `Runs on` / `Denoise automatically when a project opens` | `Шум` / `Убирает фоновый шум. В редакторе можно смешивать исходный и очищенный звук.` / `Где выполняется` / `Убирать шум автоматически при открытии проекта` |
-| `Gold is disabled. Re-enable Gold to manage inference settings.` | `The AI add-on is turned off. Turn it on in Add-ons to change these settings.` | `Дополнение ИИ выключено. Включите его в Дополнениях.` |
+| `Gold is disabled. Re-enable Gold to manage inference settings.` | `The AI extension is turned off. Turn it on in Extensions to change these settings.` | `Дополнение ИИ выключено. Включите его в Расширениях.` |
 | `AI settings could not be saved: {error}` | `Couldn't save AI settings.` + Details | `Не удалось сохранить настройки ИИ.` + Подробности |
 
 ### 9.3 Updates
@@ -462,12 +462,12 @@ heading. RU: `Аккаунты`, `Выйти`, `Добавить ещё акка
 | `Check for updates` / `Install update` | `Check now` / `Update` | `Проверить` / `Обновить` |
 | `Update channel could not be saved: {error}` | `Couldn't save this setting.` + Details | |
 
-### 9.4 Babel (only when the Babel add-on is on)
+### 9.4 Babel (only when the Babel extension is on)
 
 | Current | EN | RU |
 |---|---|---|
 | panel titles `Babel account and relay` / `Babel AI review` | `Babel` (one section) | `Babel` |
-| `Sub-account relay` / `Run the bundled relay on this machine and remember its URL for sub-accounts.` | `Sub-account relay` / `Lets sub-accounts sign in through this computer.` | `Ретранслятор для доп. аккаунтов` / `Позволяет доп. аккаунтам входить через этот компьютер.` |
+| `Sub-account relay` / `Run the bundled relay on this machine and remember its URL for sub-accounts.` | `Sub-account relay` / `Lets sub-accounts sign in through this computer.` | `Ретранслятор для под-аккаунтов` / `Позволяет под-аккаунтам входить через этот компьютер.` |
 | `Relay URL, e.g. http://127.0.0.1:8787` / `Save URL` / `Start relay` / `Stop relay` / `Stopped` / `Starting…` / `Running at {url}` / `Failed: {e}` | `Address` / `Save` / `Start` / `Stop` / `Stopped` / `Starting…` / `Running at {url}` / `Not running` + Details | `Адрес` / `Сохранить` / `Запустить` / `Остановить` / `Остановлен` / `Запуск…` / `Работает: {url}` / `Не работает` |
 | `Session & portability` / `Keep your Babel sign-in with this installation when you move it to another device.` / `Make installation portable` | `Sign-in` / `Keep your sign-ins with the app folder so they move with the app.` / `Store sign-ins next to the app` | `Вход` / `Хранить входы рядом с приложением, чтобы они переносились вместе с ним.` / `Хранить рядом с приложением` |
 | `Babel task files` / `Open Babel JSON…` | **[gone]** (Start › Babel file tile) | |
@@ -515,9 +515,9 @@ heading. RU: `Аккаунты`, `Выйти`, `Добавить ещё акка
 | slider `Mix: Enhanced (left) ↔ Original (right)` / labels `Original` / `{p}% enhanced` / `{p}% enh.` | `Clean ↔ Original` / `Original` / `{p}% clean` | `Очищенный ↔ Исходный` / `Исходный` / `{p}% очищ.` |
 | popover `No enhanced audio yet.` / `Runs on: {place}` / `{stage} · elapsed {t}` / `Using saved audio` / `Enhanced on {place} in {t}` / `Cancel` | `No clean audio yet` / `Runs on {place}` / `{stage} · {t}` / `Using saved result` / `Cleaned on {place} in {t}` / `Cancel` | `Очищенного звука пока нет` / `Выполняется: {place}` / `{stage} · {t}` / `Используется сохранённый результат` / `Очищено ({place}) за {t}` / `Отмена` |
 
-### 10.4 Add-on names and descriptions (Add-ons list)
+### 10.4 Extension names and descriptions (Extensions list)
 
-| Add-on | EN name · description | RU |
+| Extension | EN name · description | RU |
 |---|---|---|
 | sonus.local | **[gone]** from the list (it is the Start screen) | |
 | sonus.formats | `Subtitles and text` · `Import and export SRT, WebVTT and plain text.` | `Субтитры и текст` · `Импорт и экспорт SRT, WebVTT и обычного текста.` |
@@ -526,8 +526,8 @@ heading. RU: `Аккаунты`, `Выйти`, `Добавить ещё акка
 | sonus.babel | `Babel` · `Take, edit and submit Babel tasks.` | `Babel` · `Брать, редактировать и сдавать задачи Babel.` |
 | sonus.babel-lint | `Babel checks` · `Babel's transcription rules with automatic fixes.` | `Проверки Babel` · `Правила транскрипции Babel с автоисправлениями.` |
 | sonus.babel-tags | `Babel tags` · `Tag completion, СКАЗ conversion and number tools for Babel tasks.` | `Теги Babel` · `Подсказки тегов, преобразование в СКАЗ и работа с числами для задач Babel.` |
-| sonus.babel-relay | `Babel relay` · `Sign in to Babel through a sub-account relay.` | `Ретранслятор Babel` · `Вход в Babel через ретранслятор для доп. аккаунтов.` |
-| example.hello-panel | `Hello panel` · `Example add-on: inserts a greeting.` | `Панель-пример` · `Пример дополнения: вставляет приветствие.` |
+| sonus.babel-relay | `Babel relay` · `Sign in to Babel through a sub-account relay.` | `Ретранслятор Babel` · `Вход в Babel через ретранслятор для под-аккаунтов.` |
+| example.hello-panel | `Hello panel` · `Example extension: inserts a greeting.` | `Панель-пример` · `Пример расширения: вставляет приветствие.` |
 
 ---
 
@@ -541,11 +541,11 @@ the glossary and are reviewed after this pass.
 | Current | EN | RU |
 |---|---|---|
 | modes (Start tiles) | see §4.1 | |
-| auth `Welcome back` / `Sign in with the phone number or e-mail of your Babel account.` / `Phone number or e-mail` / `Continue` / `Use sub-account code` | `Sign in to Babel` / `Use the phone number or e-mail of your Babel account.` / `Phone or e-mail` / `Continue` / `I have a sub-account code` | `Вход в Babel` / `Укажите телефон или e-mail аккаунта Babel.` / `Телефон или e-mail` / `Продолжить` / `У меня код доп. аккаунта` |
+| auth `Welcome back` / `Sign in with the phone number or e-mail of your Babel account.` / `Phone number or e-mail` / `Continue` / `Use sub-account code` | `Sign in to Babel` / `Use the phone number or e-mail of your Babel account.` / `Phone or e-mail` / `Continue` / `I have a sub-account code` | `Вход в Babel` / `Укажите телефон или e-mail аккаунта Babel.` / `Телефон или e-mail` / `Продолжить` / `У меня код под-аккаунта` |
 | `Check your phone` / `Enter the verification code Babel sent you.` / `Verification code` / `Verify` / `Use a different number` | `Enter the code` / `Babel sent a code to your phone.` / `Code` / `Sign in` / `Use another number` | `Введите код` / `Babel отправил код на ваш телефон.` / `Код` / `Войти` / `Другой номер` |
 | `Sign in to a sub-account` / `Use the relay address and one-time code from the account owner.` / `Relay URL, e.g. https://relay.example.com` / `One-time code` / `Sign in` / `Use Babel account` | *(same sign-in page, second method)* `Enter the relay address and the code from the account owner.` / `Relay address` / `Code` / `Sign in` / `Use a Babel account instead` | `Введите адрес ретранслятора и код от владельца аккаунта.` / `Адрес ретранслятора` / `Код` / `Войти` / `Войти через аккаунт Babel` |
 | `Signing you in…` / `Your credentials stay on this device and are only used to talk to Babel.` / brand `Sonus` · `Babel workspace` | `Signing in…` / `Your sign-in stays on this device.` / `Exaudio` · `Babel` | `Вход…` / `Данные входа остаются на этом устройстве.` / `Exaudio` · `Babel` |
-| dashboard `Projects` / `Choose a Babel project and claim the next available task.` / `Sub-accounts` / `Settings` / `Find task` / `Refresh` / `Start task` / `Ready to claim the next task` / `No claimable queue` / `{a} of {b} tasks today` / `Today` / `Available projects` / `Sign out` | `Projects` / `Pick a project and take the next task.` / `Sub-accounts` / `Settings` / `Find a task…` / `Refresh` / `Take next task` / `Tasks available` / `No tasks available` / `{a} of {b} today` / `Today` / `Projects` / `Sign out` | `Проекты` / `Выберите проект и возьмите следующую задачу.` / `Доп. аккаунты` / `Настройки` / `Найти задачу…` / `Обновить` / `Взять задачу` / `Есть задачи` / `Нет задач` / `{a} из {b} сегодня` / `Сегодня` / `Проекты` / `Выйти` |
+| dashboard `Projects` / `Choose a Babel project and claim the next available task.` / `Sub-accounts` / `Settings` / `Find task` / `Refresh` / `Start task` / `Ready to claim the next task` / `No claimable queue` / `{a} of {b} tasks today` / `Today` / `Available projects` / `Sign out` | `Projects` / `Pick a project and take the next task.` / `Sub-accounts` / `Settings` / `Find a task…` / `Refresh` / `Take next task` / `Tasks available` / `No tasks available` / `{a} of {b} today` / `Today` / `Projects` / `Sign out` | `Проекты` / `Выберите проект и возьмите следующую задачу.` / `Под-аккаунты` / `Настройки` / `Найти задачу…` / `Обновить` / `Взять задачу` / `Есть задачи` / `Нет задач` / `{a} из {b} сегодня` / `Сегодня` / `Проекты` / `Выйти` |
 | problems `Your Babel session has expired` / `Babel no longer accepts the saved login. Sign in again to load your projects and claim tasks.` / `We couldn't refresh this workspace` / `The task could not be opened` / `{x} failed` | `Signed out of Babel` / `Sign in again to continue.` / `Couldn't refresh` / `Couldn't open the task` / `{x} didn't work` + Details | `Вы вышли из Babel` / `Войдите снова, чтобы продолжить.` / `Не удалось обновить` / `Не удалось открыть задачу` / `{x}: не удалось` |
 | commands `Submit task` / `Skip chunk` / `Flag recording` / `Drop claim` / `Magic Review` / `Feedback` / `Grade review` / `Edit annotation` / `Autofix selected row` / `Autofix all rows` / `Convert selection to SKAZ` / `Replace selected spoken digits with {d}` / `Acknowledge warning` | `Submit` / `Skip` / `Flag recording` / `Release task` / `Magic Review` / `Feedback` / `Grade` / `Edit annotation` / `Fix this segment` / `Fix all segments` / `Convert to СКАЗ` / `Replace with {d}` / `Dismiss warning` | `Отправить` / `Пропустить` / `Пометить запись` / `Отпустить задачу` / `Magic Review` / `Отзыв` / `Оценить` / `Изменить аннотацию` / `Исправить сегмент` / `Исправить все сегменты` / `Преобразовать в СКАЗ` / `Заменить на {d}` / `Скрыть предупреждение` |
 | file mode `Babel files` / `Open Babel JSON…` / `All workspaces` | **[gone]** — the tile opens the file picker directly | |
@@ -565,7 +565,7 @@ Every error the user sees is rendered by one component:
 
 | Source class | Headline | Details |
 |---|---|---|
-| Registry / activation bail (`Permissions must be approved before enabling …`, `Mode ID unavailable: …`, 30 more) | `This add-on can't start.` / `Couldn't open this workspace.` | original message |
+| Registry / activation bail (`Permissions must be approved before enabling …`, `Mode ID unavailable: …`, 30 more) | `This extension can't start.` / `Couldn't open this workspace.` | original message |
 | WASM host (`explicit permission approval is missing`, `activation output queue unavailable`, …) | `{name} stopped working.` | original message |
 | Format parser (`missing cue timing line`, 40 more) | `Couldn't read {file}.` + `Line {n}: {reason}` | — |
 | Gold remote/local (`Staging audio failed: …`, `Remote drafting needs a volunteer …`) | existing sentences are already plain → keep as headline, strip prefixes | — |
@@ -576,12 +576,7 @@ Every error the user sees is rendered by one component:
 
 ---
 
-## 13. Open questions
+## 13. Decisions (redline, 2026-11-06)
 
-1. `segment` vs `line` (EN) and `сегмент` vs `строка` (RU)?
-2. `Add-ons / Дополнения` vs keep `Extensions / Расширения`?
-3. ~~Workspace vs Source~~ — resolved: tiles are just "modes" in code and need no user-facing group word.
-4. `relay` → `ретранслятор` or `реле`? `sub-account` → `доп. аккаунт` or `под-аккаунт`?
-5. Rename the package extension `.sonusext` → `.exaudio` now (breaks the one example package) or later?
-6. RU for `speaker`: `спикер` (short, used in the industry) or `говорящий`?
-7. Tagline.
+- `segment` / `сегмент`; `Extensions` / `Расширения` (not "Add-ons"); `под-аккаунт`; `спикер`; package extension `.exaudio`; tagline `From audio, every word.` / `Из звука — в слова.`
+- Descriptions say what a thing does. No trailing "no X", "not Y", "nothing is Z" clauses anywhere in the UI.

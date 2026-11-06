@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.repository == 'Nominy/sonus' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Nominy/exaudio' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,7 +54,7 @@ jobs:
               raise SystemExit('configure-pages did not return a valid HTTPS base_url')
           target = Path('_site')
           shutil.copytree('site', target)
-          for name in ('header-light.svg', 'header-dark.svg', 'sonus-icon.svg'):
+          for name in ('header-light.svg', 'header-dark.svg', 'exaudio-icon.svg', 'social-preview.png'):
               shutil.copyfile(Path('assets/brand') / name, target / 'assets' / name)
           for name in ('index.html', 'sitemap.xml', 'robots.txt'):
               path = target / name

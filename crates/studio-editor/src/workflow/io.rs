@@ -8,7 +8,7 @@ use super::StudioWorkflow;
 
 impl StudioWorkflow {
     pub fn load_local_project(root: impl AsRef<Path>) -> Result<Self> {
-        let project = load_project(root).context("failed to load local Sonus project")?;
+        let project = load_project(root).context("failed to load local Exaudio project")?;
         Ok(Self::from_project(project))
     }
 
@@ -18,7 +18,8 @@ impl StudioWorkflow {
         source_base: impl AsRef<Path>,
     ) -> Result<()> {
         self.clear_pending_boundary_edit();
-        save_project(&self.project, root, source_base).context("failed to save local Sonus project")
+        save_project(&self.project, root, source_base)
+            .context("failed to save local Exaudio project")
     }
 
     pub fn project(&self) -> &Project {

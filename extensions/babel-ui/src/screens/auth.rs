@@ -543,15 +543,15 @@ impl Render for AuthScreen {
     }
 }
 
-/// The Sonus mark, parsed once; gpui rasterizes the SVG and caches it by content hash.
+/// The Exaudio icon, parsed once; gpui rasterizes the SVG and caches it by content hash.
 static BRAND_MARK: LazyLock<Arc<Image>> = LazyLock::new(|| {
     Arc::new(Image::from_bytes(
         ImageFormat::Svg,
-        include_bytes!("../../../../assets/brand/sonus-mark.svg").to_vec(),
+        include_bytes!("../../../../assets/brand/exaudio-icon.svg").to_vec(),
     ))
 });
 
-/// App mark: the Sonus medallion.
+/// App mark: the Exaudio icon tile.
 pub fn brand_mark() -> Img {
     img(BRAND_MARK.clone()).size(rems(2.25)).flex_none()
 }
