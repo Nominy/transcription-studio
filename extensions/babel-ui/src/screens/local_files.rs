@@ -5,9 +5,11 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use sonus_babel_domain::workflow::BabelWorkflowExt;
 use sonus_shell::editor::model::EditorModel;
+use sonus_shell::screens::ui;
 use sonus_shell::{DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ShellHandle};
 
 use crate::FILE_ID;
+use crate::text::{failed, localized, localized_fmt};
 
 /// `ModeLaunch::Direct`: the file picker opens immediately and the document, when chosen,
 /// becomes the editor. There is no launch window; cancelling leaves the shell on Start.
@@ -46,13 +48,23 @@ pub fn open_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
             };
             let model = shell.open_document(file.project, origin, environment, window, cx)?;
             crate::services::set_file_document(&model, cx);
+            let name = file_name(&file.path);
             model.update(cx, |model, cx| {
-                model.set_status(format!("Opened {}.", file.path.display()), cx)
+                model.set_status(
+                    localized_fmt(cx, "Opened {name}", "Открыт {name}", &[("name", &name)]),
+                    cx,
+                )
             });
             Ok(())
         });
         if let Err(error) = opened {
-            window.push_notification(Notification::error(format!("Open failed: {error:#}")), cx);
+            window.push_notification(
+                ui::error_notification(
+                    localized(cx, "Couldn't open the file.", "Не удалось открыть файл."),
+                    Some(format!("{error:#}").into()),
+                ),
+                cx,
+            );
         }
     });
 }
@@ -73,7 +85,7 @@ pub fn open_babel_json(
         files: true,
         directories: false,
         multiple: false,
-        prompt: Some("Open Babel JSON".into()),
+        prompt: Some(localized(cx, "Open a Babel file", "Открыть файл Babel").into()),
     });
     window
         .spawn(cx, async move |cx| {
@@ -128,7 +140,14 @@ pub fn save_babel_file(
     done: Option<Saved>,
 ) {
     if model.read(cx).doc().is_read_only() {
-        window.push_notification(Notification::error("This document is read-only."), cx);
+        window.push_notification(
+            Notification::error(localized(
+                cx,
+                "This file is read-only.",
+                "Этот файл только для чтения.",
+            )),
+            cx,
+        );
         return;
     }
     let path = model.read(cx).origin().native_path.clone();
@@ -168,10 +187,11 @@ fn save_to(
 ) {
     let snapshot = model.update(cx, |model, cx| {
         if model.doc().session().is_saving {
-            model.set_status("A save is already in progress.", cx);
+            model.set_status(localized(cx, "Already saving…", "Сохранение уже идёт…"), cx);
             return None;
         }
-        let committed = model.update_doc(cx, |doc| doc.commit_pending_drafts("Save"));
+        let action = localized(cx, "Save", "Сохранить");
+        let committed = model.update_doc(cx, |doc| doc.commit_pending_drafts(action));
         let ok = committed.is_ok();
         model.apply_result(committed, cx);
         if !ok {
@@ -180,7 +200,15 @@ fn save_to(
         let json = match model.doc().workflow().export_babel_json() {
             Ok(json) => json,
             Err(error) => {
-                model.set_status(format!("Save failed: {error:#}"), cx);
+                model.set_status(
+                    failed(
+                        cx,
+                        "Couldn't save the file.",
+                        "Не удалось сохранить файл.",
+                        format!("{error:#}"),
+                    ),
+                    cx,
+                );
                 return None;
             }
         };
@@ -201,8 +229,16 @@ fn save_to(
             cx.update(|window, cx| {
                 let succeeded = written.is_ok();
                 let detail = match written {
-                    Ok(()) => format!("Saved Babel JSON to {}.", path.display()),
-                    Err(error) => format!("Save failed: {error}"),
+                    Ok(()) => {
+                        let name = file_name(&path);
+                        localized_fmt(cx, "Saved {name}", "Сохранён {name}", &[("name", &name)])
+                    }
+                    Err(error) => failed(
+                        cx,
+                        "Couldn't save the file.",
+                        "Не удалось сохранить файл.",
+                        error,
+                    ),
                 };
                 let current = model
                     .update(cx, |model, cx| {
@@ -245,11 +281,25 @@ pub fn confirm_leave(
         window.defer(cx, done);
         return;
     }
+    let file = match model.read(cx).origin().native_path.as_deref() {
+        Some(path) => file_name(path),
+        None => format!("{}.json", file_stem(model, cx)),
+    };
+    let question = localized_fmt(
+        cx,
+        "Save changes to “{file}”?",
+        "Сохранить изменения в «{file}»?",
+        &[("file", &file)],
+    );
     let prompt = window.prompt(
         PromptLevel::Warning,
-        "Unsaved changes",
-        Some("Save this Babel JSON file before leaving?"),
-        &["Save", "Discard", "Cancel"],
+        localized(cx, "Unsaved changes", "Несохранённые изменения"),
+        Some(&question),
+        &[
+            localized(cx, "Save", "Сохранить"),
+            localized(cx, "Don't save", "Не сохранять"),
+            localized(cx, "Cancel", "Отмена"),
+        ],
         cx,
     );
     let model = model.clone();
@@ -265,6 +315,13 @@ pub fn confirm_leave(
             _ => {}
         })
         .detach();
+}
+
+/// The file's own name; paths never appear in a sentence.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn file_stem(model: &Entity<EditorModel>, cx: &App) -> String {

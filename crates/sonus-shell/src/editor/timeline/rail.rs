@@ -11,6 +11,7 @@ use studio_editor::timeline_model::TimelineLaneHeader;
 
 use super::{RAIL_WIDTH, lane_color};
 use crate::editor::model::EditorModel;
+use crate::screens::ui::localized;
 
 /// Cache style of a rail cell: the fixed rail width, the full row height.
 pub(super) fn rail_cell_style() -> StyleRefinement {
@@ -97,9 +98,9 @@ impl Render for LaneHeader {
                 IconName::ChevronDown
             })
             .tooltip(if lane.is_collapsed {
-                "Expand lane"
+                localized(cx, "Expand track", "Развернуть дорожку")
             } else {
-                "Collapse lane"
+                localized(cx, "Collapse track", "Свернуть дорожку")
             })
             .on_click(cx.listener({
                 let lane_id = lane_id.clone();
@@ -119,9 +120,9 @@ impl Render for LaneHeader {
                 IconName::Volume2
             })
             .tooltip(if lane.is_muted {
-                "Unmute lane"
+                localized(cx, "Unmute", "Включить звук")
             } else {
-                "Mute lane"
+                localized(cx, "Mute", "Без звука")
             })
             .on_click(cx.listener({
                 let lane_id = lane_id.clone();
@@ -154,8 +155,7 @@ impl Render for LaneHeader {
                 .child(h_flex().child(mute).child(collapse))
                 .into_any_element()
         } else {
-            let zoom_label = format!("{:.1}×", lane.vertical_zoom);
-            let zoom_text = theme.muted_foreground;
+            let height_hint = localized(cx, "Waveform height", "Высота волны");
             self.sync_zoom(lane.vertical_zoom, window, cx);
             h_flex()
                 .flex_1()
@@ -176,29 +176,21 @@ impl Render for LaneHeader {
                                 .gap_0p5()
                                 .child(mute)
                                 .child(collapse)
-                                .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!("lane-zoom-{lane_id}")))
-                                        .text_xs()
-                                        .text_color(zoom_text)
-                                        .child(zoom_label)
-                                        .tooltip(|window, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(
-                                                "Waveform height",
-                                            )
-                                            .build(window, cx)
-                                        }),
-                                ),
+                                .child(div().flex_1()),
                         ),
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!("lane-zoom-{lane_id}")))
                         .w(rems(1.125))
                         .h_full()
                         .py_2()
                         .flex()
                         .justify_center()
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(height_hint)
+                                .build(window, cx)
+                        })
                         .child(Slider::new(&self.zoom).vertical().h_full()),
                 )
                 .into_any_element()

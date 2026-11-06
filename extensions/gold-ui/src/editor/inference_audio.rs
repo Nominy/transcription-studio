@@ -9,19 +9,30 @@ use bytes::Bytes;
 use sonus_shell::editor::model::LaneSource;
 use studio_inference::LaneAudio;
 
+/// The headline of a failed read: the track's name only; the path and OS error follow in
+/// the chain.
+#[derive(Debug)]
+pub struct AudioReadError {
+    pub label: String,
+}
+
+impl std::fmt::Display for AudioReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Couldn't read the audio for {}.", self.label)
+    }
+}
+
 /// Reads the original WAV bytes of `sources`, in order. Blocking file IO: call it from a
-/// background executor.
+/// background executor. A failure carries [`AudioReadError`] as its outermost context.
 pub fn read_lane_audio(sources: &[LaneSource]) -> anyhow::Result<Vec<LaneAudio>> {
     sources
         .iter()
         .map(|source| {
-            let wav = std::fs::read(&source.path).with_context(|| {
-                format!(
-                    "Could not read the original audio of {}: {}",
-                    source.lane.label,
-                    source.path.display()
-                )
-            })?;
+            let wav = std::fs::read(&source.path)
+                .with_context(|| source.path.display().to_string())
+                .with_context(|| AudioReadError {
+                    label: source.lane.label.clone(),
+                })?;
             Ok(LaneAudio {
                 lane_id: source.lane.id.clone(),
                 speaker_key: source.lane.speaker_id.clone(),

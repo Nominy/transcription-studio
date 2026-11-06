@@ -13,6 +13,7 @@ use sonus_shell::screens::ui;
 use crate::ID;
 use crate::root;
 use crate::screens::ShellModels;
+use crate::text::{localized, localized_fmt};
 
 /// Env override of the providers root; a portable move is refused while it is set.
 const PROVIDER_DIR_ENV: &str = "STUDIO_PROVIDER_DIR";
@@ -28,7 +29,7 @@ impl SettingsView {
         let relay = ShellModels::relay(cx);
         let relay_url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Address")
+                .placeholder(localized(cx, "Address", "Адрес"))
                 .default_value(relay.read(cx).host_url().to_string())
         });
         let subscriptions = vec![
@@ -41,8 +42,8 @@ impl SettingsView {
                     crate::screens::relay::RelayEvent::Info(message) => {
                         Notification::info(message.clone())
                     }
-                    crate::screens::relay::RelayEvent::Error(message) => {
-                        Notification::error(message.clone())
+                    crate::screens::relay::RelayEvent::Error { headline, detail } => {
+                        ui::error_notification(headline.clone(), detail.clone())
                     }
                 };
                 window.push_notification(notification, cx);
@@ -83,9 +84,21 @@ impl SettingsView {
                         relay.sync_project_queues(&projects, auth_store, cx)
                     });
                 }
-                Notification::success(format!("Relay URL saved: {url}"))
+                Notification::success(localized_fmt(
+                    cx,
+                    "Relay address saved: {url}",
+                    "Адрес ретранслятора сохранён: {url}",
+                    &[("url", &url)],
+                ))
             }
-            Err(error) => Notification::error(format!("Relay URL not saved: {error}")),
+            Err(error) => ui::error_notification(
+                localized(
+                    cx,
+                    "Couldn't save the relay address.",
+                    "Не удалось сохранить адрес ретранслятора.",
+                ),
+                Some(error.into()),
+            ),
         };
         window.push_notification(note, cx);
     }
@@ -111,9 +124,10 @@ impl SettingsView {
             Ok(path) => {
                 root::reset_controllers(cx);
                 window.push_notification(
-                    Notification::success(format!(
-                        "Babel sign-in now lives next to the app: {}",
-                        path.display()
+                    Notification::success(path.display().to_string()).title(localized(
+                        cx,
+                        "Sign-ins now live next to the app",
+                        "Входы теперь хранятся рядом с приложением",
                     )),
                     cx,
                 );
@@ -121,7 +135,14 @@ impl SettingsView {
                 window.defer(cx, move |window, cx| shell.show_home(window, cx));
             }
             Err(error) => window.push_notification(
-                Notification::error(format!("Could not move the sign-in: {error:#}")),
+                ui::error_notification(
+                    localized(
+                        cx,
+                        "Couldn't move the sign-ins.",
+                        "Не удалось перенести входы.",
+                    ),
+                    Some(format!("{error:#}").into()),
+                ),
                 cx,
             ),
         }
@@ -131,7 +152,7 @@ impl SettingsView {
         let relay = ShellModels::relay(cx);
         let relay = relay.read(cx);
         let (can_start, can_stop, status) = (relay.can_start(), relay.can_stop(), relay.status());
-        let label = relay.status_label();
+        let label = relay.status_label(cx);
         let color = match status {
             RelayStatus::Running => cx.theme().success,
             RelayStatus::Failed => cx.theme().danger,
@@ -139,8 +160,12 @@ impl SettingsView {
             RelayStatus::Stopped => cx.theme().muted_foreground,
         };
         ui::card(
-            "Sub-account relay",
-            Some("Lets sub-accounts sign in through this computer."),
+            localized(cx, "Sub-account relay", "Ретранслятор для под-аккаунтов"),
+            Some(localized(
+                cx,
+                "Lets sub-accounts sign in through this computer.",
+                "Позволяет под-аккаунтам входить через этот компьютер.",
+            )),
             cx,
         )
         .child(
@@ -150,7 +175,7 @@ impl SettingsView {
                 .child(
                     Button::new("save-relay-url")
                         .outline()
-                        .label("Save")
+                        .label(localized(cx, "Save", "Сохранить"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.save_relay_url(window, cx)),
                         ),
@@ -163,7 +188,7 @@ impl SettingsView {
                     Button::new("start-relay")
                         .primary()
                         .small()
-                        .label("Start")
+                        .label(localized(cx, "Start", "Запустить"))
                         .loading(status == RelayStatus::Starting)
                         .disabled(!can_start)
                         .on_click(|_, _, cx| {
@@ -174,7 +199,7 @@ impl SettingsView {
                     Button::new("stop-relay")
                         .outline()
                         .small()
-                        .label("Stop")
+                        .label(localized(cx, "Stop", "Остановить"))
                         .disabled(!can_stop)
                         .on_click(|_, _, cx| {
                             ShellModels::relay(cx).update(cx, |relay, cx| relay.stop(cx))
@@ -195,18 +220,22 @@ impl SettingsView {
         let portable = portable_target().ok();
         let already_portable = portable.as_ref() == Some(&current);
         ui::card(
-            "Sign-in",
-            Some("Keep your Babel sign-in with the app folder so it moves with the app."),
+            localized(cx, "Sign-in", "Вход"),
+            Some(localized(
+                cx,
+                "Keep your sign-ins with the app folder so they move with the app.",
+                "Хранить входы рядом с приложением, чтобы они переносились вместе с ним.",
+            )),
             cx,
         )
         .child(ui::detail_row(
-            "Stored in",
+            localized(cx, "Stored in", "Расположение"),
             current.display().to_string(),
             cx,
         ))
         .when_some(portable.filter(|_| !already_portable), |this, path| {
             this.child(ui::detail_row(
-                "Next to the app",
+                localized(cx, "Next to the app", "Рядом с приложением"),
                 path.display().to_string(),
                 cx,
             ))
@@ -216,7 +245,11 @@ impl SettingsView {
                 Button::new("move-sign-in")
                     .outline()
                     .small()
-                    .label("Store sign-in next to the app")
+                    .label(localized(
+                        cx,
+                        "Store sign-ins next to the app",
+                        "Хранить рядом с приложением",
+                    ))
                     .disabled(already_portable)
                     .on_click(
                         cx.listener(|this, _, window, cx| {

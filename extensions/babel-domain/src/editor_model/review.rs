@@ -1,5 +1,7 @@
+use super::submit_control::SubmitBlocker;
 use super::{EditorSession, EditorSessionView};
 use crate::babel_metadata::project_is_babel_backed;
+use crate::i18n::{count, localized_fmt};
 use sonus_babel_lint::linter::{
     LintSeverity, ServerLintIssue, UNRESOLVED_LOW_CONFIDENCE_RULE,
     server_lint_issue_matches_segment,
@@ -12,19 +14,26 @@ impl EditorSession<'_> {
     pub fn submit_review(&mut self, project: &Project) -> Result<(), String> {
         let blocking = self.view().submission_blocking_lint_count(project);
         if blocking > 0 {
-            return Err(format!(
-                "Please fix linter errors ({blocking} blocking lint issue(s) remain)"
+            let remaining = count(
+                blocking as u64,
+                ("problem", "problems"),
+                ("проблема", "проблемы", "проблем"),
+            );
+            return Err(localized_fmt(
+                "Fix the problems first ({remaining} left)",
+                "Сначала исправьте проблемы (осталось: {remaining})",
+                &[("remaining", &remaining)],
             ));
         }
         if self.view().submission_unacknowledged_warning_count(project) > 0 {
-            return Err("Please acknowledge all warnings".into());
+            return Err(SubmitBlocker::UnacknowledgedWarnings.reason().into());
         }
         if self
             .view()
             .submission_unresolved_low_confidence_count(project)
             > 0
         {
-            return Err("Please review all low-confidence words".into());
+            return Err(SubmitBlocker::UnresolvedLowConfidence.reason().into());
         }
         self.state.mark_submitted(self.core);
         Ok(())

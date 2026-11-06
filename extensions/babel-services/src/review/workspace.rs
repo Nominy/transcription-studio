@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
+use sonus_babel_domain::i18n::localized;
 use studio_core::Project;
 
 use super::model::{
@@ -263,9 +264,15 @@ impl ReviewerWorkspace {
 
     /// Starts a manual or automatic comment save (clears a previous failure).
     pub fn begin_comment_save(&mut self) -> Result<CommentSave> {
-        let session_id = required_field("session ID", self.session_id())?;
+        let session_id = required_session_id(self.session_id())?;
         if self.comment_save_in_flight() {
-            bail!("Review comments are already being saved.");
+            bail!(
+                "{}",
+                localized(
+                    "Still saving the previous comments.",
+                    "Предыдущие комментарии ещё сохраняются.",
+                )
+            );
         }
         let save = CommentSave {
             session_id,
@@ -312,7 +319,7 @@ impl ReviewerWorkspace {
 
     /// Finalize as `apply` or `skip`; unsaved or in-flight comments are saved first.
     pub fn request_finalize(&mut self, mode: &str) -> Result<ReviewerNext> {
-        required_field("session ID", self.session_id())?;
+        required_session_id(self.session_id())?;
         if self.comments_dirty || self.comment_save_in_flight() {
             self.pending_finalize = Some(mode.to_string());
             return Ok(if self.comment_save_in_flight() {
@@ -347,7 +354,13 @@ impl ReviewerWorkspace {
         self.pending_finalize = None;
         Some(result.and_then(|outcome| {
             if outcome.finalize.feedback.is_empty() {
-                bail!("No feedback came back. Try again.");
+                bail!(
+                    "{}",
+                    localized(
+                        "No feedback came back. Try again.",
+                        "Отзыв не получен. Попробуйте снова.",
+                    )
+                );
             }
             self.generated_review = Some(outcome.generated);
             self.finalize_result = Some(outcome.finalize.clone());
@@ -407,11 +420,17 @@ impl ReviewerWorkspace {
     }
 }
 
-/// `Reviewer request blocked: missing <label>.` for blank values; trimmed value otherwise.
-pub fn required_field(label: &str, value: &str) -> Result<String> {
+/// The session id for a reviewer request; errors when the session is gone.
+pub fn required_session_id(value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("Reviewer request blocked: missing {label}."));
+        return Err(anyhow!(
+            "{}",
+            localized(
+                "The review session expired. Open Magic Review again.",
+                "Сессия ревью истекла. Откройте Magic Review снова.",
+            )
+        ));
     }
     Ok(trimmed.to_string())
 }

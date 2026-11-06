@@ -116,17 +116,17 @@ pub fn draft_stream_step(event: &SseEvent) -> Result<DraftStreamStep> {
     match event.event.as_str() {
         "started" => {
             let value: Value = serde_json::from_str(&event.data)
-                .context("malformed draft stream started event")?;
+                .context("The draft couldn't be read. (malformed started event)")?;
             Ok(DraftStreamStep::Progress(DraftStreamEvent::Started {
                 total_rows: count(&value, "totalRows"),
             }))
         }
         "row" => {
-            let value: Value =
-                serde_json::from_str(&event.data).context("malformed draft stream row event")?;
+            let value: Value = serde_json::from_str(&event.data)
+                .context("The draft couldn't be read. (malformed row event)")?;
             let row = value
                 .get("row")
-                .ok_or_else(|| anyhow!("draft stream row event has no row"))?;
+                .ok_or_else(|| anyhow!("The draft couldn't be read. (row event without row)"))?;
             let parsed = parse_draft_result(
                 &json!({ "draftRows": [row], "summary": value.get("summary") }).to_string(),
             )?;
@@ -134,11 +134,10 @@ pub fn draft_stream_step(event: &SseEvent) -> Result<DraftStreamStep> {
                 .get("summary")
                 .filter(|summary| summary.is_object())
                 .and(parsed.summary);
-            let row = parsed
-                .rows
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow!("draft stream row event has no row"))?;
+            let row =
+                parsed.rows.into_iter().next().ok_or_else(|| {
+                    anyhow!("The draft couldn't be read. (row event without row)")
+                })?;
             Ok(DraftStreamStep::Progress(DraftStreamEvent::Row {
                 row,
                 completed_rows: count(&value, "completedRows"),
@@ -159,8 +158,8 @@ fn count(value: &Value, key: &str) -> usize {
         .map_or(0, |count| count as usize)
 }
 
-/// `{error: "..."}` / `{message: "..."}` / `{error: {message}}` or the raw data; Gold's
-/// "Draft stream failed." when there is none.
+/// `{error: "..."}` / `{message: "..."}` / `{error: {message}}` or the raw data; a generic
+/// message when there is none.
 fn stream_error_message(data: &str) -> String {
     let message = serde_json::from_str::<Value>(data).ok().and_then(|value| {
         [
@@ -175,7 +174,7 @@ fn stream_error_message(data: &str) -> String {
     });
     let message = message.unwrap_or_else(|| data.trim().to_string());
     if message.trim().is_empty() {
-        "Draft stream failed.".to_string()
+        "Drafting failed.".to_string()
     } else {
         message
     }
@@ -238,6 +237,6 @@ mod tests {
             error("{\"error\":\"OpenRouter key rejected\"}"),
             "OpenRouter key rejected"
         );
-        assert_eq!(error("{\"error\":\"\"}"), "Draft stream failed.");
+        assert!(!error("{\"error\":\"\"}").trim().is_empty());
     }
 }

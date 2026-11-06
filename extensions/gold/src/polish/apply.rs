@@ -22,11 +22,11 @@ pub fn apply_draft_rows(workflow: &mut StudioWorkflow, rows: &[DraftRow]) -> Res
         .map(|row| (row.row_id.as_str(), row.rewritten_text.as_str()))
         .collect::<Vec<_>>();
     if rewritten.is_empty() {
-        bail!("Apply drafting found no rewritten rows.");
+        bail!("The draft has no rewritten segments to apply.");
     }
     let outcome = apply_texts(workflow, rewritten)?;
     if outcome.applied.is_empty() {
-        bail!("Apply drafting found no rows present in this project.");
+        bail!("The draft's segments are no longer in this project.");
     }
     Ok(outcome)
 }

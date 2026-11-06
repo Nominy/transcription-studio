@@ -149,7 +149,7 @@ impl InstallationStore {
                 Some(state.active.len() as u64),
             );
             let directory = self.package_directory(installed)?;
-            let bytes = read_package(&directory.join("archive.sonusext"), limits)?;
+            let bytes = read_package(&directory.join("archive.exaudio"), limits)?;
             let temporary = tempfile::tempdir()?;
             extract_contents(
                 &bytes,
@@ -402,7 +402,7 @@ impl InstallationStore {
             .ok_or_else(|| invalid("extension is not disabled"))?;
         validate_installed_source(catalog, &installed)?;
         let bytes = read_package(
-            &self.package_directory(&installed)?.join("archive.sonusext"),
+            &self.package_directory(&installed)?.join("archive.exaudio"),
             limits,
         )?;
         let staging = self.stage(&mut installed, &bytes, limits, control)?;
@@ -477,7 +477,7 @@ impl InstallationStore {
             control.check()?;
             validate_installed_source(catalog, installed)?;
             let bytes = read_package(
-                &self.package_directory(installed)?.join("archive.sonusext"),
+                &self.package_directory(installed)?.join("archive.exaudio"),
                 limits,
             )?;
             staging.push(self.stage(installed, &bytes, limits, control)?);
@@ -542,7 +542,7 @@ impl InstallationStore {
             &content,
             control,
         )?;
-        let mut archive = File::create(staging.path().join("archive.sonusext"))?;
+        let mut archive = File::create(staging.path().join("archive.exaudio"))?;
         archive.write_all(bytes)?;
         archive.sync_all()?;
         installed.directory = staging

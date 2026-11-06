@@ -6,10 +6,6 @@ use serde_json::{Value, json};
 
 use super::response::trpc_data;
 
-/// Message shown when Babel lists no usable projects.
-pub const NO_ACTIVE_PROJECTS_MESSAGE: &str =
-    "Babel returned no active projects with queue metadata.";
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Dashboard {
     /// Babel worker id (needed for feedback drafts).

@@ -219,7 +219,9 @@ impl LocalBackend {
         let request_id = request_id.to_string();
         tokio::task::spawn_blocking(move || StagedAudio::write(&dir, &request_id, wavs))
             .await
-            .map_err(|error| InferenceError::other(format!("Staging audio failed: {error}")))?
+            .map_err(|error| {
+                InferenceError::other(format!("Couldn't prepare the audio. ({error})"))
+            })?
     }
 
     async fn call_with_audio(
@@ -316,7 +318,7 @@ impl InferenceBackend for LocalBackend {
         let result: EnhanceResult = protocol::decode("enhance", value)?;
         if result.model != GOLD_ENHANCEMENT_MODEL.id {
             return Err(InferenceError::other(format!(
-                "The bundled Gold build enhanced with {}, Studio expects {}.",
+                "The AI engine used a different denoise model. (got {}, expected {})",
                 result.model, GOLD_ENHANCEMENT_MODEL.id
             )));
         }
@@ -330,7 +332,7 @@ impl InferenceBackend for LocalBackend {
                     .find(|metadata| metadata.lane_id == lane.lane_id)
                     .ok_or_else(|| {
                         InferenceError::other(format!(
-                            "Local enhancement returned no result for lane {}.",
+                            "Denoise returned no audio for track {}.",
                             lane.lane_id
                         ))
                     })?;
@@ -338,7 +340,7 @@ impl InferenceBackend for LocalBackend {
                     .take(&lane.lane_id, metadata.total_bytes)
                     .map_err(|error| {
                         InferenceError::other(format!(
-                            "Local enhancement audio is incomplete: {error}"
+                            "Denoise returned incomplete audio. ({error})"
                         ))
                     })?;
                 Ok(EnhancedLane {
@@ -377,7 +379,7 @@ impl InferenceBackend for LocalBackend {
 fn unsupported() -> InferenceError {
     InferenceError::new(
         studio_inference::InferenceErrorKind::Unsupported,
-        "Running AI on this PC needs Windows (Microsoft Edge WebView2); use a server instead.",
+        "Running AI on this computer needs Windows with Microsoft Edge WebView2. Use a remote server instead.",
     )
 }
 
@@ -435,8 +437,9 @@ struct StagedAudio {
 
 impl StagedAudio {
     fn write(dir: &Path, request_id: &str, wavs: Vec<Bytes>) -> InferenceResult<Self> {
-        let staging_error =
-            |error: std::io::Error| InferenceError::other(format!("Staging audio failed: {error}"));
+        let staging_error = |error: std::io::Error| {
+            InferenceError::other(format!("Couldn't prepare the audio. ({error})"))
+        };
         std::fs::create_dir_all(dir).map_err(staging_error)?;
         let mut staged = Self {
             paths: Vec::with_capacity(wavs.len()),

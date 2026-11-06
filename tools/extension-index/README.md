@@ -52,18 +52,18 @@ cargo run -p sonus-extension-index -- validate-index tools/extension-index/templ
 cargo run -p sonus-extension-index -- init-index NEW_LOCAL_INDEX_DIRECTORY
 cargo run -p sonus-extension-index -- init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT NEW_AUTHOR_DIRECTORY
 cargo run -p sonus-extension-index -- inspect INDEX.json QUERY
-cargo run -p sonus-extension-index -- pack manifest.json COMPONENT.wasm OUTPUT.sonusext LICENSE
+cargo run -p sonus-extension-index -- pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE
 cargo run -p sonus-extension-index -- validate-index PROPOSED.json PREVIOUS.json
-cargo run -p sonus-extension-index -- release-entry OWNER REPO manifest.json PACKAGE.sonusext TAG SOURCE_COMMIT
-cargo run -p sonus-extension-index -- validate-package INDEX.json ID VERSION PACKAGE.sonusext
+cargo run -p sonus-extension-index -- release-entry OWNER REPO manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
+cargo run -p sonus-extension-index -- validate-package INDEX.json ID VERSION PACKAGE.exaudio
 cargo run -p sonus-extension-index -- fetch RAW_GITHUB_URL CACHE.json
 cargo run -p sonus-extension-index -- fetch RAW_GITHUB_URL CACHE.json --offline
 cargo run -p sonus-extension-index -- plan-release INDEX.json ID VERSION STORE HOST.json GRANTS.json
 cargo run -p sonus-extension-index -- plan-mode INDEX.json ID VERSION MODE STORE HOST.json GRANTS.json
 cargo run -p sonus-extension-index -- install INDEX.json SELECTION.json STORE HOST.json GRANTS.json
 cargo run -p sonus-extension-index -- install-release RAW_GITHUB_URL CACHE.json SELECTION.json STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- preview-developer PACKAGE.sonusext
-cargo run -p sonus-extension-index -- install-developer INDEX.json PACKAGE.sonusext APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
+cargo run -p sonus-extension-index -- preview-developer PACKAGE.exaudio
+cargo run -p sonus-extension-index -- install-developer INDEX.json PACKAGE.exaudio APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
 cargo run -p sonus-extension-index -- disable ID STORE HOST.json
 cargo run -p sonus-extension-index -- enable INDEX.json ID STORE HOST.json
 cargo run -p sonus-extension-index -- uninstall ID STORE HOST.json

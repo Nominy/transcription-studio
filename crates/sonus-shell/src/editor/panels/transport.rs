@@ -27,7 +27,7 @@ impl Render for TransportStrip {
             .child(
                 Button::new("native-save")
                     .small()
-                    .label("Save")
+                    .label(crate::screens::ui::localized(cx, "Save", "Сохранить"))
                     .disabled(read_only)
                     .on_click(cx.listener(|this, _, window, cx| {
                         crate::screens::local_files::save(&this.model, window, cx, None)
@@ -36,7 +36,7 @@ impl Render for TransportStrip {
             .child(
                 Button::new("undo")
                     .small()
-                    .label("Undo")
+                    .label(crate::screens::ui::localized(cx, "Undo", "Отменить"))
                     .disabled(!undo || read_only)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |m, cx| m.edit(cx, |d| d.undo()))
@@ -45,7 +45,7 @@ impl Render for TransportStrip {
             .child(
                 Button::new("redo")
                     .small()
-                    .label("Redo")
+                    .label(crate::screens::ui::localized(cx, "Redo", "Повторить"))
                     .disabled(!redo || read_only)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |m, cx| m.edit(cx, |d| d.redo()))

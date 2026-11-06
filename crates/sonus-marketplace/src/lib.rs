@@ -16,6 +16,9 @@ pub use plan::*;
 pub use progress::*;
 pub use store::*;
 
+/// File extension (without the dot) of an installable extension package.
+pub const PACKAGE_EXTENSION: &str = "exaudio";
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]

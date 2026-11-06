@@ -9,6 +9,7 @@ use gpui_kit::*;
 use studio_editor::edit::EditorDoc;
 
 use crate::editor::model::EditorModel;
+use crate::screens::ui::localized;
 
 pub struct FindBar {
     model: Entity<EditorModel>,
@@ -44,7 +45,13 @@ impl FindBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in transcript"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(localized(
+                cx,
+                "Find in transcript",
+                "Поиск в расшифровке",
+            ))
+        });
         let subscriptions = vec![
             cx.observe_in(&model, window, |this, _, window, cx| {
                 this.on_model_changed(window, cx);
@@ -128,9 +135,14 @@ impl Render for FindBar {
         }
         let theme = cx.theme();
         let summary: SharedString = match self.model.read(cx).doc().find_summary() {
-            None => "Type to find".into(),
-            Some(summary) if summary.total == 0 => "No matches".into(),
-            Some(summary) => format!("{} of {}", summary.current, summary.total).into(),
+            None => localized(cx, "Type to search", "Введите текст").into(),
+            Some(summary) if summary.total == 0 => {
+                localized(cx, "No matches", "Ничего не найдено").into()
+            }
+            Some(summary) => localized(cx, "{i} of {n}", "{i} из {n}")
+                .replace("{i}", &summary.current.to_string())
+                .replace("{n}", &summary.total.to_string())
+                .into(),
         };
 
         h_flex()
@@ -166,7 +178,7 @@ impl Render for FindBar {
                     .icon(IconName::ChevronUp)
                     .ghost()
                     .small()
-                    .tooltip("Previous match")
+                    .tooltip(localized(cx, "Previous match", "Предыдущее"))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.step(-1, cx);
                     })),
@@ -176,7 +188,7 @@ impl Render for FindBar {
                     .icon(IconName::ChevronDown)
                     .ghost()
                     .small()
-                    .tooltip("Next match")
+                    .tooltip(localized(cx, "Next match", "Следующее"))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.step(1, cx);
                     })),
@@ -186,7 +198,7 @@ impl Render for FindBar {
                     .icon(IconName::Close)
                     .ghost()
                     .small()
-                    .tooltip("Close")
+                    .tooltip(localized(cx, "Close", "Закрыть"))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.model.update(cx, |model, cx| {
                             model.update_doc(cx, |doc| doc.close_find());

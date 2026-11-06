@@ -57,7 +57,7 @@ fn release(manifest: ExtensionManifest, bytes: &[u8]) -> Release {
         manifest,
         version,
         asset: ReleaseAsset {
-            name: "extension.sonusext".into(),
+            name: "extension.exaudio".into(),
             url: String::new(),
             bytes: bytes.len() as u64,
             sha256: format!("{:x}", Sha256::digest(bytes)),
@@ -71,7 +71,7 @@ fn catalog(mut releases: Vec<Release>) -> Catalog {
     for release in &mut releases {
         let repository = release.manifest.id.replace('.', "-");
         release.asset.url = format!(
-            "https://github.com/fixture/{repository}/releases/download/{}/extension.sonusext",
+            "https://github.com/fixture/{repository}/releases/download/{}/extension.exaudio",
             release.tag
         );
         entries
@@ -577,7 +577,7 @@ async fn release_download_checks_real_transport_and_rejects_redirects() {
 #[test]
 fn developer_consent_digest_and_provenance_are_distinct_from_review() {
     let root = tempfile::tempdir().unwrap();
-    let source = root.path().join("local.sonusext");
+    let source = root.path().join("local.exaudio");
     let mut local = manifest("fixture.local", "1.0.0");
     local.permissions.push(Permission::DocumentRead);
     let bytes = archive(&local, &[]);
@@ -918,7 +918,7 @@ fn explicit_reviewed_plan_replaces_equal_manifest_developer_bytes() {
     let extension = manifest("fixture.provenance", "1.0.0");
     let reviewed_bytes = archive(&extension, &[]);
     let developer_bytes = archive_module(&extension, b"\0asm\x0d\0\x01\0\0\x02\x01x", &[]);
-    let source = root.path().join("local.sonusext");
+    let source = root.path().join("local.exaudio");
     std::fs::write(&source, &developer_bytes).unwrap();
     let preview = preview_developer_package(&source, Limits::default()).unwrap();
     let index = catalog(vec![release(extension, &reviewed_bytes)]);
@@ -986,7 +986,7 @@ fn reviewed_dependency_candidate_cannot_keep_different_developer_bytes() {
     let dependency = manifest("fixture.provenance-dependency", "1.0.0");
     let reviewed_bytes = archive(&dependency, &[]);
     let developer_bytes = archive_module(&dependency, b"\0asm\x0d\0\x01\0\0\x02\x01x", &[]);
-    let source = root.path().join("local.sonusext");
+    let source = root.path().join("local.exaudio");
     std::fs::write(&source, developer_bytes).unwrap();
     let preview = preview_developer_package(&source, Limits::default()).unwrap();
     let mut owner = manifest("fixture.provenance-owner", "1.0.0");

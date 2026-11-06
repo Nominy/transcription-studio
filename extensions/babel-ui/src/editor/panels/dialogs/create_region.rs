@@ -9,11 +9,13 @@ use gpui_kit::component::{Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sonus_babel_domain::edit::create_region::{
-    CreateRegionDialog, CreateRegionMode, CreateRegionTimeField, OTHER_CATEGORY, intensity_label,
-    intensity_options, primary_category_options, secondary_category_options, track_options,
+    CreateRegionDialog, CreateRegionMode, CreateRegionTimeField, OTHER_CATEGORY, category_label,
+    intensity_label, intensity_options, primary_category_options, secondary_category_options,
+    track_options,
 };
 
 use crate::services::document_dialogs;
+use crate::text::localized;
 use sonus_babel_domain::edit::BabelAnnotationDialogs;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::ui::{
@@ -51,22 +53,28 @@ impl CreateRegionView {
                     .default_value(value)
             })
         };
+        let time_placeholder = localized(cx, "mm:ss.cc", "мм:сс.сс");
         let start = input(
             dialog.map(|d| d.start_draft.as_str()),
-            "mm:ss.xx",
+            time_placeholder,
             window,
             cx,
         );
-        let end = input(dialog.map(|d| d.end_draft.as_str()), "mm:ss.xx", window, cx);
+        let end = input(
+            dialog.map(|d| d.end_draft.as_str()),
+            time_placeholder,
+            window,
+            cx,
+        );
         let text = input(
             dialog.map(|d| d.text.as_str()),
-            "Enter text for this region...",
+            localized(cx, "What was said…", "Что было сказано…"),
             window,
             cx,
         );
         let description = input(
             dialog.map(|d| d.custom_description.as_str()),
-            "Describe the noise...",
+            localized(cx, "Describe the sound…", "Опишите звук…"),
             window,
             cx,
         );
@@ -190,7 +198,10 @@ impl CreateRegionView {
         });
         if reset {
             self.model.update(cx, |model, cx| {
-                model.set_status("Region time edit canceled.", cx)
+                model.set_status(
+                    localized(cx, "Time edit cancelled.", "Правка времени отменена."),
+                    cx,
+                )
             });
             self.sync_time_inputs(window, cx);
             cx.stop_propagation();
@@ -236,7 +247,7 @@ impl CreateRegionView {
             "create-region-speaker",
             Some(&dialog.selected_lane_id),
             tracks,
-            "Select speaker",
+            localized(cx, "Speaker", "Спикер"),
             move |lane_id, _, cx| {
                 update_dialog_state(&model, cx, |dialogs| {
                     if let Some(dialog) = dialogs.create_region_mut() {
@@ -254,38 +265,44 @@ impl CreateRegionView {
                     .children(error.map(|error| error_text(error, cx)))
             };
         let title = match dialog.mode {
-            CreateRegionMode::Transcription => "Add New Region",
-            CreateRegionMode::Annotation => "Add New Annotation",
+            CreateRegionMode::Transcription => localized(cx, "New segment", "Новый сегмент"),
+            CreateRegionMode::Annotation => localized(cx, "New annotation", "Новая аннотация"),
         };
         let body = match dialog.mode {
-            CreateRegionMode::Transcription => {
-                v_flex().child(field("Text", Input::new(&self.text), cx))
-            }
+            CreateRegionMode::Transcription => v_flex().child(field(
+                localized(cx, "Text", "Текст"),
+                Input::new(&self.text),
+                cx,
+            )),
             CreateRegionMode::Annotation => self.render_annotation_fields(dialog, cx),
         };
         v_flex()
             .gap_3()
             .child(dialog_header(title, None, cx))
-            .child(field("Speaker", speaker, cx))
+            .child(field(localized(cx, "Speaker", "Спикер"), speaker, cx))
             .child(
                 h_flex()
                     .gap_3()
                     .items_start()
                     .child(time(
-                        "Start Time (mm:ss.xx)",
+                        localized(cx, "Start (mm:ss.cc)", "Начало (мм:сс.сс)"),
                         &self.start,
                         dialog.start_error.as_ref().map(ToString::to_string),
                         cx,
                     ))
                     .child(time(
-                        "End Time (mm:ss.xx)",
+                        localized(cx, "End (mm:ss.cc)", "Конец (мм:сс.сс)"),
                         &self.end,
                         dialog.end_error.as_ref().map(ToString::to_string),
                         cx,
                     )),
             )
             .child(body)
-            .child(self.footer("Create", !dialog.is_create_enabled(), cx))
+            .child(self.footer(
+                localized(cx, "Add", "Добавить"),
+                !dialog.is_create_enabled(),
+                cx,
+            ))
     }
 
     fn render_annotation_fields(&self, dialog: &CreateRegionDialog, cx: &App) -> Div {
@@ -293,6 +310,7 @@ impl CreateRegionView {
             "create-region-intensity",
             intensity_label(dialog.intensity),
             self.model.clone(),
+            cx,
             |doc, label| {
                 if let Some(dialog) = doc.create_region_mut() {
                     dialog.set_intensity_label(&label);
@@ -303,18 +321,24 @@ impl CreateRegionView {
             return v_flex()
                 .gap_3()
                 .child(field(
-                    "Category",
-                    div().text_sm().child("Background Noise"),
+                    localized(cx, "Category", "Категория"),
+                    div()
+                        .text_sm()
+                        .child(localized(cx, "Background noise", "Фоновый шум")),
                     cx,
                 ))
-                .child(field("Intensity *", intensity, cx));
+                .child(field(
+                    localized(cx, "Intensity *", "Интенсивность *"),
+                    intensity,
+                    cx,
+                ));
         }
         let model = self.model.clone();
         let primary = choice(
             "create-region-primary",
             (!dialog.primary_selection.is_empty()).then_some(&dialog.primary_selection),
-            string_choices(primary_category_options().iter().copied()),
-            "Select primary category",
+            category_choices(primary_category_options().iter().copied()),
+            localized(cx, "Primary category", "Основная категория"),
             move |value, _, cx| {
                 update_dialog_state(&model, cx, |dialogs| {
                     if let Some(dialog) = dialogs.create_region_mut() {
@@ -327,8 +351,8 @@ impl CreateRegionView {
         let secondary = choice(
             "create-region-secondary",
             (!dialog.secondary_selection.is_empty()).then_some(&dialog.secondary_selection),
-            string_choices(secondary_category_options(&dialog.primary_selection)),
-            "Select secondary category",
+            category_choices(secondary_category_options(&dialog.primary_selection)),
+            localized(cx, "Secondary category", "Дополнительная категория"),
             move |value, _, cx| {
                 update_dialog_state(&model, cx, |dialogs| {
                     if let Some(dialog) = dialogs.create_region_mut() {
@@ -344,29 +368,41 @@ impl CreateRegionView {
             .child(
                 h_flex()
                     .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(field("Primary Category *", primary, cx)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(field("Secondary Category *", secondary, cx)),
-                    ),
+                    .child(div().flex_1().child(field(
+                        localized(cx, "Primary category *", "Основная категория *"),
+                        primary,
+                        cx,
+                    )))
+                    .child(div().flex_1().child(field(
+                        localized(cx, "Secondary category *", "Дополнительная категория *"),
+                        secondary,
+                        cx,
+                    ))),
             )
-            .child(field("Intensity *", intensity, cx))
+            .child(field(
+                localized(cx, "Intensity *", "Интенсивность *"),
+                intensity,
+                cx,
+            ))
             .when(needs_description, |this| {
-                this.child(field("Other", Input::new(&self.description), cx))
+                this.child(field(
+                    localized(cx, "Other", "Другое"),
+                    Input::new(&self.description),
+                    cx,
+                ))
             })
     }
 
     fn render_attached(&self, cx: &mut Context<Self>) -> Div {
         v_flex()
             .gap_3()
-            .child(dialog_header("Add Region", None, cx))
+            .child(dialog_header(
+                localized(cx, "New segment", "Новый сегмент"),
+                None,
+                cx,
+            ))
             .child(Input::new(&self.text))
-            .child(self.footer("Save", false, cx))
+            .child(self.footer(localized(cx, "Save", "Сохранить"), false, cx))
     }
 
     fn footer(&self, confirm: &'static str, disabled: bool, cx: &mut Context<Self>) -> Div {
@@ -374,7 +410,7 @@ impl CreateRegionView {
         dialog_footer()
             .child(
                 Button::new("create-region-cancel")
-                    .label("Cancel")
+                    .label(localized(cx, "Cancel", "Отмена"))
                     .on_click(move |_, window, cx| {
                         cancel(&model, cx);
                         window.close_dialog(cx);
@@ -435,11 +471,22 @@ pub(crate) fn string_choices<S: AsRef<str>>(
         .collect()
 }
 
+/// Category slugs as stored values with their localized display labels.
+pub(crate) fn category_choices<'a>(
+    slugs: impl IntoIterator<Item = &'a str>,
+) -> Vec<Choice<String>> {
+    slugs
+        .into_iter()
+        .map(|slug| Choice::new(slug.to_string(), category_label(slug).to_string()))
+        .collect()
+}
+
 /// Intensity dropdown over the four labelled levels.
 pub(crate) fn intensity_picker(
     id: &'static str,
     selected: Option<&'static str>,
     model: Entity<EditorModel>,
+    cx: &App,
     apply: impl Fn(&mut BabelAnnotationDialogs, String) + 'static,
 ) -> impl IntoElement {
     let selected = selected.map(str::to_string);
@@ -447,7 +494,7 @@ pub(crate) fn intensity_picker(
         id,
         selected.as_ref(),
         string_choices(intensity_options().iter().copied()),
-        "Select intensity",
+        localized(cx, "Intensity", "Интенсивность"),
         move |label, _, cx| {
             update_dialog_state(&model, cx, |dialogs| apply(dialogs, label));
         },

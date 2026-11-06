@@ -23,6 +23,7 @@ use sonus_babel_services::review::{
 use super::dialogs;
 use super::task::{Drawer, TaskPanels, TaskPanelsEvent};
 use crate::services::BabelServices;
+use crate::text::{failed, localized, localized_fmt};
 use sonus_babel_domain::workflow::BabelWorkflowExt;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::services::{spawn_service, spawn_service_in};
@@ -151,7 +152,7 @@ impl TaskPanels {
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
-            self.status("Save unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         let session = doc.session();
@@ -159,14 +160,15 @@ impl TaskPanels {
         if session.is_saving || !needs_save {
             return;
         }
-        if let Err(error) = self.commit_drafts("Save", cx) {
+        if let Err(error) = self.commit_drafts(localized(cx, "Save", "Сохранить"), cx) {
+            let message = failed(cx, "Couldn't save.", "Не удалось сохранить.", &error);
             self.model.update(cx, |model, cx| {
                 model.update_doc(cx, |doc| {
                     let session = doc.session_mut();
                     session.begin_save();
                     session.complete_save(false, error.clone());
                 });
-                model.set_status(format!("Save failed: {error}"), cx);
+                model.set_status(message, cx);
             });
             cx.notify();
             return;
@@ -208,7 +210,7 @@ impl TaskPanels {
                 return;
             }
         };
-        self.status("Saving progress...", cx);
+        self.status(localized(cx, "Saving…", "Сохранение…"), cx);
         let babel = self.babel(cx);
         let generation = self.generation;
         self.flows.save_task = Some(spawn_service_in(
@@ -256,7 +258,8 @@ impl TaskPanels {
         if !succeeded {
             self.flows.continue_after_save = false;
             self.flows.saved = None;
-            self.status(format!("Save failed: {detail}"), cx);
+            let message = failed(cx, "Couldn't save.", "Не удалось сохранить.", detail);
+            self.status(message, cx);
             return;
         }
         let project = self.model.read(cx).doc().project();
@@ -264,8 +267,12 @@ impl TaskPanels {
         let doc = self.model.read(cx).doc();
         let still_dirty = doc.session().is_dirty || doc.has_pending_drafts();
         let message = match still_dirty {
-            true => "Earlier changes saved; newer edits are still pending.",
-            false => "Progress saved.",
+            true => localized(
+                cx,
+                "Earlier changes saved; newer edits are still pending.",
+                "Ранние изменения сохранены; новые правки ещё не сохранены.",
+            ),
+            false => localized(cx, "Saved", "Сохранено"),
         };
         self.status(message, cx);
         if !still_dirty && let Some(saved) = self.flows.saved.take() {
@@ -366,7 +373,7 @@ impl TaskPanels {
         }
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
-            self.status("Submit unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         if let Some(reason) = self
@@ -384,16 +391,10 @@ impl TaskPanels {
             .view(doc.session())
             .submit_eligibility(doc.project());
         if let Some(blocker) = eligibility.blocker {
-            let reason = blocker.reason();
-            if reason.contains("feedback") {
+            if blocker.is_feedback() {
                 self.open_drawer(Drawer::Feedback, cx);
-                self.status(
-                    format!("Submit blocked: {reason} Opened the required feedback panel."),
-                    cx,
-                );
-            } else {
-                self.status(reason, cx);
             }
+            self.status(blocker.reason(), cx);
             return;
         }
         self.flows.submit.error = false;
@@ -408,7 +409,7 @@ impl TaskPanels {
             return;
         }
         if self.model.read(cx).doc().is_read_only() {
-            self.status("Submit unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         if let Some(reason) = self
@@ -420,8 +421,7 @@ impl TaskPanels {
             self.status(reason, cx);
             return;
         }
-        self.flows.submit.error = false;
-        if let Err(error) = self.commit_drafts("Submit", cx) {
+        if let Err(error) = self.commit_drafts(localized(cx, "Submit", "Отправить"), cx) {
             self.submit_failed(error, cx);
             return;
         }
@@ -432,7 +432,7 @@ impl TaskPanels {
             .view(doc.session())
             .submit_eligibility(doc.project());
         if let Some(blocker) = eligibility.blocker {
-            self.submit_failed(format!("Submit blocked: {}", blocker.reason()), cx);
+            self.submit_failed(blocker.reason().to_string(), cx);
             return;
         }
         let session = doc.session();
@@ -446,7 +446,10 @@ impl TaskPanels {
                 Ok(request) => {
                     self.send_assessment(request, eligibility.kind, revision, window, cx)
                 }
-                Err(error) => self.submit_failed(format!("Submit unavailable: {error:#}"), cx),
+                Err(error) => {
+                    let message = submit_unavailable(cx, error);
+                    self.submit_failed(message, cx)
+                }
             }
             return;
         }
@@ -456,13 +459,14 @@ impl TaskPanels {
         ) {
             Ok(submit) => submit,
             Err(error) => {
-                self.submit_failed(format!("Submit unavailable: {error:#}"), cx);
+                let message = submit_unavailable(cx, error);
+                self.submit_failed(message, cx);
                 return;
             }
         };
         self.flows.submit.pending = true;
         self.flows.submit.revision = revision;
-        self.status("Submitting review...", cx);
+        self.status(localized(cx, "Submitting…", "Отправка…"), cx);
         self.send_submit(submit, window, cx);
         cx.notify();
     }
@@ -479,7 +483,10 @@ impl TaskPanels {
         self.flows.submit.revision = revision;
         let generation = self.generation;
         let babel = self.babel(cx);
-        self.status("Submitting assessment attempt...", cx);
+        self.status(
+            localized(cx, "Submitting the attempt…", "Отправка попытки…"),
+            cx,
+        );
         self.flows.submit_task = Some(spawn_service_in(
             window,
             cx,
@@ -495,7 +502,13 @@ impl TaskPanels {
                 }
                 match result {
                     Err(error) => {
-                        this.submit_failed(format!("Attempt failed: {}", error.message), cx)
+                        let message = failed(
+                            cx,
+                            "Couldn't submit the attempt.",
+                            "Не удалось отправить попытку.",
+                            error.message,
+                        );
+                        this.submit_failed(message, cx)
                     }
                     Ok(result) => {
                         this.flows.submit.pending = false;
@@ -533,19 +546,32 @@ impl TaskPanels {
                         let outcome = result
                             .get("passed")
                             .and_then(serde_json::Value::as_bool)
-                            .map(|passed| if passed { "passed" } else { "not passed" })
-                            .unwrap_or("submitted");
+                            .map(|passed| {
+                                if passed {
+                                    localized(cx, "Attempt passed.", "Попытка засчитана.")
+                                } else {
+                                    localized(cx, "Attempt not passed.", "Попытка не засчитана.")
+                                }
+                            })
+                            .unwrap_or(localized(cx, "Attempt submitted.", "Попытка отправлена."));
                         let details = [
-                            "attemptNumber",
-                            "wordErrorRate",
-                            "tagErrorRate",
-                            "timestampShiftMs",
+                            ("attemptNumber", ("Attempt {v}", "Попытка {v}")),
+                            ("wordErrorRate", ("Word errors {v}", "Ошибки слов {v}")),
+                            ("tagErrorRate", ("Tag errors {v}", "Ошибки тегов {v}")),
+                            (
+                                "timestampShiftMs",
+                                ("Timing shift {v} ms", "Сдвиг времени {v} мс"),
+                            ),
                         ]
                         .into_iter()
-                        .filter_map(|key| result.get(key).map(|value| format!("{key}: {value}")))
+                        .filter_map(|(key, (en, ru))| {
+                            result.get(key).map(|value| {
+                                localized_fmt(cx, en, ru, &[("v", &value.to_string())])
+                            })
+                        })
                         .collect::<Vec<_>>()
                         .join(" · ");
-                        this.status(format!("Attempt {outcome}. {details}"), cx);
+                        this.status(format!("{outcome} {details}"), cx);
                         cx.notify();
                     }
                 }
@@ -591,7 +617,13 @@ impl TaskPanels {
             .map(|issue| issue.reason.as_str())
             .collect::<Vec<_>>()
             .join("; ");
-        self.submit_failed(format!("Submit blocked by Babel lint: {reasons}"), cx);
+        let message = failed(
+            cx,
+            "Babel found problems. Fix them first.",
+            "Babel нашёл проблемы. Сначала исправьте их.",
+            reasons,
+        );
+        self.submit_failed(message, cx);
     }
 
     fn send_submit(
@@ -616,7 +648,15 @@ impl TaskPanels {
                     Ok(()) => this.finish_submit(window, cx),
                     Err(error) => match error.lint_issues.as_deref() {
                         Some(issues) if !issues.is_empty() => this.block_submit_on_lint(issues, cx),
-                        _ => this.submit_failed(format!("Submit failed: {}", error.message), cx),
+                        _ => {
+                            let message = failed(
+                                cx,
+                                "Couldn't submit.",
+                                "Не удалось отправить.",
+                                error.message,
+                            );
+                            this.submit_failed(message, cx)
+                        }
                     },
                 }
             },
@@ -644,7 +684,15 @@ impl TaskPanels {
                 )
                 .detach();
             }
-            Err(error) => self.status(format!("Reviewer analytics skipped: {error:#}"), cx),
+            Err(error) => {
+                let message = failed(
+                    cx,
+                    "Reviewer statistics were not sent.",
+                    "Статистика ревью не отправлена.",
+                    format!("{error:#}"),
+                );
+                self.status(message, cx)
+            }
         }
     }
 
@@ -661,11 +709,7 @@ impl TaskPanels {
         });
         let project = self.model.read(cx).doc().project();
         recovery::remove_snapshot(project);
-        self.finish_task(
-            "Review submitted; Babel export will mark the action as pass.",
-            window,
-            cx,
-        );
+        self.finish_task(localized(cx, "Submitted", "Отправлено"), window, cx);
     }
 
     /// Any edit while a submit is pending invalidates its lint check.
@@ -676,7 +720,14 @@ impl TaskPanels {
         }
         self.flows.submit = SubmitFlow::default();
         self.flows.submit_task = None;
-        self.status("Transcript changed; submit again.", cx);
+        self.status(
+            localized(
+                cx,
+                "The transcript changed. Submit again.",
+                "Расшифровка изменилась. Отправьте снова.",
+            ),
+            cx,
+        );
         cx.notify();
     }
 
@@ -685,11 +736,11 @@ impl TaskPanels {
     pub fn request_skip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let project = self.model.read(cx).doc().project();
         if !EditorSession::skip_chunk_available(project) {
-            self.status("Skip unavailable for this task.", cx);
+            self.status(skip_unavailable_message(cx), cx);
             return;
         }
         if !self.flows.skip.pending && !EditorSession::skip_chunk_allowed(project) {
-            self.status(SKIP_DISABLED_TOOLTIP, cx);
+            self.status(skip_disabled_tooltip(cx), cx);
             return;
         }
         self.flows.skip.error = None;
@@ -702,14 +753,14 @@ impl TaskPanels {
         }
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
-            self.status("Skip unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         let project = doc.project();
         if !EditorSession::skip_chunk_available(project)
             || !EditorSession::skip_chunk_allowed(project)
         {
-            self.status("Skip unavailable for this task.", cx);
+            self.status(skip_unavailable_message(cx), cx);
             return;
         }
         let review_action_id = review_action_id(project);
@@ -717,7 +768,7 @@ impl TaskPanels {
             pending: true,
             error: None,
         };
-        self.status("Skipping chunk...", cx);
+        self.status(localized(cx, "Skipping…", "Пропуск…"), cx);
         let babel = self.babel(cx);
         let generation = self.generation;
         self.flows.other_task = Some(spawn_service_in(
@@ -737,10 +788,15 @@ impl TaskPanels {
                                 doc.session_mut().mark_saved();
                             });
                         });
-                        this.finish_task("Skip requested.", window, cx);
+                        this.finish_task(localized(cx, "Skipped", "Пропущено"), window, cx);
                     }
                     Err(error) => {
-                        let message = format!("Skip failed: {}", error.message);
+                        let message = failed(
+                            cx,
+                            "Couldn't skip.",
+                            "Не удалось пропустить.",
+                            error.message,
+                        );
                         this.flows.skip.error = Some(message.clone().into());
                         this.status(message, cx);
                     }
@@ -754,7 +810,7 @@ impl TaskPanels {
     pub fn request_admin_flag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let project = self.model.read(cx).doc().project();
         if !EditorSession::admin_flag_available(project) {
-            self.status("Flag recording unavailable for this task.", cx);
+            self.status(flag_unavailable_message(cx), cx);
             return;
         }
         if !self.flows.admin_flag.pending {
@@ -774,12 +830,12 @@ impl TaskPanels {
         }
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
-            self.status("Flag recording unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         let project = doc.project();
         if !EditorSession::admin_flag_available(project) {
-            self.status("Flag recording unavailable for this task.", cx);
+            self.status(flag_unavailable_message(cx), cx);
             return;
         }
         let payload = EditorSession::admin_flag_payload(reason);
@@ -788,7 +844,10 @@ impl TaskPanels {
             pending: true,
             error: None,
         };
-        self.status("Flagging recording...", cx);
+        self.status(
+            localized(cx, "Flagging the recording…", "Пометка записи…"),
+            cx,
+        );
         let babel = self.babel(cx);
         let generation = self.generation;
         let request = payload.clone();
@@ -814,10 +873,19 @@ impl TaskPanels {
                         });
                         // The transcript itself is not saved by flagging: leaving still asks
                         // about unsaved edits.
-                        this.finish_task("Recording flagged.", window, cx);
+                        this.finish_task(
+                            localized(cx, "Recording flagged", "Запись помечена"),
+                            window,
+                            cx,
+                        );
                     }
                     Err(error) => {
-                        let message = format!("Flag recording failed: {}", error.message);
+                        let message = failed(
+                            cx,
+                            "Couldn't flag the recording.",
+                            "Не удалось пометить запись.",
+                            error.message,
+                        );
                         this.flows.admin_flag.error = Some(message.clone().into());
                         this.status(message, cx);
                     }
@@ -834,13 +902,16 @@ impl TaskPanels {
         }
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
-            self.status("Drop claim unavailable: project is read-only.", cx);
+            self.status(read_only_message(cx), cx);
             return;
         }
         let queue_id = active_queue_id(doc.project());
         let review_action_id = review_action_id(doc.project());
         self.flows.drop_pending = true;
-        self.status("Dropping claim...", cx);
+        self.status(
+            localized(cx, "Releasing the task…", "Задача отпускается…"),
+            cx,
+        );
         let babel = self.babel(cx);
         let generation = self.generation;
         self.flows.other_task = Some(spawn_service_in(
@@ -860,9 +931,21 @@ impl TaskPanels {
                                 doc.session_mut().mark_saved();
                             });
                         });
-                        this.finish_task("Claim dropped.", window, cx);
+                        this.finish_task(
+                            localized(cx, "Task released", "Задача отпущена"),
+                            window,
+                            cx,
+                        );
                     }
-                    Err(error) => this.status(format!("Drop claim failed: {}", error.message), cx),
+                    Err(error) => {
+                        let message = failed(
+                            cx,
+                            "Couldn't release the task.",
+                            "Не удалось отпустить задачу.",
+                            error.message,
+                        );
+                        this.status(message, cx)
+                    }
                 }
                 cx.notify();
             },
@@ -897,7 +980,14 @@ impl TaskPanels {
                     });
                     model.set_read_only(false, cx);
                 });
-                self.status("Attempt reopened. Current annotations were retained.", cx);
+                self.status(
+                    localized(
+                        cx,
+                        "Attempt reopened. Your annotations are kept.",
+                        "Попытка открыта снова. Ваши аннотации сохранены.",
+                    ),
+                    cx,
+                );
             }
             ReadOnlyActionCommand::TakeAssessment => {
                 if self.flows.other_task.is_some() {
@@ -905,11 +995,21 @@ impl TaskPanels {
                 }
                 let queue_id = active_queue_id(self.model.read(cx).doc().project());
                 if queue_id.is_empty() {
-                    self.status("Assessment transition unavailable: task has no queue.", cx);
+                    self.status(
+                        localized(
+                            cx,
+                            "This task has no assessment.",
+                            "У этой задачи нет теста.",
+                        ),
+                        cx,
+                    );
                     return;
                 }
                 let babel = self.babel(cx);
-                self.status("Switching to assessment...", cx);
+                self.status(
+                    localized(cx, "Opening the assessment…", "Открытие теста…"),
+                    cx,
+                );
                 self.flows.other_task = Some(spawn_service_in(
                     window,
                     cx,
@@ -918,10 +1018,15 @@ impl TaskPanels {
                         this.flows.other_task = None;
                         match result {
                             Ok(()) => crate::root::reload_task(&this.model, window, cx),
-                            Err(error) => this.status(
-                                format!("Assessment transition failed: {}", error.message),
-                                cx,
-                            ),
+                            Err(error) => {
+                                let message = failed(
+                                    cx,
+                                    "Couldn't open the assessment.",
+                                    "Не удалось открыть тест.",
+                                    error.message,
+                                );
+                                this.status(message, cx)
+                            }
                         }
                     },
                 ));
@@ -931,5 +1036,43 @@ impl TaskPanels {
     }
 }
 
-pub(super) const SKIP_DISABLED_TOOLTIP: &str =
-    "Listen to this chunk for a bit longer before skipping.";
+pub(super) fn skip_disabled_tooltip(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "Listen to this chunk a bit longer before skipping.",
+        "Послушайте этот чанк ещё немного, прежде чем пропускать.",
+    )
+}
+
+fn read_only_message(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "This task is read only.",
+        "Эта задача только для чтения.",
+    )
+}
+
+fn skip_unavailable_message(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "This task can't be skipped.",
+        "Эту задачу нельзя пропустить.",
+    )
+}
+
+fn flag_unavailable_message(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "This recording can't be flagged.",
+        "Эту запись нельзя пометить.",
+    )
+}
+
+fn submit_unavailable(cx: &App, error: anyhow::Error) -> String {
+    failed(
+        cx,
+        "Couldn't submit.",
+        "Не удалось отправить.",
+        format!("{error:#}"),
+    )
+}

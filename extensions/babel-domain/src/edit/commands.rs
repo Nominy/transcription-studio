@@ -4,6 +4,8 @@ use sonus_extension::document::{
     CommandOutcome, CommandProvider, CommandRequest, DocumentEdit, DocumentTransaction,
 };
 
+use crate::i18n::{localized, with_detail};
+
 /// Babel annotation operations expressed as neutral, revision-bound document edits.
 #[derive(Debug, Default)]
 pub struct BabelAnnotationCommandProvider;
@@ -25,11 +27,19 @@ impl CommandProvider for BabelAnnotationCommandProvider {
         command: &str,
         request: &CommandRequest<'_>,
     ) -> Result<CommandOutcome, String> {
-        let segment_id = request.segment_id.ok_or("No annotation selected.")?;
+        let segment_id = request.segment_id.ok_or_else(|| {
+            localized("No annotation selected.", "Аннотация не выбрана.").to_owned()
+        })?;
         let mut segment = request
             .project
             .segment(segment_id)
-            .ok_or_else(|| format!("Segment `{segment_id}` was not found."))?
+            .ok_or_else(|| {
+                localized(
+                    "The segment no longer exists.",
+                    "Сегмент больше не существует.",
+                )
+                .to_owned()
+            })?
             .clone();
         let label = match command {
             "babel.set-annotation-type" => {
@@ -37,23 +47,33 @@ impl CommandProvider for BabelAnnotationCommandProvider {
                     .arguments
                     .get("annotation_type")
                     .and_then(Value::as_str)
-                    .ok_or("An annotation type is required.")?;
+                    .ok_or_else(|| {
+                        localized("Choose an annotation type.", "Выберите тип аннотации.")
+                            .to_owned()
+                    })?;
                 segment
                     .metadata
                     .insert("type".into(), Value::String(kind.to_string()));
-                "Annotation type change"
+                localized("Annotation type changed", "Тип аннотации изменён")
             }
             "babel.update-annotation" => {
-                let update = AnnotationUpdate::deserialize(request.arguments)
-                    .map_err(|error| format!("Invalid annotation update: {error}"))?;
+                let update = AnnotationUpdate::deserialize(request.arguments).map_err(|error| {
+                    with_detail(
+                        localized(
+                            "Couldn't save the annotation.",
+                            "Не удалось сохранить аннотацию.",
+                        ),
+                        error,
+                    )
+                })?;
                 segment.text = update.text;
                 segment
                     .metadata
                     .insert("intensity".into(), serde_json::json!(update.intensity));
                 segment.metadata.insert("content".into(), update.content);
-                "Annotation edit"
+                localized("Annotation saved", "Аннотация сохранена")
             }
-            _ => return Err(format!("Unknown Babel annotation command `{command}`.")),
+            _ => return Err(format!("Unknown Babel annotation command {command}.")),
         };
         Ok(CommandOutcome {
             transaction: Some(DocumentTransaction {

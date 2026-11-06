@@ -3,6 +3,7 @@ mod files;
 mod overlay;
 mod providers;
 mod waveform;
+use crate::screens::ui::localized;
 use crate::{
     ShellHandle,
     contributions::{CommandContribution, ContributionRegistry, ModeContribution, PanelLocation},
@@ -296,13 +297,14 @@ pub(crate) fn register(
         w::ContributionKind::Mode => {
             let mode = id.clone();
             let owner = owner_string.clone();
+            let description = localized(cx, "Extension workspace", "Пространство расширения");
             cx.update_global::<ContributionRegistry, _>(|registry, _| {
                 registry.register_mode(
                     &owner_string,
                     ModeContribution {
                         id: id.clone(),
                         label: title,
-                        description: "Component document mode".into(),
+                        description: description.into(),
                         launch: Rc::new(move |shell, context, window, cx| {
                             providers::launch_mode(&owner, &mode, shell, context, window, cx)
                         }),
@@ -1110,7 +1112,11 @@ impl Render for WasmPanel {
         let Some(tree) = tree else {
             return div()
                 .p_3()
-                .child("Waiting for extension content")
+                .child(localized(
+                    cx,
+                    "Waiting for the extension…",
+                    "Ожидание расширения…",
+                ))
                 .into_any_element();
         };
         self.sync(&tree, window, cx);
@@ -1150,11 +1156,21 @@ impl Render for WasmPanel {
         }
         result = result.children(roots.into_iter().rev());
         if let Some(owner) = cx.global::<UiStore>().owners.get(&self.owner) {
+            let counted = localized(
+                cx,
+                "{label}: {done} of {total}",
+                "{label}: {done} из {total}",
+            );
             for progress in owner.progress.values() {
-                result = result.child(div().text_sm().child(match progress.total {
-                    Some(total) => format!("{}: {}/{}", progress.label, progress.completed, total),
-                    None => format!("{}: {}", progress.label, progress.completed),
-                }));
+                result = result.child(
+                    div().text_sm().child(match progress.total {
+                        Some(total) => counted
+                            .replace("{label}", &progress.label)
+                            .replace("{done}", &progress.completed.to_string())
+                            .replace("{total}", &total.to_string()),
+                        None => format!("{}: {}", progress.label, progress.completed),
+                    }),
+                );
             }
         }
         result.into_any_element()

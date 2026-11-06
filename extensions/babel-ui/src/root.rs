@@ -11,6 +11,7 @@ use sonus_babel_domain::route::StartupRoute;
 use sonus_babel_services::account::{AccountStatus, AccountStore};
 use sonus_babel_services::babel::{BabelClient, LoadedTask};
 use sonus_shell::editor::model::EditorModel;
+use sonus_shell::screens::ui;
 use sonus_shell::{
     DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ProviderInstance, ProviderRegistry,
     ProviderStatus, ShellHandle,
@@ -21,7 +22,18 @@ use crate::screens::error_task::{ErrorTaskEvent, ErrorTaskOpen, ErrorTaskScreen}
 use crate::screens::relay::RelayEvent;
 use crate::screens::{ShellModels, dashboard::DashboardScreen};
 use crate::services::{BabelServices, set_document_client};
+use crate::text::{localized, localized_fmt, with_detail};
 use crate::{ERRORS_ID, ID, PROVIDER_ID};
+
+/// `{label} didn't work` — the headline for a failed dashboard action.
+fn did_not_work(label: &str, cx: &App) -> String {
+    localized_fmt(
+        cx,
+        "{label} didn't work",
+        "{label}: не удалось",
+        &[("label", label)],
+    )
+}
 
 /// Which projects a mode's dashboard lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,14 +187,22 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
     let metadata = route_metadata_from_project(project);
     if review_action_id.is_empty() {
         window.push_notification(
-            Notification::error("This task has no review action to reload."),
+            Notification::error(localized(
+                cx,
+                "This task can't be reloaded.",
+                "Эту задачу нельзя перезагрузить.",
+            )),
             cx,
         );
         return;
     }
     let Some(controller) = controller(&origin.mode_id, &instance.id, cx) else {
         window.push_notification(
-            Notification::error("The task's Babel workspace is no longer active."),
+            Notification::error(localized(
+                cx,
+                "The task's workspace is no longer open.",
+                "Пространство этой задачи уже закрыто.",
+            )),
             cx,
         );
         return;
@@ -201,20 +221,29 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
                     Ok(OpenedTask::Transcript(task)) => {
                         controller.open_loaded_task(
                             *task,
-                            "Task reloaded.",
-                            "Task reload",
+                            localized(cx, "Task reloaded", "Задача перезагружена"),
+                            localized(cx, "Reloading the task", "Перезагрузка задачи"),
                             window,
                             cx,
                         );
                     }
                     Ok(OpenedTask::ErrorTask(_)) => window.push_notification(
-                        Notification::error(
-                            "The review action no longer contains a transcript task.",
-                        ),
+                        Notification::error(localized(
+                            cx,
+                            "This task no longer has a transcript.",
+                            "У этой задачи больше нет расшифровки.",
+                        )),
                         cx,
                     ),
                     Err(error) => window.push_notification(
-                        Notification::error(format!("Task reload failed: {error}")),
+                        ui::error_notification(
+                            localized(
+                                cx,
+                                "Couldn't reload the task.",
+                                "Не удалось перезагрузить задачу.",
+                            ),
+                            Some(format!("{error:#}").into()),
+                        ),
                         cx,
                     ),
                 }
@@ -233,7 +262,11 @@ pub fn launch(
 ) -> Option<AnyView> {
     let Some(instance) = context.instance else {
         window.push_notification(
-            Notification::error("Sign in to a Babel account to open this workspace."),
+            Notification::error(localized(
+                cx,
+                "Sign in to a Babel account to open this workspace.",
+                "Войдите в аккаунт Babel, чтобы открыть это пространство.",
+            )),
             cx,
         );
         return None;
@@ -253,9 +286,11 @@ pub fn launch(
         Ok(Some(client)) => client,
         Ok(None) => {
             window.push_notification(
-                Notification::error(format!(
-                    "{} is signed out. Open the workspace again to sign in.",
-                    instance.label
+                Notification::error(localized_fmt(
+                    cx,
+                    "{account} is signed out. Open the workspace again to sign in.",
+                    "{account}: выполнен выход. Откройте пространство снова, чтобы войти.",
+                    &[("account", &instance.label)],
                 )),
                 cx,
             );
@@ -263,7 +298,14 @@ pub fn launch(
         }
         Err(error) => {
             window.push_notification(
-                Notification::error(format!("The saved Babel sign-in is unreadable: {error:#}")),
+                ui::error_notification(
+                    localized(
+                        cx,
+                        "Couldn't read the saved sign-in.",
+                        "Не удалось прочитать сохранённый вход.",
+                    ),
+                    Some(format!("{error:#}").into()),
+                ),
                 cx,
             );
             return None;
@@ -331,7 +373,9 @@ impl BabelController {
                 window.push_notification(
                     match event {
                         RelayEvent::Info(message) => Notification::info(message.clone()),
-                        RelayEvent::Error(message) => Notification::error(message.clone()),
+                        RelayEvent::Error { headline, detail } => {
+                            ui::error_notification(headline.clone(), detail.clone())
+                        }
                     },
                     cx,
                 );
@@ -456,47 +500,65 @@ impl BabelController {
         Ok(model)
     }
 
+    /// `status` is shown in the editor after the task opened; `failure_label` names the
+    /// action in `{label} didn't work` when it fails.
     pub fn open_loaded_task(
         &mut self,
         task: LoadedTask,
-        status: &'static str,
-        failure_label: &'static str,
+        status: impl Into<SharedString>,
+        failure_label: impl Into<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let failure_label = failure_label.into();
         let remote_audio = task.remote_audio_count > 0;
         let model = match self.open_task(task.workflow, Some(task.audio_base_dir), window, cx) {
             Ok(model) => model,
             Err(error) => {
-                let detail = format!("{failure_label} failed: {error:#}");
+                let headline = did_not_work(&failure_label, cx);
                 if self.shell.editor_model(cx).is_some() {
-                    window.push_notification(Notification::error(detail), cx);
+                    window.push_notification(
+                        ui::error_notification(headline, Some(format!("{error:#}").into())),
+                        cx,
+                    );
                 } else {
-                    self.show_dashboard_error(detail, window, cx);
+                    self.show_dashboard_error(
+                        with_detail(&headline, format!("{error:#}")),
+                        window,
+                        cx,
+                    );
                 }
                 return;
             }
         };
+        let status = status.into();
         model.update(cx, |model, cx| model.set_status(status, cx));
         if remote_audio {
-            self.audio_guard = Some(cx.observe_in(
-                &model,
-                window,
-                move |this, model, window, cx| {
-                    let load = model.read(cx).audio_load();
-                    if load.pending > 0 {
-                        return;
-                    }
-                    this.audio_guard = None;
-                    if load.loaded == 0 && load.failed > 0 {
-                        this.show_dashboard_error(
-                            format!("{failure_label} failed: the task audio could not be loaded."),
-                            window,
-                            cx,
-                        );
-                    }
-                },
-            ));
+            self.audio_guard =
+                Some(
+                    cx.observe_in(&model, window, move |this, model, window, cx| {
+                        let load = model.read(cx).audio_load();
+                        if load.pending > 0 {
+                            return;
+                        }
+                        this.audio_guard = None;
+                        if load.loaded == 0 && load.failed > 0 {
+                            let headline = did_not_work(&failure_label, cx);
+                            this.show_dashboard_error(
+                                with_detail(
+                                    &headline,
+                                    localized(
+                                        cx,
+                                        "The task audio couldn't be loaded.",
+                                        "Не удалось загрузить аудио задачи.",
+                                    ),
+                                ),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+                );
         }
     }
 

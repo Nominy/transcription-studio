@@ -16,6 +16,7 @@ use studio_editor::edit::EditorDoc;
 use studio_editor::edit::draft::byte_offset;
 use studio_editor::edit::time::TimeField;
 use studio_editor::editor_model::EditorSession;
+use studio_editor::i18n::localized;
 use studio_editor::transcript_model::{
     AnnotationDiffStatus, TranscriptActionCommand, TranscriptActionMenuEntry,
     TranscriptDiffCellKind, TranscriptDiffView, TranscriptRowKind, TranscriptRowView,
@@ -446,9 +447,9 @@ impl TranscriptView {
             div()
                 .text_color(theme.muted_foreground)
                 .child(if row.annotation_kind.is_transcription() {
-                    "What was said…"
+                    localized("What was said…", "Что было сказано…")
                 } else {
-                    "Annotation…"
+                    localized("Annotation…", "Аннотация…")
                 })
                 .into_any_element()
         } else {
@@ -638,7 +639,7 @@ impl TranscriptView {
                 .icon(IconName::Check)
                 .xsmall()
                 .outline()
-                .tooltip("Mark word reviewed")
+                .tooltip(localized("Mark as reviewed", "Отметить как проверенное"))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.model.update(cx, |model, cx| {
                         model.edit(cx, |doc| doc.execute_command(&command, &arguments))
@@ -750,21 +751,23 @@ impl TranscriptView {
                         let fix = fix.clone();
                         let model = model.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(format!("Quick fix: {}", fix.title)).on_click(
-                                move |_, _, cx| {
-                                    model.update(cx, |model, cx| {
-                                        model.edit(cx, |doc| {
-                                            doc.apply_transaction(
-                                                sonus_extension::document::DocumentTransaction {
-                                                    label: fix.title.clone(),
-                                                    expected_revision: revision,
-                                                    edits: fix.edits.clone(),
-                                                },
-                                            )
-                                        })
-                                    });
-                                },
-                            ),
+                            PopupMenuItem::new(
+                                localized("Fix: {title}", "Исправить: {title}")
+                                    .replace("{title}", &fix.title),
+                            )
+                            .on_click(move |_, _, cx| {
+                                model.update(cx, |model, cx| {
+                                    model.edit(cx, |doc| {
+                                        doc.apply_transaction(
+                                            sonus_extension::document::DocumentTransaction {
+                                                label: fix.title.clone(),
+                                                expected_revision: revision,
+                                                edits: fix.edits.clone(),
+                                            },
+                                        )
+                                    })
+                                });
+                            }),
                         );
                     }
                     menu
@@ -983,24 +986,47 @@ fn diff_cell(
 
 fn diff_badge(diff: &TranscriptDiffView, theme: &Theme) -> (SharedString, Hsla) {
     match diff.kind {
-        TranscriptDiffCellKind::New => ("New".into(), theme.info),
-        TranscriptDiffCellKind::ModifiedAdded => ("Added".into(), theme.success),
-        TranscriptDiffCellKind::ModifiedDeleted => ("Deleted".into(), theme.danger),
+        TranscriptDiffCellKind::New => (localized("New", "Новый").into(), theme.info),
+        TranscriptDiffCellKind::ModifiedAdded => {
+            (localized("Added", "Добавлен").into(), theme.success)
+        }
+        TranscriptDiffCellKind::ModifiedDeleted => {
+            (localized("Deleted", "Удалён").into(), theme.danger)
+        }
         TranscriptDiffCellKind::Diff => match diff.change_count {
-            0 => ("No changes".into(), theme.muted_foreground),
-            1 => ("1 change".into(), theme.warning),
-            count => (format!("{count} changes").into(), theme.warning),
+            0 => (
+                localized("No changes", "Без изменений").into(),
+                theme.muted_foreground,
+            ),
+            1 => (localized("1 change", "1 изменение").into(), theme.warning),
+            count => (
+                localized("{n} changes", "{n} изменений")
+                    .replace("{n}", &count.to_string())
+                    .into(),
+                theme.warning,
+            ),
         },
     }
 }
 
 fn annotation_diff_status(status: AnnotationDiffStatus, theme: &Theme) -> (&'static str, Hsla) {
     match status {
-        AnnotationDiffStatus::Matched => ("Unchanged", theme.muted_foreground),
-        AnnotationDiffStatus::LabelMismatch => ("Label changed", theme.warning),
-        AnnotationDiffStatus::SubcategoryMismatch => ("Subcategory changed", theme.warning),
-        AnnotationDiffStatus::IntensityMismatch => ("Intensity changed", theme.warning),
-        AnnotationDiffStatus::UnmatchedReference => ("Removed", theme.danger),
+        AnnotationDiffStatus::Matched => (
+            localized("Unchanged", "Без изменений"),
+            theme.muted_foreground,
+        ),
+        AnnotationDiffStatus::LabelMismatch => {
+            (localized("Label changed", "Изменена метка"), theme.warning)
+        }
+        AnnotationDiffStatus::SubcategoryMismatch => (
+            localized("Subcategory changed", "Изменена подкатегория"),
+            theme.warning,
+        ),
+        AnnotationDiffStatus::IntensityMismatch => (
+            localized("Intensity changed", "Изменена интенсивность"),
+            theme.warning,
+        ),
+        AnnotationDiffStatus::UnmatchedReference => (localized("Removed", "Удалено"), theme.danger),
     }
 }
 
@@ -1014,12 +1040,20 @@ pub(super) fn lint_color(severity: Severity, theme: &Theme) -> Hsla {
 
 fn command_label(command: TranscriptActionCommand) -> &'static str {
     match command {
-        TranscriptActionCommand::Edit => "Edit",
-        TranscriptActionCommand::CreateBefore => "Add Segment Above",
-        TranscriptActionCommand::CreateAfter => "Add Segment Below",
-        TranscriptActionCommand::MergeAbove => "Merge With Above",
-        TranscriptActionCommand::MergeBelow => "Merge With Below",
-        TranscriptActionCommand::Delete => "Delete",
+        TranscriptActionCommand::Edit => localized("Edit", "Изменить"),
+        TranscriptActionCommand::CreateBefore => {
+            localized("Add segment above", "Добавить сегмент выше")
+        }
+        TranscriptActionCommand::CreateAfter => {
+            localized("Add segment below", "Добавить сегмент ниже")
+        }
+        TranscriptActionCommand::MergeAbove => {
+            localized("Merge with previous", "Объединить с предыдущим")
+        }
+        TranscriptActionCommand::MergeBelow => {
+            localized("Merge with next", "Объединить со следующим")
+        }
+        TranscriptActionCommand::Delete => localized("Delete", "Удалить"),
     }
 }
 

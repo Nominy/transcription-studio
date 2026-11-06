@@ -28,8 +28,8 @@ pub use feedback::{
 pub use model::{
     CategoryGrade, EvidenceDetail, FinalizeOutcome, GRADE_CATEGORIES, GeneratedReview, GradeResult,
     GradeSample, ReviewerCard, ReviewerFeedback, ReviewerFinalize, ReviewerSession,
-    ReviewerSuggestion, ReviewerTemplate, parse_finalize_outcome, parse_generated_review,
-    parse_grade_result, parse_reviewer_session, parse_template_search,
+    ReviewerSuggestion, ReviewerTemplate, grade_category_title, parse_finalize_outcome,
+    parse_generated_review, parse_grade_result, parse_reviewer_session, parse_template_search,
 };
 pub use payload::{
     build_draft_generate_payload, build_draft_redistribute_payload,
@@ -43,5 +43,5 @@ pub use snapshot::{
 };
 pub use workspace::{
     CommentSave, ReviewerNext, ReviewerWorkspace, TEMPLATE_SEARCH_LIMIT, TemplateSearch,
-    TemplateSearchRequest, required_field,
+    TemplateSearchRequest, required_session_id,
 };

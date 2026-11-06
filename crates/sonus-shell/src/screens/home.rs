@@ -1,4 +1,4 @@
-//! Start: one tile per installed mode, "Get more" → Add-ons, footer Settings · Add-ons.
+//! Start: one tile per installed mode, "Get more" → Extensions, footer Settings · Extensions.
 //! Local is a tile like any other; its launch window owns recent projects and recovery.
 use super::{accounts, ui};
 use crate::{ContributionRegistry, ProviderRegistry, ShellHandle};
@@ -128,14 +128,14 @@ pub fn render(shell: ShellHandle, _window: &mut Window, cx: &App) -> impl IntoEl
                         .child(
                             Button::new("home-get-more")
                                 .outline()
-                                .label(ui::localized(cx, "Get more", "Добавить ещё"))
+                                .label(ui::localized(cx, "Get more", "Ещё"))
                                 .on_click(move |_, window, cx| more.show_extensions(window, cx)),
                         )
                         .child(ui::muted(
                             ui::localized(
                                 cx,
-                                "Workspaces and tools from the add-on catalog.",
-                                "Рабочие пространства и инструменты из каталога дополнений.",
+                                "Extensions from the catalog",
+                                "Расширения из каталога",
                             ),
                             cx,
                         )),
@@ -152,7 +152,7 @@ pub fn render(shell: ShellHandle, _window: &mut Window, cx: &App) -> impl IntoEl
                 )
                 .child(
                     Button::new("home-extensions")
-                        .label(ui::localized(cx, "Add-ons", "Дополнения"))
+                        .label(ui::localized(cx, "Extensions", "Расширения"))
                         .on_click(move |_, window, cx| extensions.show_extensions(window, cx)),
                 ),
         )

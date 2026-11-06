@@ -1,10 +1,10 @@
 {
   "id": "example.hello-panel",
-  "name": "Hello Panel",
+  "name": "Hello panel",
   "version": "0.1.0",
   "api": "^0.1.0",
   "runtime": "wasm",
-  "description": "An offline panel and command that inserts a greeting as one undoable transaction, empty-segment hints, and a sample account provider with a mode that greets the signed-in name.",
+  "description": "Example extension: inserts a greeting.",
   "license": "MIT",
   "dependencies": {},
   "permissions": [{ "kind": "document-read" }, { "kind": "document-edit" }, { "kind": "secrets" }],

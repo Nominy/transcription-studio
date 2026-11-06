@@ -2,6 +2,7 @@
 
 use serde_json::{Map, Value, json};
 use sonus_babel_domain::editor_model::feedback_assessment::{FeedbackInput, FeedbackInputResponse};
+use sonus_babel_domain::i18n::{localized, with_detail};
 use sonus_babel_lint::linter::{LintSeverity, ServerLintIssue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -105,16 +106,14 @@ pub(super) fn merge_review_action_annotations(
     let Some(annotations) = loaded.get("annotations").filter(|value| value.is_array()) else {
         return Err(BabelError::new(response_error(
             &loaded,
-            "Babel annotations response did not include an annotations array.",
+            "The server's reply had no annotations.",
         )));
     };
     let mut value = decode(payload)?;
     let Some(Value::Object(data)) =
         review_action_data_pointer(&value).and_then(|pointer| value.pointer_mut(&pointer))
     else {
-        return Err(BabelError::new(
-            "Babel task payload did not include review action data.",
-        ));
+        return Err(BabelError::new("The server's reply had no task data."));
     };
     data.insert("annotations".to_string(), annotations.clone());
     if let Some(lint_errors) = loaded.get("lintErrors").filter(|value| value.is_array()) {
@@ -151,11 +150,8 @@ fn decode(payload: &str) -> Result<Value, BabelError> {
     if payload.trim().is_empty() {
         return Ok(Value::Null);
     }
-    serde_json::from_str(payload).map_err(|error| {
-        BabelError::new(format!(
-            "failed to decode native Babel service response: {error}"
-        ))
-    })
+    serde_json::from_str(payload)
+        .map_err(|error| BabelError::new(format!("The server sent an unreadable reply: {error}")))
 }
 
 fn response_success(value: &Value) -> bool {
@@ -192,7 +188,13 @@ pub(super) fn parse_save(payload: &str) -> Result<SaveOutcome, BabelError> {
         });
     }
     Err(BabelError {
-        message: response_error(&value, "Failed to save progress. Please try again."),
+        message: response_error(
+            &value,
+            localized(
+                "Couldn't save your progress. Try again.",
+                "Не удалось сохранить прогресс. Попробуйте снова.",
+            ),
+        ),
         lint_issues,
         signed_out: false,
     })
@@ -202,9 +204,12 @@ pub(super) fn parse_save(payload: &str) -> Result<SaveOutcome, BabelError> {
 pub(super) fn parse_submit(payload: &str) -> Result<(), BabelError> {
     let value = decode(payload)?;
     if first_bool_by_key(&value, &["feedbackIncomplete"]) == Some(true) {
-        return Err(BabelError::new(format!(
-            "Feedback incomplete: {}",
-            response_error(&value, "Finish the feedback form before submitting.")
+        return Err(BabelError::new(response_error(
+            &value,
+            localized(
+                "Finish the feedback form before submitting.",
+                "Перед отправкой заполните форму отзыва.",
+            ),
         )));
     }
     let issues = server_lint_issues(&value)?;
@@ -219,7 +224,13 @@ pub(super) fn parse_submit(payload: &str) -> Result<(), BabelError> {
         Ok(())
     } else {
         Err(BabelError {
-            message: response_error(&value, "Failed to submit annotations. Please try again."),
+            message: response_error(
+                &value,
+                localized(
+                    "Couldn't submit. Try again.",
+                    "Не удалось отправить. Попробуйте снова.",
+                ),
+            ),
             lint_issues: issues,
             signed_out: false,
         })
@@ -239,7 +250,14 @@ pub(super) fn parse_simple_mutation(payload: &str, fallback: &str) -> Result<(),
 /// `submitTranscriptionErrorLabel`: Babel's web treats any non-error reply as success, so
 /// only an explicit `success: false` or an error message fails.
 pub(super) fn parse_error_label_submit(payload: &str) -> Result<(), BabelError> {
-    parse_mutation_value(payload, "Failed to submit the label. Please try again.").map(|_| ())
+    parse_mutation_value(
+        payload,
+        localized(
+            "Couldn't submit the label. Try again.",
+            "Не удалось отправить метку. Попробуйте снова.",
+        ),
+    )
+    .map(|_| ())
 }
 
 /// Preserve practice/assessment result fields; a failed assessment (`passed: false`)
@@ -265,13 +283,13 @@ pub(super) fn parse_mutation_value(payload: &str, fallback: &str) -> Result<Valu
 }
 
 fn lint_failure_message(issues: &[ServerLintIssue]) -> String {
-    format!(
-        "Failed to pass linting: {}",
+    with_detail(
+        localized("Babel rejected the task", "Babel отклонил задачу"),
         issues
             .iter()
             .map(|issue| issue.reason.as_str())
             .collect::<Vec<_>>()
-            .join("; ")
+            .join("; "),
     )
 }
 
@@ -441,9 +459,9 @@ pub(super) fn parse_feedback_inputs(payload: &str) -> Result<Vec<FeedbackInput>,
     let value = feedback_value(payload)?;
     let values = value
         .as_array()
-        .ok_or_else(|| BabelError::new("Babel feedback inputs response must be an array"))?;
+        .ok_or_else(|| BabelError::new("The server's feedback form reply was not a list."))?;
     if values.is_empty() {
-        return Err(BabelError::new("Babel feedback form returned no inputs"));
+        return Err(BabelError::new("The server's feedback form has no inputs."));
     }
     values
         .iter()
@@ -530,7 +548,6 @@ pub(super) fn parse_feedback_draft(payload: &str) -> Result<FeedbackDraftBootstr
 
 /// Returns `last_saved`. `null`/empty success responses are accepted.
 pub(super) fn parse_feedback_draft_save(payload: &str) -> Result<String, BabelError> {
-    const FALLBACK: &str = "Failed to save feedback draft. Please try again.";
     let value = decode(payload)?;
     if let Some(error) =
         first_string_by_key(&value, &["error", "message"]).filter(|error| !error.trim().is_empty())
@@ -540,7 +557,10 @@ pub(super) fn parse_feedback_draft_save(payload: &str) -> Result<String, BabelEr
     if has_nonempty_value_by_key(&value, &["error", "message"])
         || has_false_bool_by_key(&value, &["success", "ok"])
     {
-        return Err(BabelError::new(FALLBACK));
+        return Err(BabelError::new(localized(
+            "Couldn't save the feedback. Try again.",
+            "Не удалось сохранить отзыв. Попробуйте снова.",
+        )));
     }
     Ok(updated_at(&value))
 }
@@ -674,10 +694,7 @@ mod tests {
         parse_feedback_draft_save(&normalized).expect("null is success");
 
         for payload in [r#"{"success":false}"#, r#"{"ok":false}"#] {
-            assert_eq!(
-                parse_feedback_draft_save(payload).unwrap_err().message,
-                "Failed to save feedback draft. Please try again."
-            );
+            parse_feedback_draft_save(payload).unwrap_err();
         }
         let normalized =
             normalize_payload(r#"[{"error":{"json":{"message":"Feedback draft was rejected"}}}]"#);
@@ -751,7 +768,7 @@ mod tests {
             r#"{"success":false,"linterErrors":[{"annotationId":"a","reason":"Bad tag","severity":"error"}]}"#,
         )
         .unwrap_err();
-        assert_eq!(error.message, "Failed to pass linting: Bad tag");
+        assert!(error.message.contains("Bad tag"));
         assert_eq!(
             error.lint_issues,
             Some(vec![issue("a", "Bad tag", LintSeverity::Error)])
@@ -776,14 +793,10 @@ mod tests {
             r#"{"success":false,"linterErrors":[],"feedbackIncomplete":true,"message":"Rubric missing"}"#,
         )
         .unwrap_err();
-        assert_eq!(error.message, "Feedback incomplete: Rubric missing");
+        assert!(error.message.contains("Rubric missing"));
         assert_eq!(error.lint_issues, None);
-        assert!(
-            parse_submit(r#"{"success":false,"linterErrors":[],"feedbackIncomplete":true}"#)
-                .unwrap_err()
-                .message
-                .starts_with("Feedback incomplete")
-        );
+        parse_submit(r#"{"success":false,"linterErrors":[],"feedbackIncomplete":true}"#)
+            .unwrap_err();
         parse_submit(r#"{"success":true,"linterErrors":[],"feedbackIncomplete":false}"#)
             .expect("complete feedback passes");
     }

@@ -5,9 +5,8 @@ use gpui_kit::component::{Disableable, WindowExt, v_flex};
 use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
+use crate::text::localized;
 use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
-
-const DESCRIPTION: &str = "The chunk will be archived and you'll be returned to the project page. This counts against your daily skip cap (20% of your task limit). It will not count toward your task limits or quality metrics.";
 
 struct SkipDialog {
     panels: Entity<TaskPanels>,
@@ -23,8 +22,15 @@ impl Render for SkipDialog {
         v_flex()
             .gap_3()
             .child(dialog_header(
-                "Skip this chunk?",
-                Some(DESCRIPTION.into()),
+                localized(cx, "Skip this chunk?", "Пропустить этот чанк?"),
+                Some(
+                    localized(
+                        cx,
+                        "The chunk goes back to the queue and you return to the project. Skips are limited to 20% of your daily task limit.",
+                        "Чанк вернётся в очередь, а вы — к проекту. Пропуски ограничены 20% дневного лимита задач.",
+                    )
+                    .into(),
+                ),
                 cx,
             ))
             .children(error.map(|error| error_text(error, cx)))
@@ -32,7 +38,7 @@ impl Render for SkipDialog {
                 dialog_footer()
                     .child(
                         Button::new("skip-cancel")
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .disabled(pending)
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -40,9 +46,9 @@ impl Render for SkipDialog {
                         primary_button(
                             "skip-confirm",
                             if pending {
-                                "Skipping..."
+                                localized(cx, "Skipping…", "Пропуск…")
                             } else {
-                                "Confirm Skip"
+                                localized(cx, "Skip", "Пропустить")
                             },
                             pending,
                             false,

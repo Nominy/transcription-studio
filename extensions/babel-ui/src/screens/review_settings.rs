@@ -2,12 +2,13 @@
 
 use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use sonus_gold::prefs::{AiPreferences, AiSettings};
 use sonus_shell::{screens::ui, services::AppServices};
+
+use crate::text::{localized, localized_fmt};
 
 const REVIEW_MODEL_SUGGESTIONS: &str = "cloudflare/clef-omni, typesafe/jev-1.14";
 
@@ -22,13 +23,13 @@ impl ReviewSettingsView {
         let settings = cx.global::<AppServices>().storage.ai_settings();
         let key = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Review OpenRouter API key (sk-or-…)")
+                .placeholder(localized(cx, "OpenRouter key", "Ключ OpenRouter"))
                 .masked(true)
                 .default_value(settings.review_openrouter_key)
         });
         let model = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Review model (backend default)")
+                .placeholder(localized(cx, "Model (optional)", "Модель (необязательно)"))
                 .default_value(settings.review_model)
         });
         let subscriptions = vec![
@@ -65,7 +66,14 @@ impl ReviewSettingsView {
         change(&mut settings);
         if let Err(error) = storage.set_ai_settings(&settings.normalized()) {
             window.push_notification(
-                Notification::warning(format!("Review settings could not be saved: {error}")),
+                ui::warning_notification(
+                    localized(
+                        cx,
+                        "Couldn't save review settings.",
+                        "Не удалось сохранить настройки ревью.",
+                    ),
+                    Some(error.to_string().into()),
+                ),
                 cx,
             );
         }
@@ -73,56 +81,44 @@ impl ReviewSettingsView {
     }
 }
 
-fn key_hint(key: &str) -> Option<&'static str> {
+fn key_hint(key: &str, cx: &App) -> Option<&'static str> {
     if key.is_empty() {
         return None;
     }
     let valid =
         key.starts_with("sk-or-") && key.len() <= 512 && !key.chars().any(char::is_whitespace);
-    (!valid).then_some("OpenRouter keys start with sk-or- and contain no spaces.")
-}
-
-/// Review Helper model IDs use provider/model syntax, at most 128 bytes.
-fn valid_review_model(model: &str) -> bool {
-    let Some((provider, name)) = model.split_once('/') else {
-        return false;
-    };
-    let part = |text: &str, extra: &[char]| {
-        let mut chars = text.chars();
-        chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
-            && chars.all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
-    };
-    model.len() <= 128 && part(provider, &['.', '_', '-']) && part(name, &['.', '_', ':', '-'])
+    (!valid).then(|| localized(cx, "Keys start with sk-or-.", "Ключ начинается с sk-or-."))
 }
 
 impl Render for ReviewSettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let settings = cx.global::<AppServices>().storage.ai_settings();
-        let model_hint = (!settings.review_model.is_empty()
-            && !valid_review_model(&settings.review_model))
-        .then_some("Model ids look like provider/model.");
         ui::card(
-            "Review Helper",
-            Some("Magic Review and the Grader use this OpenRouter key and model."),
+            localized(cx, "AI review", "ИИ-ревью"),
+            Some(localized(
+                cx,
+                "Used by Magic Review and the Grader.",
+                "Используется Magic Review и Grader.",
+            )),
             cx,
         )
         .child(
             h_flex()
                 .justify_between()
                 .gap_3()
-                .child(div().text_sm().child("Magic Review mode"))
+                .child(div().text_sm().child("Magic Review"))
                 .child(
                     ButtonGroup::new("ai-review-mode")
                         .outline()
                         .small()
                         .child(
                             Button::new("ai-review-interactive")
-                                .label("Interactive")
+                                .label(localized(cx, "Step by step", "Пошагово"))
                                 .selected(!settings.review_fast_mode),
                         )
                         .child(
                             Button::new("ai-review-fast")
-                                .label("Fast")
+                                .label(localized(cx, "All at once", "Сразу всё"))
                                 .selected(settings.review_fast_mode),
                         )
                         .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
@@ -135,17 +131,22 @@ impl Render for ReviewSettingsView {
             v_flex()
                 .gap_2()
                 .child(Input::new(&self.key).mask_toggle())
-                .when_some(key_hint(&settings.review_openrouter_key), |view, hint| {
-                    view.child(div().text_xs().text_color(cx.theme().warning).child(hint))
-                })
+                .when_some(
+                    key_hint(&settings.review_openrouter_key, cx),
+                    |view, hint| {
+                        view.child(div().text_xs().text_color(cx.theme().warning).child(hint))
+                    },
+                )
                 .child(Input::new(&self.model))
                 .child(ui::muted(
-                    format!("Suggested: {REVIEW_MODEL_SUGGESTIONS}"),
+                    localized_fmt(
+                        cx,
+                        "Suggested: {models}",
+                        "Рекомендуемые: {models}",
+                        &[("models", REVIEW_MODEL_SUGGESTIONS)],
+                    ),
                     cx,
-                ))
-                .when_some(model_hint, |view, hint| {
-                    view.child(div().text_xs().text_color(cx.theme().warning).child(hint))
-                }),
+                )),
         )
     }
 }

@@ -6,18 +6,24 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::*;
 
+use crate::text::{localized, localized_fmt};
 use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header};
 
-/// Opens the non-dismissible no-work modal; "Back to Projects" closes it and calls `on_back`.
-/// `job_kind` fills "Sorry, we weren't able to find a {job_kind} job for you!".
+/// Opens the non-dismissible no-work modal; "Back to projects" closes it and calls `on_back`.
+/// `job_kind` fills "No {job_kind} tasks right now".
 pub fn open(
     job_kind: &str,
     window: &mut Window,
     cx: &mut App,
     on_back: impl Fn(&mut Window, &mut App) + 'static,
 ) {
-    let title: SharedString =
-        format!("Sorry, we weren't able to find a {job_kind} job for you!").into();
+    let title: SharedString = localized_fmt(
+        cx,
+        "No {job_kind} tasks right now",
+        "Сейчас нет задач: {job_kind}",
+        &[("job_kind", job_kind)],
+    )
+    .into();
     let on_back = Rc::new(on_back);
     window.open_dialog(cx, move |dialog, window, cx| {
         let on_back = on_back.clone();
@@ -32,14 +38,14 @@ pub fn open(
                     .gap_3()
                     .child(dialog_header(
                         title.clone(),
-                        Some("Come back later and we'll have more work ready.".into()),
+                        Some(localized(cx, "Check back later.", "Загляните позже.").into()),
                         cx,
                     ))
                     .child(
                         dialog_footer().child(
                             Button::new("no-work-back")
                                 .primary()
-                                .label("Back to Projects")
+                                .label(localized(cx, "Back to projects", "К проектам"))
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     on_back(window, cx);

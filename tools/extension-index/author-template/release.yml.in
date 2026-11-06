@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           id=$(jq -r '.id' manifest.json)
           version=$(jq -r '.version' manifest.json)
-          asset="$id-$version.sonusext"
+          asset="$id-$version.exaudio"
           sonus-extension-index pack manifest.json dist/module.wasm "dist/$asset" LICENSE
           sonus-extension-index release-entry '@@OWNER@@' '@@REPOSITORY@@' manifest.json "dist/$asset" "$RELEASE_TAG" "$(git rev-parse HEAD)" > dist/index-entry.json
           cp Cargo.lock dist/build-Cargo.lock
@@ -69,7 +69,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            dist/*.sonusext
+            dist/*.exaudio
             dist/index-entry.json
             dist/build-Cargo.lock
             dist/build-source.json
@@ -98,5 +98,5 @@ jobs:
           fi
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" \
             --notes 'Sonus WASM extension. Submit the attached index-entry.json in a reviewed index PR. Checksums are not publisher signatures.' \
-            release-assets/*.sonusext release-assets/index-entry.json release-assets/build-Cargo.lock release-assets/build-source.json
+            release-assets/*.exaudio release-assets/index-entry.json release-assets/build-Cargo.lock release-assets/build-source.json
           echo 'Release published. Index inclusion still requires a separate reviewed pull request.' >> "$GITHUB_STEP_SUMMARY"

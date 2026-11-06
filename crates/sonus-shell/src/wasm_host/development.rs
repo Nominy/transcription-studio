@@ -22,14 +22,14 @@ fn bounded(path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max {
-        bail!("invalid or oversized package member: {}", path.display());
+        bail!("The developer folder is missing a file, or the file is too large or a link.");
     }
     let mut value = Vec::with_capacity(metadata.len() as usize);
     fs::File::open(path)?
         .take(max + 1)
         .read_to_end(&mut value)?;
     if value.len() as u64 > max {
-        bail!("package member changed beyond size limit");
+        bail!("A file in the developer folder grew too large while it was being read.");
     }
     Ok(value)
 }
@@ -44,13 +44,13 @@ fn prepare(
     manifest.validate()?;
     manifest.check_host_compatibility()?;
     if manifest.id != expected.id || initial && manifest != *expected {
-        bail!("developer manifest changed since permission review; review it again");
+        bail!("The extension's permissions changed. Review them again.");
     }
     if manifest.permissions.iter().any(|p| !grants.contains(p)) {
-        bail!("reload requests new permissions; review and approve the directory again");
+        bail!("The extension asks for new permissions. Review them again.");
     }
     if !matches!(manifest.runtime, sonus_extension::Runtime::Wasm) {
-        bail!("developer directory must contain a WASM component");
+        bail!("The developer folder has no extension in it.");
     }
     let component = bounded(&directory.join("module.wasm"), 16 * 1024 * 1024)?;
     let mut assets = BTreeMap::new();
@@ -58,7 +58,7 @@ fn prepare(
     if asset_root.exists() {
         let root = asset_root.canonicalize()?;
         if !root.starts_with(directory) {
-            bail!("asset directory escapes developer package");
+            bail!("The assets folder points outside the developer folder.");
         }
         let mut queue = vec![root.clone()];
         let mut bytes = 0u64;
@@ -67,14 +67,14 @@ fn prepare(
                 let entry = entry?;
                 let metadata = fs::symlink_metadata(entry.path())?;
                 if metadata.file_type().is_symlink() {
-                    bail!("package assets cannot be symlinks");
+                    bail!("Links aren't allowed in the assets folder.");
                 }
                 if metadata.is_dir() {
                     queue.push(entry.path());
                 } else if metadata.is_file() {
                     bytes = bytes.saturating_add(metadata.len());
                     if bytes > 32 * 1024 * 1024 || assets.len() >= 2048 {
-                        bail!("package assets exceed quota");
+                        bail!("The assets folder is too large.");
                     }
                     let path = entry.path().canonicalize()?;
                     let id = path
@@ -112,11 +112,11 @@ pub fn watch_development(
         .iter()
         .any(|p| !approved_grants.contains(p))
     {
-        bail!("permissions have not been approved");
+        bail!("The extension's permissions haven't been approved.");
     }
     let directory = directory.canonicalize()?;
     if !directory.is_dir() {
-        bail!("developer package is not a directory");
+        bail!("The developer folder can't be opened.");
     }
     if !cx.has_global::<WasmExtensions>() {
         cx.set_global(WasmExtensions::default());
@@ -168,7 +168,7 @@ pub fn watch_development(
                             .entries
                             .contains_key(&task_owner)
                         {
-                            record(&task_owner, "reload rejected", &error.to_string(), cx);
+                            record(&task_owner, "Reload failed", &error.to_string(), cx);
                         } else {
                             cx.update_global::<ContributionRegistry, _>(|r, _| {
                                 r.errors.insert(task_owner.clone(), error.to_string());
@@ -209,7 +209,7 @@ pub fn watch_development(
                                                     Some(task_directory.clone());
                                                 push_log(
                                                     &mut entry.status,
-                                                    "developer component activated",
+                                                    "Developer extension started",
                                                 );
                                             }
                                         })
@@ -218,12 +218,7 @@ pub fn watch_development(
                                 }
                                 Ok(Some(Err(error))) => {
                                     cx.update(|cx| {
-                                        record(
-                                            &task_owner,
-                                            "reload rejected",
-                                            &error.to_string(),
-                                            cx,
-                                        )
+                                        record(&task_owner, "Reload failed", &error.to_string(), cx)
                                     });
                                     break;
                                 }
@@ -232,7 +227,7 @@ pub fn watch_development(
                         },
                         Err(error) => {
                             cx.update(|cx| {
-                                record(&task_owner, "reload rejected", &error.to_string(), cx)
+                                record(&task_owner, "Reload failed", &error.to_string(), cx)
                             });
                         }
                     }
@@ -259,7 +254,7 @@ pub fn reload_development(owner: &str, cx: &mut App) -> Result<()> {
         .global::<WasmExtensions>()
         .watches
         .get(owner)
-        .ok_or_else(|| anyhow!("developer watcher is not running"))?;
+        .ok_or_else(|| anyhow!("This developer folder isn't being watched."))?;
     let _ = watch.wake.try_send(());
     Ok(())
 }

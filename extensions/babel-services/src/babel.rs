@@ -20,9 +20,7 @@ mod response;
 mod transport;
 
 pub use client::{BabelClient, LoadedErrorTask, LoadedTask, OpenedTask, TaskRequest};
-pub use dashboard::{
-    Dashboard, DashboardProject, NO_ACTIVE_PROJECTS_MESSAGE, daily_task_progress, parse_dashboard,
-};
+pub use dashboard::{Dashboard, DashboardProject, daily_task_progress, parse_dashboard};
 pub use payload::{
     META_ACTIVE_QUEUE_ID, META_CHUNKED_QUEUE_ID, META_DISPLAY_FEEDBACK, META_FEEDBACK_INITIAL_OPEN,
     META_IS_STITCHED_QUEUE, META_PROJECT_ID, META_QUEUE_ID, META_REVIEW_ACTION_ID,

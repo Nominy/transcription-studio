@@ -47,7 +47,7 @@ impl DraftingConfig {
         };
         if key.is_empty() {
             bail!(
-                "drafting requires `{DRAFT_OPENROUTER_API_KEY_ENV}` or `{OPENROUTER_API_KEY_ENV}`"
+                "Drafting needs an OpenRouter API key. (set {DRAFT_OPENROUTER_API_KEY_ENV} or {OPENROUTER_API_KEY_ENV})"
             );
         }
         Ok(key)

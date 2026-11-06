@@ -23,13 +23,13 @@ const USAGE: &str = "sonus-extension-index commands:
   validate-index INDEX.json [PREVIOUS.json]
   inspect INDEX.json [QUERY]
   fetch RAW_GITHUB_URL CACHE.json [--offline]
-  pack MANIFEST.json COMPONENT.wasm OUTPUT.sonusext [LICENSE]
-  release-entry OWNER REPOSITORY MANIFEST.json PACKAGE.sonusext TAG SOURCE_COMMIT
-  validate-package INDEX.json ID VERSION PACKAGE.sonusext
+  pack MANIFEST.json COMPONENT.wasm OUTPUT.exaudio [LICENSE]
+  release-entry OWNER REPOSITORY MANIFEST.json PACKAGE.exaudio TAG SOURCE_COMMIT
+  validate-package INDEX.json ID VERSION PACKAGE.exaudio
   plan-mode INDEX.json ID VERSION MODE STORE HOST.json GRANTS.json
   plan-release INDEX.json ID VERSION STORE HOST.json GRANTS.json
-  preview-developer PACKAGE.sonusext
-  install-developer INDEX.json PACKAGE.sonusext APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
+  preview-developer PACKAGE.exaudio
+  install-developer INDEX.json PACKAGE.exaudio APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
   install INDEX.json SELECTION.json STORE HOST.json GRANTS.json
   install-release RAW_GITHUB_URL CACHE.json SELECTION.json STORE HOST.json GRANTS.json
   rollback INDEX.json STORE HOST.json
@@ -37,7 +37,7 @@ const USAGE: &str = "sonus-extension-index commands:
   enable INDEX.json ID STORE HOST.json
   uninstall ID STORE HOST.json
 
-SELECTION.json: [{\"id\":\"author.extension\",\"version\":\"1.0.0\",\"package\":\"local.sonusext\"}]
+SELECTION.json: [{\"id\":\"author.extension\",\"version\":\"1.0.0\",\"package\":\"local.exaudio\"}]
 The package field is required for install and ignored for install-release.
 HOST.json: {\"requirements\":[],\"builtins\":[]}; GRANTS.json: {\"author.extension\":[{\"kind\":\"document-read\"}]}
 Grants must represent explicit user consent, never copied automatically from the manifest.
@@ -436,8 +436,8 @@ fn pack(
     control: &OperationControl,
 ) -> Result<()> {
     let output = Path::new(output);
-    if output.extension().and_then(|extension| extension.to_str()) != Some("sonusext") {
-        return Err("output must have .sonusext extension".into());
+    if output.extension().and_then(|extension| extension.to_str()) != Some("exaudio") {
+        return Err("output must have .exaudio extension".into());
     }
     let parent = output
         .parent()

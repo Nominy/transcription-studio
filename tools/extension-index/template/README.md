@@ -2,7 +2,7 @@
 
 This repository is a reviewed catalog, not an extension source monorepo. `index.json`
 is the published schema-1 index. Each entry belongs to one author's GitHub repository;
-each immutable release points at an actual `.sonusext` GitHub release asset. Start with
+each immutable release points at an actual `.exaudio` GitHub release asset. Start with
 this empty index and add only published, reviewed releases. There are no example releases.
 
 ## Repository layout and review policy
@@ -24,7 +24,7 @@ build instructions. Build and test the extension as a WASM component matching th
 Exaudio extension host ABI. This index does not build or execute submitted repository source.
 See the Exaudio repository's WASM SDK/examples for the actual host ABI.
 
-Publish a ZIP archive with a `.sonusext` filename containing exactly:
+Publish a ZIP archive with a `.exaudio` filename containing exactly:
 
 ```
 manifest.json
@@ -48,8 +48,8 @@ lowercase identifiers. Capability declarations request access; they do not grant
 
 1. Commit the author's source and manifest. Record the full Git source commit ID.
 2. Build locally using the author's toolchain. Package the real WASM component and exact
-   manifest into `.sonusext`. The trusted CLI can do this with
-   `sonus-extension-index pack manifest.json COMPONENT.wasm OUTPUT.sonusext LICENSE`.
+   manifest into `.exaudio`. The trusted CLI can do this with
+   `sonus-extension-index pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE`.
    It validates the archive and refuses to overwrite existing artifacts. Do not include
    native binaries or build scripts.
 3. Create a versioned GitHub release in the author's repository and upload the archive.
@@ -57,7 +57,7 @@ lowercase identifiers. Capability declarations request access; they do not grant
 4. Generate a real entry from those exact bytes with the trusted validator:
 
    ```text
-   sonus-extension-index release-entry OWNER REPOSITORY manifest.json PACKAGE.sonusext TAG SOURCE_COMMIT
+   sonus-extension-index release-entry OWNER REPOSITORY manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
    ```
 
    It validates the package and prints an entry; it does not upload anything or prove
@@ -91,7 +91,7 @@ Every release record contains:
 | `tag` | Actual GitHub release tag |
 | `source_commit` | Full lowercase 40- or 64-hex Git object ID |
 | `manifest` | Complete, immutable `ExtensionManifest`, not a summary |
-| `asset.name` | `.sonusext` archive filename |
+| `asset.name` | `.exaudio` archive filename |
 | `asset.url` | Exact `https://github.com/OWNER/REPOSITORY/releases/download/TAG/NAME` |
 | `asset.bytes` | Positive exact compressed byte count |
 | `asset.sha256` | Lowercase 64-hex SHA256 of archive bytes |

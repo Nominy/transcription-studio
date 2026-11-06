@@ -9,17 +9,19 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::review::CategoryGrade;
+use sonus_babel_services::review::{CategoryGrade, grade_category_title};
 
 use super::task::TaskPanels;
+use crate::text;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, dialog_surface, modal};
 use sonus_shell::editor::panels::ui::muted;
 
-const SCORE_LABELS: [(u8, &str); 3] = [
-    (1, "1 · Few or no issues"),
-    (2, "2 · Repeated issues"),
-    (3, "3 · Systemic issues"),
+/// Score buttons: value and label (EN, RU).
+const SCORE_LABELS: [(u8, &str, &str); 3] = [
+    (1, "1 · Few or no issues", "1 · Почти без ошибок"),
+    (2, "2 · Repeated issues", "2 · Повторяющиеся ошибки"),
+    (3, "3 · Systemic issues", "3 · Системные ошибки"),
 ];
 
 pub struct GraderPanel {
@@ -52,11 +54,11 @@ impl GraderPanel {
         let scores = h_flex()
             .gap_1()
             .flex_wrap()
-            .children(SCORE_LABELS.iter().map(|&(score, label)| {
+            .children(SCORE_LABELS.iter().map(|&(score, en, ru)| {
                 let p = self.panels.clone();
                 Button::new(SharedString::from(format!("grade-{category}-{score}")))
                     .xsmall()
-                    .label(label)
+                    .label(text::localized(cx, en, ru))
                     .when(grade.score == score, |button| button.primary())
                     .when(grade.score != score, |button| button.outline())
                     .disabled(busy)
@@ -74,9 +76,21 @@ impl GraderPanel {
                         .xsmall()
                         .ghost()
                         .label(format!(
-                            "{} Examples · {count} correction{}",
+                            "{} {}",
                             if expanded { "▾" } else { "▸" },
-                            if count == 1 { "" } else { "s" }
+                            text::localized_fmt(
+                                cx,
+                                "Examples · {count}",
+                                "Примеры · {count}",
+                                &[(
+                                    "count",
+                                    &text::count(
+                                        count as u64,
+                                        ("correction", "corrections"),
+                                        ("исправление", "исправления", "исправлений"),
+                                    ),
+                                )],
+                            )
                         ))
                         .on_click(move |_, _, cx| {
                             p.update(cx, |panels, cx| panels.toggle_grade_examples(category, cx));
@@ -94,13 +108,23 @@ impl GraderPanel {
                                 div()
                                     .text_xs()
                                     .whitespace_normal()
-                                    .child(format!("Original: {before}"))
+                                    .child(text::localized_fmt(
+                                        cx,
+                                        "Original: {text}",
+                                        "Исходный: {text}",
+                                        &[("text", &before)],
+                                    ))
                             }))
                             .children(sample.after.clone().map(|after| {
                                 div()
                                     .text_xs()
                                     .whitespace_normal()
-                                    .child(format!("Reviewed: {after}"))
+                                    .child(text::localized_fmt(
+                                        cx,
+                                        "Reviewed: {text}",
+                                        "Проверенный: {text}",
+                                        &[("text", &after)],
+                                    ))
                             }))
                     }))
                 })
@@ -115,7 +139,7 @@ impl GraderPanel {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(category),
+                    .child(grade_category_title(category).to_string()),
             )
             .child(scores)
             .when(!grade.note.is_empty(), |this| {
@@ -161,14 +185,14 @@ impl Render for GraderPanel {
                     .flex_1()
                     .text_base()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Babel Review Grader"),
+                    .child(text::localized(cx, "Grader", "Grader")),
             )
             .child(
                 Button::new("grader-close")
                     .small()
                     .ghost()
                     .icon(IconName::Close)
-                    .label("Close")
+                    .label(text::localized(cx, "Close", "Закрыть"))
                     .on_click(move |_, _, cx| {
                         close.update(cx, |panels, cx| panels.close_grader(cx))
                     }),
@@ -185,7 +209,9 @@ impl Render for GraderPanel {
                     })
                     .child(text)
             }))
-            .when(busy, |this| this.child(muted("Working…", cx)));
+            .when(busy, |this| {
+                this.child(muted(text::localized(cx, "Working…", "Выполняется…"), cx))
+            });
         let footer = h_flex()
             .gap_2()
             .justify_end()
@@ -197,9 +223,9 @@ impl Render for GraderPanel {
                     .small()
                     .outline()
                     .label(if has_result {
-                        "Regenerate"
+                        text::localized(cx, "Generate again", "Сгенерировать заново")
                     } else {
-                        "Generate grades"
+                        text::localized(cx, "Generate grades", "Сгенерировать оценки")
                     })
                     .loading(busy)
                     .disabled(busy)
@@ -211,7 +237,7 @@ impl Render for GraderPanel {
                 Button::new("grader-apply")
                     .small()
                     .primary()
-                    .label("Apply grades")
+                    .label(text::localized(cx, "Apply grades", "Применить оценки"))
                     .disabled(busy || !has_result)
                     .on_click(move |_, window, cx| {
                         apply.update(cx, |panels, cx| panels.apply_grades(window, cx));

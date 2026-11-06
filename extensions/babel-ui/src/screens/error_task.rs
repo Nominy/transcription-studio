@@ -34,15 +34,32 @@ use sonus_gold::prefs::AiPreferences;
 use sonus_gold_ui::services::GoldServices;
 use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header};
 use sonus_shell::screens::ui::{self, Tone};
+
+use crate::text::{count, failed, localized, localized_fmt};
 use sonus_shell::services::spawn_service_in;
 
 const LANE: &str = "target";
-const WHOLE_QUESTION: &str = "Does the highlight capture the whole error?";
-const MEANING_QUESTION: &str = "Did this error change the meaning?";
-const MEANING_HELP: &str = "Yes if the difference changes what was said or meant. No if it is only formatting, spacing, case, a number written differently (\"24\" vs \"twenty-four\"), a filler, or a pronunciation variant.";
-const HUMAN_QUESTION: &str = "Is the human transcript correct?";
-const HUMAN_HELP: &str = "Yes = correct, No = contains an error. Still tag the difference.";
-const CANCELLED: &str = "Cancelled. A dispatched provider request may finish into the cache; no choices will be applied.";
+const WHOLE_QUESTION: (&str, &str) = (
+    "Does the highlight capture the whole error?",
+    "Выделение охватывает всю ошибку?",
+);
+const MEANING_QUESTION: (&str, &str) = (
+    "Did this error change the meaning?",
+    "Эта ошибка меняет смысл?",
+);
+const MEANING_HELP: (&str, &str) = (
+    "Yes if the difference changes what was said or meant. No if it is only formatting, spacing, case, a number written differently (\"24\" vs \"twenty-four\"), a filler, or a pronunciation variant.",
+    "Да — если различие меняет сказанное или его смысл. Нет — если это только форматирование, пробелы, регистр, иная запись числа («24» и «двадцать четыре»), слово-паразит или вариант произношения.",
+);
+const HUMAN_QUESTION: (&str, &str) = (
+    "Is the human transcript correct?",
+    "Расшифровка человека верна?",
+);
+const HUMAN_HELP: (&str, &str) = (
+    "Yes if it is correct, No if it contains an error. Tag the difference either way.",
+    "Да — если верна, Нет — если содержит ошибку. В любом случае отметьте различие.",
+);
+const CANCELLED: (&str, &str) = ("Cancelled.", "Отменено.");
 
 /// How the screen was opened (from the dashboard).
 pub struct ErrorTaskOpen {
@@ -74,8 +91,11 @@ enum AfterSubmit {
 enum AudioLoad {
     /// Synthetic diffs have no audio.
     None,
+    /// The task has no recording for the diff's speaker.
+    Missing,
     Loading,
     Ready(ClipSource),
+    /// Decoding failed; the technical detail.
     Failed(SharedString),
 }
 
@@ -133,10 +153,15 @@ pub struct ErrorTaskScreen {
 impl ErrorTaskScreen {
     pub fn new(open: ErrorTaskOpen, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Type to filter, e.g. homophone, date, filler")
+            InputState::new(window, cx).placeholder(localized(
+                cx,
+                "Filter categories, e.g. homophone, date, filler",
+                "Фильтр категорий, например омофон, дата, слово-паразит",
+            ))
         });
-        let notes = cx.new(|cx| InputState::new(window, cx).placeholder("Optional"));
-        let other_issues = cx.new(|cx| InputState::new(window, cx).placeholder("Optional"));
+        let optional = localized(cx, "Optional", "Необязательно");
+        let notes = cx.new(|cx| InputState::new(window, cx).placeholder(optional));
+        let other_issues = cx.new(|cx| InputState::new(window, cx).placeholder(optional));
         let subscriptions = vec![
             cx.subscribe_in(&filter, window, |_, _, event, _, cx| {
                 if let InputEvent::Change = event {
@@ -217,21 +242,28 @@ impl ErrorTaskScreen {
                 v_flex()
                     .gap_3()
                     .child(dialog_header(
-                        "Leave without submitting?",
-                        Some("Your answers for this diff have not been sent.".into()),
+                        localized(cx, "Leave without submitting?", "Выйти без отправки?"),
+                        Some(
+                            localized(
+                                cx,
+                                "Your answers for this diff will be lost.",
+                                "Ваши ответы по этому диффу будут потеряны.",
+                            )
+                            .into(),
+                        ),
                         cx,
                     ))
                     .child(
                         dialog_footer()
                             .child(
                                 Button::new("error-task-stay")
-                                    .label("Keep labeling")
+                                    .label(localized(cx, "Keep labeling", "Продолжить разметку"))
                                     .on_click(|_, window, cx| window.close_dialog(cx)),
                             )
                             .child(
                                 Button::new("error-task-discard")
                                     .danger()
-                                    .label("Discard answers")
+                                    .label(localized(cx, "Leave", "Выйти"))
                                     .on_click(move |_, window, cx| {
                                         window.close_dialog(cx);
                                         if let Some(confirmed) = on_confirmed.take() {
@@ -259,14 +291,14 @@ impl ErrorTaskScreen {
             return;
         };
         let Some(path) = focus.audio_path.clone() else {
-            self.audio = AudioLoad::Failed("This task has no audio for the diff's speaker.".into());
+            self.audio = AudioLoad::Missing;
             return;
         };
         let path = base.join(path);
         self.audio = AudioLoad::Loading;
         self.set_assistant(AssistantStatus::new(
             AssistantPhase::WaitingAudio,
-            "Waiting for audio…",
+            localized(cx, "Waiting for audio…", "Ожидание аудио…"),
         ));
         let decode = cx.background_spawn(async move { decode_audio_file(&path) });
         self.audio_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -277,8 +309,7 @@ impl ErrorTaskScreen {
                     Ok(decoded) => {
                         let audio = Arc::new(decoded);
                         if let Err(error) = this.engine.insert_lane(LANE, Arc::clone(&audio)) {
-                            this.status =
-                                Some(format!("Audio playback unavailable: {error}").into());
+                            this.status = Some(Self::playback_failed(error, cx).into());
                         }
                         this.engine.set_timeline_end(Some(audio.duration()));
                         this.audio = AudioLoad::Ready(audio);
@@ -296,9 +327,18 @@ impl ErrorTaskScreen {
         }));
     }
 
+    fn playback_failed(error: impl std::fmt::Display, cx: &App) -> String {
+        failed(
+            cx,
+            "Can't play audio on this device.",
+            "Не удаётся воспроизвести аудио на этом устройстве.",
+            error,
+        )
+    }
+
     fn play(&mut self, start: f64, end: f64, cx: &mut Context<Self>) {
         if let Err(error) = self.engine.audition(start, end) {
-            self.status = Some(format!("Audio playback unavailable: {error}").into());
+            self.status = Some(Self::playback_failed(error, cx).into());
         }
         cx.notify();
     }
@@ -407,7 +447,8 @@ impl ErrorTaskScreen {
                 match result {
                     Ok(()) => {
                         this.submitted = true;
-                        this.status = Some("Label submitted.".into());
+                        this.status =
+                            Some(localized(cx, "Label submitted.", "Разметка отправлена.").into());
                         match (after, this.next_project.clone()) {
                             (AfterSubmit::NextTask, Some(project_id)) => {
                                 cx.emit(ErrorTaskEvent::NextTask { project_id })
@@ -416,12 +457,7 @@ impl ErrorTaskScreen {
                         }
                     }
                     Err(error) => {
-                        let message = if error.message.trim().is_empty() {
-                            "Failed to submit the label. Please try again.".to_string()
-                        } else {
-                            error.message
-                        };
-                        this.submit_error = Some(message.into());
+                        this.submit_error = Some(error.message.into());
                     }
                 }
                 cx.notify();
@@ -458,7 +494,7 @@ impl ErrorTaskScreen {
         self.assistant.status = Some(status);
     }
 
-    fn assistant_error(&mut self, error: &ErrorTaskError) {
+    fn assistant_error(&mut self, error: &ErrorTaskError, cx: &App) {
         self.set_assistant(AssistantStatus::new(
             if error.is_cancelled() {
                 AssistantPhase::Cancelled
@@ -466,7 +502,7 @@ impl ErrorTaskScreen {
                 AssistantPhase::Error
             },
             if error.is_cancelled() {
-                CANCELLED.to_string()
+                localized(cx, CANCELLED.0, CANCELLED.1).to_string()
             } else {
                 error.message.clone()
             },
@@ -572,7 +608,11 @@ impl ErrorTaskScreen {
             self.assistant.fill_after_alignment = false;
             self.set_assistant(AssistantStatus::new(
                 AssistantPhase::Cancelled,
-                "Enable Gold to align audio and use Initial fill. Manual labeling remains available.",
+                localized(
+                    cx,
+                    "Turn on the AI extension in Extensions to align audio and use Fill in.",
+                    "Включите расширение ИИ в разделе «Расширения», чтобы выровнять аудио и использовать заполнение.",
+                ),
             ));
             cx.notify();
             return;
@@ -608,13 +648,21 @@ impl ErrorTaskScreen {
         match result {
             Ok(aligned) => {
                 let message = match aligned.alignment.boundary_note {
-                    Some(BoundaryNote::SegmentOnly) => {
-                        "Using the whole segment. Check the audio and choices before Submit."
-                    }
-                    Some(BoundaryNote::OverlappingAsrWords) => {
-                        "Words overlap here. Check the audio and choices before Submit."
-                    }
-                    None => "Audio found. Check it and the choices before Submit.",
+                    Some(BoundaryNote::SegmentOnly) => localized(
+                        cx,
+                        "Using the whole segment. Check the audio and choices before you submit.",
+                        "Используется весь сегмент. Проверьте аудио и ответы перед отправкой.",
+                    ),
+                    Some(BoundaryNote::OverlappingAsrWords) => localized(
+                        cx,
+                        "Words overlap here. Check the audio and choices before you submit.",
+                        "Слова здесь накладываются. Проверьте аудио и ответы перед отправкой.",
+                    ),
+                    None => localized(
+                        cx,
+                        "Audio found. Check it and the choices before you submit.",
+                        "Аудио найдено. Проверьте его и ответы перед отправкой.",
+                    ),
                 };
                 self.set_assistant(AssistantStatus {
                     phase: AssistantPhase::Aligned,
@@ -628,7 +676,7 @@ impl ErrorTaskScreen {
             }
             Err(error) => {
                 self.assistant.failed = true;
-                self.assistant_error(&error);
+                self.assistant_error(&error, cx);
             }
         }
         cx.notify();
@@ -638,7 +686,11 @@ impl ErrorTaskScreen {
         if self.read_only {
             self.set_assistant(AssistantStatus::new(
                 AssistantPhase::Error,
-                "This questionnaire is read-only.",
+                localized(
+                    cx,
+                    "This questionnaire is read-only.",
+                    "Эта анкета только для чтения.",
+                ),
             ));
             cx.notify();
             return;
@@ -663,7 +715,11 @@ impl ErrorTaskScreen {
         if !matches!(self.audio, AudioLoad::Ready(_)) {
             self.set_assistant(AssistantStatus::new(
                 AssistantPhase::Error,
-                "Audio is still loading. Try again in a moment.",
+                localized(
+                    cx,
+                    "Audio is still loading. Try again in a moment.",
+                    "Аудио ещё загружается. Попробуйте чуть позже.",
+                ),
             ));
             cx.notify();
             return;
@@ -676,7 +732,11 @@ impl ErrorTaskScreen {
         let Some(project_id) = self.project_id.clone() else {
             self.set_assistant(AssistantStatus::new(
                 AssistantPhase::Error,
-                "Couldn’t find this project’s style guide. Open the task from its project.",
+                localized(
+                    cx,
+                    "Couldn’t find this project’s style guide. Open the task from its project.",
+                    "Не удалось найти гайд проекта. Откройте задачу из её проекта.",
+                ),
             ));
             cx.notify();
             return;
@@ -686,7 +746,7 @@ impl ErrorTaskScreen {
         drop(sender);
         self.set_assistant(AssistantStatus::new(
             AssistantPhase::Drafting,
-            "Loading the style guide…",
+            localized(cx, "Loading the style guide…", "Загрузка гайда…"),
         ));
         let task = spawn_service_in(
             window,
@@ -712,7 +772,7 @@ impl ErrorTaskScreen {
         let style_guide = match result {
             Ok(guide) => guide,
             Err(error) => {
-                self.assistant_error(&error);
+                self.assistant_error(&error, cx);
                 cx.notify();
                 return;
             }
@@ -724,7 +784,11 @@ impl ErrorTaskScreen {
         ) else {
             self.set_assistant(AssistantStatus::new(
                 AssistantPhase::Error,
-                "The audio isn’t ready. Try again.",
+                localized(
+                    cx,
+                    "The audio isn’t ready. Try again.",
+                    "Аудио не готово. Попробуйте ещё раз.",
+                ),
             ));
             cx.notify();
             return;
@@ -776,9 +840,17 @@ impl ErrorTaskScreen {
                 Ok(next) => {
                     let message = if let Some(next) = next {
                         self.choices = next;
-                        "Choices filled. Review, then Submit. Notes untouched."
+                        localized(
+                            cx,
+                            "Choices filled. Review them, then submit.",
+                            "Ответы заполнены. Проверьте их и отправьте.",
+                        )
                     } else {
-                        "Your choices were already complete."
+                        localized(
+                            cx,
+                            "Your choices were already complete.",
+                            "Ваши ответы уже заполнены.",
+                        )
                     };
                     self.set_assistant(AssistantStatus {
                         phase: AssistantPhase::Filled,
@@ -799,7 +871,7 @@ impl ErrorTaskScreen {
                     receipt: Some(receipt),
                 }),
             },
-            Err(error) => self.assistant_error(&error),
+            Err(error) => self.assistant_error(&error, cx),
         }
         cx.notify();
     }
@@ -810,7 +882,10 @@ impl ErrorTaskScreen {
             if self.assistant.alignment.is_none() {
                 self.assistant.failed = true;
             }
-            self.set_assistant(AssistantStatus::new(AssistantPhase::Cancelled, CANCELLED));
+            self.set_assistant(AssistantStatus::new(
+                AssistantPhase::Cancelled,
+                localized(cx, CANCELLED.0, CANCELLED.1),
+            ));
             cx.notify();
         }
     }
@@ -903,11 +978,11 @@ fn quoted(text: &str) -> String {
     }
 }
 
-fn yes_no(value: Option<bool>) -> &'static str {
+fn yes_no(value: Option<bool>, cx: &App) -> &'static str {
     match value {
         None => "-",
-        Some(true) => "Yes",
-        Some(false) => "No",
+        Some(true) => localized(cx, "Yes", "Да"),
+        Some(false) => localized(cx, "No", "Нет"),
     }
 }
 
@@ -924,11 +999,15 @@ impl ErrorTaskScreen {
 
     fn render_header(&self, palette: Palette, cx: &mut Context<Self>) -> Div {
         let title = if self.read_only {
-            "Error task (read-only)"
+            localized(
+                cx,
+                "Error task (read-only)",
+                "Задача по ошибкам (только чтение)",
+            )
         } else if self.task.error.is_qa_review {
-            "QA review"
+            localized(cx, "QA review", "Проверка QA")
         } else {
-            "Label this diff"
+            localized(cx, "Label this diff", "Разметьте дифф")
         };
         h_flex()
             .w_full()
@@ -938,7 +1017,7 @@ impl ErrorTaskScreen {
                     .ghost()
                     .small()
                     .icon(IconName::ArrowLeft)
-                    .label("Projects")
+                    .label(localized(cx, "Projects", "Проекты"))
                     .on_click(cx.listener(|this, _, window, cx| this.leave(window, cx))),
             )
             .child(
@@ -954,7 +1033,7 @@ impl ErrorTaskScreen {
     }
 
     /// "Human vs Machine · Diff … · time · Diff type · Synthetic" (Babel's player bar).
-    fn render_diff_bar(&self, palette: Palette) -> Div {
+    fn render_diff_bar(&self, palette: Palette, cx: &App) -> Div {
         let error = &self.task.error;
         let human = error.diff.human.parts().1;
         let machine = error.diff.machine.parts().1;
@@ -972,41 +1051,47 @@ impl ErrorTaskScreen {
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.fg)
-                    .child("Human vs Machine"),
+                    .child(localized(cx, "Human vs Machine", "Человек и машина")),
             )
             .child(separator())
             .child(
-                h_flex().gap_1p5().child("Diff").child(
-                    h_flex()
-                        .gap_1()
-                        .px_1p5()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(palette.border)
-                        .bg(palette.surface)
-                        .child(div().text_color(palette.human).child(quoted(&human)))
-                        .child("→")
-                        .child(div().text_color(palette.machine).child(quoted(&machine))),
-                ),
+                h_flex()
+                    .gap_1p5()
+                    .child(localized(cx, "Diff", "Дифф"))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .px_1p5()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(palette.border)
+                            .bg(palette.surface)
+                            .child(div().text_color(palette.human).child(quoted(&human)))
+                            .child("→")
+                            .child(div().text_color(palette.machine).child(quoted(&machine))),
+                    ),
             )
             .when_some(self.task.focus.as_ref(), |this, focus| {
                 this.child(separator()).child(format!(
-                    "{} to {}",
+                    "{} – {}",
                     format_time(focus.start_seconds),
                     format_time(focus.end_seconds)
                 ))
             })
             .when_some(error.diff_type_label(), |this, label| {
                 this.child(separator()).child(
-                    h_flex().gap_1p5().child("Diff type").child(
-                        div()
-                            .px_2()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(palette.border)
-                            .text_color(palette.fg)
-                            .child(label),
-                    ),
+                    h_flex()
+                        .gap_1p5()
+                        .child(localized(cx, "Diff type", "Тип диффа"))
+                        .child(
+                            div()
+                                .px_2()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(palette.border)
+                                .text_color(palette.fg)
+                                .child(label),
+                        ),
                 )
             })
             .when(error.source == ErrorSource::Synthetic, |this| {
@@ -1018,12 +1103,16 @@ impl ErrorTaskScreen {
                         .border_color(palette.info.opacity(0.4))
                         .bg(palette.info.opacity(0.08))
                         .text_color(palette.info)
-                        .child("Synthetic · text only, no audio"),
+                        .child(localized(
+                            cx,
+                            "Synthetic · text only",
+                            "Синтетический · только текст",
+                        )),
                 )
             })
     }
 
-    fn render_comparison(&self, palette: Palette) -> Div {
+    fn render_comparison(&self, palette: Palette, cx: &App) -> Div {
         let diff = self.displayed_diff();
         v_flex()
             .w_full()
@@ -1036,19 +1125,36 @@ impl ErrorTaskScreen {
                 h_flex()
                     .items_start()
                     .gap_2()
-                    .child(tone_label("Human", palette.human))
-                    .child(div().flex_1().min_w_0().text_sm().child(passage(&diff.human, palette.human))),
+                    .child(tone_label(localized(cx, "Human", "Человек"), palette.human))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .child(passage(&diff.human, palette.human)),
+                    ),
             )
             .child(
                 h_flex()
                     .items_start()
                     .gap_2()
-                    .child(tone_label("Machine", palette.machine))
-                    .child(div().flex_1().min_w_0().text_sm().child(passage(&diff.machine, palette.machine))),
+                    .child(tone_label(
+                        localized(cx, "Machine", "Машина"),
+                        palette.machine,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .child(passage(&diff.machine, palette.machine)),
+                    ),
             )
-            .child(div().text_xs().text_color(palette.muted).child(
-                "Reminder: this is normalized text, not the raw transcript, so it will look different from what you're used to.",
-            ))
+            .child(div().text_xs().text_color(palette.muted).child(localized(
+                cx,
+                "Normalized text",
+                "Нормализованный текст",
+            )))
     }
 
     fn render_audio(&self, palette: Palette, cx: &mut Context<Self>) -> Option<Div> {
@@ -1062,8 +1168,20 @@ impl ErrorTaskScreen {
             .as_ref()
             .map(|aligned| aligned.alignment.clone());
         let state: SharedString = match &self.audio {
-            AudioLoad::Loading => "Loading the audio…".into(),
-            AudioLoad::Failed(error) => format!("Audio unavailable: {error}").into(),
+            AudioLoad::Loading => localized(cx, "Loading the audio…", "Загрузка аудио…").into(),
+            AudioLoad::Missing => localized(
+                cx,
+                "This task has no audio for the diff's speaker.",
+                "В задаче нет аудио для спикера этого диффа.",
+            )
+            .into(),
+            AudioLoad::Failed(error) => failed(
+                cx,
+                "Couldn't load the audio.",
+                "Не удалось загрузить аудио.",
+                error,
+            )
+            .into(),
             _ => focus.speaker_label().into(),
         };
         Some(
@@ -1082,7 +1200,7 @@ impl ErrorTaskScreen {
                         Button::new("error-task-pause")
                             .small()
                             .icon(IconName::Pause)
-                            .label("Pause")
+                            .label(localized(cx, "Pause", "Пауза"))
                             .on_click(cx.listener(|this, _, _, cx| this.pause(cx))),
                     )
                 })
@@ -1092,7 +1210,7 @@ impl ErrorTaskScreen {
                             .small()
                             .outline()
                             .icon(IconName::Play)
-                            .label("Play segment")
+                            .label(localized(cx, "Play segment", "Воспроизвести сегмент"))
                             .disabled(!ready)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.play(segment.start_seconds, segment.end_seconds, cx)
@@ -1104,7 +1222,7 @@ impl ErrorTaskScreen {
                                 .small()
                                 .outline()
                                 .icon(IconName::Play)
-                                .label("Play context")
+                                .label(localized(cx, "Play context", "Воспроизвести контекст"))
                                 .disabled(!ready)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.play(
@@ -1119,7 +1237,7 @@ impl ErrorTaskScreen {
                                 .small()
                                 .outline()
                                 .icon(IconName::Play)
-                                .label("Play diff")
+                                .label(localized(cx, "Play diff", "Воспроизвести дифф"))
                                 .disabled(!ready)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.play(
@@ -1157,7 +1275,7 @@ impl ErrorTaskScreen {
                     .cost
                     .map(|cost| format!(" · ${cost:.6}"))
                     .unwrap_or_default();
-                format!("{} · {}{cost}", receipt.provider, receipt.model)
+                format!("{}{cost}", receipt.model)
             });
         Some(
             h_flex()
@@ -1173,14 +1291,22 @@ impl ErrorTaskScreen {
                         .small()
                         .primary()
                         .icon(IconName::Bot)
-                        .label("Initial fill")
+                        .label(localized(cx, "Fill in", "Заполнить"))
                         .tooltip(
                             if !Self::gold_inference_available(cx)
                                 && self.assistant.alignment.is_none()
                             {
-                                "Enable Gold to align audio before using Initial fill."
+                                localized(
+                                    cx,
+                                    "Turn on the AI extension in Extensions to align audio first.",
+                                    "Сначала включите расширение ИИ в разделе «Расширения», чтобы выровнять аудио.",
+                                )
                             } else {
-                                "Fill unanswered choices. Review before Submit."
+                                localized(
+                                    cx,
+                                    "Fills the unanswered choices for you to review.",
+                                    "Заполняет неотвеченные вопросы — проверьте перед отправкой.",
+                                )
                             },
                         )
                         .loading(busy)
@@ -1200,7 +1326,7 @@ impl ErrorTaskScreen {
                         Button::new("error-task-cancel-assistant")
                             .small()
                             .ghost()
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_assistant(cx))),
                     )
                 })
@@ -1220,7 +1346,7 @@ impl ErrorTaskScreen {
         )
     }
 
-    fn render_label_table(&self, rows: Vec<LabelRow>, palette: Palette) -> Option<Div> {
+    fn render_label_table(&self, rows: Vec<LabelRow>, palette: Palette, cx: &App) -> Option<Div> {
         if rows.is_empty() {
             return None;
         }
@@ -1232,23 +1358,33 @@ impl ErrorTaskScreen {
             .text_xs()
             .text_color(palette.muted)
             .bg(palette.group)
-            .child(div().w(rems(3.5)).px_2().py_1().child("Label"))
+            .child(
+                div()
+                    .w(rems(3.5))
+                    .px_2()
+                    .py_1()
+                    .child(localized(cx, "Label", "Разметка")),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w(rems(8.))
                     .px_2()
                     .py_1()
-                    .child("Categories (any bucket)"),
+                    .child(localized(cx, "Categories", "Категории")),
             )
-            .child(cell("Changed meaning".into()));
+            .child(cell(
+                localized(cx, "Changed meaning", "Меняет смысл").into(),
+            ));
         if has_audio {
-            header = header.child(cell("Human correct".into()));
+            header = header.child(cell(localized(cx, "Human correct", "Человек прав").into()));
         }
         header = header
-            .child(cell("Whole error".into()))
-            .child(cell("Other issues".into()))
-            .child(cell("Notes".into()));
+            .child(cell(localized(cx, "Whole error", "Вся ошибка").into()))
+            .child(cell(
+                localized(cx, "Other issues", "Другие проблемы").into(),
+            ))
+            .child(cell(localized(cx, "Notes", "Заметки").into()));
         let body = rows.into_iter().map(|row| {
             let categories = grouped_label_categories(&row.label.category_keys, &language)
                 .into_iter()
@@ -1276,13 +1412,13 @@ impl ErrorTaskScreen {
                         .py_1()
                         .child(categories),
                 )
-                .child(cell(yes_no(row.label.meaning_changed).into()));
+                .child(cell(yes_no(row.label.meaning_changed, cx).into()));
             if has_audio {
                 line = line.child(cell(
-                    yes_no(row.label.human_transcript_wrong.map(|wrong| !wrong)).into(),
+                    yes_no(row.label.human_transcript_wrong.map(|wrong| !wrong), cx).into(),
                 ));
             }
-            line.child(cell(yes_no(row.label.captures_whole_error).into()))
+            line.child(cell(yes_no(row.label.captures_whole_error, cx).into()))
                 .child(cell(
                     row.label
                         .other_issues
@@ -1318,10 +1454,14 @@ impl ErrorTaskScreen {
             .disabled(self.read_only || self.submitting.is_some() || self.submitted)
             .child(
                 Button::new("yes")
-                    .label("Yes")
+                    .label(localized(cx, "Yes", "Да"))
                     .selected(value == Some(true)),
             )
-            .child(Button::new("no").label("No").selected(value == Some(false)))
+            .child(
+                Button::new("no")
+                    .label(localized(cx, "No", "Нет"))
+                    .selected(value == Some(false)),
+            )
             .on_click(cx.listener(move |this, clicked: &Vec<usize>, _, cx| {
                 if let Some(&index) = clicked.first() {
                     this.set_choices(|choices| set(choices, index == 0), cx);
@@ -1375,9 +1515,6 @@ impl ErrorTaskScreen {
             indices.dedup();
             indices.len()
         };
-        let plural = |count: usize, one: &str, many: &str| {
-            format!("{count} {}", if count == 1 { one } else { many })
-        };
         let agree = level_one_categories(&self.task.error.prior_labels);
         let chips = selected.iter().enumerate().map(|(index, key)| {
             let remove = key.clone();
@@ -1396,7 +1533,12 @@ impl ErrorTaskScreen {
                         .xsmall()
                         .icon(IconName::Close)
                         .disabled(locked)
-                        .tooltip(format!("Remove {}", category_name(key, &language)))
+                        .tooltip(localized_fmt(
+                            cx,
+                            "Remove {name}",
+                            "Убрать {name}",
+                            &[("name", &category_name(key, &language))],
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let key = remove.clone();
                             this.set_choices(|choices| choices.toggle_category(&key), cx);
@@ -1496,21 +1638,25 @@ impl ErrorTaskScreen {
                     .gap_0p5()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Categories")
+                    .child(localized(cx, "Categories", "Категории"))
                     .child(div().text_color(palette.danger).child("*")),
             )
-            .child(div().text_xs().text_color(palette.muted).child(format!(
-                "Pick the first category that applies, top to bottom. Add a second only if one further down also applies, never from {} or {}, except {}. Most errors need just one.",
-                group_name(&CATEGORY_GROUPS[4], &language),
-                group_name(&CATEGORY_GROUPS[5], &language),
-                category_name("affix", &language),
+            .child(div().text_xs().text_color(palette.muted).child(localized_fmt(
+                cx,
+                "Pick the first category that applies, top to bottom. Add a second only if one further down also applies, never from {a} or {b}, except {c}. Most errors need just one.",
+                "Выберите первую подходящую категорию сверху вниз. Добавьте вторую, только если подходит и одна из нижних, но не из {a} или {b}, кроме {c}. Большинству ошибок хватает одной.",
+                &[
+                    ("a", &group_name(&CATEGORY_GROUPS[4], &language)),
+                    ("b", &group_name(&CATEGORY_GROUPS[5], &language)),
+                    ("c", &category_name("affix", &language)),
+                ],
             )))
             .when_some(agree, |this, keys| {
                 this.child(
                     Button::new("agree-with-l1")
                         .outline()
                         .small()
-                        .label("Agree with L1’s selection")
+                        .label(localized(cx, "Agree with L1’s selection", "Согласиться с выбором L1"))
                         .disabled(locked)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let keys = keys.clone();
@@ -1524,7 +1670,11 @@ impl ErrorTaskScreen {
                     .gap_1p5()
                     .min_h(rems(1.75))
                     .when(selected.is_empty(), |this| {
-                        this.child(div().text_xs().text_color(palette.muted).child("No categories selected"))
+                        this.child(div().text_xs().text_color(palette.muted).child(localized(
+                            cx,
+                            "No categories selected",
+                            "Категории не выбраны",
+                        )))
                     })
                     .children(chips),
             )
@@ -1533,7 +1683,11 @@ impl ErrorTaskScreen {
                     div()
                         .text_xs()
                         .text_color(palette.warning)
-                        .child("That's the max of 2. Only keep the second if it also applies."),
+                        .child(localized(
+                            cx,
+                            "Two is the maximum. Keep the second only if it also applies.",
+                            "Максимум две. Оставьте вторую, только если она тоже подходит.",
+                        )),
                 )
             })
             .child(
@@ -1552,8 +1706,16 @@ impl ErrorTaskScreen {
                             .when(!selected.is_empty(), |this| {
                                 this.child(div().text_xs().text_color(palette.muted).child(format!(
                                     "{} · {}",
-                                    plural(selected.len(), "category", "categories"),
-                                    plural(selected_groups, "group", "groups"),
+                                    count(
+                                        selected.len() as u64,
+                                        ("category", "categories"),
+                                        ("категория", "категории", "категорий"),
+                                    ),
+                                    count(
+                                        selected_groups as u64,
+                                        ("group", "groups"),
+                                        ("группа", "группы", "групп"),
+                                    ),
                                 )))
                             }),
                     )
@@ -1571,7 +1733,7 @@ impl ErrorTaskScreen {
                                             .p_2p5()
                                             .text_xs()
                                             .text_color(palette.muted)
-                                            .child("No category matches."),
+                                            .child(localized(cx, "No category matches.", "Ничего не найдено.")),
                                     )
                                 },
                             )),
@@ -1586,12 +1748,12 @@ impl ErrorTaskScreen {
         let busy = self.submitting.is_some() || self.submitted;
         let discard = self.choices.captures_whole_error == Some(false);
         let action = if discard {
-            "Discard this diff"
+            localized(cx, "Discard this diff", "Отбросить дифф")
         } else {
-            "Submit the label"
+            localized(cx, "Submit the label", "Отправить разметку")
         };
         let status_text: SharedString = match &ready {
-            Ok(()) => "Ready".into(),
+            Ok(()) => localized(cx, "Ready", "Готово").into(),
             Err(message) => message.clone().into(),
         };
         let qa = self.task.error.is_qa_review;
@@ -1624,12 +1786,24 @@ impl ErrorTaskScreen {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(if qa { "QA review" } else { "Label this diff" }),
+                                    .child(if qa {
+                                        localized(cx, "QA review", "Проверка QA")
+                                    } else {
+                                        localized(cx, "Label this diff", "Разметьте дифф")
+                                    }),
                             )
                             .child(div().text_xs().text_color(palette.muted).child(if qa {
-                                "L1 and L2 labeled this diff. Your label is saved next to theirs; nothing is overwritten."
+                                localized(
+                                    cx,
+                                    "L1 and L2 labeled this diff. Your label is saved next to theirs.",
+                                    "L1 и L2 разметили этот дифф. Ваша разметка сохраняется рядом с ними.",
+                                )
                             } else {
-                                "Answer the first question. If Yes, pick the category that applies."
+                                localized(
+                                    cx,
+                                    "Answer the first question. If Yes, pick the category that applies.",
+                                    "Ответьте на первый вопрос. Если Да — выберите подходящую категорию.",
+                                )
                             })),
                     )
                     .child(
@@ -1643,9 +1817,14 @@ impl ErrorTaskScreen {
                             Button::new("error-task-submit-exit")
                                 .outline()
                                 .small()
-                                .label("Submit and exit")
+                                .label(localized(cx, "Submit and exit", "Отправить и выйти"))
                                 .tooltip(if submittable {
-                                    SharedString::from(format!("{action} and go back to projects"))
+                                    SharedString::from(localized_fmt(
+                                        cx,
+                                        "{action} and go back to projects",
+                                        "{action} и вернуться к проектам",
+                                        &[("action", action)],
+                                    ))
                                 } else {
                                     status_text.clone()
                                 })
@@ -1660,12 +1839,22 @@ impl ErrorTaskScreen {
                         Button::new("error-task-submit")
                             .primary()
                             .small()
-                            .label(if self.next_project.is_some() { "Next task" } else { "Submit" })
+                            .label(if self.next_project.is_some() {
+                                localized(cx, "Next task", "Следующая задача")
+                            } else {
+                                localized(cx, "Submit", "Отправить")
+                            })
                             .tooltip(if submittable {
-                                SharedString::from(format!(
-                                    "{action}{} (Ctrl+Enter)",
-                                    if self.next_project.is_some() { " and open the next task" } else { "" }
-                                ))
+                                SharedString::from(if self.next_project.is_some() {
+                                    localized_fmt(
+                                        cx,
+                                        "{action} and open the next task (Ctrl+Enter)",
+                                        "{action} и открыть следующую задачу (Ctrl+Enter)",
+                                        &[("action", action)],
+                                    )
+                                } else {
+                                    format!("{action} (Ctrl+Enter)")
+                                })
                             } else {
                                 status_text
                             })
@@ -1677,11 +1866,18 @@ impl ErrorTaskScreen {
                     ),
             )
             .when_some(self.submit_error.clone(), |this, error| {
-                this.child(ui::banner(Tone::Danger, "Submit failed", Some(error), None, cx))
+                this.child(ui::banner(
+                    Tone::Danger,
+                    localized(cx, "Couldn't submit the label.", "Не удалось отправить разметку."),
+                    Some(error).filter(|error| !error.trim().is_empty()),
+                    None,
+                    cx,
+                ))
             })
             .children(self.render_label_table(
                 label_rows(&self.task.error.prior_labels, None, qa),
                 palette,
+                cx,
             ))
             .child(
                 h_flex()
@@ -1698,7 +1894,7 @@ impl ErrorTaskScreen {
                             .gap_0p5()
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(WHOLE_QUESTION)
+                            .child(localized(cx, WHOLE_QUESTION.0, WHOLE_QUESTION.1))
                             .child(div().text_color(palette.danger).child("*")),
                     )
                     .child(whole)
@@ -1706,7 +1902,11 @@ impl ErrorTaskScreen {
                         div()
                             .text_xs()
                             .text_color(palette.muted)
-                            .child("No = this diff is thrown away; just press Submit."),
+                            .child(localized(
+                                cx,
+                                "No discards this diff; then just submit.",
+                                "Нет — дифф отбрасывается; останется только отправить.",
+                            )),
                     ),
             );
         if discard {
@@ -1720,7 +1920,11 @@ impl ErrorTaskScreen {
                     .bg(palette.warning.opacity(0.08))
                     .text_xs()
                     .text_color(palette.warning)
-                    .child("This diff will be thrown away. Nothing else to fill in: press Submit."),
+                    .child(localized(
+                        cx,
+                        "This diff will be discarded. Submit to continue.",
+                        "Этот дифф будет отброшен. Отправьте, чтобы продолжить.",
+                    )),
             );
         }
         if self.choices.captures_whole_error == Some(true) {
@@ -1749,15 +1953,15 @@ impl ErrorTaskScreen {
                         .flex_wrap()
                         .gap_4()
                         .child(self.question(
-                            MEANING_QUESTION,
-                            Some(MEANING_HELP),
+                            localized(cx, MEANING_QUESTION.0, MEANING_QUESTION.1),
+                            Some(localized(cx, MEANING_HELP.0, MEANING_HELP.1)),
                             meaning,
                             palette,
                         ))
                         .when_some(human, |this, human| {
                             this.child(self.question(
-                                HUMAN_QUESTION,
-                                Some(HUMAN_HELP),
+                                localized(cx, HUMAN_QUESTION.0, HUMAN_QUESTION.1),
+                                Some(localized(cx, HUMAN_HELP.0, HUMAN_HELP.1)),
                                 human,
                                 palette,
                             ))
@@ -1777,7 +1981,7 @@ impl ErrorTaskScreen {
                                     div()
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Other issues with diff"),
+                                        .child(localized(cx, "Other issues", "Другие проблемы")),
                                 )
                                 .child(div().flex_1().child(
                                     Input::new(&self.other_issues).small().disabled(locked),
@@ -1792,7 +1996,7 @@ impl ErrorTaskScreen {
                                     div()
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Notes"),
+                                        .child(localized(cx, "Notes", "Заметки")),
                                 )
                                 .child(
                                     div()
@@ -1805,7 +2009,7 @@ impl ErrorTaskScreen {
         section
     }
 
-    fn render_submitted(&self, palette: Palette) -> Option<Div> {
+    fn render_submitted(&self, palette: Palette, cx: &App) -> Option<Div> {
         let error = &self.task.error;
         let table = self.render_label_table(
             label_rows(
@@ -1814,6 +2018,7 @@ impl ErrorTaskScreen {
                 error.is_qa_review,
             ),
             palette,
+            cx,
         )?;
         Some(
             v_flex()
@@ -1829,7 +2034,7 @@ impl ErrorTaskScreen {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Submitted labels"),
+                        .child(localized(cx, "Submitted labels", "Отправленные разметки")),
                 )
                 .child(table),
         )
@@ -1846,12 +2051,12 @@ impl Render for ErrorTaskScreen {
         self.schedule_frame(window, cx);
         let palette = Palette::new(cx);
         let header = self.render_header(palette, cx);
-        let diff_bar = self.render_diff_bar(palette);
-        let comparison = self.render_comparison(palette);
+        let diff_bar = self.render_diff_bar(palette, cx);
+        let comparison = self.render_comparison(palette, cx);
         let audio = self.render_audio(palette, cx);
         let assistant = self.render_assistant(palette, cx);
         let bottom = if self.read_only {
-            self.render_submitted(palette)
+            self.render_submitted(palette, cx)
         } else {
             Some(self.render_questionnaire(palette, cx))
         };

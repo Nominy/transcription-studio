@@ -12,6 +12,7 @@ use screens::ai_settings::AiSettingsView;
 use services::GoldServices;
 use sonus_extension::manifest::ExtensionManifest;
 use sonus_shell::editor::model::EditorModel;
+use sonus_shell::screens::ui::localized;
 use sonus_shell::services::AppServices;
 use sonus_shell::{CommandContribution, ContributionRegistry, PanelLocation, ShellHandle};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -54,11 +55,18 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     let views: DraftViews = Rc::new(RefCell::new(HashMap::new()));
     let panel_views = views.clone();
     let unload_views = views.clone();
+    let draft_panel_title = localized(cx, "AI draft", "Черновик ИИ");
+    let denoise_title = localized(cx, "Denoise", "Убрать шум");
+    let settings_title = localized(cx, "AI", "ИИ");
+    let draft_label = localized(cx, "Draft with AI…", "Черновик с ИИ…");
+    let align_label = localized(cx, "Align words", "Выровнять слова");
+    let fill_label = localized(cx, "Fill this segment", "Заполнить сегмент");
+    let settings_label = localized(cx, "AI settings…", "Настройки ИИ…");
     let registry = cx.global_mut::<ContributionRegistry>();
     registry.register_panel(
         ID,
         "sonus.gold.draft",
-        "Gold Draft",
+        draft_panel_title,
         PanelLocation::Overlay,
         Rc::new(move |shell, _, cx| {
             let model = shell
@@ -70,7 +78,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.gold.denoise",
-        "Denoise",
+        denoise_title,
         PanelLocation::Transport,
         Rc::new(|shell, window, cx| {
             let model = shell
@@ -82,17 +90,13 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.gold.settings",
-        "AI",
+        settings_title,
         PanelLocation::Settings,
         Rc::new(|_, window, cx| cx.new(|cx| AiSettingsView::new(window, cx)).into()),
     )?;
     for (id, label, mode) in [
-        ("sonus.gold.draft", "Gold Draft", DraftMode::Draft),
-        (
-            "sonus.gold.align",
-            "Word timestamps",
-            DraftMode::TimestampsOnly,
-        ),
+        ("sonus.gold.draft", draft_label, DraftMode::Draft),
+        ("sonus.gold.align", align_label, DraftMode::TimestampsOnly),
     ] {
         let views = views.clone();
         registry.register_command(
@@ -115,7 +119,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.gold.transcribe-segment".into(),
-            label: "Transcribe segment".into(),
+            label: fill_label.into(),
             shortcut: Some("alt-shift-g".into()),
             toolbar: false,
             run: Rc::new(move |shell, window, cx| {
@@ -132,7 +136,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.gold.settings".into(),
-            label: "AI settings".into(),
+            label: settings_label.into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|_, window, cx| open_ai_settings(window, cx)),

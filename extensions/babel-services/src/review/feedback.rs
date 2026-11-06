@@ -8,6 +8,7 @@ use sonus_babel_domain::editor_model::feedback_assessment::{
     compute_feedback_draft_save_request, get_rubric_fields_for_flags, has_other_feedback_flag,
     parse_feedback_responses,
 };
+use sonus_babel_domain::i18n::{localized, with_detail};
 use sonus_babel_domain::workflow::BabelWorkflowExt;
 use studio_core::Project;
 use studio_editor::workflow::StudioWorkflow;
@@ -36,23 +37,22 @@ pub struct FeedbackBootstrapIds {
 }
 
 impl FeedbackBootstrapIds {
-    /// Errors with `Feedback form unavailable: missing <names>.` when any id is blank.
+    /// Errors when the project, task or worker id is blank.
     pub fn for_project(project: &Project, worker_id: &str) -> Result<Self> {
         let ids = Self {
             project_id: crate::babel::feedback_project_id(project),
             review_action_id: crate::babel::review_action_id(project),
             worker_id: worker_id.trim().to_string(),
         };
-        let missing = [
-            (ids.project_id.is_empty(), "Babel project id"),
-            (ids.review_action_id.is_empty(), "review action id"),
-            (ids.worker_id.is_empty(), "worker id"),
-        ]
-        .into_iter()
-        .filter_map(|(missing, name)| missing.then_some(name))
-        .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            bail!("Feedback form unavailable: missing {}.", missing.join(", "));
+        if ids.project_id.is_empty() || ids.review_action_id.is_empty() || ids.worker_id.is_empty()
+        {
+            bail!(
+                "{}",
+                localized(
+                    "The feedback form isn't available for this task.",
+                    "Форма отзыва недоступна для этой задачи.",
+                )
+            );
         }
         Ok(ids)
     }
@@ -215,7 +215,7 @@ impl FeedbackForm {
     /// Live form from a completed bootstrap; saved responses hydrate the draft.
     pub fn from_bootstrap(bootstrap: FeedbackBootstrap, is_tts_project: bool) -> Result<Self> {
         if bootstrap.inputs.is_empty() {
-            bail!("Babel feedback form returned no inputs");
+            bail!("The server's feedback form has no inputs.");
         }
         let flag_refs = bootstrap
             .rubric_flag_names
@@ -228,7 +228,7 @@ impl FeedbackForm {
         let draft = if has_responses {
             parse_feedback_responses(&bootstrap.draft.input_responses, Some(&bootstrap.inputs))
                 .ok_or_else(|| {
-                    anyhow!("Babel feedback draft responses could not be matched to form inputs")
+                    anyhow!("The saved feedback draft doesn't match the form's inputs.")
                 })?
         } else {
             default_feedback_draft(&rubric_fields)
@@ -305,12 +305,20 @@ impl FeedbackForm {
     pub fn submit_block_reason(&self) -> Option<String> {
         if self.is_loading {
             return Some(
-                "Submit blocked: the required feedback form is still loading.".to_string(),
+                localized(
+                    "The feedback form is still loading.",
+                    "Форма отзыва ещё загружается.",
+                )
+                .to_owned(),
             );
         }
         self.bootstrap_error.as_ref().map(|error| {
-            format!(
-                "Submit blocked: the required feedback form could not be loaded: {error} Use Retry in the feedback panel."
+            with_detail(
+                localized(
+                    "Couldn't load the feedback form. Use Retry in the Feedback panel.",
+                    "Не удалось загрузить форму отзыва. Нажмите «Повторить» на панели отзыва.",
+                ),
+                error,
             )
         })
     }
@@ -471,9 +479,10 @@ impl FeedbackForm {
                 let error = error.trim();
                 self.save_has_error = true;
                 self.last_autosave_error = Some(if error.is_empty() {
-                    "Unknown autosave error".to_string()
+                    localized("Couldn't save the feedback.", "Не удалось сохранить отзыв.")
+                        .to_owned()
                 } else {
-                    error.to_string()
+                    error.to_owned()
                 });
             }
         }

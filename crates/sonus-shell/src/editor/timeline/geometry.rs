@@ -87,13 +87,13 @@ pub fn hit_test(
 }
 
 /// Cut selection length shown on its chip: hundredths under 10 s (`0.30 s`), tenths under a
-/// minute (`12.5 s`), then `m:ss.s`.
-pub fn selection_length_label(seconds: f64) -> String {
+/// minute (`12.5 s`), then `m:ss.s`. `unit` is the localized seconds suffix.
+pub fn selection_length_label(seconds: f64, unit: &str) -> String {
     let seconds = seconds.max(0.0);
     if seconds < 9.995 {
-        format!("{seconds:.2} s")
+        format!("{seconds:.2} {unit}")
     } else if seconds < 59.95 {
-        format!("{seconds:.1} s")
+        format!("{seconds:.1} {unit}")
     } else {
         let tenths = (seconds * 10.0).round() as u64;
         format!("{}:{:02}.{}", tenths / 600, tenths % 600 / 10, tenths % 10)
@@ -245,13 +245,13 @@ mod tests {
 
     #[test]
     fn selection_length_label_precision_follows_magnitude() {
-        assert_eq!(selection_length_label(0.3), "0.30 s");
-        assert_eq!(selection_length_label(1.254), "1.25 s");
-        assert_eq!(selection_length_label(9.999), "10.0 s");
-        assert_eq!(selection_length_label(42.34), "42.3 s");
-        assert_eq!(selection_length_label(59.97), "1:00.0");
-        assert_eq!(selection_length_label(125.26), "2:05.3");
-        assert_eq!(selection_length_label(-1.0), "0.00 s");
+        assert_eq!(selection_length_label(0.3, "s"), "0.30 s");
+        assert_eq!(selection_length_label(1.254, "s"), "1.25 s");
+        assert_eq!(selection_length_label(9.999, "s"), "10.0 s");
+        assert_eq!(selection_length_label(42.34, "s"), "42.3 s");
+        assert_eq!(selection_length_label(59.97, "s"), "1:00.0");
+        assert_eq!(selection_length_label(125.26, "s"), "2:05.3");
+        assert_eq!(selection_length_label(-1.0, "s"), "0.00 s");
     }
 
     #[test]

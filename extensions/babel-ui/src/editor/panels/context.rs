@@ -14,6 +14,7 @@ use sonus_babel_domain::editor_model::context_panels::{
 };
 use sonus_babel_services::prefs::{ORIGINAL_SCRIPT_HIDDEN_KEY, SCRIPT_CONTEXT_HIDDEN_KEY};
 
+use crate::text::{failed, localized};
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::services::AppServices;
 
@@ -71,20 +72,24 @@ impl ContextPanels {
             .storage
             .set_collapsed(key, collapsed);
         if let Err(error) = result {
+            let message = failed(
+                cx,
+                "Couldn't save the panel setting.",
+                "Не удалось сохранить настройку панели.",
+                error,
+            );
             self.model.update(cx, |model, cx| {
-                model.set_status(
-                    format!("Context panel preference could not be saved: {error}"),
-                    cx,
-                );
+                model.set_status(message, cx);
             });
         }
         cx.notify();
     }
 
     fn copy_submission_id(&mut self, submission_id: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(submission_id.clone()));
+        cx.write_to_clipboard(ClipboardItem::new_string(submission_id));
+        let message = localized(cx, "ID copied", "ID скопирован");
         self.model.update(cx, |model, cx| {
-            model.set_status(format!("Submission ID copied: {submission_id}"), cx);
+            model.set_status(message, cx);
         });
         self.copied = true;
         self.copy_reset = Some(cx.spawn(async move |this, cx| {
@@ -108,10 +113,14 @@ impl ContextPanels {
         let collapsed = cx.global::<AppServices>().storage.is_collapsed(key);
         let theme = cx.theme();
         let tooltip = match (key, collapsed) {
-            (SCRIPT_CONTEXT_HIDDEN_KEY, true) => "Show Script Context",
-            (SCRIPT_CONTEXT_HIDDEN_KEY, false) => "Hide Script Context",
-            (_, true) => "Show Original Script",
-            (_, false) => "Hide Original Script",
+            (SCRIPT_CONTEXT_HIDDEN_KEY, true) => {
+                localized(cx, "Show script context", "Показать контекст сценария")
+            }
+            (SCRIPT_CONTEXT_HIDDEN_KEY, false) => {
+                localized(cx, "Hide script context", "Скрыть контекст сценария")
+            }
+            (_, true) => localized(cx, "Show original script", "Показать исходный сценарий"),
+            (_, false) => localized(cx, "Hide original script", "Скрыть исходный сценарий"),
         };
         v_flex()
             .flex_1()
@@ -179,7 +188,7 @@ impl ContextPanels {
                         .flex_none()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Submission ID"),
+                        .child(localized(cx, "Submission ID", "ID задачи")),
                 )
                 .child(
                     div()
@@ -196,8 +205,12 @@ impl ContextPanels {
                         } else {
                             IconName::Copy
                         })
-                        .label(if copied { "Copied!" } else { "Copy" })
-                        .tooltip("Copy submission ID")
+                        .label(if copied {
+                            localized(cx, "Copied", "Скопировано")
+                        } else {
+                            localized(cx, "Copy", "Копировать")
+                        })
+                        .tooltip(localized(cx, "Copy submission ID", "Копировать ID задачи"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy_submission_id(id.clone(), cx);
                         })),
@@ -215,7 +228,7 @@ impl ContextPanels {
                     .emotion
                     .clone()
                     .filter(|emotion| !emotion.trim().is_empty())
-                    .map(|emotion| line("Emotion", emotion)),
+                    .map(|emotion| line(localized(cx, "Emotion", "Эмоция"), emotion)),
             )
             .children(
                 context
@@ -235,7 +248,8 @@ impl Render for ContextPanels {
         }
         let context_card = context.map(|context| {
             let body = self.script_context_body(&context, cx);
-            self.card(SCRIPT_CONTEXT_HIDDEN_KEY, "Script Context", body, cx)
+            let title = localized(cx, "Script context", "Контекст сценария");
+            self.card(SCRIPT_CONTEXT_HIDDEN_KEY, title, body, cx)
         });
         let script_card = script.map(|script| {
             let body = div()
@@ -246,7 +260,8 @@ impl Render for ContextPanels {
                 .pb_2()
                 .text_sm()
                 .child(script);
-            self.card(ORIGINAL_SCRIPT_HIDDEN_KEY, "Original Script", body, cx)
+            let title = localized(cx, "Original script", "Исходный сценарий");
+            self.card(ORIGINAL_SCRIPT_HIDDEN_KEY, title, body, cx)
         });
         h_flex()
             .w_full()

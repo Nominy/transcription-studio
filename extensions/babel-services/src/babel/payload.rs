@@ -177,7 +177,7 @@ impl SaveAnnotationsRequest {
         let review_action_id = review_action_id(workflow.project());
         let annotations = exported_annotations(workflow, "save", asserted_warning_keys)?;
         if review_action_id.is_empty() {
-            bail!("missing review action id");
+            bail!("the task has no Babel task id");
         }
         Ok(Self {
             review_action_id,
@@ -195,7 +195,7 @@ impl SubmitReviewActionRequest {
         let review_action_id = review_action_id(project);
         let annotations = exported_annotations(workflow, "submit", asserted_warning_keys)?;
         if review_action_id.is_empty() {
-            bail!("missing review action id");
+            bail!("the task has no Babel task id");
         }
         Ok(Self {
             review_action_id,
@@ -212,12 +212,12 @@ fn exported_annotations(
 ) -> Result<Vec<Value>> {
     let exported = workflow
         .export_babel_json()
-        .with_context(|| format!("could not build Babel {operation} payload"))?;
+        .with_context(|| format!("couldn't prepare the {operation} data"))?;
     let value: Value = serde_json::from_str(&exported)
-        .with_context(|| format!("could not decode Babel {operation} payload"))?;
+        .with_context(|| format!("couldn't read the prepared {operation} data"))?;
     let mut annotations = find_array_by_key(&value, "annotations")
         .cloned()
-        .ok_or_else(|| anyhow!("could not find annotations array in Babel export"))?;
+        .ok_or_else(|| anyhow!("the prepared data has no annotations"))?;
     merge_asserted_warnings(&mut annotations, workflow.project(), asserted_warning_keys);
     Ok(annotations)
 }

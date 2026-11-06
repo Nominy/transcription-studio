@@ -3,6 +3,7 @@ pub mod babel_metadata;
 pub mod capabilities;
 pub mod edit;
 pub mod editor_model;
+pub mod i18n;
 pub mod presentation;
 pub mod route;
 pub mod server_diagnostics;

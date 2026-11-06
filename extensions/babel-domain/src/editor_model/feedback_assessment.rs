@@ -1,11 +1,29 @@
 use std::collections::{BTreeMap, HashMap};
 
+use crate::i18n::localized;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeedbackRubricField {
     pub key: &'static str,
+    /// The server's form-input label; matches draft responses, never shown.
     pub label: &'static str,
-    pub description: Option<&'static str>,
+    /// Display title `(en, ru)`.
+    pub title: (&'static str, &'static str),
+    /// Display description `(en, ru)`.
+    pub description: Option<(&'static str, &'static str)>,
     pub required: bool,
+}
+
+impl FeedbackRubricField {
+    /// Title shown in the feedback form.
+    pub fn title(&self) -> &'static str {
+        localized(self.title.0, self.title.1)
+    }
+
+    /// Description shown under the title in the feedback form.
+    pub fn hint(&self) -> Option<&'static str> {
+        self.description.map(|(en, ru)| localized(en, ru))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,55 +73,97 @@ pub const FEEDBACK_RUBRIC_FIELDS: [FeedbackRubricField; 9] = [
     FeedbackRubricField {
         key: "wordAccuracy",
         label: "Word Accuracy",
-        description: Some("Accuracy of transcribed words and phrases"),
+        title: ("Word accuracy", "Точность слов"),
+        description: Some((
+            "How accurately words and phrases are transcribed",
+            "Насколько точно переданы слова и фразы",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "timestampAccuracy",
         label: "Timestamp Accuracy",
-        description: Some("Precision of segment start/end times"),
+        title: ("Timestamp accuracy", "Точность таймкодов"),
+        description: Some((
+            "How precise segment start and end times are",
+            "Насколько точны начало и конец сегментов",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "punctuationFormatting",
         label: "Punctuation & Formatting",
-        description: Some("Correct use of punctuation and text formatting"),
+        title: ("Punctuation and formatting", "Пунктуация и форматирование"),
+        description: Some((
+            "Correct punctuation and text formatting",
+            "Правильность пунктуации и форматирования текста",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "tagsEmphasis",
         label: "Tags & Emphasis",
-        description: Some("Proper use of speaker tags and emphasis markers"),
+        title: ("Tags and emphasis", "Теги и акценты"),
+        description: Some((
+            "Correct speaker tags and emphasis markers",
+            "Правильность тегов спикеров и маркеров акцента",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "segmentation",
         label: "Segmentation",
-        description: Some("Appropriate segment breaks and grouping"),
+        title: ("Segmentation", "Сегментация"),
+        description: Some((
+            "Sensible segment breaks and grouping",
+            "Уместное разбиение на сегменты",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "wordCharacterAccuracy",
         label: "Word & Character Set Accuracy",
-        description: Some("Accuracy of transcribed words and character sets"),
+        title: (
+            "Word and character set accuracy",
+            "Точность слов и набора символов",
+        ),
+        description: Some((
+            "How accurately words and character sets are transcribed",
+            "Насколько точно переданы слова и наборы символов",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "punctuationFormattingAccuracy",
         label: "Punctuation & Formatting Accuracy",
-        description: Some("Correct use of punctuation and formatting"),
+        title: (
+            "Punctuation and formatting accuracy",
+            "Точность пунктуации и форматирования",
+        ),
+        description: Some((
+            "Correct punctuation and formatting",
+            "Правильность пунктуации и форматирования",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "nonSpeechTagAccuracy",
         label: "Non-Speech Tag Accuracy",
-        description: Some("Accuracy of non-speech sound tags (e.g. [soupir], [rire])"),
+        title: ("Non-speech tag accuracy", "Точность неречевых тегов"),
+        description: Some((
+            "Correct non-speech sound tags, such as [soupir] or [rire]",
+            "Правильность тегов неречевых звуков, например [soupir] или [rire]",
+        )),
         required: true,
     },
     FeedbackRubricField {
         key: "styleTagAccuracy",
         label: "Style Tag Accuracy",
-        description: Some("Accuracy of style/delivery tags (e.g. <doux>, <intensite-crescendo>)"),
+        title: ("Style tag accuracy", "Точность стилевых тегов"),
+        description: Some((
+            "Correct style and delivery tags, such as <doux> or <intensite-crescendo>",
+            "Правильность тегов стиля и подачи, например <doux> или <intensite-crescendo>",
+        )),
         required: true,
     },
 ];

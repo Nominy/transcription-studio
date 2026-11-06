@@ -194,9 +194,9 @@ fn side(text: String, start: f64, end: f64, name: &str) -> Result<DiffSide, Babe
 /// (never the visual row order).
 pub fn parse_error_task(payload: &str) -> Result<ErrorTask, BabelError> {
     let value: Value = serde_json::from_str(payload)
-        .map_err(|error| BabelError::new(format!("failed to decode the Babel task: {error}")))?;
+        .map_err(|error| BabelError::new(format!("The server sent an unreadable task: {error}")))?;
     let data = review_action_data(&value)
-        .ok_or_else(|| BabelError::new("Babel task payload did not include review action data."))?;
+        .ok_or_else(|| BabelError::new("The server's reply had no task data."))?;
     if data.get("success").and_then(Value::as_bool) == Some(false) {
         let message = data
             .get("error")

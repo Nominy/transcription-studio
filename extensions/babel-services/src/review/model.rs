@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
+use sonus_babel_domain::i18n::localized;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReviewerTemplate {
@@ -77,33 +78,33 @@ impl ReviewerCard {
                 let side = |text: &str| {
                     let text = text.trim();
                     if text.is_empty() {
-                        "(empty)".to_string()
+                        localized("(empty)", "(пусто)").to_owned()
                     } else {
-                        text.to_string()
+                        text.to_owned()
                     }
                 };
-                format!("{} -> {}", side(&before), side(&after))
+                format!("{} → {}", side(&before), side(&after))
             }
             Some(EvidenceDetail::Raw(text)) => text,
             _ if !self.summary.is_empty() => self.summary.clone(),
-            _ => "Change".to_string(),
+            _ => localized("Change", "Изменение").to_owned(),
         }
     }
 
-    /// Model match / Manual match / Manual reassignment / Template removed / Matched / Unmatched.
+    /// How the card's template was matched.
     pub fn match_source_label(&self) -> &'static str {
         match self.match_source.as_deref() {
             Some("manual")
                 if self.initial_matched_template_id.is_some()
                     && self.initial_matched_template_id != self.matched_template_id =>
             {
-                "Manual reassignment"
+                localized("Reassigned by hand", "Переназначено вручную")
             }
-            Some("manual") => "Manual match",
-            Some("manual_cleared") => "Template removed",
-            Some("model") => "Model match",
-            _ if self.matched_template_id.is_some() => "Matched",
-            _ => "Unmatched",
+            Some("manual") => localized("Matched by hand", "Подобрано вручную"),
+            Some("manual_cleared") => localized("Template removed", "Шаблон убран"),
+            Some("model") => localized("Matched by AI", "Подобрано ИИ"),
+            _ if self.matched_template_id.is_some() => localized("Matched", "Подобрано"),
+            _ => localized("Unmatched", "Без шаблона"),
         }
     }
 
@@ -115,7 +116,7 @@ impl ReviewerCard {
     }
 }
 
-/// Grader rubric categories in display order.
+/// Grader rubric categories in display order (the server's category names).
 pub const GRADE_CATEGORIES: [&str; 5] = [
     "Word Accuracy",
     "Timestamp Accuracy",
@@ -123,6 +124,19 @@ pub const GRADE_CATEGORIES: [&str; 5] = [
     "Tags & Emphasis",
     "Segmentation",
 ];
+
+/// Display title of a grader category in the current UI language.
+pub fn grade_category_title(category: &str) -> &str {
+    let (en, ru) = match category {
+        "Word Accuracy" => ("Word accuracy", "Точность слов"),
+        "Timestamp Accuracy" => ("Timestamp accuracy", "Точность таймкодов"),
+        "Punctuation & Formatting" => ("Punctuation and formatting", "Пунктуация и форматирование"),
+        "Tags & Emphasis" => ("Tags and emphasis", "Теги и акценты"),
+        "Segmentation" => ("Segmentation", "Сегментация"),
+        _ => return category,
+    };
+    localized(en, ru)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GradeSample {
@@ -224,7 +238,7 @@ pub fn parse_reviewer_session(payload: &str) -> Result<ReviewerSession> {
     let cards = value
         .get("cards")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("review session response did not include cards"))?
+        .ok_or_else(|| anyhow!("The server's reply has no cards."))?
         .iter()
         .map(|card| reviewer_card_from_value(card, card_comments))
         .collect();
@@ -337,7 +351,7 @@ pub fn parse_generated_review(payload: &str) -> Result<GeneratedReview> {
             .collect();
     }
     if cards.is_empty() && feedback.is_empty() {
-        bail!("review generate response did not include feedback, classifications, or cards");
+        bail!("The server's reply has no feedback.");
     }
     Ok(GeneratedReview {
         model: optional_string(ai_review, "model"),
@@ -395,7 +409,7 @@ pub fn parse_template_search(payload: &str) -> Result<Vec<ReviewerTemplate>> {
     let results = value
         .get("results")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("template search response did not include results"))?;
+        .ok_or_else(|| anyhow!("The server's reply has no results."))?;
     Ok(results
         .iter()
         .map(|result| ReviewerTemplate {
@@ -414,9 +428,9 @@ pub fn parse_grade_result(payload: &str) -> Result<GradeResult> {
     let items = value
         .get("grades")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("grade response did not include grades"))?;
+        .ok_or_else(|| anyhow!("The server's reply has no grades."))?;
     if items.len() != GRADE_CATEGORIES.len() {
-        bail!("grade response must include exactly five categories");
+        bail!("The server's grades don't cover exactly five categories.");
     }
     let mut grades = Vec::with_capacity(GRADE_CATEGORIES.len());
     for category in GRADE_CATEGORIES {
@@ -425,9 +439,9 @@ pub fn parse_grade_result(payload: &str) -> Result<GradeResult> {
             .filter(|item| item.get("category").and_then(Value::as_str) == Some(category));
         let item = matches
             .next()
-            .ok_or_else(|| anyhow!("grade response is missing {category}"))?;
+            .ok_or_else(|| anyhow!("The server's grades are missing {category}."))?;
         if matches.next().is_some() {
-            bail!("grade response repeats {category}");
+            bail!("The server's grades repeat {category}.");
         }
         let score_of = |key: &str| {
             item.get(key)
@@ -436,7 +450,7 @@ pub fn parse_grade_result(payload: &str) -> Result<GradeResult> {
                 .map(|score| score as u8)
         };
         let score =
-            score_of("score").ok_or_else(|| anyhow!("{category} grade must be 1, 2 or 3"))?;
+            score_of("score").ok_or_else(|| anyhow!("The {category} grade must be 1, 2 or 3."))?;
         let evidence = item.get("evidence").unwrap_or(&Value::Null);
         let raw_text =
             |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
@@ -484,10 +498,15 @@ fn classification_card(index: usize, classification: &Value) -> ReviewerCard {
         id: format!("change-{change_index}"),
         change_index,
         kind: "TEMPLATE MATCH".to_string(),
-        summary: template_id
-            .as_ref()
-            .map(|id| format!("Matched template {id}"))
-            .unwrap_or_else(|| "Generated reviewer classification".to_string()),
+        summary: if template_id.is_some() {
+            localized("Matched a template", "Шаблон подобран").to_owned()
+        } else {
+            localized(
+                "Classified by Magic Review",
+                "Классифицировано Magic Review",
+            )
+            .to_owned()
+        },
         evidence: classification.to_string(),
         evidence_detail: None,
         categories: Vec::new(),
@@ -571,11 +590,11 @@ fn reviewer_card_from_value(card: &Value, card_comments: &Value) -> ReviewerCard
 }
 
 fn parse_json(payload: &str) -> Result<Value> {
-    serde_json::from_str::<Value>(payload).context("malformed JSON")
+    serde_json::from_str::<Value>(payload).context("The server sent an unreadable reply.")
 }
 
 fn required_string(value: &Value, key: &str) -> Result<String> {
-    optional_string(value, key).ok_or_else(|| anyhow!("missing `{key}`"))
+    optional_string(value, key).ok_or_else(|| anyhow!("The server's reply has no {key}."))
 }
 
 fn optional_string(value: &Value, key: &str) -> Option<String> {

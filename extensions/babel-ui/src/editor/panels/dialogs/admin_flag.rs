@@ -6,11 +6,10 @@ use gpui_kit::component::{Disableable, WindowExt, v_flex};
 use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
+use crate::text::localized;
 use sonus_shell::editor::panels::ui::{
     dialog_footer, dialog_header, error_text, field, primary_button,
 };
-
-const DESCRIPTION: &str = "Admin rating marks a recording as unusable and flags the transcription. Use this when the audio or performance has issues that make it unusable - such as poor audio quality, poor acting, removing tags, or a voice actor going fully off-script. You must still edit and submit an accurate transcription before admin rating.";
 
 struct AdminFlagDialog {
     panels: Entity<TaskPanels>,
@@ -21,8 +20,11 @@ struct AdminFlagDialog {
 impl AdminFlagDialog {
     fn new(panels: Entity<TaskPanels>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let reason = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("e.g. background noise, wrong emotion, mispronunciation...")
+            InputState::new(window, cx).placeholder(localized(
+                cx,
+                "e.g. background noise, wrong emotion, mispronunciation…",
+                "например, фоновый шум, не та эмоция, неверное произношение…",
+            ))
         });
         let subscriptions = vec![
             cx.observe(&panels, |_, _, cx| cx.notify()),
@@ -59,12 +61,19 @@ impl Render for AdminFlagDialog {
         v_flex()
             .gap_3()
             .child(dialog_header(
-                "Flag this recording?",
-                Some(DESCRIPTION.into()),
+                localized(cx, "Flag this recording?", "Пометить эту запись?"),
+                Some(
+                    localized(
+                        cx,
+                        "Marks the recording as unusable and flags the transcript — for poor audio, poor acting, removed tags or an actor going off-script. Edit and submit an accurate transcript first.",
+                        "Помечает запись как непригодную и отмечает расшифровку — при плохом звуке, плохой игре, удалённых тегах или уходе актёра от сценария. Сначала исправьте и отправьте точную расшифровку.",
+                    )
+                    .into(),
+                ),
                 cx,
             ))
             .child(field(
-                "Reason (optional)",
+                localized(cx, "Reason (optional)", "Причина (необязательно)"),
                 Input::new(&self.reason).disabled(pending),
                 cx,
             ))
@@ -73,7 +82,7 @@ impl Render for AdminFlagDialog {
                 dialog_footer()
                     .child(
                         Button::new("flag-cancel")
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .disabled(pending)
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -81,9 +90,9 @@ impl Render for AdminFlagDialog {
                         primary_button(
                             "flag-confirm",
                             if pending {
-                                "Flagging..."
+                                localized(cx, "Flagging…", "Пометка…")
                             } else {
-                                "Confirm Flag"
+                                localized(cx, "Flag", "Пометить")
                             },
                             pending,
                             false,

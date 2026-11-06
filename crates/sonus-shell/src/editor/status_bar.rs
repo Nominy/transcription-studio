@@ -1,14 +1,17 @@
-//! Status bar: last status message, save detail, lane audio loading, selection, zoom and the
+//! Status bar: last status message, save detail, lane audio loading, selection and the
 //! playhead position.
 
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Sizable as _, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use studio_editor::edit::format::{MAX_ZOOM_FACTOR, SPEED_OPTIONS, format_speed, format_time};
+use studio_editor::edit::format::{SPEED_OPTIONS, format_speed, format_time};
 use studio_editor::editor_model::SaveStatus;
 
 use crate::editor::model::{EditorEvent, EditorModel};
 use crate::editor::panels::ui::{stable_text, tabular_figures};
+use crate::screens::ui::{self, localized};
 
 pub struct StatusBar {
     model: Entity<EditorModel>,
@@ -44,8 +47,11 @@ impl Render for StatusBar {
         let save = match session.save_status() {
             SaveStatus::Failed { message } => Some((
                 message.map_or_else(
-                    || "Save failed.".to_string(),
-                    |message| format!("Save failed: {message}"),
+                    || localized(cx, "Not saved", "Не сохранено").to_string(),
+                    |message| {
+                        localized(cx, "Not saved — {message}", "Не сохранено — {message}")
+                            .replace("{message}", &message)
+                    },
                 ),
                 theme.danger,
             )),
@@ -53,7 +59,12 @@ impl Render for StatusBar {
                 .last_saved_at
                 .as_ref()
                 .filter(|saved| !saved.trim().is_empty())
-                .map(|saved| (format!("Saved {saved}"), theme.muted_foreground)),
+                .map(|saved| {
+                    (
+                        localized(cx, "Saved {time}", "Сохранено {time}").replace("{time}", saved),
+                        theme.muted_foreground,
+                    )
+                }),
             SaveStatus::Saving | SaveStatus::Dirty => None,
         };
 
@@ -64,18 +75,27 @@ impl Render for StatusBar {
                 h_flex()
                     .gap_1()
                     .child(Spinner::new().xsmall())
-                    .child(format!("Loading audio {}/{total}", load.loaded))
+                    .child(
+                        localized(cx, "Loading audio {i} of {n}", "Загрузка аудио {i} из {n}")
+                            .replace("{i}", &load.loaded.to_string())
+                            .replace("{n}", &total.to_string()),
+                    )
                     .into_any_element(),
             )
         } else if load.failed > 0 {
             Some(
                 div()
                     .text_color(theme.warning)
-                    .child(if load.failed == 1 {
-                        "1 lane without audio".to_string()
-                    } else {
-                        format!("{} lanes without audio", load.failed)
-                    })
+                    .child(ui::count(
+                        cx,
+                        load.failed,
+                        ("track has no audio", "tracks have no audio"),
+                        (
+                            "дорожка без аудио",
+                            "дорожки без аудио",
+                            "дорожек без аудио",
+                        ),
+                    ))
                     .into_any_element(),
             )
         } else {
@@ -83,21 +103,33 @@ impl Render for StatusBar {
         };
 
         let total = project.segments.len();
+        let segment_of = localized(cx, "Segment {i} of {n}", "Сегмент {i} из {n}");
         let selection = session
             .selected_segment_id
             .as_deref()
             .and_then(|id| project.segments.iter().position(|segment| segment.id == id))
             .map_or_else(
-                || format!("{total} segments"),
-                |index| format!("Segment {} of {total}", index + 1),
+                || {
+                    ui::count(
+                        cx,
+                        total,
+                        ("segment", "segments"),
+                        ("сегмент", "сегмента", "сегментов"),
+                    )
+                },
+                |index| {
+                    segment_of
+                        .replace("{i}", &(index + 1).to_string())
+                        .replace("{n}", &total.to_string())
+                },
             );
         let bounds = session.timeline_bounds(project);
-        let visible = session.viewport.duration_seconds();
         let position = format!(
             "{} / {}",
             format_time(session.playhead_seconds),
             format_time(bounds.end_seconds)
         );
+        let status_detail = model.status_detail().cloned();
 
         h_flex()
             .h(rems(1.75))
@@ -114,11 +146,17 @@ impl Render for StatusBar {
             .text_color(theme.muted_foreground)
             .child(
                 div()
+                    .id("status-line")
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_color(theme.foreground)
-                    .children(model.status().cloned()),
+                    .children(model.status().cloned())
+                    .when_some(status_detail, |this, detail| {
+                        this.tooltip(move |window, cx| {
+                            Tooltip::new(detail.clone()).build(window, cx)
+                        })
+                    }),
             )
             .children(save.map(|(text, color)| div().flex_none().text_color(color).child(text)))
             .children(audio)
@@ -126,18 +164,11 @@ impl Render for StatusBar {
             // labels to its left. The cluster is anchored to the bar's right edge, so the
             // values align right within their slots.
             .child(
-                stable_text(selection, [format!("Segment {total} of {total}")])
-                    .items_end()
-                    .font_features(tabular_figures()),
-            )
-            .child(
                 stable_text(
-                    format!("Zoom {:.2}× · {visible:.1}s visible", session.zoom),
-                    [format!(
-                        "Zoom {:.2}× · {:.1}s visible",
-                        MAX_ZOOM_FACTOR,
-                        (bounds.end_seconds - bounds.start_seconds).max(visible)
-                    )],
+                    selection,
+                    [segment_of
+                        .replace("{i}", &total.to_string())
+                        .replace("{n}", &total.to_string())],
                 )
                 .items_end()
                 .font_features(tabular_figures()),

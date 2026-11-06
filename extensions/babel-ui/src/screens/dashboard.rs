@@ -13,8 +13,8 @@ use gpui_kit::*;
 use sonus_babel_domain::editor_model::task_lookup::{TaskLookupEffect, TaskLookupState};
 use sonus_babel_domain::route::{RouteLoad, StartupRoute};
 use sonus_babel_services::babel::{
-    DashboardProject, META_STITCHED_QUEUE_ID, NO_ACTIVE_PROJECTS_MESSAGE, OpenedTask,
-    ROUTE_METADATA_KEYS, RouteContext, TaskRequest, daily_task_progress,
+    DashboardProject, META_STITCHED_QUEUE_ID, OpenedTask, ROUTE_METADATA_KEYS, RouteContext,
+    TaskRequest, daily_task_progress,
 };
 use sonus_babel_services::recovery::{self, RecoveryDraft};
 use sonus_babel_services::subaccounts::SubaccountSession;
@@ -27,6 +27,7 @@ use crate::screens::auth::{brand, brand_mark};
 use crate::screens::error_task::ErrorTaskOpen;
 use crate::screens::subaccounts::{LoadProjects, SubaccountsView};
 use crate::screens::task_lookup;
+use crate::text::{count, is_russian, localized, localized_fmt};
 use sonus_babel_services::babel::BabelClient;
 use sonus_shell::screens::settings::SettingsView;
 use sonus_shell::screens::ui::{self, Tone};
@@ -56,22 +57,65 @@ struct LookupScope {
     stitched_queue_id: String,
 }
 
-struct Problem {
-    title: SharedString,
-    detail: SharedString,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProblemKind {
     /// The Babel session is missing or expired: offer "Sign in again" instead of a retry.
-    signed_out: bool,
+    SignedOut,
+    /// Refreshing the dashboard failed: offer "Sign out" as the one fix that always exists.
+    RefreshFailed,
+    Other,
+}
+
+struct Problem {
+    /// Plain headline.
+    title: SharedString,
+    /// Next step, one sentence (empty when the headline is enough).
+    detail: SharedString,
+    /// Technical text, shown under "Details".
+    technical: Option<SharedString>,
+    kind: ProblemKind,
 }
 
 impl Problem {
-    fn signed_out() -> Self {
+    fn new(title: impl Into<SharedString>, detail: impl Into<SharedString>) -> Self {
         Self {
-            title: SESSION_EXPIRED.into(),
-            detail: "Babel no longer accepts the saved login. Sign in again to load your \
-                     projects and claim tasks."
-                .into(),
-            signed_out: true,
+            title: title.into(),
+            detail: detail.into(),
+            technical: None,
+            kind: ProblemKind::Other,
         }
+    }
+
+    fn technical(mut self, technical: impl std::fmt::Display) -> Self {
+        let technical = technical.to_string();
+        self.technical = (!technical.trim().is_empty()).then(|| technical.into());
+        self
+    }
+
+    fn signed_out(cx: &App) -> Self {
+        Self {
+            kind: ProblemKind::SignedOut,
+            ..Self::new(
+                localized(cx, "Signed out of Babel", "Вы вышли из Babel"),
+                localized(
+                    cx,
+                    "Sign in again to continue.",
+                    "Войдите снова, чтобы продолжить.",
+                ),
+            )
+        }
+    }
+
+    fn refresh_failed(cx: &App, error: impl std::fmt::Display) -> Self {
+        Self {
+            kind: ProblemKind::RefreshFailed,
+            ..Self::new(localized(cx, "Couldn't refresh", "Не удалось обновить"), "")
+                .technical(error)
+        }
+    }
+
+    fn is_signed_out(&self) -> bool {
+        self.kind == ProblemKind::SignedOut
     }
 }
 
@@ -200,11 +244,13 @@ impl DashboardScreen {
     }
 
     pub fn show_error(&mut self, detail: String, cx: &mut Context<Self>) {
-        self.problem = Some(Problem {
-            title: "The task could not be opened".into(),
-            detail: detail.into(),
-            signed_out: false,
-        });
+        self.problem = Some(
+            Problem::new(
+                localized(cx, "Couldn't open the task", "Не удалось открыть задачу"),
+                "",
+            )
+            .technical(detail),
+        );
         cx.notify();
     }
 
@@ -223,8 +269,7 @@ impl DashboardScreen {
                         this.loaded = true;
                         this.projects = dashboard.projects;
                         this.worker_id = dashboard.worker_id;
-                        if matches!(&this.problem, Some(p) if p.title.as_ref() == REFRESH_FAILED || p.signed_out)
-                        {
+                        if matches!(&this.problem, Some(p) if p.kind != ProblemKind::Other) {
                             this.problem = None;
                         }
                         let projects = this.projects.clone();
@@ -241,14 +286,10 @@ impl DashboardScreen {
                         }
                     }
                     Err(error) if error.signed_out => {
-                        this.problem = Some(Problem::signed_out());
+                        this.problem = Some(Problem::signed_out(cx));
                     }
                     Err(error) => {
-                        this.problem = Some(Problem {
-                            title: REFRESH_FAILED.into(),
-                            detail: error.to_string().into(),
-                            signed_out: false,
-                        });
+                        this.problem = Some(Problem::refresh_failed(cx, error));
                     }
                 }
                 cx.notify();
@@ -350,11 +391,7 @@ impl DashboardScreen {
         let queue_id = scope.stitched_queue_id.clone();
         let request = match effect {
             TaskLookupEffect::ClaimQaTask if queue_id.is_empty() => {
-                self.problem = Some(Problem {
-                    title: "QA claims need a stitched queue".into(),
-                    detail: "Open the lookup from a project that has a stitched queue.".into(),
-                    signed_out: false,
-                });
+                self.problem = Some(Self::lookup_needs_project(cx));
                 cx.notify();
                 return;
             }
@@ -369,11 +406,7 @@ impl DashboardScreen {
             | TaskLookupEffect::ViewReadOnlyByProcessedTranscriptionId
                 if queue_id.is_empty() =>
             {
-                self.problem = Some(Problem {
-                    title: "Task lookup needs a stitched queue".into(),
-                    detail: "Open the lookup from a project that has a stitched queue.".into(),
-                    signed_out: false,
-                });
+                self.problem = Some(Self::lookup_needs_project(cx));
                 cx.notify();
                 return;
             }
@@ -398,6 +431,14 @@ impl DashboardScreen {
         };
         let project_id = (!scope.project_id.is_empty()).then_some(scope.project_id);
         self.open_task(request, context, project_id, window, cx);
+    }
+
+    /// A lookup opened from the startup route without a project cannot take tasks.
+    fn lookup_needs_project(cx: &App) -> Problem {
+        Problem::new(
+            localized(cx, "Couldn't open the task", "Не удалось открыть задачу"),
+            localized(cx, "Search from a project.", "Откройте поиск из проекта."),
+        )
     }
 
     fn start_project(
@@ -454,13 +495,14 @@ impl DashboardScreen {
         metadata.extend(context.metadata());
         let metadata: Vec<(String, String)> = metadata.into_iter().collect();
         let label: SharedString = match &request {
-            TaskRequest::ClaimNext { .. } => "Claiming the next task…",
-            TaskRequest::ClaimByProcessedTranscription { .. } => {
-                "Claiming the stitched transcription…"
+            TaskRequest::ClaimNext { .. }
+            | TaskRequest::ClaimByProcessedTranscription { .. }
+            | TaskRequest::ClaimErrorQaTask { .. } => {
+                localized(cx, "Taking the task…", "Берём задачу…")
             }
-            TaskRequest::ClaimErrorQaTask { .. } => "Claiming the QA task…",
-            TaskRequest::ReviewAction { .. } => "Loading the review action…",
-            TaskRequest::LatestReviewAction { .. } => "Loading the processed transcription…",
+            TaskRequest::ReviewAction { .. } | TaskRequest::LatestReviewAction { .. } => {
+                localized(cx, "Loading the task…", "Загружаем задачу…")
+            }
         }
         .into();
         self.problem = None;
@@ -527,14 +569,21 @@ impl DashboardScreen {
                     .ok();
             }
             Err(error) if error.signed_out => {
-                self.problem = Some(Problem::signed_out());
+                self.problem = Some(Problem::signed_out(cx));
             }
             Err(error) => {
-                self.problem = Some(Problem {
-                    title: format!("{} failed", request.failure_label()).into(),
-                    detail: error.message.into(),
-                    signed_out: false,
-                });
+                self.problem = Some(
+                    Problem::new(
+                        localized_fmt(
+                            cx,
+                            "{x} didn't work",
+                            "{x}: не удалось",
+                            &[("x", request.failure_label())],
+                        ),
+                        "",
+                    )
+                    .technical(error.message),
+                );
                 if matches!(request, TaskRequest::ClaimNext { .. }) {
                     no_work::open("review", window, cx, |_, _| {});
                 }
@@ -545,26 +594,36 @@ impl DashboardScreen {
     fn recover_latest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.recovery_drafts = recovery::discover_drafts();
         let Some(draft) = self.recovery_drafts.first().cloned() else {
-            self.problem = Some(Problem {
-                title: "Nothing to recover".into(),
-                detail: "No local recovery draft is available.".into(),
-                signed_out: false,
-            });
+            self.problem = Some(Problem::new(
+                localized(cx, "Nothing to recover", "Нечего восстанавливать"),
+                "",
+            ));
             cx.notify();
             return;
         };
         match recovery::load_draft(&draft) {
             Ok(workflow) => {
                 let base = draft.path.parent().map(std::path::Path::to_path_buf);
-                let status = format!("Recovered local draft {}.", draft.label);
+                let status = localized_fmt(
+                    cx,
+                    "Restored {draft}.",
+                    "Восстановлено: {draft}.",
+                    &[("draft", &draft.label)],
+                );
                 self.open_local_workflow(workflow, base, status, true, window, cx);
             }
             Err(error) => {
-                self.problem = Some(Problem {
-                    title: "Recovery failed".into(),
-                    detail: format!("{error:#}").into(),
-                    signed_out: false,
-                });
+                self.problem = Some(
+                    Problem::new(
+                        localized(
+                            cx,
+                            "Couldn't restore the work",
+                            "Не удалось восстановить работу",
+                        ),
+                        "",
+                    )
+                    .technical(format!("{error:#}")),
+                );
                 cx.notify();
             }
         }
@@ -572,11 +631,13 @@ impl DashboardScreen {
 
     fn open_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = sonus_shell::root::open_demo(&self.shell, window, cx) {
-            self.problem = Some(Problem {
-                title: "Demo failed to load".into(),
-                detail: format!("{error:#}").into(),
-                signed_out: false,
-            });
+            self.problem = Some(
+                Problem::new(
+                    localized(cx, "Couldn't open the demo", "Не удалось открыть демо"),
+                    "",
+                )
+                .technical(format!("{error:#}")),
+            );
             cx.notify();
         }
     }
@@ -680,9 +741,9 @@ impl DashboardScreen {
             };
 
         let account_kind = if self.subaccount.is_some() {
-            "Sub-account"
+            localized(cx, "Sub-account", "Под-аккаунт")
         } else {
-            "Babel account"
+            localized(cx, "Babel account", "Аккаунт Babel")
         };
         let account = v_flex()
             .items_start()
@@ -699,7 +760,7 @@ impl DashboardScreen {
                     .ghost()
                     .small()
                     .icon(sign_out_icon())
-                    .label("Sign out")
+                    .label(localized(cx, "Sign out", "Выйти"))
                     .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
             );
 
@@ -710,25 +771,27 @@ impl DashboardScreen {
             .clone();
         let nav_items = v_flex()
             .gap_1()
-            .when(!compact, |this| this.child(ui::caption("WORKSPACE", cx)))
+            .when(!compact, |this| {
+                this.child(ui::caption(localized(cx, "WORKSPACE", "ПРОСТРАНСТВО"), cx))
+            })
             .child(nav(
                 "nav-projects",
                 IconName::LayoutDashboard,
-                "Projects",
+                localized(cx, "Projects", "Проекты"),
                 Section::Projects,
             ))
             .when(self.subaccount.is_none(), |this| {
                 this.child(nav(
                     "nav-subaccounts",
                     IconName::Network,
-                    "Sub-accounts",
+                    localized(cx, "Sub-accounts", "Под-аккаунты"),
                     Section::Subaccounts,
                 ))
             })
             .child(nav(
                 "nav-settings",
                 IconName::Settings,
-                "Settings",
+                localized(cx, "Settings", "Настройки"),
                 Section::Settings,
             ));
         let sidebar = v_flex()
@@ -746,7 +809,7 @@ impl DashboardScreen {
                 .ghost()
                 .small()
                 .icon(sign_out_icon())
-                .tooltip("Sign out")
+                .tooltip(localized(cx, "Sign out", "Выйти"))
                 .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx)));
             return sidebar
                 .px_2()
@@ -765,34 +828,54 @@ impl DashboardScreen {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(ui::caption("ACCOUNT", cx))
+                    .child(ui::caption(localized(cx, "ACCOUNT", "АККАУНТ"), cx))
                     .child(div().px_2().child(account)),
             )
             .children(updates::update_notice(cx))
-            .child(
-                div()
-                    .px_2()
-                    .child(ui::muted(format!("Version {version}"), cx)),
-            )
+            .child(div().px_2().child(ui::muted(
+                localized_fmt(
+                    cx,
+                    "Version {version}",
+                    "Версия {version}",
+                    &[("version", &version)],
+                ),
+                cx,
+            )))
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (title, subtitle) = match self.section {
             Section::Projects => (
-                "Projects",
+                localized(cx, "Projects", "Проекты"),
                 if self.subaccount.is_some() {
-                    "Choose an assigned project and continue where you left off."
+                    localized(
+                        cx,
+                        "Pick a project and continue where you left off.",
+                        "Выберите проект и продолжите с того места, где остановились.",
+                    )
                 } else {
-                    "Choose a Babel project and claim the next available task."
+                    localized(
+                        cx,
+                        "Pick a project and take the next task.",
+                        "Выберите проект и возьмите следующую задачу.",
+                    )
                 },
             ),
             Section::Subaccounts => (
-                "Sub-accounts",
-                "Create focused workspaces and control which projects they can access.",
+                localized(cx, "Sub-accounts", "Под-аккаунты"),
+                localized(
+                    cx,
+                    "Separate logins with their own project access.",
+                    "Отдельные входы со своим доступом к проектам.",
+                ),
             ),
             Section::Settings => (
-                "Settings",
-                "This installation, integrations, updates and local files.",
+                localized(cx, "Settings", "Настройки"),
+                localized(
+                    cx,
+                    "This installation, integrations, updates and local files.",
+                    "Эта установка, интеграции, обновления и локальные файлы.",
+                ),
             ),
         };
         let busy = self.task_load.is_some();
@@ -825,7 +908,7 @@ impl DashboardScreen {
                             this.child(
                                 Button::new("open-demo")
                                     .ghost()
-                                    .label("Open demo")
+                                    .label(localized(cx, "Open demo", "Открыть демо"))
                                     .disabled(busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_demo(window, cx)
@@ -836,7 +919,7 @@ impl DashboardScreen {
                             Button::new("find-task")
                                 .outline()
                                 .icon(IconName::Search)
-                                .label("Find task")
+                                .label(localized(cx, "Find a task…", "Найти задачу…"))
                                 .disabled(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     let scope = this.route_scope();
@@ -853,9 +936,9 @@ impl DashboardScreen {
                                 .primary()
                                 .icon(IconName::RefreshCw)
                                 .label(if refreshing {
-                                    "Refreshing…"
+                                    localized(cx, "Refreshing…", "Обновление…")
                                 } else {
-                                    "Refresh"
+                                    localized(cx, "Refresh", "Обновить")
                                 })
                                 .loading(refreshing)
                                 .disabled(refreshing)
@@ -883,17 +966,37 @@ impl DashboardScreen {
         let (completed, limit, limited) = daily_task_progress(&visible);
         let theme = cx.theme();
         let summary = if limited > 0 {
-            format!("{completed} of {limit} tasks today")
-        } else {
-            format!("{} projects available", visible.len())
-        };
-        let detail = if limited > 0 {
-            format!(
-                "Across {limited} project{} with a daily limit.",
-                if limited == 1 { "" } else { "s" }
+            localized_fmt(
+                cx,
+                "{a} of {b} today",
+                "{a} из {b} сегодня",
+                &[("a", &completed.to_string()), ("b", &limit.to_string())],
             )
         } else {
-            "Babel reports no daily limit for these projects.".to_string()
+            is_russian(cx);
+            count(
+                visible.len() as u64,
+                ("project", "projects"),
+                ("проект", "проекта", "проектов"),
+            )
+        };
+        let detail = if limited > 0 {
+            is_russian(cx);
+            localized_fmt(
+                cx,
+                "Across {projects} with a daily limit.",
+                "По {projects} с дневным лимитом.",
+                &[(
+                    "projects",
+                    &count(
+                        limited as u64,
+                        ("project", "projects"),
+                        ("проекту", "проектам", "проектам"),
+                    ),
+                )],
+            )
+        } else {
+            localized(cx, "Without a daily limit.", "Без дневного лимита.").to_string()
         };
         Some(
             v_flex()
@@ -911,12 +1014,15 @@ impl DashboardScreen {
                         .gap_y_1()
                         .justify_between()
                         .child(
-                            v_flex().gap_0p5().child(ui::muted("Today", cx)).child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(summary),
-                            ),
+                            v_flex()
+                                .gap_0p5()
+                                .child(ui::muted(localized(cx, "Today", "Сегодня"), cx))
+                                .child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(summary),
+                                ),
                         )
                         .child(ui::muted(detail, cx)),
                 )
@@ -985,9 +1091,9 @@ impl DashboardScreen {
                                 theme.muted_foreground
                             }))
                             .child(if claimable {
-                                "Ready to claim the next task"
+                                localized(cx, "Tasks available", "Есть задачи")
                             } else {
-                                "No claimable queue"
+                                localized(cx, "No tasks available", "Нет задач")
                             }),
                     ),
             )
@@ -998,7 +1104,15 @@ impl DashboardScreen {
                         .flex_none()
                         .gap_1()
                         .child(ui::muted(
-                            format!("{} of {limit} today", project.tasks_completed_today),
+                            localized_fmt(
+                                cx,
+                                "{a} of {b} today",
+                                "{a} из {b} сегодня",
+                                &[
+                                    ("a", &project.tasks_completed_today.to_string()),
+                                    ("b", &limit.to_string()),
+                                ],
+                            ),
                             cx,
                         ))
                         .child(
@@ -1016,7 +1130,11 @@ impl DashboardScreen {
                             .ghost()
                             .small()
                             .icon(IconName::Search)
-                            .tooltip("Find a task in this project")
+                            .tooltip(localized(
+                                cx,
+                                "Find a task in this project",
+                                "Найти задачу в этом проекте",
+                            ))
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let state = TaskLookupState::new(
@@ -1032,7 +1150,7 @@ impl DashboardScreen {
                         Button::new(("start", ix))
                             .primary()
                             .small()
-                            .label("Start task")
+                            .label(localized(cx, "Take next task", "Взять задачу"))
                             .loading(loading_here)
                             .disabled(busy || !claimable)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -1056,22 +1174,40 @@ impl DashboardScreen {
         if let Some(draft) = self.recovery_drafts.first() {
             let others = self.recovery_drafts.len() - 1;
             let body = if others > 0 {
-                format!(
-                    "Restore {} or one of {others} other drafts before starting another task.",
-                    draft.label
+                is_russian(cx);
+                localized_fmt(
+                    cx,
+                    "Restore {draft} or one of {others} before starting another task.",
+                    "Восстановите {draft} или {others}, прежде чем брать другую задачу.",
+                    &[
+                        ("draft", &draft.label),
+                        (
+                            "others",
+                            &count(
+                                others as u64,
+                                ("other draft", "other drafts"),
+                                ("другой черновик", "других черновика", "других черновиков"),
+                            ),
+                        ),
+                    ],
                 )
             } else {
-                format!("Restore {} before starting another task.", draft.label)
+                localized_fmt(
+                    cx,
+                    "Restore {draft} before starting another task.",
+                    "Восстановите {draft}, прежде чем брать другую задачу.",
+                    &[("draft", &draft.label)],
+                )
             };
             content = content.child(ui::banner(
                 Tone::Warning,
-                "A local recovery draft is available",
+                localized(cx, "Unsaved work found", "Есть несохранённая работа"),
                 Some(body.into()),
                 Some(
                     Button::new("recover-latest")
                         .warning()
                         .small()
-                        .label("Recover latest")
+                        .label(localized(cx, "Restore latest", "Восстановить последнее"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.recover_latest(window, cx)),
                         )
@@ -1088,24 +1224,39 @@ impl DashboardScreen {
         let list = if visible.is_empty() {
             let (title, detail): (&str, &str) = if !self.loaded && self.refresh.is_some() {
                 (
-                    "Loading your projects…",
-                    "This usually takes only a moment.",
+                    localized(cx, "Loading your projects…", "Загрузка проектов…"),
+                    localized(
+                        cx,
+                        "This usually takes a moment.",
+                        "Обычно это занимает несколько секунд.",
+                    ),
                 )
             } else if self.loaded {
-                ("No active projects", NO_ACTIVE_PROJECTS_MESSAGE)
-            } else if self
-                .problem
-                .as_ref()
-                .is_some_and(|problem| problem.signed_out)
-            {
                 (
-                    "Projects unavailable",
-                    "Sign in again to see your projects.",
+                    localized(cx, "No active projects", "Нет активных проектов"),
+                    localized(
+                        cx,
+                        "Refresh to check again.",
+                        "Обновите, чтобы проверить снова.",
+                    ),
+                )
+            } else if self.problem.as_ref().is_some_and(Problem::is_signed_out) {
+                (
+                    localized(cx, "Projects unavailable", "Проекты недоступны"),
+                    localized(
+                        cx,
+                        "Sign in again to see your projects.",
+                        "Войдите снова, чтобы увидеть проекты.",
+                    ),
                 )
             } else {
                 (
-                    "Projects unavailable",
-                    "Refresh once the connection to Babel is back.",
+                    localized(cx, "Projects unavailable", "Проекты недоступны"),
+                    localized(
+                        cx,
+                        "Refresh once Babel is reachable.",
+                        "Обновите, когда Babel снова будет доступен.",
+                    ),
                 )
             };
             v_flex()
@@ -1142,9 +1293,17 @@ impl DashboardScreen {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Available projects"),
+                                .child(localized(cx, "Projects", "Проекты")),
                         )
-                        .child(ui::muted(format!("{} total", visible.len()), cx)),
+                        .child(ui::muted(
+                            localized_fmt(
+                                cx,
+                                "{n} total",
+                                "Всего: {n}",
+                                &[("n", &visible.len().to_string())],
+                            ),
+                            cx,
+                        )),
                 )
                 .children(
                     visible
@@ -1166,8 +1325,15 @@ impl DashboardScreen {
                 .w_full()
                 .child(ui::banner(
                     Tone::Info,
-                    "Sub-account device",
-                    Some("Sub-accounts are managed from the main Babel account.".into()),
+                    localized(cx, "Sub-account", "Под-аккаунт"),
+                    Some(
+                        localized(
+                            cx,
+                            "Sub-accounts are managed from the main Babel account.",
+                            "Под-аккаунтами управляют из основного аккаунта Babel.",
+                        )
+                        .into(),
+                    ),
                     None,
                     cx,
                 ))
@@ -1176,8 +1342,6 @@ impl DashboardScreen {
     }
 }
 
-const REFRESH_FAILED: &str = "We couldn't refresh this workspace";
-const SESSION_EXPIRED: &str = "Your Babel session has expired";
 /// Below this many rems of window width the sidebar collapses to icons.
 const COMPACT_SIDEBAR_BELOW_REMS: f32 = 60.;
 
@@ -1209,7 +1373,7 @@ impl Render for DashboardScreen {
                     this.problem = None;
                     cx.notify();
                 }));
-            let actions = if problem.signed_out {
+            let actions = if problem.is_signed_out() {
                 h_flex()
                     .flex_none()
                     .gap_1()
@@ -1218,14 +1382,14 @@ impl Render for DashboardScreen {
                             .primary()
                             .small()
                             .icon(sign_out_icon())
-                            .label("Sign in again")
+                            .label(localized(cx, "Sign in again", "Войти снова"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.sign_in_again(window, cx)),
                             ),
                     )
                     .child(dismiss)
                     .into_any_element()
-            } else if problem.title.as_ref() == REFRESH_FAILED {
+            } else if problem.kind == ProblemKind::RefreshFailed {
                 // An unrecognised auth failure looks like any other refresh error; signing out
                 // and back in is the one fix the user can always try.
                 h_flex()
@@ -1236,8 +1400,12 @@ impl Render for DashboardScreen {
                             .outline()
                             .small()
                             .icon(sign_out_icon())
-                            .label("Sign out")
-                            .tooltip("Session broken? Sign out and sign in to Babel again.")
+                            .label(localized(cx, "Sign out", "Выйти"))
+                            .tooltip(localized(
+                                cx,
+                                "Sign out and sign in to Babel again.",
+                                "Выйдите и войдите в Babel снова.",
+                            ))
                             .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
                     )
                     .child(dismiss)
@@ -1245,17 +1413,25 @@ impl Render for DashboardScreen {
             } else {
                 dismiss.into_any_element()
             };
-            ui::banner(
-                if problem.signed_out {
+            let banner = ui::banner(
+                if problem.is_signed_out() {
                     Tone::Warning
                 } else {
                     Tone::Danger
                 },
                 problem.title.clone(),
-                Some(problem.detail.clone()),
+                (!problem.detail.is_empty()).then(|| problem.detail.clone()),
                 Some(actions),
                 cx,
-            )
+            );
+            match &problem.technical {
+                Some(technical) => v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(banner)
+                    .child(div().px_4().child(ui::details(technical.clone(), cx))),
+                None => banner,
+            }
         });
         let body: AnyElement = match self.section {
             Section::Projects => self.render_projects(cx).into_any_element(),

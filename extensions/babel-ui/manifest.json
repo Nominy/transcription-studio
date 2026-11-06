@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
-  "description": "Babel tasks, error review, feedback, project context and offline task files.",
+  "description": "Take, edit and submit Babel tasks.",
   "license": "MIT",
   "dependencies": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
   "permissions": [

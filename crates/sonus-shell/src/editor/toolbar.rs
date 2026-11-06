@@ -23,10 +23,11 @@ use crate::editor::model::EditorModel;
 use crate::editor::panels::ui::{stable_text, tabular_figures};
 use crate::editor::timeline::overview::OverviewView;
 use crate::editor::timeline::shortcut_hint;
+use crate::screens::ui::localized;
 
 /// Zoom factor change per zoom-button press.
 const ZOOM_STEP: f32 = 1.5;
-/// Below this toolbar width the back and support-id buttons drop their labels.
+/// Below this toolbar width the back button drops its label.
 const COMPACT_WIDTH: Rems = rems(60.);
 /// Below this width the zoom slider and the speed step buttons are hidden too.
 const NARROW_WIDTH: Rems = rems(46.);
@@ -89,10 +90,13 @@ impl Toolbar {
         });
     }
 
-    fn copy_document_id(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_project_id(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.model.read(cx).doc().project().id.clone();
         cx.write_to_clipboard(ClipboardItem::new_string(id));
-        window.push_notification("Document ID copied.", cx);
+        window.push_notification(
+            localized(cx, "Project ID copied.", "ID проекта скопирован."),
+            cx,
+        );
     }
 
     fn state_badge(&self, cx: &App) -> AnyElement {
@@ -100,22 +104,29 @@ impl Toolbar {
         if doc.is_read_only() {
             return Tag::secondary()
                 .small()
-                .child(h_flex().gap_1().child(IconName::Lock).child("Read-only"))
+                .child(h_flex().gap_1().child(IconName::Lock).child(localized(
+                    cx,
+                    "Read only",
+                    "Только чтение",
+                )))
                 .into_any_element();
         }
+        let labels = [
+            localized(cx, "Saving…", "Сохранение…"),
+            localized(cx, "Not saved", "Не сохранено"),
+            localized(cx, "Unsaved changes", "Есть изменения"),
+            localized(cx, "Saved", "Сохранено"),
+        ];
         let (tag, label) = match doc.session().save_status() {
-            SaveStatus::Saving => (Tag::info(), "Saving…"),
-            SaveStatus::Failed { .. } => (Tag::danger(), "Save failed"),
-            SaveStatus::Dirty => (Tag::warning(), "Unsaved"),
-            SaveStatus::Saved => (Tag::success(), "Saved"),
+            SaveStatus::Saving => (Tag::info(), labels[0]),
+            SaveStatus::Failed { .. } => (Tag::danger(), labels[1]),
+            SaveStatus::Dirty => (Tag::warning(), labels[2]),
+            SaveStatus::Saved => (Tag::success(), labels[3]),
         };
         // As wide as the widest state, so saving never moves the overview beside it.
         tag.outline()
             .small()
-            .child(stable_text(
-                label,
-                ["Saving…", "Save failed", "Unsaved", "Saved"],
-            ))
+            .child(stable_text(label, labels))
             .into_any_element()
     }
 }
@@ -151,10 +162,12 @@ impl Render for Toolbar {
             .ghost()
             .small()
             .icon(IconName::ArrowLeft)
-            .when(!compact, |button| button.label("Projects"))
+            .when(!compact, |button| {
+                button.label(localized(cx, "Start", "Начало"))
+            })
             .tooltip(shortcut_hint(
                 cx,
-                "Back to projects",
+                localized(cx, "Back to Start", "На начальный экран"),
                 EditorAction::BackToProjects,
             ))
             .on_click(cx.listener(|_, _, _, cx| cx.emit(RequestLeave)));
@@ -169,7 +182,11 @@ impl Render for Toolbar {
             })
             .tooltip(shortcut_hint(
                 cx,
-                if is_playing { "Pause" } else { "Play" },
+                if is_playing {
+                    localized(cx, "Pause", "Пауза")
+                } else {
+                    localized(cx, "Play", "Воспроизвести")
+                },
                 EditorAction::PlayPause,
             ))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -190,7 +207,7 @@ impl Render for Toolbar {
                 .font_features(tabular_figures()),
             )
             .accessibility_label(format_speed(speed))
-            .tooltip("Playback speed")
+            .tooltip(localized(cx, "Speed", "Скорость"))
             .dropdown_menu({
                 let model = self.model.clone();
                 move |menu, _, _| {
@@ -215,7 +232,7 @@ impl Render for Toolbar {
             .icon(IconName::Minus)
             .tooltip(shortcut_hint(
                 cx,
-                "Slower",
+                localized(cx, "Slower", "Медленнее"),
                 EditorAction::DecreasePlaybackSpeed,
             ))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -228,7 +245,7 @@ impl Render for Toolbar {
             .icon(IconName::Plus)
             .tooltip(shortcut_hint(
                 cx,
-                "Faster",
+                localized(cx, "Faster", "Быстрее"),
                 EditorAction::IncreasePlaybackSpeed,
             ))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -240,78 +257,92 @@ impl Render for Toolbar {
             .ghost()
             .small()
             .icon(IconName::ZoomOut)
-            .tooltip("Zoom out (Ctrl+wheel)")
+            .tooltip(format!(
+                "{} (Ctrl+wheel)",
+                localized(cx, "Zoom out", "Уменьшить")
+            ))
             .on_click(cx.listener(|this, _, _, cx| this.step_zoom(1.0 / ZOOM_STEP, cx)));
         let zoom_in = Button::new("toolbar-zoom-in")
             .ghost()
             .small()
             .icon(IconName::ZoomIn)
-            .tooltip("Zoom in (Ctrl+wheel)")
+            .tooltip(format!(
+                "{} (Ctrl+wheel)",
+                localized(cx, "Zoom in", "Увеличить")
+            ))
             .on_click(cx.listener(|this, _, _, cx| this.step_zoom(ZOOM_STEP, cx)));
 
-        let document_id = self.model.read(cx).doc().project().id.clone();
-        let copy = Button::new("toolbar-document-id")
-            .ghost()
-            .small()
-            .icon(IconName::Copy)
-            .when(!compact, |button| button.label("Document ID"))
-            .tooltip(format!("Copy document ID {document_id}"))
-            .on_click(cx.listener(|this, _, window, cx| this.copy_document_id(window, cx)));
-        let help = Button::new("toolbar-hotkeys")
-            .ghost()
-            .small()
-            .icon(IconName::Keyboard)
-            .tooltip("Keyboard shortcuts")
-            .on_click(|_, window, cx| crate::editor::panels::dialogs::hotkeys::open(window, cx));
         let commands = cx.global::<crate::ContributionRegistry>().commands();
+        let toolbar = cx.entity().downgrade();
         let menu = Button::new("extension-commands")
             .small()
-            .label("Commands")
+            .label("⋯")
+            .tooltip(localized(cx, "More", "Ещё"))
             .dropdown_menu(move |mut menu, _, cx| {
                 menu = menu
                     .item(
-                        PopupMenuItem::new(crate::screens::ui::localized(cx, "Home", "Главная"))
-                            .on_click(|_, window, cx| {
+                        PopupMenuItem::new(localized(
+                            cx,
+                            "Import transcript…",
+                            "Импортировать текст…",
+                        ))
+                        .on_click(|_, window, cx| {
+                            let shell = cx.global::<crate::ShellHandle>().clone();
+                            crate::screens::formats::import_document(shell, window, cx);
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new(localized(cx, "Start", "Начало")).on_click(
+                            |_, window, cx| {
                                 cx.global::<crate::ShellHandle>()
                                     .clone()
                                     .show_home(window, cx);
-                            }),
+                            },
+                        ),
                     )
                     .item(
-                        PopupMenuItem::new(crate::screens::ui::localized(
+                        PopupMenuItem::new(localized(cx, "Settings…", "Настройки…")).on_click(
+                            |_, window, cx| {
+                                cx.global::<crate::ShellHandle>()
+                                    .clone()
+                                    .show_settings(window, cx);
+                            },
+                        ),
+                    )
+                    .item(
+                        PopupMenuItem::new(localized(cx, "Extensions…", "Расширения…")).on_click(
+                            |_, window, cx| {
+                                cx.global::<crate::ShellHandle>()
+                                    .clone()
+                                    .show_extensions(window, cx);
+                            },
+                        ),
+                    )
+                    .item(
+                        PopupMenuItem::new(localized(
                             cx,
-                            "Settings",
-                            "Настройки",
+                            "Keyboard shortcuts…",
+                            "Сочетания клавиш…",
                         ))
                         .on_click(|_, window, cx| {
-                            cx.global::<crate::ShellHandle>()
-                                .clone()
-                                .show_settings(window, cx);
+                            crate::editor::panels::dialogs::hotkeys::open(window, cx)
                         }),
                     )
                     .item(
-                        PopupMenuItem::new(crate::screens::ui::localized(
+                        PopupMenuItem::new(localized(
                             cx,
-                            "Extensions",
-                            "Расширения",
+                            "Copy project ID",
+                            "Скопировать ID проекта",
                         ))
-                        .on_click(|_, window, cx| {
-                            cx.global::<crate::ShellHandle>()
-                                .clone()
-                                .show_extensions(window, cx);
+                        .on_click({
+                            let toolbar = toolbar.clone();
+                            move |_, window, cx| {
+                                toolbar
+                                    .update(cx, |this, cx| this.copy_project_id(window, cx))
+                                    .ok();
+                            }
                         }),
                     );
-                menu = menu.item(
-                    PopupMenuItem::new(crate::screens::ui::localized(
-                        cx,
-                        "Import transcript…",
-                        "Импорт текста…",
-                    ))
-                    .on_click(|_, window, cx| {
-                        let shell = cx.global::<crate::ShellHandle>().clone();
-                        crate::screens::formats::import_document(shell, window, cx);
-                    }),
-                );
                 for command in &commands {
                     let id = command.id.clone();
                     menu = menu.item(PopupMenuItem::new(command.label.clone()).on_click(
@@ -325,7 +356,7 @@ impl Render for Toolbar {
             });
         let export = Button::new("document-export")
             .small()
-            .label("Export…")
+            .label(localized(cx, "Export…", "Экспорт…"))
             .on_click(|_, window, cx| {
                 let shell = cx.global::<crate::ShellHandle>().clone();
                 crate::screens::formats::export_document(shell, window, cx);
@@ -399,10 +430,8 @@ impl Render for Toolbar {
                     .flex_none()
                     .gap_2()
                     .child(badge)
-                    .child(copy)
-                    .child(menu)
                     .child(export)
-                    .child(help),
+                    .child(menu),
             )
     }
 }

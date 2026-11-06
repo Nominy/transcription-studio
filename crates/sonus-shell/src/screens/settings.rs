@@ -3,6 +3,7 @@
 
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Selectable, Sizable, Theme, ThemeConfig, ThemeMode,
     ThemeRegistry, WindowExt as _, h_flex, v_flex,
@@ -22,12 +23,24 @@ use crate::{ContributionRegistry, PanelLocation, ShellHandle};
 /// UI storage key of the persisted theme (`"light"` / `"dark"`).
 pub const THEME_STORAGE_KEY: &str = "studio.theme.v1";
 
-const LAYOUTS: [(EditorLayout, &str); 3] = [
-    (EditorLayout::Classic, "Classic table"),
-    (EditorLayout::SplitStacked, "Split stacked"),
-    (EditorLayout::SplitSideBySide, "Split side by side"),
+const LAYOUTS: [(EditorLayout, &str, &str); 3] = [
+    (EditorLayout::Classic, "Table", "Таблица"),
+    (EditorLayout::SplitStacked, "Stacked", "Друг под другом"),
+    (EditorLayout::SplitSideBySide, "Side by side", "Рядом"),
 ];
 const LANGUAGES: [(&str, &str); 2] = [("en", "English"), ("ru", "Русский")];
+
+/// "Couldn't save this setting." with the storage error under Details.
+fn setting_not_saved(error: &dyn std::fmt::Display, cx: &App) -> Notification {
+    ui::warning_notification(
+        ui::localized(
+            cx,
+            "Couldn't save this setting.",
+            "Не удалось сохранить настройку.",
+        ),
+        Some(error.to_string().into()),
+    )
+}
 
 /// Brand accent (amber) and the ink it carries text in; the same on both modes.
 const ACCENT: &str = "#D99A2B";
@@ -116,10 +129,7 @@ impl SettingsView {
             .storage
             .set_value(THEME_STORAGE_KEY, value.to_string())
         {
-            window.push_notification(
-                Notification::warning(format!("Theme could not be saved: {error}")),
-                cx,
-            );
+            window.push_notification(setting_not_saved(&error, cx), cx);
         }
         cx.refresh_windows();
     }
@@ -130,10 +140,7 @@ impl SettingsView {
         let mut preferences = storage.preferences();
         preferences.editor_layout = layout;
         if let Err(error) = storage.set_preferences(&preferences) {
-            window.push_notification(
-                Notification::warning(format!("Layout could not be saved: {error}")),
-                cx,
-            );
+            window.push_notification(setting_not_saved(&error, cx), cx);
         }
         cx.notify();
     }
@@ -142,20 +149,16 @@ impl SettingsView {
         if let Err(error) = cx
             .global_mut::<AppServices>()
             .storage
-            .set_value("sonus.language", id.into())
+            .set_value(ui::LANGUAGE_STORAGE_KEY, id.into())
         {
-            window.push_notification(Notification::error(error.to_string()), cx);
+            window.push_notification(setting_not_saved(&error, cx), cx);
         }
+        ui::sync_language(cx);
         cx.refresh_windows();
     }
 
     fn render_general(&self, cx: &mut Context<Self>) -> Div {
-        let choice = cx
-            .global::<AppServices>()
-            .storage
-            .value("sonus.language")
-            .unwrap_or("ru")
-            .to_owned();
+        let choice = ui::language(cx);
         ui::card(ui::localized(cx, "General", "Общие"), None, cx).child(
             h_flex()
                 .flex_wrap()
@@ -221,113 +224,121 @@ impl SettingsView {
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
         let dark = cx.theme().is_dark();
-        ui::card(
-            "Appearance",
-            Some("Theme and the transcript layout used when a task opens."),
-            cx,
-        )
-        .child(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .justify_between()
-                .child(ui::muted("Theme", cx))
-                .child(
-                    ButtonGroup::new("theme")
-                        .outline()
-                        .small()
-                        .child(
-                            Button::new("theme-light")
-                                .icon(IconName::Sun)
-                                .label("Light")
-                                .selected(!dark),
-                        )
-                        .child(
-                            Button::new("theme-dark")
-                                .icon(IconName::Moon)
-                                .label("Dark")
-                                .selected(dark),
-                        )
-                        .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
-                            let mode = if clicked.contains(&0) {
-                                ThemeMode::Light
-                            } else {
-                                ThemeMode::Dark
-                            };
-                            this.set_theme(mode, window, cx);
-                        })),
-                ),
-        )
-        .child(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .justify_between()
-                .child(ui::muted("Interface size (Ctrl + / Ctrl − / Ctrl 0)", cx))
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("zoom-out")
-                                .outline()
-                                .small()
-                                .icon(IconName::Minus)
-                                .on_click(|_, _, cx| crate::zoom::step(-1, cx)),
-                        )
-                        .child(
-                            Button::new("zoom-reset")
-                                .outline()
-                                .small()
-                                .label(format!("{:.0}%", crate::zoom::level(cx) * 100.))
-                                .on_click(|_, _, cx| crate::zoom::set(1.0, cx)),
-                        )
-                        .child(
-                            Button::new("zoom-in")
-                                .outline()
-                                .small()
-                                .icon(IconName::Plus)
-                                .on_click(|_, _, cx| crate::zoom::step(1, cx)),
-                        ),
-                ),
-        )
-        .child(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .justify_between()
-                .child(ui::muted("Editor layout", cx))
-                .child(
-                    ButtonGroup::new("layout")
-                        .outline()
-                        .small()
-                        .children(LAYOUTS.iter().enumerate().map(|(ix, (layout, label))| {
-                            Button::new(("layout", ix))
-                                .label(*label)
-                                .selected(self.layout == *layout)
-                        }))
-                        .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
-                            if let Some((layout, _)) =
-                                clicked.first().and_then(|ix| LAYOUTS.get(*ix))
-                            {
-                                this.set_layout(*layout, window, cx);
-                            }
-                        })),
-                ),
-        )
-        .child(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .justify_between()
-                .child(ui::muted("Keyboard shortcuts", cx))
-                .child(
-                    Button::new("hotkeys")
-                        .outline()
-                        .small()
-                        .label("Customize shortcuts…")
-                        .on_click(|_, window, cx| hotkeys::open(window, cx)),
-                ),
-        )
+        ui::card(ui::localized(cx, "Appearance", "Оформление"), None, cx)
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .justify_between()
+                    .child(ui::muted(ui::localized(cx, "Theme", "Тема"), cx))
+                    .child(
+                        ButtonGroup::new("theme")
+                            .outline()
+                            .small()
+                            .child(
+                                Button::new("theme-light")
+                                    .icon(IconName::Sun)
+                                    .label(ui::localized(cx, "Light", "Светлая"))
+                                    .selected(!dark),
+                            )
+                            .child(
+                                Button::new("theme-dark")
+                                    .icon(IconName::Moon)
+                                    .label(ui::localized(cx, "Dark", "Тёмная"))
+                                    .selected(dark),
+                            )
+                            .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
+                                let mode = if clicked.contains(&0) {
+                                    ThemeMode::Light
+                                } else {
+                                    ThemeMode::Dark
+                                };
+                                this.set_theme(mode, window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .justify_between()
+                    .child(ui::muted(
+                        ui::localized(cx, "Interface size", "Размер интерфейса"),
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("zoom-out")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::Minus)
+                                    .tooltip("Ctrl −")
+                                    .on_click(|_, _, cx| crate::zoom::step(-1, cx)),
+                            )
+                            .child(
+                                Button::new("zoom-reset")
+                                    .outline()
+                                    .small()
+                                    .label(format!("{:.0}%", crate::zoom::level(cx) * 100.))
+                                    .tooltip("Ctrl 0")
+                                    .on_click(|_, _, cx| crate::zoom::set(1.0, cx)),
+                            )
+                            .child(
+                                Button::new("zoom-in")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::Plus)
+                                    .tooltip("Ctrl +")
+                                    .on_click(|_, _, cx| crate::zoom::step(1, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .justify_between()
+                    .child(ui::muted(
+                        ui::localized(cx, "Editor layout", "Расположение редактора"),
+                        cx,
+                    ))
+                    .child(
+                        ButtonGroup::new("layout")
+                            .outline()
+                            .small()
+                            .children(LAYOUTS.iter().enumerate().map(|(ix, (layout, en, ru))| {
+                                Button::new(("layout", ix))
+                                    .label(ui::localized(cx, en, ru))
+                                    .selected(self.layout == *layout)
+                            }))
+                            .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
+                                if let Some((layout, _, _)) =
+                                    clicked.first().and_then(|ix| LAYOUTS.get(*ix))
+                                {
+                                    this.set_layout(*layout, window, cx);
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .justify_between()
+                    .child(ui::muted(
+                        ui::localized(cx, "Keyboard shortcuts", "Сочетания клавиш"),
+                        cx,
+                    ))
+                    .child(
+                        Button::new("hotkeys")
+                            .outline()
+                            .small()
+                            .label(ui::localized(cx, "Customize…", "Настроить…"))
+                            .on_click(|_, window, cx| hotkeys::open(window, cx)),
+                    ),
+            )
     }
 
     fn render_updates(&self, cx: &mut Context<Self>) -> Div {
@@ -338,19 +349,34 @@ impl SettingsView {
         } else {
             cx.theme().muted_foreground
         };
+        let (status, status_detail) = super::updates::status_text(&state, cx);
         ui::card(
-            "Updates",
-            Some("Exaudio checks for updates on launch and every few hours."),
+            ui::localized(cx, "Updates", "Обновления"),
+            Some(ui::localized(
+                cx,
+                "Exaudio checks for updates automatically.",
+                "Exaudio проверяет обновления автоматически.",
+            )),
             cx,
         )
-        .child(ui::detail_row("Version", state.current_version.clone(), cx))
-        .child(ui::detail_row("Build", state.build_commit.clone(), cx))
+        .child(
+            ui::detail_row(
+                ui::localized(cx, "Version", "Версия"),
+                state.current_version.clone(),
+                cx,
+            )
+            .id("update-version")
+            .tooltip({
+                let build = SharedString::from(format!("Build {}", state.build_commit));
+                move |window, cx| Tooltip::new(build.clone()).build(window, cx)
+            }),
+        )
         .child(
             h_flex()
                 .flex_wrap()
                 .gap_2()
                 .justify_between()
-                .child(ui::muted("Channel", cx))
+                .child(ui::muted(ui::localized(cx, "Channel", "Канал"), cx))
                 .child(
                     ButtonGroup::new("update-channel")
                         .outline()
@@ -358,7 +384,7 @@ impl SettingsView {
                         .disabled(!state.can_switch_channel())
                         .children(UpdateChannel::ALL.iter().enumerate().map(|(ix, channel)| {
                             Button::new(("update-channel", ix))
-                                .label(channel.label())
+                                .label(super::updates::channel_label(*channel, cx))
                                 .selected(state.channel == *channel)
                         }))
                         .on_click(|clicked: &Vec<usize>, window, cx| {
@@ -370,18 +396,19 @@ impl SettingsView {
                             let saved = ShellModels::updater(cx)
                                 .update(cx, |updater, cx| updater.set_channel(*channel, cx));
                             if let Err(error) = saved {
-                                window.push_notification(
-                                    Notification::warning(format!(
-                                        "Update channel could not be saved: {error}"
-                                    )),
-                                    cx,
-                                );
+                                window.push_notification(setting_not_saved(&error, cx), cx);
                             }
                         }),
                 ),
         )
-        .child(ui::muted(state.channel.description(), cx))
-        .child(ui::detail_row("Source", state.channel.source_url(), cx))
+        .child(
+            ui::muted(super::updates::channel_description(state.channel, cx), cx)
+                .id("update-source")
+                .tooltip({
+                    let source = state.channel.source_url();
+                    move |window, cx| Tooltip::new(source).build(window, cx)
+                }),
+        )
         // Status on its own wrapping line: a long updater error must never push the
         // buttons out of the card, at any window width or zoom level.
         .child(
@@ -390,8 +417,11 @@ impl SettingsView {
                 .min_w_0()
                 .text_xs()
                 .text_color(status_color)
-                .child(state.status_label()),
+                .child(status),
         )
+        .when_some(status_detail, |this, detail| {
+            this.child(ui::details(detail, cx))
+        })
         .child(
             h_flex()
                 .flex_wrap()
@@ -401,7 +431,7 @@ impl SettingsView {
                     Button::new("check-updates")
                         .outline()
                         .small()
-                        .label("Check for updates")
+                        .label(ui::localized(cx, "Check now", "Проверить"))
                         .disabled(!state.can_check())
                         .on_click(|_, _, cx| {
                             ShellModels::updater(cx).update(cx, |updater, cx| updater.check(cx))
@@ -411,7 +441,7 @@ impl SettingsView {
                     Button::new("install-update")
                         .primary()
                         .small()
-                        .label("Install update")
+                        .label(ui::localized(cx, "Update", "Обновить"))
                         .disabled(!state.can_install())
                         .on_click(|_, _, cx| {
                             ShellModels::updater(cx).update(cx, |updater, cx| updater.install(cx))

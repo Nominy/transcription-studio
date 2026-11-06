@@ -38,7 +38,11 @@ pub fn install(cx: &mut App) -> Option<async_channel::Receiver<TrayCommand>> {
             .into_iter()
             .map(|c| (c.id, c.label))
             .collect();
-        match windows_tray::create(commands) {
+        let labels = windows_tray::Labels {
+            open: crate::screens::ui::localized(cx, "Open Exaudio", "Открыть Exaudio"),
+            quit: crate::screens::ui::localized(cx, "Quit", "Выйти"),
+        };
+        match windows_tray::create(commands, labels) {
             Ok((icon, receiver)) => {
                 cx.set_global(TrayHandle { _icon: icon });
                 Some(receiver)
@@ -87,15 +91,22 @@ mod windows_tray {
     const RESTORE_ID: &str = "transcription-studio.restore";
     const EXIT_ID: &str = "transcription-studio.exit";
 
+    /// Localized labels of the fixed menu items.
+    pub struct Labels {
+        pub open: &'static str,
+        pub quit: &'static str,
+    }
+
     pub fn create(
         commands: Vec<(String, String)>,
+        labels: Labels,
     ) -> Result<(TrayIcon, async_channel::Receiver<TrayCommand>), String> {
         let menu = Menu::new();
         let item = |id: &str, label: &str| MenuItem::with_id(MenuId::new(id), label, true, None);
         menu.append_items(&[
-            &item(RESTORE_ID, "Open Exaudio"),
+            &item(RESTORE_ID, labels.open),
             &PredefinedMenuItem::separator(),
-            &item(EXIT_ID, "Exit"),
+            &item(EXIT_ID, labels.quit),
         ])
         .map_err(|error| format!("failed to build tray menu: {error}"))?;
         for (id, label) in &commands {

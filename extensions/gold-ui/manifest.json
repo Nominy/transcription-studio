@@ -1,10 +1,10 @@
 {
   "id": "sonus.gold",
-  "name": "Gold",
+  "name": "AI tools",
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
-  "description": "Local and remote word alignment, drafting, speech enhancement and model management.",
+  "description": "Align words, draft text, fill segments and remove noise — on this computer or a remote server.",
   "license": "MIT",
   "permissions": [
     { "kind": "document-read" },

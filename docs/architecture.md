@@ -183,10 +183,10 @@ it needs an account, and otherwise never meets the provider.
 
 **The journey**
 
-1. **Start** lists every installed mode plus *Get more* (Add-ons). No language picker here;
+1. **Start** lists every installed mode plus *Get more* (Extensions). No language picker here;
    it lives in Settings › General.
 2. Clicking a tile calls the shell's `show_mode(id)`:
-   - `enter_mode` resolves the mode's required add-ons (transactional, see below).
+   - `enter_mode` resolves the mode's required extensions (transactional, see below).
    - If the mode manifest names a `provider`, the shell needs a configured `Ready` instance of
      that type. None configured → the provider's **setup view** is shown as a step of opening
      the mode (header "Sign in to {mode label}"); after `ProviderSetup::done` the launch
@@ -194,10 +194,10 @@ it needs an account, and otherwise never meets the provider.
      Several instances and none selected → a small chooser, then continue.
    - The shell calls `ModeContribution.launch(shell, ModeLaunchContext { mode_id, instance })`.
      `Some(view)` is shown as the mode's **launch window** (a page under the Start / Settings /
-     Add-ons header). `None` means the mode opened a document itself (`launch: "direct"`) or
+     Extensions header). `None` means the mode opened a document itself (`launch: "direct"`) or
      declined; the shell stays where it is.
-3. The editor is the base editor plus the mode's required add-ons plus the user's enabled,
-   compatible add-ons (`active_requirements`).
+3. The editor is the base editor plus the mode's required extensions plus the user's enabled,
+   compatible extensions (`active_requirements`).
 4. Closing the editor returns to the mode's launch window (`launch` is invoked again) or to
    Start for `direct` modes.
 5. Settings › Advanced › **Accounts** lists instances per provider type with status, *Sign out*
@@ -274,7 +274,7 @@ straight into the editor). The former separate "Relay" mode is gone.
 The shell retains the active `EditorModel` independently of its rendering view.
 Extension panels may query the document during rendering without reentering
 `EditorScreen`'s GPUI entity borrow.
-Settings and Add-ons open as overlays: the active document and its mode requirements
+Settings and Extensions open as overlays: the active document and its mode requirements
 remain intact. Disabling optional providers removes their diagnostics from the open document;
 empty-text checks are not built into core draft validation.
 
@@ -287,7 +287,7 @@ documents. Bundled packages satisfy requirements without network access. Missing
 are offered through the marketplace; new permissions require user approval. Required
 extensions activate for the mode's documents, not globally, and cannot be disabled while
 those documents are open. Activation is transactional: an incompatible dependency, cycle,
-denied permission or failed activation leaves the previous workspace usable. The Add-ons
+denied permission or failed activation leaves the previous workspace usable. The Extensions
 page shows which mode requires each extension and why.
 
 ## 3. Extension APIs
@@ -379,8 +379,8 @@ progress shown before installation; bundled extension code does not mean all mod
 are bundled. Extensions remain independently managed; required extensions activate within
 their modes rather than becoming unconditional core features.
 
-Third-party extensions are `.sonusext` files: a zip with `manifest.json`, `module.wasm`
-and optional assets. Install from the Add-ons page (file or URL); the page lists
+Third-party extensions are `.exaudio` files: a zip with `manifest.json`, `module.wasm`
+and optional assets. Install from the Extensions page (file or URL); the page lists
 extensions with version, source (bundled/installed/dev), permissions, required-by, settings,
 logs and enable/disable/uninstall. Developer mode loads an unpacked folder and reloads it on
 change. `extensions/examples/` holds templates.
@@ -389,7 +389,7 @@ change. `extensions/examples/` holds templates.
 
 Each extension is a GitHub repository owned by its author. Its repository contains
 `manifest.json`, source, license, documentation and versioned GitHub Releases with
-`.sonusext` assets. A public index repository (`Nominy/sonus-extensions`) is the discovery
+`.exaudio` assets. A public index repository (`Nominy/sonus-extensions`) is the discovery
 and reviewed release catalog, not a server that executes third-party repository code.
 Index contributions are pull requests.
 

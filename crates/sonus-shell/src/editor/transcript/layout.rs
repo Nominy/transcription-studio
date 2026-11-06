@@ -285,7 +285,7 @@ pub(super) fn diff_display_text(row: &TranscriptRowView) -> String {
         return if diff.kind == studio_editor::transcript_model::TranscriptDiffCellKind::New {
             row.text.clone()
         } else {
-            "No content".to_string()
+            studio_editor::i18n::localized("No content", "Пусто").to_string()
         };
     }
     let mut text = String::new();

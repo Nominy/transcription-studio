@@ -6,9 +6,17 @@
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
+use sonus_babel_domain::i18n::{localized, with_detail};
 use studio_core::Project;
 
 use crate::babel::{BabelClient, BabelRequest};
+
+fn original_missing_message() -> &'static str {
+    localized(
+        "Couldn't find the original transcript for this task.",
+        "Не удалось найти исходную расшифровку для этой задачи.",
+    )
+}
 
 /// One captured review pair. [`ReviewSnapshot::transcript_key`] identifies the transcript
 /// content so results can be refused after the transcript changed.
@@ -33,13 +41,19 @@ impl ReviewSnapshot {
                 .unwrap_or(0)
         };
         if action_id(&current) != review_action_id || level(&current) <= 1 {
-            bail!("Magic Review needs the current L2 review task.");
+            bail!(
+                "{}",
+                localized(
+                    "Magic Review is only available for review tasks.",
+                    "Magic Review доступен только для задач ревью.",
+                )
+            );
         }
         if action_id(&original).is_empty()
             || action_id(&original) == review_action_id
             || level(&original) != 1
         {
-            bail!("Couldn't find the original L1 transcript for this task.");
+            bail!("{}", original_missing_message());
         }
         let transcript_key = transcript_key(&original, &current);
         Ok(Self {
@@ -105,20 +119,37 @@ pub async fn load_l1_original(babel: &BabelClient, review_action_id: &str) -> Re
             review_action_id: reference_id.clone(),
         })
         .await
-        .map_err(|error| anyhow!("Original transcript load failed: {error}"))?;
+        .map_err(|error| {
+            anyhow!(
+                "{}",
+                with_detail(
+                    localized(
+                        "Couldn't load the original transcript.",
+                        "Не удалось загрузить исходную расшифровку.",
+                    ),
+                    error,
+                )
+            )
+        })?;
     let original = normalize_review_action(&raw)?;
     if original.get("actionId").and_then(Value::as_str) != Some(reference_id.as_str()) {
-        bail!("Couldn't read the original transcript. Reload the task.");
+        bail!(
+            "{}",
+            localized(
+                "Couldn't read the original transcript. Reload the task.",
+                "Не удалось прочитать исходную расшифровку. Перезагрузите задачу.",
+            )
+        );
     }
     Ok(original)
 }
 
-/// Id of the level-1 action in a `getReviewActionsForChunk` response.
+/// Id of the level-1 action in the chunk's review list.
 pub fn l1_reference_id(payload: &str, review_action_id: &str) -> Result<String> {
     let value: Value = serde_json::from_str(payload.trim())
-        .map_err(|_| anyhow!("getReviewActionsForChunk returned unexpected payload."))?;
+        .map_err(|_| anyhow!("The server sent an unexpected reply."))?;
     let list = find_array_with_levels(&value)
-        .ok_or_else(|| anyhow!("getReviewActionsForChunk returned unexpected payload."))?;
+        .ok_or_else(|| anyhow!("The server sent an unexpected reply."))?;
     list.iter()
         .find_map(|item| {
             let level = item.get("level").and_then(|level| {
@@ -130,7 +161,7 @@ pub fn l1_reference_id(payload: &str, review_action_id: &str) -> Result<String> 
             (level == Some(1) && !id.is_empty()).then(|| id.to_string())
         })
         .filter(|id| id != review_action_id)
-        .ok_or_else(|| anyhow!("Could not find the L1 review action for this L2 task."))
+        .ok_or_else(|| anyhow!("{}", original_missing_message()))
 }
 
 fn find_array_with_levels(value: &Value) -> Option<&Vec<Value>> {
@@ -145,9 +176,9 @@ fn find_array_with_levels(value: &Value) -> Option<&Vec<Value>> {
 /// Normalizes a `getReviewActionDataById` response like the Review Helper's parser.
 pub fn normalize_review_action(payload: &str) -> Result<Value> {
     let value: Value = serde_json::from_str(payload.trim())
-        .map_err(|_| anyhow!("Original transcript response was not JSON."))?;
+        .map_err(|_| anyhow!("The server sent an unreadable reply."))?;
     let raw = find_review_action(&value)
-        .ok_or_else(|| anyhow!("Original transcript response had no annotations."))?;
+        .ok_or_else(|| anyhow!("The server's reply had no annotations."))?;
     let number = |value: Option<&Value>| {
         value
             .and_then(|value| {

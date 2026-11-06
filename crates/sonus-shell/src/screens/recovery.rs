@@ -1,9 +1,9 @@
 //! Periodic native recovery, independent of provider-owned documents and save routes.
 use crate::{
-    DocumentOrigin, ProviderEnvironment, ShellHandle, editor::model::EditorModel,
+    DocumentOrigin, ProviderEnvironment, ShellHandle, editor::model::EditorModel, screens::ui,
     services::AppServices,
 };
-use gpui_kit::component::{WindowExt as _, notification::Notification};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::*;
 use std::{
     hash::{Hash, Hasher},
@@ -43,7 +43,7 @@ pub fn start(model: &Entity<EditorModel>, cx: &mut App) -> Task<()> {
                 let project = match model.doc().recovery_project() {
                     Ok(project) => project,
                     Err(error) => {
-                        model.set_status(format!("Recovery not saved: {error}"), cx);
+                        backup_not_saved(model, &error.to_string(), cx);
                         return None;
                     }
                 };
@@ -80,7 +80,7 @@ pub fn start(model: &Entity<EditorModel>, cx: &mut App) -> Task<()> {
                     model
                         .update(cx, |model, cx| {
                             if let Err(error) = remember(&root, cx) {
-                                model.set_status(format!("Recovery index not saved: {error}"), cx);
+                                backup_not_saved(model, &error.to_string(), cx);
                             }
                         })
                         .ok();
@@ -88,7 +88,7 @@ pub fn start(model: &Entity<EditorModel>, cx: &mut App) -> Task<()> {
                 (_, Err(error)) => {
                     model
                         .update(cx, |model, cx| {
-                            model.set_status(format!("Recovery not saved: {error}"), cx)
+                            backup_not_saved(model, &error.to_string(), cx)
                         })
                         .ok();
                 }
@@ -111,17 +111,34 @@ pub fn open(shell: ShellHandle, root: PathBuf, window: &mut Window, cx: &mut App
                         Ok(model) => model.update(cx, |model, cx| {
                             model.update_doc(cx, |doc| doc.session_mut().mark_dirty())
                         }),
-                        Err(error) => {
-                            window.push_notification(Notification::error(error.to_string()), cx)
-                        }
+                        Err(error) => window.push_notification(ui::anyhow_notification(&error), cx),
                     }
                 }
                 Err(error) => window.push_notification(
-                    Notification::error(format!("Recovery could not be opened: {error}")),
+                    ui::error_notification(
+                        ui::localized(
+                            cx,
+                            "Couldn't restore the unsaved work.",
+                            "Не удалось восстановить несохранённую работу.",
+                        ),
+                        Some(format!("{error:#}").into()),
+                    ),
                     cx,
                 ),
             })
             .ok();
         })
         .detach();
+}
+
+/// Status line for a failed backup write; the I/O error stays behind the hover.
+fn backup_not_saved(model: &mut EditorModel, error: &str, cx: &mut Context<EditorModel>) {
+    model.set_status_with_detail(
+        studio_editor::i18n::localized(
+            "Couldn't save a backup of unsaved work.",
+            "Не удалось сохранить резервную копию.",
+        ),
+        error.to_string(),
+        cx,
+    );
 }

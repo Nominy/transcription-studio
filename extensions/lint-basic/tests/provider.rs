@@ -25,7 +25,7 @@ fn project(segments: Vec<Segment>) -> Project {
     }
 }
 fn check(text: &str) -> DiagnosticCollection {
-    BasicChecks.diagnose(&project(vec![segment("one", "a", text, 0.0, 1.0)]), 41)
+    BasicChecks::default().diagnose(&project(vec![segment("one", "a", text, 0.0, 1.0)]), 41)
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn manifest_is_valid_and_provider_is_opt_in() {
             .diagnostics
             .is_empty()
     );
-    let providers = sonus_lint_basic::providers();
+    let providers = sonus_lint_basic::providers(sonus_lint_basic::Language::En);
     assert_eq!(providers.diagnostics.len(), 1);
     assert_eq!(
         providers.diagnostics[0]
@@ -135,8 +135,8 @@ fn invalid_timing_is_error_without_guessing_a_repair() {
         (0.0, -1.0),
         (2.0, 1.0),
     ] {
-        let result =
-            BasicChecks.diagnose(&project(vec![segment("one", "a", "text", start, end)]), 0);
+        let result = BasicChecks::default()
+            .diagnose(&project(vec![segment("one", "a", "text", start, end)]), 0);
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(result.diagnostics[0].severity, Severity::Error);
         assert!(result.diagnostics[0].fixes.is_empty());
@@ -145,7 +145,7 @@ fn invalid_timing_is_error_without_guessing_a_repair() {
 
 #[test]
 fn overlap_is_lane_scoped_unsorted_nested_and_non_destructive() {
-    let result = BasicChecks.diagnose(
+    let result = BasicChecks::default().diagnose(
         &project(vec![
             segment("nested", "a", "text", 2.0, 3.0),
             segment("other-speaker", "b", "text", 1.0, 9.0),
@@ -175,7 +175,7 @@ fn different_speakers_on_same_lane_still_overlap() {
     let mut b = segment("two", "a", "two", 1.0, 3.0);
     b.speaker_id = "different".into();
     assert_eq!(
-        BasicChecks
+        BasicChecks::default()
             .diagnose(&project(vec![a, b]), 1)
             .diagnostics
             .len(),

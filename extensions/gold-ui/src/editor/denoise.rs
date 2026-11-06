@@ -1,12 +1,13 @@
-//! Speech enhancement (denoise) for the open task: the toolbar's Generate button, the
-//! Enhanced ↔ Original mix slider and the status popover.
+//! Speech enhancement (denoise) for the open task: the toolbar's Denoise button, the
+//! Clean ↔ Original mix slider and the status popover.
 //!
 //! Enhancement runs through [`InferenceBackend::enhance`] on the backend chosen by the
-//! denoise location setting (This PC or Remote GPU). Results are cached on disk per task,
-//! enhancer model and original source digest; when the task's audio loads a cached result
-//! is installed without inference, and with "denoise automatically" a miss generates one.
-//! The mix ratio changes live in the audio engine, and lane waveforms follow it (they paint
-//! the blend each lane plays); playback, waveforms and every timing keep the originals' clock.
+//! denoise location setting (this computer or the remote server). Results are cached on
+//! disk per task, enhancer model and original source digest; when the task's audio loads a
+//! cached result is installed without inference, and with "denoise automatically" a miss
+//! generates one. The mix ratio changes live in the audio engine, and lane waveforms follow
+//! it (they paint the blend each lane plays); playback, waveforms and every timing keep the
+//! originals' clock.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -36,8 +37,9 @@ use crate::editor::inference_audio::{read_lane_audio, until_cancelled};
 use crate::services::GoldServices;
 use sonus_shell::editor::model::{EditorModel, LaneSource};
 use sonus_shell::editor::panels::ui::{
-    dialog_footer, dialog_header, error_text, muted, stable_text, tabular_figures,
+    dialog_footer, dialog_header, muted, stable_text, tabular_figures,
 };
+use sonus_shell::screens::ui::{error_block, localized};
 
 /// Slider detent, in percent.
 const MIX_STEP_PERCENT: u8 = 10;
@@ -76,17 +78,12 @@ impl EnhancedPercent {
         self.0 == 100
     }
 
-    fn label(self) -> String {
+    fn label(self, cx: &App) -> String {
         match self.0 {
-            0 => "Original".to_string(),
-            percent => format!("{percent}% enhanced"),
-        }
-    }
-
-    fn short_label(self) -> String {
-        match self.0 {
-            0 => "Original".to_string(),
-            percent => format!("{percent}% enh."),
+            0 => localized(cx, "Original", "Исходный").to_string(),
+            percent => {
+                localized(cx, "{p}% clean", "{p}% очищ.").replace("{p}", &percent.to_string())
+            }
         }
     }
 }
@@ -148,11 +145,22 @@ enum RunState {
     },
     Ready {
         source: ReadySource,
-        /// The cache could not be written; the installed audio is unaffected.
+        /// The cache could not be written (technical text); the installed audio is unaffected.
         cache_warning: Option<String>,
     },
     Cancelled,
-    Failed(String),
+    Failed(Failure),
+}
+
+/// Why a run produced no clean audio; worded for the user at render time.
+#[derive(Clone, Debug, PartialEq)]
+enum Failure {
+    /// The task's audio has not finished loading.
+    AudioLoading,
+    /// Fewer speaker tracks than the enhancement takes are loaded.
+    MissingTracks { loaded: usize, required: usize },
+    /// Reading, inference, decoding or installing failed; holds the technical text.
+    Cleaning(String),
 }
 
 enum Outcome {
@@ -162,7 +170,8 @@ enum Outcome {
     },
     /// Cache-only lookup missed.
     NothingCached,
-    Failed(String),
+    Cancelled,
+    Failed(Failure),
 }
 
 /// The open task's lanes as the enhancement job needs them.
@@ -332,16 +341,20 @@ impl DenoiseControl {
                     v_flex()
                         .gap_3()
                         .child(dialog_header(
-                            "Use 100% enhanced audio?",
+                            localized(cx, "Use 100% clean audio?", "Использовать 100% очищенного звука?"),
                             Some(
-                                "Full strength can suppress or remove speech. 90% keeps more of the voice."
-                                    .into(),
+                                localized(
+                                    cx,
+                                    "Full strength can remove parts of speech. 90% keeps more of the voice.",
+                                    "На полной силе могут пропасть части речи. 90% сохраняет больше голоса.",
+                                )
+                                .into(),
                             ),
                             cx,
                         ))
                         .child(
                             dialog_footer()
-                                .child(Button::new("denoise-full-cancel").label("Cancel").on_click(
+                                .child(Button::new("denoise-full-cancel").label(localized(cx, "Cancel", "Отмена")).on_click(
                                     move |_, window, cx| {
                                         cancel_button
                                             .update(cx, |this, cx| this.revert_mix(window, cx));
@@ -351,7 +364,7 @@ impl DenoiseControl {
                                 .child(
                                     Button::new("denoise-full-confirm")
                                         .warning()
-                                        .label("Use 100% enhanced")
+                                        .label(localized(cx, "Use 100%", "Использовать 100%"))
                                         .on_click(move |_, window, cx| {
                                             confirm.update(cx, |this, cx| {
                                                 this.approve_full_enhancement(cx);
@@ -418,18 +431,18 @@ impl DenoiseControl {
         let lane_count = model.doc().project().lanes.len();
         let sources = model.inference_lane_sources();
         let unusable = if load.pending > 0 {
-            Some("Speaker audio is still loading.".to_string())
+            Some(Failure::AudioLoading)
         } else if lane_count != ENHANCED_LANE_COUNT || sources.len() != ENHANCED_LANE_COUNT {
-            Some(format!(
-                "Denoise needs both speaker tracks loaded ({} of {lane_count} loaded; {ENHANCED_LANE_COUNT} required).",
-                sources.len()
-            ))
+            Some(Failure::MissingTracks {
+                loaded: sources.len(),
+                required: ENHANCED_LANE_COUNT,
+            })
         } else {
             None
         };
-        if let Some(message) = unusable {
+        if let Some(failure) = unusable {
             if mode == RunMode::Generate {
-                self.run = RunState::Failed(message);
+                self.run = RunState::Failed(failure);
                 cx.notify();
             }
             return;
@@ -506,7 +519,7 @@ impl DenoiseControl {
             model.set_enhanced_ratio(ratio, cx);
             model
                 .set_enhanced_audio(lanes, cx)
-                .map_err(|error| format!("Enhanced audio was rejected: {error}"))
+                .map_err(|error| format!("Enhanced audio was rejected: {error:#}"))
         })
     }
 
@@ -522,7 +535,8 @@ impl DenoiseControl {
                 cache_warning,
             },
             Outcome::NothingCached => RunState::Idle,
-            Outcome::Failed(message) => RunState::Failed(message),
+            Outcome::Cancelled => RunState::Cancelled,
+            Outcome::Failed(failure) => RunState::Failed(failure),
         };
         cx.notify();
     }
@@ -532,21 +546,21 @@ impl DenoiseControl {
     fn generate_button(&self, cx: &mut Context<Self>) -> Button {
         let running = self.is_generating();
         let ready = matches!(self.run, RunState::Ready { .. });
+        let idle_label = localized(cx, "Denoise", "Убрать шум");
+        let running_label = localized(cx, "Denoising…", "Удаление шума…");
+        let label = if running { running_label } else { idle_label };
         Button::new("denoise-generate")
             .outline()
             .small()
             .icon(IconName::AudioLines)
-            .child(stable_text(
-                if running { "Denoising" } else { "Denoise" },
-                ["Denoise", "Denoising"],
-            ))
-            .accessibility_label(if running { "Denoising" } else { "Denoise" })
+            .child(stable_text(label, [idle_label, running_label]))
+            .accessibility_label(label)
             .loading(running)
             .disabled(running || ready)
             .tooltip(if ready {
-                "Enhanced audio is ready"
+                localized(cx, "Clean audio is ready", "Очищенный звук готов")
             } else {
-                "Generate enhanced (denoised) audio"
+                localized(cx, "Remove background noise", "Убрать фоновый шум")
             })
             .on_click(cx.listener(|this, _, _, cx| this.generate(cx)))
     }
@@ -588,23 +602,30 @@ impl DenoiseControl {
             .child(
                 stable_text(label.unwrap_or_default(), ["100%"]).font_features(tabular_figures()),
             )
-            .accessibility_label("Denoise status")
-            .tooltip("Denoise status")
+            .accessibility_label(localized(cx, "Status", "Состояние"))
+            .tooltip(localized(cx, "Status", "Состояние"))
     }
 
     fn status_content(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let mut rows = v_flex().gap_1();
         let location_text = |location: ExecutionLocation| match location {
-            ExecutionLocation::Local => "This PC",
-            ExecutionLocation::Remote => "Remote GPU",
+            ExecutionLocation::Local => localized(cx, "This computer", "Этот компьютер"),
+            ExecutionLocation::Remote => localized(cx, "Remote server", "Удалённый сервер"),
         };
         let configured = cx.global::<GoldServices>().ai.denoise_location;
         let mut actions = h_flex().gap_2().justify_end().pt_1();
         match &self.run {
             RunState::Idle => {
                 rows = rows
-                    .child(muted("No enhanced audio yet.", cx))
-                    .child(muted(format!("Runs on: {}", location_text(configured)), cx));
+                    .child(muted(
+                        localized(cx, "No clean audio yet", "Очищенного звука пока нет"),
+                        cx,
+                    ))
+                    .child(muted(
+                        localized(cx, "Runs on {place}", "Выполняется: {place}")
+                            .replace("{place}", location_text(configured)),
+                        cx,
+                    ));
             }
             RunState::Running {
                 location,
@@ -615,7 +636,7 @@ impl DenoiseControl {
                 let elapsed = started.elapsed();
                 let fraction = phase_fraction(phase);
                 rows = rows
-                    .child(div().text_sm().child(phase_text(phase)))
+                    .child(div().text_sm().child(phase_text(phase, cx)))
                     .children(
                         phase_detail(phase, &self.model.read(cx).doc().project().lanes)
                             .map(|detail| muted(detail, cx)),
@@ -627,16 +648,16 @@ impl DenoiseControl {
                     )
                     .child(muted(
                         format!(
-                            "{} · elapsed {}",
+                            "{} · {}",
                             location_text(*location),
-                            format_duration(elapsed)
+                            format_duration(elapsed, cx)
                         ),
                         cx,
                     ));
                 actions = actions.child(
                     Button::new("denoise-cancel")
                         .small()
-                        .label("Cancel")
+                        .label(localized(cx, "Cancel", "Отмена"))
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 );
             }
@@ -644,35 +665,55 @@ impl DenoiseControl {
                 source,
                 cache_warning,
             } => {
-                rows = rows.child(div().text_sm().child(match source {
-                    ReadySource::Cache => "Using saved audio".to_string(),
-                    ReadySource::Generated { location, took } => format!(
-                        "Enhanced on {} in {}",
-                        location_text(*location),
-                        format_duration(*took)
-                    ),
-                }));
+                rows = rows.child(
+                    div().text_sm().child(match source {
+                        ReadySource::Cache => localized(
+                            cx,
+                            "Using saved result",
+                            "Используется сохранённый результат",
+                        )
+                        .to_string(),
+                        ReadySource::Generated { location, took } => {
+                            localized(cx, "Cleaned on {place} in {t}", "Очищено ({place}) за {t}")
+                                .replace("{place}", location_text(*location))
+                                .replace("{t}", &format_duration(*took, cx))
+                        }
+                    }),
+                );
                 if let Some(warning) = cache_warning {
-                    rows = rows.child(error_text(
-                        format!("Could not save enhanced audio for next time: {warning}"),
+                    rows = rows.child(error_block(
+                        localized(
+                            cx,
+                            "Couldn't save the clean audio for next time.",
+                            "Не удалось сохранить очищенный звук на будущее.",
+                        ),
+                        Some(warning.clone().into()),
                         cx,
                     ));
                 }
             }
             RunState::Cancelled => {
-                rows = rows.child(muted("Denoising was cancelled.", cx));
+                rows = rows.child(muted(localized(cx, "Cancelled", "Отменено"), cx));
             }
-            RunState::Failed(message) => {
-                rows = rows.child(error_text(message.clone(), cx));
+            RunState::Failed(failure) => {
+                let (headline, detail) = failure_text(failure, cx);
+                rows = rows.child(error_block(headline, detail, cx));
             }
         }
         if configured == ExecutionLocation::Remote && !matches!(self.run, RunState::Ready { .. }) {
             rows = rows.child(muted(
-                "Remote GPU uploads both original tracks to the configured server unless a saved result exists.",
+                localized(
+                    cx,
+                    "Audio is sent to the remote server.",
+                    "Аудио отправляется на удалённый сервер.",
+                ),
                 cx,
             ));
         }
-        rows = rows.child(muted(format!("Mix: {}", self.preview.label()), cx));
+        rows = rows.child(muted(
+            localized(cx, "Mix: {mix}", "Баланс: {mix}").replace("{mix}", &self.preview.label(cx)),
+            cx,
+        ));
         if matches!(
             self.run,
             RunState::Idle | RunState::Cancelled | RunState::Failed(_)
@@ -682,9 +723,9 @@ impl DenoiseControl {
                     .small()
                     .primary()
                     .label(if matches!(self.run, RunState::Failed(_)) {
-                        "Retry"
+                        localized(cx, "Try again", "Повторить")
                     } else {
-                        "Generate"
+                        localized(cx, "Denoise", "Убрать шум")
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.generate(cx))),
             );
@@ -696,7 +737,7 @@ impl DenoiseControl {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Denoise"),
+                    .child(localized(cx, "Denoise", "Шумоподавление")),
             )
             .child(rows)
             .child(actions)
@@ -723,7 +764,7 @@ impl Render for DenoiseControl {
                         .w(rems(6.))
                         .child(Slider::new(&self.slider).horizontal())
                         .tooltip(|window, cx| {
-                            Tooltip::new("Mix: Enhanced (left) ↔ Original (right)")
+                            Tooltip::new(localized(cx, "Clean ↔ Original", "Очищенный ↔ Исходный"))
                                 .build(window, cx)
                         }),
                 )
@@ -732,7 +773,7 @@ impl Render for DenoiseControl {
                         .w(rems(4.))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(self.preview.short_label()),
+                        .child(self.preview.label(cx)),
                 )
             })
             .child(status)
@@ -766,7 +807,7 @@ async fn run_job(
         Err(message) => {
             return match mode {
                 RunMode::CacheOnly => Outcome::NothingCached,
-                RunMode::Generate => Outcome::Failed(message),
+                RunMode::Generate => Outcome::Failed(Failure::Cleaning(message)),
             };
         }
     };
@@ -825,8 +866,8 @@ async fn run_job(
     drop(pump);
     let enhanced = match result {
         Some(Ok(enhanced)) => enhanced,
-        Some(Err(error)) => return Outcome::Failed(format!("Denoising failed: {error}")),
-        None => return Outcome::Failed("Denoising was cancelled.".to_string()),
+        Some(Err(error)) => return Outcome::Failed(Failure::Cleaning(format!("{error:#}"))),
+        None => return Outcome::Cancelled,
     };
 
     this.update(cx, |this, cx| this.set_phase(Phase::Installing, cx))
@@ -836,11 +877,11 @@ async fn run_job(
         .await
     {
         Ok(decoded) => decoded,
-        Err(message) => return Outcome::Failed(message),
+        Err(detail) => return Outcome::Failed(Failure::Cleaning(detail)),
     };
     match this.update(cx, |this, cx| this.install(decoded.lanes, cx)) {
         Ok(Ok(())) => {}
-        Ok(Err(message)) => return Outcome::Failed(message),
+        Ok(Err(detail)) => return Outcome::Failed(Failure::Cleaning(detail)),
         Err(_) => return Outcome::NothingCached,
     }
     let took = started.elapsed();
@@ -911,7 +952,7 @@ fn decode_result(
     if enhanced.len() != expected_ids.len() || enhanced.iter().any(|lane| lane.model_id != model_id)
     {
         return Err(format!(
-            "Denoising returned {} tracks for {} requested.",
+            "Denoising returned {} tracks for {} requested",
             enhanced.len(),
             expected_ids.len()
         ));
@@ -936,6 +977,30 @@ fn decode_result(
     })
 }
 
+/// A failure as the user sees it: a plain headline and, for technical causes, the detail.
+fn failure_text(failure: &Failure, cx: &App) -> (String, Option<SharedString>) {
+    match failure {
+        Failure::AudioLoading => (
+            localized(cx, "Audio is still loading.", "Аудио ещё загружается.").to_string(),
+            None,
+        ),
+        Failure::MissingTracks { loaded, required } => (
+            localized(
+                cx,
+                "Denoise needs both speaker tracks loaded ({a} of {b}).",
+                "Для удаления шума нужны обе дорожки спикеров (загружено {a} из {b}).",
+            )
+            .replace("{a}", &loaded.to_string())
+            .replace("{b}", &required.to_string()),
+            None,
+        ),
+        Failure::Cleaning(detail) => (
+            localized(cx, "Couldn't clean the audio.", "Не удалось очистить звук.").to_string(),
+            Some(detail.clone().into()),
+        ),
+    }
+}
+
 /// Completed share of the current phase, when it has a known total.
 fn phase_fraction(phase: &Phase) -> Option<f32> {
     match phase {
@@ -951,42 +1016,81 @@ fn phase_fraction(phase: &Phase) -> Option<f32> {
     }
 }
 
-fn phase_text(phase: &Phase) -> String {
+fn phase_text(phase: &Phase, cx: &App) -> String {
     match phase {
-        Phase::Preparing => "Reading the original audio".to_string(),
-        Phase::Queued { position: 0, .. } => "Running on the server".to_string(),
-        Phase::Queued { position, count } => format!("Queued: position {position} of {count}"),
+        Phase::Preparing => localized(cx, "Reading the audio…", "Чтение аудио…").to_string(),
+        Phase::Queued { position: 0, .. } => {
+            localized(cx, "Running on the server…", "Выполняется на сервере…").to_string()
+        }
+        Phase::Queued { position, count } => {
+            localized(cx, "In queue: {i} of {n}", "В очереди: {i} из {n}")
+                .replace("{i}", &position.to_string())
+                .replace("{n}", &count.to_string())
+        }
         Phase::Stage {
             stage,
             completed,
             total: Some(total),
             ..
-        } => format!("{}: chunk {completed}/{total}", sentence_case(stage)),
+        } => localized(cx, "{stage}: {c} of {t}", "{stage}: {c} из {t}")
+            .replace("{stage}", &stage_text(stage, cx))
+            .replace("{c}", &completed.to_string())
+            .replace("{t}", &total.to_string()),
         Phase::Stage {
             stage, completed, ..
-        } if *completed > 0 => format!("{}: {completed} done", sentence_case(stage)),
-        Phase::Stage { stage, .. } => sentence_case(stage),
-        Phase::Download { bytes, total } => format!(
-            "Downloading models: {:.1} / {:.1} MB",
-            *bytes as f64 / 1_000_000.0,
-            *total as f64 / 1_000_000.0
-        ),
-        Phase::Installing => "Switching playback to the enhanced audio".to_string(),
+        } if *completed > 0 => localized(cx, "{stage}: {c} done", "{stage}: готово {c}")
+            .replace("{stage}", &stage_text(stage, cx))
+            .replace("{c}", &completed.to_string()),
+        Phase::Stage { stage, .. } => format!("{}…", stage_text(stage, cx)),
+        Phase::Download { bytes, total } => localized(
+            cx,
+            "Downloading models: {a} / {b} MB",
+            "Загрузка моделей: {a} / {b} МБ",
+        )
+        .replace("{a}", &format!("{:.1}", *bytes as f64 / 1_000_000.0))
+        .replace("{b}", &format!("{:.1}", *total as f64 / 1_000_000.0)),
+        Phase::Installing => localized(
+            cx,
+            "Switching to the clean audio…",
+            "Переключение на очищенный звук…",
+        )
+        .to_string(),
     }
 }
 
-/// The stage detail; a lane id (the track being processed) is shown as its label.
+/// A backend stage id as a sentence; unknown ids are shown sentence-cased.
+fn stage_text(stage: &str, cx: &App) -> String {
+    match stage {
+        "preparing" => localized(cx, "Preparing", "Подготовка").to_string(),
+        "uploading" => localized(
+            cx,
+            "Sending the audio to the server",
+            "Отправка аудио на сервер",
+        )
+        .to_string(),
+        "loading-model" => localized(cx, "Loading the model", "Загрузка модели").to_string(),
+        "enhancing" => localized(cx, "Removing noise", "Удаление шума").to_string(),
+        "encoding" => {
+            localized(cx, "Saving the clean audio", "Сохранение очищенного звука").to_string()
+        }
+        "downloading-gold-runtime" => {
+            localized(cx, "Downloading Gold", "Скачивание Gold").to_string()
+        }
+        "extracting-gold-runtime" => localized(cx, "Unpacking Gold", "Распаковка Gold").to_string(),
+        other => sentence_case(&other.replace(['-', '_'], " ")),
+    }
+}
+
+/// The stage detail when it names one of the task's lanes: that lane's label.
 fn phase_detail(phase: &Phase, lanes: &[AudioLane]) -> Option<String> {
     match phase {
         Phase::Stage {
             detail: Some(detail),
             ..
-        } if !detail.is_empty() => Some(
-            lanes
-                .iter()
-                .find(|lane| lane.id == *detail)
-                .map_or_else(|| detail.clone(), |lane| lane.label.clone()),
-        ),
+        } => lanes
+            .iter()
+            .find(|lane| lane.id == *detail)
+            .map(|lane| lane.label.clone()),
         _ => None,
     }
 }
@@ -998,12 +1102,14 @@ fn sentence_case(text: &str) -> String {
     })
 }
 
-fn format_duration(duration: Duration) -> String {
+fn format_duration(duration: Duration, cx: &App) -> String {
     let seconds = duration.as_secs();
     if seconds < 60 {
-        format!("{seconds}s")
+        localized(cx, "{s} s", "{s} с").replace("{s}", &seconds.to_string())
     } else {
-        format!("{}m {:02}s", seconds / 60, seconds % 60)
+        localized(cx, "{m} min {s} s", "{m} мин {s} с")
+            .replace("{m}", &(seconds / 60).to_string())
+            .replace("{s}", &(seconds % 60).to_string())
     }
 }
 

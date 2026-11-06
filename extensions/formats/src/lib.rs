@@ -45,14 +45,14 @@ impl FormatProvider for SubtitleFormat {
         let (id, name, extension, media_type) = match self {
             Self::Srt => (
                 "sonus.formats.srt",
-                "SubRip subtitles",
+                "SubRip (.srt)",
                 "srt",
                 "application/x-subrip",
             ),
-            Self::WebVtt => ("sonus.formats.vtt", "WebVTT subtitles", "vtt", "text/vtt"),
+            Self::WebVtt => ("sonus.formats.vtt", "WebVTT (.vtt)", "vtt", "text/vtt"),
             Self::Text => (
                 "sonus.formats.txt",
-                "Plain text (untimed import)",
+                "Plain text (.txt)",
                 "txt",
                 "text/plain",
             ),

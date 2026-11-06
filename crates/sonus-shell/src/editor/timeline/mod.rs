@@ -687,7 +687,11 @@ impl TimelineView {
                         .justify_center()
                         .text_xs()
                         .text_color(muted_foreground)
-                        .child("Loading audio…"),
+                        .child(crate::screens::ui::localized(
+                            cx,
+                            "Loading audio…",
+                            "Загрузка аудио…",
+                        )),
                 );
             }
             if let Some(hit) = hover.filter(|_| frame.capture_lane.is_none()) {
@@ -879,7 +883,11 @@ impl TimelineView {
                         .ghost()
                         .xsmall()
                         .icon(IconName::Pencil)
-                        .tooltip("Edit annotation")
+                        .tooltip(crate::screens::ui::localized(
+                            cx,
+                            "Edit annotation",
+                            "Изменить аннотацию",
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.model.update(cx, |model, cx| {
                                 model.edit(cx, |doc| doc.open_segment_editor(&segment_id));

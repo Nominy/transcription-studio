@@ -6,8 +6,10 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 use studio_core::Project;
 
+use crate::i18n::{is_russian, localized};
 use studio_editor::edit::format::{format_time, parse_time};
 use studio_editor::edit::time::TimeEditError;
+
 const BABEL_TRANSCRIPTION_TYPE: &str = "transcription";
 
 const BACKGROUND_NOISE_TYPE: &str = "background_noise";
@@ -63,15 +65,27 @@ pub struct CreateRegionPayload {
 }
 
 /// Why the dialog cannot be submitted.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateRegionError {
-    #[error("{0}")]
     Time(TimeEditError),
-    #[error("Select a valid speaker.")]
     UnknownLane,
-    #[error("Intensity and categories are required.")]
     IncompleteAnnotation,
 }
+
+impl std::fmt::Display for CreateRegionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Time(error) => error.fmt(f),
+            Self::UnknownLane => f.write_str(localized("Choose a speaker.", "Выберите спикера.")),
+            Self::IncompleteAnnotation => f.write_str(localized(
+                "Choose an intensity and both categories.",
+                "Выберите интенсивность и обе категории.",
+            )),
+        }
+    }
+}
+
+impl std::error::Error for CreateRegionError {}
 
 impl CreateRegionDialog {
     /// Transcription-mode dialog.
@@ -407,14 +421,64 @@ pub fn secondary_category_options(primary: &str) -> Vec<&'static str> {
     options
 }
 
-/// Intensity option labels (`1`..`4`).
+/// Intensity option labels (`1`..`4`) in the current UI language.
 pub fn intensity_options() -> &'static [&'static str] {
-    &[
-        "1 - Barely noticeable",
-        "2 - Noticeable but not disruptive",
-        "3 - Disruptive",
-        "4 - Severe",
-    ]
+    const EN: [&str; 4] = [
+        "1 – Barely noticeable",
+        "2 – Noticeable but not disruptive",
+        "3 – Disruptive",
+        "4 – Severe",
+    ];
+    const RU: [&str; 4] = [
+        "1 – Едва заметно",
+        "2 – Заметно, но не мешает",
+        "3 – Мешает",
+        "4 – Сильно мешает",
+    ];
+    if is_russian() { &RU } else { &EN }
+}
+
+/// Display label for a stored primary or secondary category value; unknown values (custom
+/// descriptions) are shown as they are.
+pub fn category_label(value: &str) -> &str {
+    let (en, ru) = match value {
+        "speech-sounds (optional)" => ("Speech sounds (optional)", "Речевые звуки (необязательно)"),
+        "non-speech-sounds" => ("Non-speech sounds", "Неречевые звуки"),
+        "distorted-speech" => ("Distorted speech", "Искажённая речь"),
+        "background-noise" => ("Background noise", "Фоновый шум"),
+        "background-speech" | "background speech" => ("Background speech", "Фоновая речь"),
+        "plosive" => ("Plosive", "Взрывной звук"),
+        "system-noise" => ("System noise", "Системный шум"),
+        OTHER_CATEGORY => ("Other", "Другое"),
+        "main speech" => ("Main speech", "Основная речь"),
+        "interjection (um, uh, mhm, ah, ya)" => (
+            "Interjection (um, uh, mhm, ah, ya)",
+            "Междометие (эм, э-э, мгм, ах, ага)",
+        ),
+        "cough" => ("Cough", "Кашель"),
+        "sneeze" => ("Sneeze", "Чихание"),
+        "sigh" => ("Sigh", "Вздох"),
+        "laugh" => ("Laugh", "Смех"),
+        "breath" => ("Breath", "Дыхание"),
+        "throat clear" => ("Throat clear", "Прочистка горла"),
+        "mouth click" => ("Mouth click", "Щелчок губ"),
+        "audio smear" => ("Audio smear", "Размытый звук"),
+        "muffle" => ("Muffle", "Приглушение"),
+        "echo (channel bleed)" => ("Echo (channel bleed)", "Эхо (просачивание канала)"),
+        "dropout/network" => ("Dropout or network loss", "Пропадание звука (сеть)"),
+        "rustle" => ("Rustle", "Шуршание"),
+        "mic bump" => ("Mic bump", "Удар по микрофону"),
+        "tap" => ("Tap", "Стук"),
+        "click" => ("Click", "Щелчок"),
+        "keyboard" => ("Keyboard", "Клавиатура"),
+        "wind" => ("Wind", "Ветер"),
+        "animal" => ("Animal", "Животное"),
+        "other environmental noise" => ("Other environmental noise", "Другой шум окружения"),
+        "static" => ("Static", "Статика"),
+        "static-burst" => ("Static burst", "Всплеск статики"),
+        _ => return value,
+    };
+    localized(en, ru)
 }
 
 /// Parses an intensity option label or bare number (`"0"` is accepted).

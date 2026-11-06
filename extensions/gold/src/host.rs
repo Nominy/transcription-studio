@@ -78,24 +78,24 @@ pub struct PageInfo {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HostError {
     #[error(
-        "Microsoft Edge WebView2 Runtime is not installed. Install it from \
-         https://go.microsoft.com/fwlink/p/?LinkId=2124703 to run AI on this PC."
+        "Running AI on this computer needs Microsoft Edge WebView2. Install it from \
+         https://go.microsoft.com/fwlink/p/?LinkId=2124703 and try again."
     )]
     RuntimeMissing,
-    #[error("Gold's inference build is missing at {0}.")]
+    #[error("The AI engine isn't installed. ({0})")]
     ExtensionMissing(String),
-    #[error("WebView2 failed while {context}: {message}")]
+    #[error("The AI engine couldn't start. (WebView2 failed while {context}: {message})")]
     WebView {
         context: &'static str,
         message: String,
     },
-    #[error("The local inference page stopped: {0}")]
+    #[error("The AI engine stopped. ({0})")]
     Crashed(String),
-    #[error("The local inference host is shut down.")]
+    #[error("The AI engine is shut down.")]
     Stopped,
     #[error("{}", .0.message)]
     Page(PageError),
-    #[error("Malformed reply from the local inference page: {0}")]
+    #[error("The AI engine sent an unreadable reply. ({0})")]
     Malformed(String),
 }
 

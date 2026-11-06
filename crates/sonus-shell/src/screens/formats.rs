@@ -29,8 +29,8 @@ fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &
         window.push_notification(
             Notification::info(localized(
                 cx,
-                "Open an audio project first, then choose a format.",
-                "Сначала откройте аудиопроект, затем выберите формат.",
+                "Open a project first.",
+                "Сначала откройте проект.",
             )),
             cx,
         );
@@ -51,20 +51,28 @@ fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &
         .collect();
     if formats.is_empty() {
         window.push_notification(
-            Notification::info(localized(
-                cx,
-                "No format extension is enabled. Open Extensions to enable one.",
-                "Нет активных расширений форматов. Включите их в разделе «Расширения».",
-            )),
+            Notification::info(if importing {
+                localized(
+                    cx,
+                    "No import formats are enabled. Turn one on in Extensions.",
+                    "Форматы импорта отключены. Включите их в Расширениях.",
+                )
+            } else {
+                localized(
+                    cx,
+                    "No export formats are enabled. Turn one on in Extensions.",
+                    "Форматы экспорта отключены. Включите их в Расширениях.",
+                )
+            }),
             cx,
         );
         return;
     }
     window.open_dialog(cx, move |dialog, _, cx| {
         let title = if importing {
-            localized(cx, "Import transcript", "Импорт текста")
+            localized(cx, "Import from…", "Импортировать из…")
         } else {
-            localized(cx, "Export transcript", "Экспорт текста")
+            localized(cx, "Export as…", "Экспортировать как…")
         };
         dialog
             .title(title)
@@ -82,7 +90,11 @@ fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &
                             .cloned();
                         let Some(provider) = provider else {
                             window.push_notification(
-                                Notification::warning("The format extension was disabled."),
+                                Notification::warning(localized(
+                                    cx,
+                                    "That format was just turned off.",
+                                    "Этот формат только что отключили.",
+                                )),
                                 cx,
                             );
                             return;
@@ -150,7 +162,7 @@ fn pick_export(
     let filename = format!(
         "{}.{extension}",
         if safe_name.trim().is_empty() {
-            "transcript"
+            localized(cx, "transcript", "расшифровка")
         } else {
             safe_name.trim()
         }
@@ -159,6 +171,13 @@ fn pick_export(
         &std::env::current_dir().unwrap_or_default(),
         Some(&filename),
     );
+    let export_dir = localized(
+        cx,
+        "Choose a folder to export to.",
+        "Выберите папку для экспорта.",
+    );
+    let exported = localized(cx, "Exported to {file}", "Экспортировано в {file}");
+    let export_failed = localized(cx, "Couldn't export.", "Не удалось экспортировать.");
     window
         .spawn(cx, async move |cx| {
             let Ok(Ok(Some(path))) = picked.await else {
@@ -181,9 +200,7 @@ fn pick_export(
                     let bytes = provider
                         .export(&project, &ExportOptions::default())
                         .map_err(|error| error.to_string())?;
-                    let parent = target
-                        .parent()
-                        .ok_or_else(|| "Export path has no directory.".to_owned())?;
+                    let parent = target.parent().ok_or_else(|| export_dir.to_owned())?;
                     let mut temporary = tempfile::NamedTempFile::new_in(parent)
                         .map_err(|error| error.to_string())?;
                     temporary
@@ -201,10 +218,25 @@ fn pick_export(
                 .await;
             cx.update(|window, cx| match result {
                 Ok(()) => window.push_notification(
-                    Notification::success(format!("Exported {}", path.display())),
+                    Notification::success(
+                        exported.replace(
+                            "{file}",
+                            &path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        ),
+                    ),
                     cx,
                 ),
-                Err(error) => window.push_notification(Notification::error(error), cx),
+                Err(error) => window.push_notification(
+                    if error == export_dir {
+                        Notification::error(error)
+                    } else {
+                        crate::screens::ui::error_notification(export_failed, Some(error.into()))
+                    },
+                    cx,
+                ),
             })
             .ok();
         })
@@ -230,7 +262,7 @@ fn pick_import(
         window.push_notification(
             Notification::info(localized(
                 cx,
-                "Select a segment on the destination lane first.",
+                "Select a segment on the target track first.",
                 "Сначала выберите сегмент на нужной дорожке.",
             )),
             cx,
@@ -241,8 +273,14 @@ fn pick_import(
         files: true,
         directories: false,
         multiple: false,
-        prompt: Some(localized(cx, "Import transcript", "Импорт текста").into()),
+        prompt: Some(localized(cx, "Import from…", "Импортировать из…").into()),
     });
+    let too_large = localized(
+        cx,
+        "This file is too large to import (over 32 MB).",
+        "Файл слишком большой для импорта (больше 32 МБ).",
+    );
+    let unreadable = localized(cx, "Couldn't read {file}.", "Не удалось прочитать {file}.");
     window
         .spawn(cx, async move |cx| {
             let Ok(Ok(Some(paths))) = picked.await else {
@@ -251,6 +289,10 @@ fn pick_import(
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let parsed = cx
                 .background_spawn(async move {
                     const MAX_BYTES: u64 = 32 * 1024 * 1024;
@@ -260,7 +302,7 @@ fn pick_import(
                         .read_to_end(&mut bytes)
                         .map_err(|error| error.to_string())?;
                     if bytes.len() as u64 > MAX_BYTES {
-                        return Err("Transcript file exceeds 32 MiB.".to_owned());
+                        return Err(too_large.to_owned());
                     }
                     provider.import(&bytes).map_err(|error| error.to_string())
                 })
@@ -279,7 +321,17 @@ fn pick_import(
                     window,
                     cx,
                 ),
-                Err(error) => window.push_notification(Notification::error(error), cx),
+                Err(error) => window.push_notification(
+                    if error == too_large {
+                        Notification::error(error)
+                    } else {
+                        crate::screens::ui::error_notification(
+                            unreadable.replace("{file}", &name),
+                            Some(error.into()),
+                        )
+                    },
+                    cx,
+                ),
             })
             .ok();
         })
@@ -312,15 +364,20 @@ fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
     let (edits, detail) = match content {
         ImportContent::Untimed(text) => {
             let Some(segment_id) = selected else {
-                window.push_notification(Notification::info(localized(cx,
-                    "Plain text has no timestamps. Select an existing segment to place it without inventing timing.",
-                    "В обычном тексте нет таймкодов. Выберите существующий сегмент для вставки без выдуманных границ.")), cx);
+                window.push_notification(
+                    Notification::info(localized(
+                        cx,
+                        "Plain text has no timing. Select the segment to put it in.",
+                        "В обычном тексте нет тайминга. Выберите сегмент, куда его вставить.",
+                    )),
+                    cx,
+                );
                 return;
             };
             let detail = localized(
                 cx,
-                "Replace the selected segment's text? Its existing timing is unchanged.",
-                "Заменить текст выбранного сегмента? Его временные границы сохранятся.",
+                "Replace the text of the selected segment?",
+                "Заменить текст выбранного сегмента?",
             )
             .to_owned();
             (
@@ -333,20 +390,13 @@ fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
             )
         }
         ImportContent::Timed(cues) => {
-            let detail = format!(
-                "{} {}. {}",
-                cues.len(),
-                localized(
-                    cx,
-                    "cues will be appended to this lane",
-                    "сегментов будет добавлено на эту дорожку"
-                ),
-                localized(
-                    cx,
-                    "Existing segments stay unchanged; source speaker labels are kept in the text.",
-                    "Существующие сегменты сохранятся; имена говорящих останутся в тексте."
-                )
-            );
+            let detail = localized(
+                cx,
+                "Add {n} subtitles to “{track}”? Existing segments are kept. Speaker names from the file stay in the text.",
+                "Добавить {n} субтитров на дорожку «{track}»? Существующие сегменты сохранятся. Имена спикеров из файла останутся в тексте.",
+            )
+            .replace("{n}", &cues.len().to_string())
+            .replace("{track}", &lane.label);
             let mut next = 0_u64;
             let edits = cues
                 .into_iter()
@@ -380,7 +430,7 @@ fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
         }
     };
     let transaction = DocumentTransaction {
-        label: "Import transcript".into(),
+        label: localized(cx, "Import transcript", "Импорт текста").into(),
         expected_revision: revision,
         edits,
     };
@@ -389,48 +439,52 @@ fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
         let format = format.clone();
         let transaction = transaction.clone();
         let project_id = project.id.clone();
-        dialog
-            .title(localized(cx, "Confirm import", "Подтвердите импорт"))
-            .child(
-                v_flex()
-                    .gap_3()
-                    .text_color(cx.theme().foreground)
-                    .child(detail.clone())
-                    .child(
-                        Button::new("apply-transcript-import")
-                            .primary()
-                            .label(localized(cx, "Import", "Импортировать"))
-                            .on_click(move |_, window, cx| {
-                                if cx
-                                    .global::<ContributionRegistry>()
-                                    .formats
-                                    .get(&format)
-                                    .is_none()
-                                {
-                                    window.push_notification(
-                                        Notification::error("The format extension was disabled."),
+        dialog.title(localized(cx, "Import", "Импорт")).child(
+            v_flex()
+                .gap_3()
+                .text_color(cx.theme().foreground)
+                .child(detail.clone())
+                .child(
+                    Button::new("apply-transcript-import")
+                        .primary()
+                        .label(localized(cx, "Import", "Импортировать"))
+                        .on_click(move |_, window, cx| {
+                            if cx
+                                .global::<ContributionRegistry>()
+                                .formats
+                                .get(&format)
+                                .is_none()
+                            {
+                                window.push_notification(
+                                    Notification::error(localized(
                                         cx,
-                                    );
-                                    return;
-                                }
-                                let Some(model) = shell.editor_model(cx) else {
-                                    return;
-                                };
-                                if model.read(cx).doc().project().id != project_id {
-                                    window.push_notification(
-                                        Notification::error(
-                                            "The active document changed. Start the import again.",
-                                        ),
+                                        "That format was just turned off.",
+                                        "Этот формат только что отключили.",
+                                    )),
+                                    cx,
+                                );
+                                return;
+                            }
+                            let Some(model) = shell.editor_model(cx) else {
+                                return;
+                            };
+                            if model.read(cx).doc().project().id != project_id {
+                                window.push_notification(
+                                    Notification::error(localized(
                                         cx,
-                                    );
-                                    return;
-                                }
-                                model.update(cx, |model, cx| {
-                                    model.edit(cx, |doc| doc.apply_transaction(transaction.clone()))
-                                });
-                                window.close_dialog(cx);
-                            }),
-                    ),
-            )
+                                        "The project changed meanwhile. Start the import again.",
+                                        "Проект изменился. Начните импорт заново.",
+                                    )),
+                                    cx,
+                                );
+                                return;
+                            }
+                            model.update(cx, |model, cx| {
+                                model.edit(cx, |doc| doc.apply_transaction(transaction.clone()))
+                            });
+                            window.close_dialog(cx);
+                        }),
+                ),
+        )
     });
 }

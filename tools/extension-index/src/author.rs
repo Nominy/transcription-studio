@@ -66,7 +66,7 @@ fn render(spec: &Spec<'_>) -> Result<BTreeMap<&'static str, String>> {
         return Err("SDK commit must be a full lowercase Git commit ID, never a moving branch or invented default tag".into());
     }
     let version: Version = spec.version.parse()?;
-    if !version.build.is_empty() || format!("{}-{version}.sonusext", spec.id).len() > 128 {
+    if !version.build.is_empty() || format!("{}-{version}.exaudio", spec.id).len() > 128 {
         return Err(
             "author release version/ID must form a path-safe asset name of at most 128 bytes"
                 .into(),
@@ -135,7 +135,7 @@ fn render(spec: &Spec<'_>) -> Result<BTreeMap<&'static str, String>> {
         ("LICENSE", license),
         (
             ".gitignore",
-            "/target/\n/dist/\n/module.wasm\n/*.sonusext\n".to_owned(),
+            "/target/\n/dist/\n/module.wasm\n/*.exaudio\n".to_owned(),
         ),
     ]))
 }

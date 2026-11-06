@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use sonus_babel_domain::editor_model::feedback_assessment::{
     FeedbackDraftSaveRequest, FeedbackInput,
 };
+use sonus_babel_domain::i18n::{localized, with_detail};
 use sonus_babel_domain::workflow::BabelWorkflowExt;
 use sonus_babel_lint::project_lint_tag_config::babel_project_lint_tag_metadata;
 use studio_editor::workflow::StudioWorkflow;
@@ -56,22 +57,24 @@ impl TaskRequest {
     /// Status shown after the task opened.
     pub fn success_status(&self) -> &'static str {
         match self {
-            Self::ReviewAction { .. } => "Review action loaded.",
-            Self::LatestReviewAction { .. } => "Processed transcription loaded.",
-            Self::ClaimByProcessedTranscription { .. } => "Stitched transcription claimed.",
-            Self::ClaimNext { .. } => "Queue claim loaded.",
-            Self::ClaimErrorQaTask { .. } => "QA task claimed.",
+            Self::ReviewAction { .. } | Self::LatestReviewAction { .. } => {
+                localized("Task loaded", "Задача загружена")
+            }
+            Self::ClaimByProcessedTranscription { .. }
+            | Self::ClaimNext { .. }
+            | Self::ClaimErrorQaTask { .. } => localized("Task taken", "Задача взята"),
         }
     }
 
-    /// Prefix for `"<label> failed: <error>"`.
+    /// Names the action in the UI's `{label} didn't work`.
     pub fn failure_label(&self) -> &'static str {
         match self {
-            Self::ReviewAction { .. } => "Review action load",
-            Self::LatestReviewAction { .. } => "Processed transcription load",
-            Self::ClaimByProcessedTranscription { .. } => "Stitched transcription claim",
-            Self::ClaimNext { .. } => "Queue claim load",
-            Self::ClaimErrorQaTask { .. } => "QA task claim",
+            Self::ReviewAction { .. } | Self::LatestReviewAction { .. } => {
+                localized("Loading the task", "Загрузка задачи")
+            }
+            Self::ClaimByProcessedTranscription { .. }
+            | Self::ClaimNext { .. }
+            | Self::ClaimErrorQaTask { .. } => localized("Taking the task", "Взятие задачи"),
         }
     }
 
@@ -190,7 +193,7 @@ impl BabelClient {
     pub async fn raw(&self, request: &BabelRequest) -> Result<String, BabelError> {
         payload_for(&self.config, request)
             .await
-            .map_err(|error| transport_error(String::new(), error))
+            .map_err(|error| transport_error("", error))
     }
 
     async fn raw_prefixed(
@@ -200,7 +203,7 @@ impl BabelClient {
     ) -> Result<String, BabelError> {
         payload_for(&self.config, request)
             .await
-            .map_err(|error| transport_error(format!("{prefix}: "), error))
+            .map_err(|error| transport_error(prefix, error))
     }
 
     /// Worker id + active projects with queue ids and daily progress.
@@ -220,7 +223,7 @@ impl BabelClient {
         let annotations = self
             .raw_prefixed(
                 &BabelRequest::LoadAnnotationsByReviewAction { review_action_id },
-                "Review action annotations load failed",
+                "Task annotations load failed",
             )
             .await?;
         merge_review_action_annotations(&payload, &annotations)
@@ -349,7 +352,10 @@ impl BabelClient {
             &self
                 .raw(&BabelRequest::SubmitPracticeAttempt(request))
                 .await?,
-            "Failed to submit practice attempt.",
+            localized(
+                "Couldn't submit the attempt. Try again.",
+                "Не удалось отправить попытку. Попробуйте снова.",
+            ),
         )
     }
 
@@ -360,7 +366,10 @@ impl BabelClient {
     ) -> Result<serde_json::Value, BabelError> {
         parse_mutation_value(
             &self.raw(&BabelRequest::SubmitAssessment(request)).await?,
-            "Failed to submit assessment.",
+            localized(
+                "Couldn't submit the assessment. Try again.",
+                "Не удалось отправить тест. Попробуйте снова.",
+            ),
         )
     }
 
@@ -372,7 +381,10 @@ impl BabelClient {
                     queue_id: queue_id.into(),
                 })
                 .await?,
-            "Failed to transition to assessment.",
+            localized(
+                "Couldn't open the assessment. Try again.",
+                "Не удалось открыть тест. Попробуйте снова.",
+            ),
         )
         .map(|_| ())
     }
@@ -389,7 +401,13 @@ impl BabelClient {
                 review_action_id,
             })
             .await?;
-        parse_simple_mutation(&payload, "Failed to drop claim. Please try again.")
+        parse_simple_mutation(
+            &payload,
+            localized(
+                "Couldn't release the task. Try again.",
+                "Не удалось отпустить задачу. Попробуйте снова.",
+            ),
+        )
     }
 
     /// Skips the current chunk.
@@ -397,7 +415,7 @@ impl BabelClient {
         let payload = self
             .raw(&BabelRequest::SkipReviewAction { review_action_id })
             .await?;
-        parse_simple_mutation(&payload, "Please try again.")
+        parse_simple_mutation(&payload, localized("Try again.", "Попробуйте снова."))
     }
 
     /// Admin flag (`transcriptions.adminRateTtsTranscription`).
@@ -414,7 +432,7 @@ impl BabelClient {
                 rating_reason,
             })
             .await?;
-        parse_simple_mutation(&payload, "Please try again.")
+        parse_simple_mutation(&payload, localized("Try again.", "Попробуйте снова."))
     }
 
     pub async fn feedback_rubric_flags(&self, project_id: &str) -> Result<Vec<String>, BabelError> {
@@ -465,7 +483,7 @@ impl BabelClient {
         };
         parse_feedback_draft(
             &self
-                .raw_prefixed(&request, "Feedback draft bootstrap failed")
+                .raw_prefixed(&request, "Feedback draft load failed")
                 .await?,
         )
     }
@@ -491,15 +509,15 @@ impl BabelClient {
             &BabelRequest::LoadReviewActionsForChunk {
                 review_action_id: review_action_id.to_string(),
             },
-            "Review actions load failed",
+            "Chunk reviews load failed",
         )
         .await
     }
 }
 
-fn transport_error(prefix: String, error: TransportError) -> BabelError {
+fn transport_error(prefix: &str, error: TransportError) -> BabelError {
     BabelError {
-        message: prefix + &error.message,
+        message: with_detail(prefix, error.message),
         lint_issues: None,
         signed_out: error.signed_out,
     }

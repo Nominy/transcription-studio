@@ -1,4 +1,5 @@
 use super::*;
+use crate::screens::ui::localized;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) struct WaveformWidget {
@@ -7,7 +8,7 @@ pub(super) struct WaveformWidget {
     config: w::WaveformConfig,
     source: Option<Arc<[f32]>>,
     peaks: Arc<[f32]>,
-    message: String,
+    message: &'static str,
     cancel: Arc<AtomicBool>,
     task: Option<Task<()>>,
     _observer: Option<Subscription>,
@@ -34,7 +35,7 @@ impl WaveformWidget {
             config,
             source: None,
             peaks: Arc::from([]),
-            message: "Audio loading".into(),
+            message: localized(cx, "Loading audio…", "Загрузка аудио…"),
             cancel: Arc::new(AtomicBool::new(false)),
             task: None,
             _observer: observer,
@@ -44,7 +45,7 @@ impl WaveformWidget {
     }
     fn reload(&mut self, cx: &mut Context<Self>) {
         let Some(model) = self.shell.editor_model(cx) else {
-            self.message = "Document closed".into();
+            self.message = localized(cx, "Project closed", "Проект закрыт");
             return;
         };
         if !crate::wasm_host::has_permission(
@@ -56,12 +57,16 @@ impl WaveformWidget {
             self.cancel.store(true, Ordering::Release);
             self.source = None;
             self.peaks = Arc::from([]);
-            self.message = "Audio access not granted".into();
+            self.message = localized(
+                cx,
+                "This extension can't read the audio",
+                "Расширение не может читать аудио",
+            );
             cx.notify();
             return;
         }
         if crate::wasm_host::document_handle(&model) != self.config.document_id {
-            self.message = "Document no longer associated".into();
+            self.message = localized(cx, "Project closed", "Проект закрыт");
             return;
         }
         let model = model.read(cx);
@@ -69,7 +74,7 @@ impl WaveformWidget {
             return;
         };
         let Some(source) = audio.channel_data_shared(self.config.channel as usize) else {
-            self.message = "Unknown audio channel".into();
+            self.message = localized(cx, "No audio", "Нет аудио");
             return;
         };
         if self
@@ -89,11 +94,11 @@ impl WaveformWidget {
         let cancellation = self.cancel.clone();
         if start >= end {
             self.peaks = Arc::from([]);
-            self.message = "Empty audio interval".into();
+            self.message = localized(cx, "Nothing to show", "Нечего показать");
             cx.notify();
             return;
         }
-        self.message = "Preparing waveform".into();
+        self.message = localized(cx, "Preparing waveform…", "Подготовка волны…");
         let work = cx.background_spawn(async move {
             let bins = (end - start).min(2048);
             let mut peaks = Vec::with_capacity(bins);
@@ -120,7 +125,7 @@ impl WaveformWidget {
             if let Some(peaks) = work.await {
                 let _ = this.update(cx, |this, cx| {
                     this.peaks = peaks;
-                    this.message.clear();
+                    this.message = "";
                     cx.notify();
                 });
             }
@@ -145,14 +150,15 @@ impl Render for WaveformWidget {
             self.peaks = Arc::from([]);
             return div()
                 .h(px(96.))
-                .child("Audio unavailable for this document")
+                .child(localized(
+                    cx,
+                    "No audio in this project",
+                    "В этом проекте нет аудио",
+                ))
                 .into_any_element();
         }
         if self.peaks.is_empty() {
-            return div()
-                .h(px(96.))
-                .child(self.message.clone())
-                .into_any_element();
+            return div().h(px(96.)).child(self.message).into_any_element();
         }
         let peaks = self.peaks.clone();
         let color = cx.theme().primary;

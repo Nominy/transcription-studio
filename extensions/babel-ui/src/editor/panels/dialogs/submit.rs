@@ -7,6 +7,7 @@ use gpui_kit::*;
 use sonus_babel_domain::editor_model::submit_control::SubmitKind;
 
 use crate::editor::panels::task::TaskPanels;
+use crate::text::localized;
 use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
 
 pub struct SubmitCopy {
@@ -16,30 +17,48 @@ pub struct SubmitCopy {
     pub confirm: &'static str,
 }
 
-pub fn copy(kind: SubmitKind) -> SubmitCopy {
+pub fn copy(kind: SubmitKind, cx: &App) -> SubmitCopy {
     match kind {
         SubmitKind::Review => SubmitCopy {
-            trigger: "Submit Review",
-            title: "Confirm Submission",
-            description: "Are you sure you want to submit?",
-            confirm: "Submit",
+            trigger: localized(cx, "Submit", "Отправить"),
+            title: localized(cx, "Submit this task?", "Отправить задачу?"),
+            description: localized(
+                cx,
+                "You can't edit it afterwards.",
+                "После этого изменить её нельзя.",
+            ),
+            confirm: localized(cx, "Submit", "Отправить"),
         },
         SubmitKind::FinalAssessment => SubmitCopy {
-            trigger: "Submit Assessment",
-            title: "Submit Final Assessment",
-            description: "This is your final assessment submission. Your transcription will be reviewed by our team. You will not be able to retry after submitting.",
-            confirm: "Submit Assessment",
+            trigger: localized(cx, "Submit assessment", "Отправить тест"),
+            title: localized(
+                cx,
+                "Submit the final assessment?",
+                "Отправить итоговый тест?",
+            ),
+            description: localized(
+                cx,
+                "Our team reviews your transcript. You can't retry afterwards.",
+                "Наша команда проверит вашу расшифровку. Повторить попытку потом нельзя.",
+            ),
+            confirm: localized(cx, "Submit", "Отправить"),
         },
         SubmitKind::Practice => SubmitCopy {
-            trigger: "Submit Practice",
-            title: "Submit Practice Attempt",
-            description: "Your transcription will be compared to the answer key. You'll be able to review your results and retry as many times as you like. When you're ready, click \"Take Assessment\" to submit for real.",
-            confirm: "Submit Practice",
+            trigger: localized(cx, "Submit practice", "Отправить тренировку"),
+            title: localized(
+                cx,
+                "Submit this practice attempt?",
+                "Отправить тренировочную попытку?",
+            ),
+            description: localized(
+                cx,
+                "Your transcript is compared with the answer key. You can review the result and try again as often as you like. When you're ready, choose “Take assessment” to submit for real.",
+                "Ваша расшифровка сравнивается с эталоном. Результат можно посмотреть и повторить попытку сколько угодно раз. Когда будете готовы, выберите «Пройти тест», чтобы отправить по-настоящему.",
+            ),
+            confirm: localized(cx, "Submit", "Отправить"),
         },
     }
 }
-
-const REJECTED: &str = "Submission was rejected. See the status bar below for the exact reason.";
 
 struct SubmitDialog {
     panels: Entity<TaskPanels>,
@@ -56,14 +75,21 @@ impl Render for SubmitDialog {
             .view(doc.session())
             .submit_eligibility(doc.project())
             .kind;
-        let copy = copy(kind);
+        let copy = copy(kind, cx);
         let submit = &panels.flows.submit;
         let pending = submit.pending;
         let status = panels.model().read(cx).status().cloned();
         let body = if submit.error {
             v_flex()
                 .gap_1()
-                .child(error_text(REJECTED, cx))
+                .child(error_text(
+                    localized(
+                        cx,
+                        "The task wasn't accepted. The reason is in the status bar.",
+                        "Задача не принята. Причина указана в строке состояния.",
+                    ),
+                    cx,
+                ))
                 .children(status.map(|status| error_text(status, cx)))
         } else {
             v_flex()
@@ -78,14 +104,14 @@ impl Render for SubmitDialog {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Submitting your review..."),
+                        .child(localized(cx, "Submitting…", "Отправка…")),
                 )
             })
             .child(
                 dialog_footer()
                     .child(
                         Button::new("submit-cancel")
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .disabled(pending)
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -93,7 +119,7 @@ impl Render for SubmitDialog {
                         primary_button(
                             "submit-confirm",
                             if pending {
-                                "Submitting..."
+                                localized(cx, "Submitting…", "Отправка…")
                             } else {
                                 copy.confirm
                             },

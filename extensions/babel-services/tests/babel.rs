@@ -450,10 +450,7 @@ async fn live_submit_returns_server_lint_issues() {
         })
         .await
         .unwrap_err();
-    assert_eq!(
-        error.message,
-        "Failed to pass linting: Invalid bracket tag found."
-    );
+    assert!(error.message.contains("Invalid bracket tag found."));
     assert_eq!(
         error
             .lint_issues

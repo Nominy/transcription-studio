@@ -3,11 +3,11 @@ use crate::{
     ContributionRegistry, ProviderRegistry, ShellHandle,
     keymap::ActiveKeymap,
     root::StudioRoot,
-    screens::{ShellModels, settings},
+    screens::{ShellModels, settings, ui},
     services::AppServices,
     tray::{self, TrayCommand},
 };
-use gpui_kit::component::{WindowExt as _, notification::Notification};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::*;
 pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
     gpui_kit::application()
@@ -19,12 +19,20 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
             let providers = ProviderRegistry::load(cx);
             cx.set_global(providers);
             settings::apply_saved_theme(cx);
+            ui::sync_language(cx);
             ActiveKeymap::init(cx);
             crate::zoom::init(cx);
             ShellModels::init(cx);
-            let registration_error = register(cx)
-                .err()
-                .map(|e| format!("Bundled extension activation failed: {e:#}"));
+            let registration_error = register(cx).err().map(|e| {
+                ui::error_notification(
+                    ui::localized(
+                        cx,
+                        "Some built-in extensions couldn't start.",
+                        "Некоторые встроенные расширения не запустились.",
+                    ),
+                    Some(format!("{e:#}").into()),
+                )
+            });
             let tray_commands = tray::install(cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -48,9 +56,9 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
                         .ok();
                     false
                 });
-                if let Some(error) = registration_error {
+                if let Some(notification) = registration_error {
                     window.defer(cx, move |window, cx| {
-                        window.push_notification(Notification::error(error), cx)
+                        window.push_notification(notification, cx)
                     });
                 }
                 root
@@ -77,7 +85,14 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
                     && let Err(error) = crate::root::open_demo(&shell, window, cx)
                 {
                     window.push_notification(
-                        Notification::error(format!("Demo could not be opened: {error}")),
+                        ui::error_notification(
+                            ui::localized(
+                                cx,
+                                "Couldn't open the demo.",
+                                "Не удалось открыть демо.",
+                            ),
+                            Some(format!("{error:#}").into()),
+                        ),
                         cx,
                     );
                 }

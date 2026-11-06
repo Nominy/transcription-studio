@@ -1,17 +1,16 @@
-//! Settings → AI: where inference runs (This PC / Remote GPU) with the local model status
-//! (install / cancel / test / remove) and the remote server's per-operation status, Gold Draft
-//! polish (OpenRouter key/model/tier/effort) and denoise. Every
-//! value is persisted through [`GoldServices::update_ai`]; keys are masked and never logged.
+//! Settings → AI: where inference runs (this computer / remote server) with the local model
+//! status (download / cancel / test / delete) and the remote server's per-operation status,
+//! polish (OpenRouter key/model/tier/effort) and denoise. Every value is persisted through
+//! [`GoldServices::update_ai`]; keys are masked and never logged.
 
 use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Selectable, Sizable, WindowExt as _, h_flex, v_flex,
+    ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -26,13 +25,40 @@ use studio_inference::{BackendStatus, InferenceProgress, InferenceResult, Progre
 use crate::editor::inference_audio::until_cancelled;
 use crate::editor::panels::gold_progress::{hold, label};
 use crate::services::GoldServices;
-use sonus_shell::screens::ui::{self, Tone};
+use sonus_shell::screens::ui::{self, Tone, localized};
 use sonus_shell::services::{AppServices, spawn_service};
 
-const LOCATIONS: [(ExecutionLocation, &str); 2] = [
-    (ExecutionLocation::Local, "This PC"),
-    (ExecutionLocation::Remote, "Remote GPU"),
+/// Execution locations with their EN / RU labels.
+const LOCATIONS: [(ExecutionLocation, &str, &str); 2] = [
+    (ExecutionLocation::Local, "This computer", "Этот компьютер"),
+    (
+        ExecutionLocation::Remote,
+        "Remote server",
+        "Удалённый сервер",
+    ),
 ];
+
+/// Display label of a raw [`SERVICE_TIERS`] value.
+fn tier_label(cx: &App, tier: &str) -> &'static str {
+    match tier {
+        "flex" => localized(cx, "Cheaper", "Дешевле"),
+        "priority" => localized(cx, "Faster", "Быстрее"),
+        _ => localized(cx, "Standard", "Обычный"),
+    }
+}
+
+/// Display label of a raw [`REASONING_EFFORTS`] value.
+fn effort_label(cx: &App, effort: &str) -> &'static str {
+    match effort {
+        "none" => localized(cx, "Off", "Выкл."),
+        "minimal" => localized(cx, "Minimal", "Минимум"),
+        "low" => localized(cx, "Low", "Низкое"),
+        "medium" => localized(cx, "Medium", "Среднее"),
+        "high" => localized(cx, "High", "Высокое"),
+        "xhigh" => localized(cx, "Very high", "Очень высокое"),
+        _ => localized(cx, "Default", "По умолчанию"),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextField {
@@ -41,7 +67,7 @@ enum TextField {
     GoldModel,
 }
 
-/// A model operation running on This PC.
+/// A model operation running on this computer.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModelOp {
     Install,
@@ -49,13 +75,13 @@ enum ModelOp {
     Remove,
 }
 
-/// This PC: host status plus the operation in flight.
+/// This computer: host status plus the operation in flight.
 #[derive(Default)]
 struct LocalModels {
     status: Option<Result<HostStatus, String>>,
     checking: bool,
     op: Option<ModelOp>,
-    /// Progress of the running operation as Gold's options page labels it:
+    /// Progress of the running operation, labelled like Gold's options page:
     /// "Downloading models… 42% · 1.1 GB of 2.6 GB".
     progress: Option<OpProgress>,
     /// Outcome of the last operation (`true` = error).
@@ -68,6 +94,7 @@ struct LocalModels {
 
 /// One labelled bar of a model operation; a new phase starts its own bar.
 struct OpProgress {
+    /// Localized phase name without the trailing ellipsis ([`label`] adds it).
     action: &'static str,
     fraction: Option<f32>,
     step: String,
@@ -91,25 +118,27 @@ impl OpProgress {
 }
 
 /// Gold `formatByteCount`-style sizes.
-fn byte_count(bytes: u64) -> String {
+fn byte_count(bytes: u64, cx: &App) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = 1024.0 * MB;
     let bytes = bytes as f64;
     if bytes >= GB {
-        format!("{:.1} GB", bytes / GB)
+        format!("{:.1} {}", bytes / GB, localized(cx, "GB", "ГБ"))
     } else {
-        format!("{:.0} MB", bytes / MB)
+        format!("{:.0} {}", bytes / MB, localized(cx, "MB", "МБ"))
     }
 }
 
-/// "X of Y", "finishing" once every byte is in, or nothing without a total.
-fn bytes_step(bytes: u64, total: u64) -> String {
+/// "X of Y", "Finishing…" once every byte is in, or nothing without a total.
+fn bytes_step(bytes: u64, total: u64, cx: &App) -> String {
     if total == 0 {
         String::new()
     } else if bytes >= total {
-        "finishing".to_string()
+        localized(cx, "Finishing…", "Завершение…").to_string()
     } else {
-        format!("{} of {}", byte_count(bytes), byte_count(total))
+        localized(cx, "{a} of {b}", "{a} из {b}")
+            .replace("{a}", &byte_count(bytes, cx))
+            .replace("{b}", &byte_count(total, cx))
     }
 }
 
@@ -143,11 +172,15 @@ pub struct AiSettingsView {
     gold_key: Entity<InputState>,
     gold_model: Entity<InputState>,
     remote_url_error: Option<String>,
+    /// Backend health; the error is the technical text shown under "Details".
     health: Option<Result<BackendHealth, String>>,
     health_task: Option<Task<()>>,
     local: LocalModels,
     remote_status: Option<BackendStatus>,
     remote_task: Option<Task<()>>,
+    /// "Advanced" disclosures: remote server inputs, polish model/priority/thinking.
+    advanced_remote: bool,
+    advanced_polish: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -174,22 +207,34 @@ impl AiSettingsView {
                     .default_value(value)
             })
         };
-        let remote_url = input("Remote server URL", &ai.remote_base_url, false, window, cx);
+        let remote_url = input(
+            localized(cx, "Address", "Адрес"),
+            &ai.remote_base_url,
+            false,
+            window,
+            cx,
+        );
         let remote_key = input(
-            "Remote access key (optional)",
+            localized(cx, "Access key (optional)", "Ключ доступа (необязательно)"),
             &ai.remote_access_key,
             true,
             window,
             cx,
         );
         let gold_key = input(
-            "OpenRouter API key (sk-or-…)",
+            localized(cx, "OpenRouter key", "Ключ OpenRouter"),
             &ai.gold_openrouter_key,
             true,
             window,
             cx,
         );
-        let gold_model = input("Polish model", &ai.gold_model, false, window, cx);
+        let gold_model = input(
+            localized(cx, "Model", "Модель"),
+            &ai.gold_model,
+            false,
+            window,
+            cx,
+        );
         let subscriptions = vec![
             Self::watch(&remote_key, TextField::RemoteKey, window, cx),
             Self::watch(&gold_key, TextField::GoldKey, window, cx),
@@ -212,6 +257,9 @@ impl AiSettingsView {
             local: LocalModels::default(),
             remote_status: None,
             remote_task: None,
+            advanced_remote: ai.execution_location == ExecutionLocation::Remote
+                || ai.denoise_location == ExecutionLocation::Remote,
+            advanced_polish: false,
             _subscriptions: subscriptions,
         };
         this.refresh_local(cx);
@@ -219,7 +267,7 @@ impl AiSettingsView {
         this
     }
 
-    // ---- This PC models / remote status -------------------------------------------------
+    // ---- Models on this computer / remote status ----------------------------------------
 
     fn refresh_local(&mut self, cx: &mut Context<Self>) {
         let local = cx.global::<GoldServices>().inference.local();
@@ -264,7 +312,7 @@ impl AiSettingsView {
             Arc<sonus_gold::LocalBackend>,
             ProgressSink,
         ) -> std::pin::Pin<Box<dyn Future<Output = InferenceResult<T>> + Send>>,
-        done: impl FnOnce(&mut Self, T) -> String + 'static,
+        done: impl FnOnce(&mut Self, T, &App) -> String + 'static,
     ) {
         if self.local.op.is_some() {
             return;
@@ -299,9 +347,9 @@ impl AiSettingsView {
                 this.local.cancel = None;
                 this.local.progress = None;
                 this.local.notice = Some(match result {
-                    Some(Ok(value)) => (done(this, value), false),
+                    Some(Ok(value)) => (done(this, value, cx), false),
                     Some(Err(error)) => (error.message, true),
-                    None => ("Cancelled.".to_string(), true),
+                    None => (localized(cx, "Cancelled", "Отменено").to_string(), true),
                 });
                 this.refresh_local(cx);
             },
@@ -322,22 +370,31 @@ impl AiSettingsView {
                 total,
                 ..
             } if stage == DOWNLOAD_STAGE => {
-                let bar = OpProgress::phase(progress, "Downloading Gold runtime");
+                let bar = OpProgress::phase(
+                    progress,
+                    localized(cx, "Downloading runtime", "Загрузка среды"),
+                );
                 let total = total.unwrap_or(0);
                 bar.fraction = hold(bar.fraction, ratio(completed, total));
-                bar.step = bytes_step(completed, total);
+                bar.step = bytes_step(completed, total, cx);
             }
             InferenceProgress::Stage { stage, .. } if stage == EXTRACT_STAGE => {
-                OpProgress::phase(progress, "Installing Gold runtime");
+                OpProgress::phase(
+                    progress,
+                    localized(cx, "Installing runtime", "Установка среды"),
+                );
             }
             // Bytes in place are 98% of an install; validation and activation follow
             // (Gold `modelDownloadFraction`).
             InferenceProgress::Download { bytes, total } => {
-                let bar = OpProgress::phase(progress, "Downloading models");
+                let bar = OpProgress::phase(
+                    progress,
+                    localized(cx, "Downloading models", "Загрузка моделей"),
+                );
                 bar.fraction = hold(bar.fraction, ratio(bytes, total).map(|f| 0.98 * f));
-                bar.step = bytes_step(bytes, total);
+                bar.step = bytes_step(bytes, total, cx);
             }
-            // The sample test reports no overall value; Gold shows "Testing…".
+            // The sample test reports no overall value; the card shows "Testing…".
             _ => return,
         }
         cx.notify();
@@ -348,11 +405,16 @@ impl AiSettingsView {
             ModelOp::Install,
             cx,
             |local, sink| Box::pin(async move { local.install_models(sink).await }),
-            |_, models| match models.state {
-                ModelsState::Ready => "Models installed. Run the test to finish setup.".to_string(),
-                _ => models
-                    .error
-                    .unwrap_or_else(|| "Model download stopped.".to_string()),
+            |_, models, cx| match models.state {
+                ModelsState::Ready => localized(
+                    cx,
+                    "Downloaded. Run the test to finish.",
+                    "Загружено. Запустите проверку.",
+                )
+                .to_string(),
+                _ => models.error.unwrap_or_else(|| {
+                    localized(cx, "Download stopped", "Загрузка остановлена").to_string()
+                }),
             },
         );
     }
@@ -362,12 +424,14 @@ impl AiSettingsView {
             ModelOp::Test,
             cx,
             |local, sink| Box::pin(async move { local.test_sample(sink).await }),
-            |this, sample| {
-                let message = format!(
-                    "Test passed: {} words in {:.1} s of sample audio.",
-                    sample.tokens.len(),
-                    sample.duration_seconds
-                );
+            |this, sample, cx| {
+                let message = localized(
+                    cx,
+                    "Test passed — {n} words from {s} s of audio.",
+                    "Проверка пройдена — {n} слов из {s} с аудио.",
+                )
+                .replace("{n}", &sample.tokens.len().to_string())
+                .replace("{s}", &format!("{:.1}", sample.duration_seconds));
                 this.local.sample = Some(sample);
                 message
             },
@@ -379,9 +443,9 @@ impl AiSettingsView {
             ModelOp::Remove,
             cx,
             |local, _| Box::pin(async move { local.remove_models().await }),
-            |this, _| {
+            |this, _, cx| {
                 this.local.sample = None;
-                "Models removed.".to_string()
+                localized(cx, "Models deleted", "Модели удалены").to_string()
             },
         );
     }
@@ -422,7 +486,14 @@ impl AiSettingsView {
         });
         if let Err(error) = result {
             window.push_notification(
-                Notification::warning(format!("AI settings could not be saved: {error}")),
+                ui::warning_notification(
+                    localized(
+                        cx,
+                        "Couldn't save AI settings.",
+                        "Не удалось сохранить настройки ИИ.",
+                    ),
+                    Some(format!("{error:#}").into()),
+                ),
                 cx,
             );
         }
@@ -432,7 +503,14 @@ impl AiSettingsView {
     fn save_remote_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let raw = self.remote_url.read(cx).value().to_string();
         let Some(url) = normalize_base_url(&raw) else {
-            self.remote_url_error = Some("Enter an http(s) server address.".to_string());
+            self.remote_url_error = Some(
+                localized(
+                    cx,
+                    "Enter an address starting with http:// or https://.",
+                    "Введите адрес, начинающийся с http:// или https://.",
+                )
+                .to_string(),
+            );
             cx.notify();
             return;
         };
@@ -448,9 +526,12 @@ impl AiSettingsView {
 
     fn check_backend(&mut self, cx: &mut Context<Self>) {
         let Some(review) = cx.global::<GoldServices>().polish.clone() else {
-            self.health = Some(Err(
-                "No polish provider is available for this document.".to_string()
-            ));
+            self.health = Some(Err(localized(
+                cx,
+                "Polish isn't available in this project.",
+                "Доработка текста недоступна в этом проекте.",
+            )
+            .to_string()));
             cx.notify();
             return;
         };
@@ -476,23 +557,30 @@ impl AiSettingsView {
         ButtonGroup::new(id)
             .outline()
             .small()
-            .children(LOCATIONS.iter().enumerate().map(|(ix, (location, label))| {
-                Button::new((id, ix))
-                    .label(*label)
-                    .selected(current == *location)
-            }))
+            .children(
+                LOCATIONS
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, (location, en, ru))| {
+                        Button::new((id, ix))
+                            .label(localized(cx, en, ru))
+                            .selected(current == *location)
+                    }),
+            )
             .on_click(cx.listener(move |this, clicked: &Vec<usize>, window, cx| {
-                if let Some((location, _)) = clicked.first().and_then(|ix| LOCATIONS.get(*ix)) {
+                if let Some((location, ..)) = clicked.first().and_then(|ix| LOCATIONS.get(*ix)) {
                     let location = *location;
                     this.update(window, cx, move |ai| apply(ai, location));
                 }
             }))
     }
 
+    /// Buttons for raw option values shown through `label`.
     fn choice_group(
         id: &'static str,
         options: &'static [&'static str],
         current: &str,
+        label: fn(&App, &str) -> &'static str,
         cx: &mut Context<Self>,
         apply: fn(&mut AiSettings, &'static str),
     ) -> ButtonGroup {
@@ -501,7 +589,7 @@ impl AiSettingsView {
             .xsmall()
             .children(options.iter().enumerate().map(|(ix, option)| {
                 Button::new((id, ix))
-                    .label(*option)
+                    .label(label(cx, option))
                     .selected(current == *option)
             }))
             .on_click(cx.listener(move |this, clicked: &Vec<usize>, window, cx| {
@@ -509,6 +597,28 @@ impl AiSettingsView {
                     let option = *option;
                     this.update(window, cx, move |ai| apply(ai, option));
                 }
+            }))
+    }
+
+    /// "Advanced" disclosure toggle shaped like the shell's settings screen.
+    fn advanced_toggle(
+        id: &'static str,
+        open: bool,
+        cx: &mut Context<Self>,
+        toggle: fn(&mut Self),
+    ) -> Button {
+        Button::new(id)
+            .ghost()
+            .small()
+            .icon(if open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            })
+            .label(localized(cx, "Advanced", "Дополнительно"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                toggle(this);
+                cx.notify();
             }))
     }
 
@@ -522,81 +632,121 @@ impl AiSettingsView {
     }
 
     fn render_inference(&self, ai: &AiSettings, cx: &mut Context<Self>) -> Div {
-        let remote = ai.execution_location == ExecutionLocation::Remote;
         ui::card(
-            "AI inference",
-            Some("Where word timestamps, draft text and segment transcription run."),
+            localized(cx, "AI", "ИИ"),
+            Some(localized(
+                cx,
+                "Used for aligning words, drafting text and filling segments.",
+                "Используется для выравнивания слов, черновиков и заполнения сегментов.",
+            )),
             cx,
         )
         .child(Self::labeled(
-            "Where to draft",
+            localized(cx, "Runs on", "Где выполняется"),
             Self::location_group("ai-location", ai.execution_location, cx, |ai, location| {
                 ai.execution_location = location
             }),
             cx,
         ))
-        .child(
-            v_flex()
-                .gap_2()
-                .child(ui::muted(
-                    if remote {
-                        "Remote server (used for drafting)"
-                    } else {
-                        "Remote server (used when drafting on the remote GPU)"
-                    },
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().flex_1().child(Input::new(&self.remote_url)))
-                        .child(
-                            Button::new("ai-remote-save")
-                                .outline()
-                                .label("Save URL")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.save_remote_url(window, cx)
-                                })),
-                        ),
-                )
-                .when_some(self.remote_url_error.clone(), |this, error| {
-                    this.child(div().text_xs().text_color(cx.theme().danger).child(error))
-                })
-                .child(Input::new(&self.remote_key).mask_toggle()),
-        )
+        .child(Self::advanced_toggle(
+            "ai-remote-advanced",
+            self.advanced_remote,
+            cx,
+            |this| this.advanced_remote = !this.advanced_remote,
+        ))
+        .when(self.advanced_remote, |card| {
+            card.child(
+                v_flex()
+                    .gap_2()
+                    .child(ui::muted(
+                        localized(cx, "Remote server", "Удалённый сервер"),
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().child(Input::new(&self.remote_url)))
+                            .child(
+                                Button::new("ai-remote-save")
+                                    .outline()
+                                    .label(localized(cx, "Save", "Сохранить"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_remote_url(window, cx)
+                                    })),
+                            ),
+                    )
+                    .when_some(self.remote_url_error.clone(), |this, error| {
+                        this.child(ui::error_block(error, None, cx))
+                    })
+                    .child(Input::new(&self.remote_key).mask_toggle()),
+            )
+        })
     }
 
-    /// Remote server status for each operation.
-    fn remote_status_line(&self) -> (Tone, String) {
+    /// Remote server status line, its tone, and technical text for a "Details" disclosure.
+    fn remote_status_line(&self, cx: &App) -> (Tone, String, Option<SharedString>) {
         match &self.remote_status {
-            None => (Tone::Info, "Remote GPU: checking…".to_string()),
-            Some(BackendStatus::Ready {
-                release,
-                operations,
-            }) => {
-                let mark = |ok: bool| if ok { "available" } else { "unavailable" };
+            None => (
+                Tone::Info,
+                localized(
+                    cx,
+                    "Remote server: checking…",
+                    "Удалённый сервер: проверка…",
+                )
+                .to_string(),
+                None,
+            ),
+            Some(BackendStatus::Ready { operations, .. }) => {
+                let features = [
+                    (
+                        operations.timing,
+                        localized(cx, "Align words", "Выровнять слова"),
+                    ),
+                    (
+                        operations.draft,
+                        localized(cx, "Draft with AI", "Черновик с ИИ"),
+                    ),
+                    (operations.enhance, localized(cx, "Denoise", "Убрать шум")),
+                    (
+                        operations.align,
+                        localized(cx, "Align segments", "Выровнять сегменты"),
+                    ),
+                ];
+                let unavailable = features
+                    .iter()
+                    .filter(|(ok, _)| !ok)
+                    .map(|(_, name)| *name)
+                    .collect::<Vec<_>>();
+                let detail = (!unavailable.is_empty()).then(|| {
+                    localized(cx, "Unavailable: {list}", "Недоступно: {list}")
+                        .replace("{list}", &unavailable.join(", "))
+                        .into()
+                });
                 (
                     if operations.timing && operations.draft {
                         Tone::Success
                     } else {
                         Tone::Warning
                     },
-                    format!(
-                        "Remote GPU ({release}): timestamps {}, draft text {}, denoise {}, error-task alignment {}",
-                        mark(operations.timing),
-                        mark(operations.draft),
-                        mark(operations.enhance),
-                        mark(operations.align)
-                    ),
+                    localized(cx, "Remote server: ready", "Удалённый сервер: готов").to_string(),
+                    detail,
                 )
             }
-            Some(BackendStatus::NeedsModels { release, .. }) => (
+            Some(BackendStatus::NeedsModels { .. }) => (
                 Tone::Warning,
-                format!("Remote GPU: release {release} is not ready."),
+                localized(cx, "Remote server: not ready", "Удалённый сервер: не готов").to_string(),
+                None,
             ),
-            Some(BackendStatus::Unavailable { message, .. }) => {
-                (Tone::Danger, format!("Remote GPU: {message}"))
-            }
+            Some(BackendStatus::Unavailable { message, .. }) => (
+                Tone::Danger,
+                localized(
+                    cx,
+                    "Remote server: {message}",
+                    "Удалённый сервер: {message}",
+                )
+                .replace("{message}", message),
+                None,
+            ),
         }
     }
 
@@ -605,74 +755,126 @@ impl AiSettingsView {
         let busy = local.op.is_some();
         let theme = cx.theme().clone();
         let mut card = ui::card(
-            "Models on this PC",
-            Some(
-                "Gold's local models (downloaded once, about 2.6 GB) run on this PC's GPU through WebGPU.",
-            ),
+            localized(cx, "Models on this computer", "Модели на этом компьютере"),
+            Some(localized(
+                cx,
+                "About 2.6 GB, downloaded once. Needs a graphics card that supports WebGPU.",
+                "Около 2,6 ГБ, загружаются один раз. Нужна видеокарта с поддержкой WebGPU.",
+            )),
             cx,
         );
-        let (summary, tone) = match &local.status {
-            None => ("Checking this PC…".to_string(), Tone::Info),
-            Some(Err(error)) => (error.clone(), Tone::Danger),
+        // Summary line, tone, and technical text (model error, graphics reason) for "Details".
+        let (summary, tone, detail) = match &local.status {
+            None => (
+                localized(cx, "Checking…", "Проверка…").to_string(),
+                Tone::Info,
+                None,
+            ),
+            Some(Err(error)) => (error.clone(), Tone::Danger, None),
             Some(Ok(status)) => {
                 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
                 let models = &status.models;
                 let state = match models.state {
                     ModelsState::Ready if models.outdated => {
-                        "an older release is installed".to_string()
+                        localized(cx, "Update available", "Доступно обновление").to_string()
                     }
-                    ModelsState::Ready if models.tested => "installed and tested".to_string(),
-                    ModelsState::Ready => "installed, not tested yet".to_string(),
-                    ModelsState::Downloading => "downloading".to_string(),
-                    ModelsState::NotInstalled => format!(
-                        "not installed ({:.1} GB to download)",
-                        status.download_bytes.unwrap_or(models.total_bytes) as f64 / GB
-                    ),
-                    ModelsState::Stopped => "download stopped".to_string(),
-                    ModelsState::Error => models
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "model error".to_string()),
+                    ModelsState::Ready if models.tested => {
+                        localized(cx, "Ready", "Готово").to_string()
+                    }
+                    ModelsState::Ready => localized(
+                        cx,
+                        "Installed — run the test",
+                        "Установлено — запустите проверку",
+                    )
+                    .to_string(),
+                    ModelsState::Downloading => {
+                        localized(cx, "Downloading…", "Загрузка…").to_string()
+                    }
+                    ModelsState::NotInstalled => {
+                        localized(cx, "Not installed ({x} GB)", "Не установлено ({x} ГБ)").replace(
+                            "{x}",
+                            &format!(
+                                "{:.1}",
+                                status.download_bytes.unwrap_or(models.total_bytes) as f64 / GB
+                            ),
+                        )
+                    }
+                    ModelsState::Stopped => {
+                        localized(cx, "Download paused", "Загрузка остановлена").to_string()
+                    }
+                    ModelsState::Error => localized(cx, "Problem", "Ошибка").to_string(),
                 };
-                let gpu = if status.webgpu.available && status.webgpu.shader_f16 {
+                let graphics_ok = status.webgpu.available && status.webgpu.shader_f16;
+                let gpu = if graphics_ok {
                     status
                         .webgpu
                         .adapter
                         .as_ref()
                         .map(|adapter| {
-                            format!("GPU: {} {}", adapter.vendor, adapter.architecture)
-                                .trim()
-                                .to_string()
+                            localized(
+                                cx,
+                                "Graphics: {vendor} {arch}",
+                                "Видеокарта: {vendor} {arch}",
+                            )
+                            .replace("{vendor}", &adapter.vendor)
+                            .replace("{arch}", &adapter.architecture)
+                            .trim()
+                            .to_string()
                         })
-                        .unwrap_or_else(|| "GPU: WebGPU ready".to_string())
+                        .unwrap_or_else(|| {
+                            localized(cx, "Graphics: ready", "Видеокарта: готова").to_string()
+                        })
                 } else {
-                    format!(
-                        "GPU: {}",
-                        status.webgpu.reason.clone().unwrap_or_else(|| {
-                            "WebGPU with shader-f16 is unavailable".to_string()
-                        })
+                    localized(
+                        cx,
+                        "This graphics card can't run the models",
+                        "Эта видеокарта не может запускать модели",
                     )
+                    .to_string()
                 };
+                let mut detail = Vec::new();
+                if models.state == ModelsState::Error {
+                    detail.extend(models.error.clone());
+                }
+                if !graphics_ok {
+                    detail.extend(status.webgpu.reason.clone());
+                }
                 let tone = if status.ready {
                     Tone::Success
-                } else if status.webgpu.available && status.webgpu.shader_f16 {
+                } else if graphics_ok {
                     Tone::Warning
                 } else {
                     Tone::Danger
                 };
-                (format!("Release {}: {state}. {gpu}.", status.release), tone)
+                (
+                    format!("{state} · {gpu}"),
+                    tone,
+                    (!detail.is_empty()).then(|| detail.join("\n").into()),
+                )
             }
         };
-        card = card.child(ui::banner(tone, "This PC", Some(summary.into()), None, cx));
+        card = card
+            .child(ui::banner(
+                tone,
+                localized(cx, "This computer", "Этот компьютер"),
+                Some(summary.into()),
+                None,
+                cx,
+            ))
+            .when_some(detail, |card, detail| card.child(ui::details(detail, cx)));
         if busy {
             let (line, fraction) = match &local.progress {
                 Some(bar) => (label(bar.action, bar.fraction, &bar.step), bar.fraction),
                 None => (
                     match local.op {
-                        Some(ModelOp::Install) => "Downloading models…",
-                        Some(ModelOp::Test) => "Testing…",
-                        Some(ModelOp::Remove) => "Removing models…",
-                        None => "Working…",
+                        Some(ModelOp::Install) => {
+                            localized(cx, "Downloading models…", "Загрузка моделей…")
+                        }
+                        Some(ModelOp::Test) => localized(cx, "Testing…", "Проверка…"),
+                        Some(ModelOp::Remove) => {
+                            localized(cx, "Removing models…", "Удаление моделей…")
+                        }
+                        None => localized(cx, "Working…", "Выполняется…"),
                     }
                     .to_string(),
                     None,
@@ -687,21 +889,27 @@ impl AiSettingsView {
                 .child(ui::muted(line, cx));
         }
         if let Some((notice, error)) = &local.notice {
-            card = card.child(
+            card = card.child(if *error {
+                ui::error_block(notice.clone(), None, cx)
+            } else {
                 div()
                     .text_xs()
-                    .text_color(if *error { theme.danger } else { theme.success })
-                    .child(notice.clone()),
-            );
+                    .text_color(theme.success)
+                    .child(notice.clone())
+            });
         }
         if let Some(sample) = &local.sample {
-            card = card.child(ui::muted(format!("Sample transcript: {}", sample.text), cx));
+            card = card.child(ui::muted(
+                localized(cx, "Test transcript: {text}", "Расшифровка теста: {text}")
+                    .replace("{text}", &sample.text),
+                cx,
+            ));
         }
         let installed = matches!(
             &local.status,
             Some(Ok(status)) if status.models.state == ModelsState::Ready
         );
-        let (remote_tone, remote_line) = self.remote_status_line();
+        let (remote_tone, remote_line, remote_detail) = self.remote_status_line(cx);
         let remote_color = match remote_tone {
             Tone::Success => theme.success,
             Tone::Warning => theme.warning,
@@ -717,9 +925,9 @@ impl AiSettingsView {
                         .outline()
                         .small()
                         .label(if installed {
-                            "Reinstall / update"
+                            localized(cx, "Update", "Обновить")
                         } else {
-                            "Install models"
+                            localized(cx, "Download", "Скачать")
                         })
                         .loading(local.op == Some(ModelOp::Install))
                         .disabled(busy)
@@ -730,7 +938,7 @@ impl AiSettingsView {
                         Button::new("ai-models-cancel")
                             .outline()
                             .small()
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_model_op(cx))),
                     )
                 })
@@ -738,7 +946,7 @@ impl AiSettingsView {
                     Button::new("ai-models-test")
                         .outline()
                         .small()
-                        .label("Test with sample")
+                        .label(localized(cx, "Run test", "Запустить проверку"))
                         .loading(local.op == Some(ModelOp::Test))
                         .disabled(busy || !installed)
                         .on_click(cx.listener(|this, _, _, cx| this.test_models(cx))),
@@ -747,7 +955,7 @@ impl AiSettingsView {
                     Button::new("ai-models-remove")
                         .outline()
                         .small()
-                        .label("Remove models")
+                        .label(localized(cx, "Delete models", "Удалить модели"))
                         .disabled(busy || !installed)
                         .on_click(cx.listener(|this, _, _, cx| this.remove_models(cx))),
                 )
@@ -755,7 +963,7 @@ impl AiSettingsView {
                     Button::new("ai-models-refresh")
                         .ghost()
                         .small()
-                        .label("Refresh")
+                        .label(localized(cx, "Check again", "Проверить снова"))
                         .loading(local.checking || self.remote_task.is_some())
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -765,18 +973,25 @@ impl AiSettingsView {
                 ),
         )
         .child(div().text_xs().text_color(remote_color).child(remote_line))
+        .when_some(remote_detail, |card, detail| {
+            card.child(ui::details(detail, cx))
+        })
     }
 
     fn render_gold(&self, ai: &AiSettings, cx: &mut Context<Self>) -> Div {
         let checking = self.health_task.is_some();
-        let key_hint = key_hint(&ai.gold_openrouter_key);
+        let key_hint = key_hint(&ai.gold_openrouter_key, cx);
         let mut card = ui::card(
-            "Gold Draft polish",
-            Some("Optional OpenRouter refinement after timestamps; the key also powers error-task Initial fill."),
+            localized(cx, "Polish", "Доработка текста"),
+            Some(localized(
+                cx,
+                "After drafting, an online model tidies the text. Needs an OpenRouter key.",
+                "После черновика онлайн-модель приводит текст в порядок. Нужен ключ OpenRouter.",
+            )),
             cx,
         )
         .child(Self::labeled(
-            "Polish draft text with OpenRouter",
+            localized(cx, "Polish drafts", "Дорабатывать черновики"),
             Switch::new("ai-polish")
                 .checked(ai.gold_polish_enabled)
                 .on_click(cx.listener(|this, checked: &bool, window, cx| {
@@ -796,7 +1011,7 @@ impl AiSettingsView {
                 .child(
                     Button::new("check-backend")
                         .outline()
-                        .label("Check backend")
+                        .label(localized(cx, "Test key", "Проверить ключ"))
                         .loading(checking)
                         .disabled(checking)
                         .on_click(cx.listener(|this, _, _, cx| this.check_backend(cx))),
@@ -804,30 +1019,7 @@ impl AiSettingsView {
         )
         .when_some(key_hint, |this, hint| {
             this.child(div().text_xs().text_color(cx.theme().warning).child(hint))
-        })
-        .child(Input::new(&self.gold_model))
-        .child(Self::labeled(
-            "Service tier",
-            Self::choice_group(
-                "ai-tier",
-                &SERVICE_TIERS,
-                &ai.gold_service_tier,
-                cx,
-                |ai, tier| ai.gold_service_tier = tier.to_string(),
-            ),
-            cx,
-        ))
-        .child(Self::labeled(
-            "Reasoning effort",
-            Self::choice_group(
-                "ai-effort",
-                &REASONING_EFFORTS,
-                &ai.gold_reasoning_effort,
-                cx,
-                |ai, effort| ai.gold_reasoning_effort = effort.to_string(),
-            ),
-            cx,
-        ));
+        });
         match &self.health {
             Some(Ok(health)) => {
                 let mut details = vec![health.service.clone()];
@@ -837,36 +1029,76 @@ impl AiSettingsView {
                     details.push("test mode".to_string());
                 }
                 details.extend(health.provider_diagnostics.iter().cloned());
-                card = card.child(ui::banner(
-                    Tone::Success,
-                    "Backend reachable",
-                    Some(details.join(" · ").into()),
-                    None,
-                    cx,
-                ));
+                card = card
+                    .child(ui::banner(
+                        Tone::Success,
+                        localized(cx, "Key works", "Ключ работает"),
+                        None,
+                        None,
+                        cx,
+                    ))
+                    .child(ui::details(details.join(" · ").into(), cx));
             }
             Some(Err(error)) => {
-                card = card.child(ui::banner(
-                    Tone::Danger,
-                    "Backend check failed",
+                card = card.child(ui::error_block(
+                    localized(cx, "Key doesn't work", "Ключ не работает"),
                     Some(error.clone().into()),
-                    None,
                     cx,
                 ));
             }
             None => {}
         }
-        card
+        card.child(Self::advanced_toggle(
+            "ai-polish-advanced",
+            self.advanced_polish,
+            cx,
+            |this| this.advanced_polish = !this.advanced_polish,
+        ))
+        .when(self.advanced_polish, |card| {
+            card.child(Self::labeled(
+                localized(cx, "Model", "Модель"),
+                div().min_w_64().child(Input::new(&self.gold_model)),
+                cx,
+            ))
+            .child(Self::labeled(
+                localized(cx, "Priority", "Приоритет"),
+                Self::choice_group(
+                    "ai-tier",
+                    &SERVICE_TIERS,
+                    &ai.gold_service_tier,
+                    tier_label,
+                    cx,
+                    |ai, tier| ai.gold_service_tier = tier.to_string(),
+                ),
+                cx,
+            ))
+            .child(Self::labeled(
+                localized(cx, "Thinking", "Размышление"),
+                Self::choice_group(
+                    "ai-effort",
+                    &REASONING_EFFORTS,
+                    &ai.gold_reasoning_effort,
+                    effort_label,
+                    cx,
+                    |ai, effort| ai.gold_reasoning_effort = effort.to_string(),
+                ),
+                cx,
+            ))
+        })
     }
 
     fn render_denoise(&self, ai: &AiSettings, cx: &mut Context<Self>) -> Div {
         ui::card(
-            "Denoise",
-            Some("Speech enhancement for the Original/Enhanced mix."),
+            localized(cx, "Denoise", "Шум"),
+            Some(localized(
+                cx,
+                "Removes background noise. You can mix the original and cleaned audio in the editor.",
+                "Убирает фоновый шум. В редакторе можно смешивать исходный и очищенный звук.",
+            )),
             cx,
         )
         .child(Self::labeled(
-            "Where to denoise",
+            localized(cx, "Runs on", "Где выполняется"),
             Self::location_group(
                 "ai-denoise-location",
                 ai.denoise_location,
@@ -876,7 +1108,11 @@ impl AiSettingsView {
             cx,
         ))
         .child(Self::labeled(
-            "Denoise automatically when a task opens",
+            localized(
+                cx,
+                "Denoise automatically when a project opens",
+                "Убирать шум автоматически при открытии проекта",
+            ),
             Switch::new("ai-auto-denoise")
                 .checked(ai.auto_denoise)
                 .on_click(cx.listener(|this, checked: &bool, window, cx| {
@@ -889,20 +1125,23 @@ impl AiSettingsView {
 }
 
 /// OpenRouter's key rule (`sk-or-`, ≤512 characters, no whitespace); `None` when valid or empty.
-fn key_hint(key: &str) -> Option<&'static str> {
+fn key_hint(key: &str, cx: &App) -> Option<&'static str> {
     if key.is_empty() {
         return None;
     }
     let valid =
         key.starts_with("sk-or-") && key.len() <= 512 && !key.chars().any(char::is_whitespace);
-    (!valid).then_some("OpenRouter keys start with sk-or- and contain no spaces.")
+    (!valid).then(|| localized(cx, "Keys start with sk-or-.", "Ключ начинается с sk-or-."))
 }
 
 impl Render for AiSettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.unloaded {
-            return v_flex()
-                .child("Gold is disabled. Re-enable Gold to manage inference settings.");
+            return v_flex().child(localized(
+                cx,
+                "The AI extension is turned off. Turn it on in Extensions to change these settings.",
+                "Дополнение ИИ выключено. Включите его в Расширениях.",
+            ));
         }
         let ai = cx.global::<GoldServices>().ai.clone();
         v_flex()

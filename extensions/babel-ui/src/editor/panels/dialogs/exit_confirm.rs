@@ -5,6 +5,7 @@ use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
+use crate::text::{failed, localized};
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
 
@@ -21,13 +22,22 @@ impl Render for ExitConfirmDialog {
         let error = session
             .save_has_error
             .then(|| match session.save_error_message.as_deref() {
-                Some(message) => format!("Save failed: {message}"),
-                None => "Save failed. Retry to save changes.".to_string(),
+                Some(message) => failed(cx, "Couldn't save.", "Не удалось сохранить.", message),
+                None => localized(
+                    cx,
+                    "Couldn't save. Try again.",
+                    "Не удалось сохранить. Попробуйте ещё раз.",
+                )
+                .to_string(),
             });
         let description = if saving {
-            "Saving your latest changes before leaving..."
+            localized(cx, "Saving…", "Сохранение…")
         } else {
-            "This task has unsaved changes. Save them before leaving, or discard them."
+            localized(
+                cx,
+                "Save your changes before leaving, or discard them.",
+                "Сохраните изменения перед выходом или отмените их.",
+            )
         };
         let keep = self.panels.clone();
         let discard = self.panels.clone();
@@ -35,23 +45,25 @@ impl Render for ExitConfirmDialog {
         v_flex()
             .gap_3()
             .child(dialog_header(
-                "Unsaved changes",
+                localized(cx, "Unsaved changes", "Несохранённые изменения"),
                 Some(description.into()),
                 cx,
             ))
             .children(error.map(|error| error_text(error, cx)))
             .child(
                 dialog_footer()
-                    .child(Button::new("exit-keep").label("Keep Editing").on_click(
-                        move |_, window, cx| {
-                            keep.update(cx, |panels, cx| panels.keep_editing(cx));
-                            window.close_dialog(cx);
-                        },
-                    ))
+                    .child(
+                        Button::new("exit-keep")
+                            .label(localized(cx, "Keep editing", "Продолжить правку"))
+                            .on_click(move |_, window, cx| {
+                                keep.update(cx, |panels, cx| panels.keep_editing(cx));
+                                window.close_dialog(cx);
+                            }),
+                    )
                     .child(
                         Button::new("exit-discard")
                             .danger()
-                            .label("Discard Changes")
+                            .label(localized(cx, "Discard changes", "Отменить изменения"))
                             .on_click(move |_, window, cx| {
                                 discard
                                     .update(cx, |panels, cx| panels.discard_and_leave(window, cx));
@@ -61,9 +73,9 @@ impl Render for ExitConfirmDialog {
                         primary_button(
                             "exit-save",
                             if saving {
-                                "Saving..."
+                                localized(cx, "Saving…", "Сохранение…")
                             } else {
-                                "Save & Continue"
+                                localized(cx, "Save and leave", "Сохранить и выйти")
                             },
                             saving,
                             false,

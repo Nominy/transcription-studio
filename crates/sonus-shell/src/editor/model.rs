@@ -76,6 +76,8 @@ pub struct EditorModel {
     /// Original file each loaded lane was decoded from, by lane id.
     lane_files: HashMap<String, PathBuf>,
     status: Option<SharedString>,
+    /// Technical text behind the status line (shown on hover), cleared with the status.
+    status_detail: Option<SharedString>,
     last_frame: Option<Instant>,
     load_tasks: Vec<Task<()>>,
     /// What each lane's waveform paints while enhanced audio is installed.
@@ -119,6 +121,7 @@ impl EditorModel {
             audio_load: AudioLoadState::default(),
             lane_files: HashMap::new(),
             status: None,
+            status_detail: None,
             last_frame: None,
             load_tasks: Vec::new(),
             blends: BlendedWaveforms::default(),
@@ -197,6 +200,10 @@ impl EditorModel {
 
     pub fn status(&self) -> Option<&SharedString> {
         self.status.as_ref()
+    }
+
+    pub fn status_detail(&self) -> Option<&SharedString> {
+        self.status_detail.as_ref()
     }
 
     /// Project lanes whose original audio is loaded, in project order, with the files they
@@ -320,6 +327,19 @@ impl EditorModel {
 
     pub fn set_status(&mut self, status: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.status = Some(status.into());
+        self.status_detail = None;
+        cx.notify();
+    }
+
+    /// A plain-sentence status with its technical text kept for the hover.
+    pub fn set_status_with_detail(
+        &mut self,
+        status: impl Into<SharedString>,
+        detail: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = Some(status.into());
+        self.status_detail = Some(detail.into());
         cx.notify();
     }
 
@@ -370,6 +390,7 @@ impl EditorModel {
             Ok(outcome) => self.apply_outcome(outcome, cx),
             Err(error) => {
                 self.status = Some(error.to_string().into());
+                self.status_detail = None;
                 cx.notify();
             }
         }
@@ -378,6 +399,7 @@ impl EditorModel {
     pub fn apply_outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         if let Some(status) = outcome.status {
             self.status = Some(status.into());
+            self.status_detail = None;
         }
         let mut restart = false;
         for effect in outcome.effects {
@@ -490,7 +512,14 @@ impl EditorModel {
 
     fn report_audio(&mut self, result: Result<usize, AudioError>) {
         if let Err(error) = result {
-            self.status = Some(format!("Audio playback unavailable: {error}").into());
+            self.status = Some(
+                studio_editor::i18n::localized(
+                    "Can't play audio on this device.",
+                    "Не удаётся воспроизвести звук на этом устройстве.",
+                )
+                .into(),
+            );
+            self.status_detail = Some(error.to_string().into());
         }
     }
 
@@ -572,7 +601,15 @@ impl EditorModel {
             Err(error) => {
                 self.audio_load.failed += 1;
                 let lane = self.doc.lane_label(&lane_id);
-                self.status = Some(format!("{lane} audio: {error}").into());
+                self.status = Some(
+                    studio_editor::i18n::localized(
+                        "Couldn't load audio for “{track}”.",
+                        "Не удалось загрузить аудио для «{track}».",
+                    )
+                    .replace("{track}", &lane)
+                    .into(),
+                );
+                self.status_detail = Some(error.to_string().into());
             }
         }
         cx.notify();

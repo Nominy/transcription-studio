@@ -12,11 +12,22 @@ use studio_editor::edit::keymap::{ACTION_DEFS, ActionDef, KeyChord};
 
 use crate::editor::panels::ui::{caption, dialog_footer, dialog_header, muted};
 use crate::keymap::{ActiveKeymap, IS_MAC, keystroke_string};
+use crate::screens::ui::localized;
 
-const HINT: &str =
-    "Shortcuts use physical key positions, so the same keys work across keyboard layouts.";
-const CAPTURE_HINT: &str =
-    "Press the new key combination for the highlighted action, or Cancel. Escape can be bound too.";
+/// "Couldn't save the shortcut." with the storage error behind it.
+fn not_saved(error: &dyn std::fmt::Display, cx: &App) -> Notice {
+    Notice::Error(
+        format!(
+            "{} — {error}",
+            localized(
+                cx,
+                "Couldn't save the shortcut.",
+                "Не удалось сохранить сочетание."
+            )
+        )
+        .into(),
+    )
+}
 
 /// Keys that only modify another key; a binding needs a real key.
 const MODIFIER_KEYS: &[&str] = &[
@@ -39,14 +50,16 @@ struct HotkeysDialog {
 impl HotkeysDialog {
     fn start_capture(&mut self, action: EditorAction, window: &mut Window, cx: &mut Context<Self>) {
         self.capturing = Some(action);
-        self.notice = Some(Notice::Info("Press the new key combination.".into()));
+        self.notice = Some(Notice::Info(
+            localized(cx, "Press the new keys.", "Нажмите новое сочетание.").into(),
+        ));
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
     fn cancel_capture(&mut self, cx: &mut Context<Self>) {
         if self.capturing.take().is_some() {
-            self.notice = Some(Notice::Info("Hotkey change canceled.".into()));
+            self.notice = Some(Notice::Info(localized(cx, "Cancelled", "Отменено").into()));
         }
         cx.notify();
     }
@@ -66,23 +79,28 @@ impl HotkeysDialog {
             .conflicts_with(action, &keystroke, IS_MAC);
         let result = ActiveKeymap::update(cx, |keymap| keymap.set_override(action, &keystroke));
         self.notice = Some(match result {
-            Ok(Ok(())) if conflicts.is_empty() => Notice::Info("Hotkey updated.".into()),
+            Ok(Ok(())) if conflicts.is_empty() => {
+                Notice::Info(localized(cx, "Shortcut changed", "Сочетание изменено").into())
+            }
             Ok(Ok(())) => Notice::Warning(
-                format!(
-                    "Hotkey updated. {} is also used by: {}.",
-                    chord_label(&keystroke),
-                    conflicts
+                localized(
+                    cx,
+                    "Shortcut changed. {chord} is also used for {actions}.",
+                    "Сочетание изменено. {chord} также используется для: {actions}.",
+                )
+                .replace("{chord}", &chord_label(&keystroke))
+                .replace(
+                    "{actions}",
+                    &conflicts
                         .iter()
-                        .map(|other| other.def().description)
+                        .map(|other| other.def().description.get())
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
                 )
                 .into(),
             ),
             Ok(Err(error)) => Notice::Error(error.to_string().into()),
-            Err(error) => {
-                Notice::Error(format!("Hotkey preference could not be saved: {error}").into())
-            }
+            Err(error) => not_saved(&error, cx),
         });
         self.capturing = None;
         cx.notify();
@@ -94,10 +112,10 @@ impl HotkeysDialog {
         }
         self.notice = Some(
             match ActiveKeymap::update(cx, |keymap| keymap.reset_override(action)) {
-                Ok(()) => Notice::Info("Hotkey reset to default.".into()),
-                Err(error) => {
-                    Notice::Error(format!("Hotkey preference could not be saved: {error}").into())
+                Ok(()) => {
+                    Notice::Info(localized(cx, "Shortcut reset", "Сочетание сброшено").into())
                 }
+                Err(error) => not_saved(&error, cx),
             },
         );
         cx.notify();
@@ -111,10 +129,10 @@ impl HotkeysDialog {
             }
         });
         self.notice = Some(match result {
-            Ok(()) => Notice::Info("All hotkeys reset to defaults.".into()),
-            Err(error) => {
-                Notice::Error(format!("Hotkey preference could not be saved: {error}").into())
+            Ok(()) => {
+                Notice::Info(localized(cx, "All shortcuts reset", "Все сочетания сброшены").into())
             }
+            Err(error) => not_saved(&error, cx),
         });
         cx.notify();
     }
@@ -136,7 +154,7 @@ impl HotkeysDialog {
                 div()
                     .text_xs()
                     .text_color(theme.primary)
-                    .child("Press new key combination...")
+                    .child(localized(cx, "Press keys…", "Нажмите клавиши…"))
                     .into_any_element(),
             ]
         } else {
@@ -157,12 +175,20 @@ impl HotkeysDialog {
                     .flex_1()
                     .min_w_0()
                     .gap_2()
-                    .child(div().text_sm().child(def.description))
+                    .child(div().text_sm().child(def.description.get()))
                     .when(overridden, |this| {
-                        this.child(div().text_xs().text_color(theme.info).child("custom"))
+                        this.child(div().text_xs().text_color(theme.info).child(localized(
+                            cx,
+                            "changed",
+                            "изменено",
+                        )))
                     })
                     .when(conflicted, |this| {
-                        this.child(div().text_xs().text_color(theme.warning).child("conflict"))
+                        this.child(div().text_xs().text_color(theme.warning).child(localized(
+                            cx,
+                            "conflict",
+                            "конфликт",
+                        )))
                     }),
             )
             .child(div().w(rems(13.75)).flex_none().child(keys))
@@ -177,13 +203,13 @@ impl HotkeysDialog {
                             Button::new("cancel")
                                 .xsmall()
                                 .ghost()
-                                .label("Cancel")
+                                .label(localized(cx, "Cancel", "Отмена"))
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel_capture(cx)))
                         } else {
                             Button::new("change")
                                 .xsmall()
                                 .outline()
-                                .label("Change")
+                                .label(localized(cx, "Change", "Изменить"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.start_capture(action, window, cx);
                                 }))
@@ -192,14 +218,16 @@ impl HotkeysDialog {
                             Button::new("reset")
                                 .xsmall()
                                 .ghost()
-                                .label("Reset")
+                                .label(localized(cx, "Reset", "Сбросить"))
                                 .disabled(!overridden)
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.reset(action, cx)),
                                 ),
                         )
                     })
-                    .when(!def.configurable, |this| this.child(muted("fixed", cx))),
+                    .when(!def.configurable, |this| {
+                        this.child(muted(localized(cx, "fixed", "фиксировано"), cx))
+                    }),
             )
     }
 }
@@ -247,14 +275,14 @@ impl Render for HotkeysDialog {
                 format!(
                     "{}: {} / {}",
                     conflict.chord.label(IS_MAC),
-                    conflict.first.def().description,
-                    conflict.second.def().description
+                    conflict.first.def().description.get(),
+                    conflict.second.def().description.get()
                 )
                 .into()
             })
             .collect();
 
-        let mut sections: Vec<(&'static str, Vec<&ActionDef>)> = Vec::new();
+        let mut sections: Vec<(studio_editor::i18n::Text, Vec<&ActionDef>)> = Vec::new();
         for def in ACTION_DEFS {
             match sections.last_mut() {
                 Some((section, defs)) if *section == def.section => defs.push(def),
@@ -265,7 +293,7 @@ impl Render for HotkeysDialog {
         for (section, defs) in sections {
             let mut group = v_flex()
                 .gap_0p5()
-                .child(div().px_3().child(caption(section, cx)));
+                .child(div().px_3().child(caption(section.get(), cx)));
             for def in defs {
                 let row = self.render_row(def, conflicted(def.action), cx);
                 group = group.child(row);
@@ -282,17 +310,23 @@ impl Render for HotkeysDialog {
             };
             div().text_xs().text_color(color).child(text)
         });
-        let hint = if self.capturing.is_some() {
-            CAPTURE_HINT
-        } else {
-            HINT
-        };
+        let hint = self.capturing.is_some().then(|| {
+            SharedString::from(localized(
+                cx,
+                "Press the new keys.",
+                "Нажмите новое сочетание.",
+            ))
+        });
         v_flex()
             .id("hotkeys-dialog")
             .track_focus(&self.focus_handle)
             .capture_key_down(cx.listener(Self::on_key_down))
             .gap_3()
-            .child(dialog_header("Keyboard Shortcuts", Some(hint.into()), cx))
+            .child(dialog_header(
+                localized(cx, "Keyboard shortcuts", "Сочетания клавиш"),
+                hint,
+                cx,
+            ))
             .when(!conflict_lines.is_empty(), |this| {
                 this.child(
                     v_flex()
@@ -306,7 +340,11 @@ impl Render for HotkeysDialog {
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.warning)
-                                .child("Conflicting shortcuts"),
+                                .child(localized(
+                                    cx,
+                                    "These shortcuts conflict",
+                                    "Эти сочетания конфликтуют",
+                                )),
                         )
                         .children(conflict_lines.into_iter().map(|line| muted(line, cx))),
                 )
@@ -324,7 +362,7 @@ impl Render for HotkeysDialog {
                     .child(
                         Button::new("hotkeys-reset-all")
                             .ghost()
-                            .label("Reset All")
+                            .label(localized(cx, "Reset all", "Сбросить все"))
                             .disabled(!any_overridden)
                             .on_click(cx.listener(|this, _, _, cx| this.reset_all(cx))),
                     )
@@ -332,7 +370,7 @@ impl Render for HotkeysDialog {
                     .child(
                         Button::new("hotkeys-close")
                             .primary()
-                            .label("Close")
+                            .label(localized(cx, "Close", "Закрыть"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     ),
             )

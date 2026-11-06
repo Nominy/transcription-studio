@@ -57,6 +57,12 @@ pub struct Catalog {
     pub extensions: Vec<CatalogExtension>,
 }
 
+/// Whether `name` ends in the package extension (`.exaudio`).
+pub(crate) fn is_package_name(name: &str) -> bool {
+    name.strip_suffix(crate::PACKAGE_EXTENSION)
+        .is_some_and(|stem| stem.ends_with('.'))
+}
+
 pub(crate) fn safe_token(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -129,7 +135,7 @@ impl Catalog {
                 }
                 if !safe_token(&release.tag)
                     || !safe_token(&release.asset.name)
-                    || !release.asset.name.ends_with(".sonusext")
+                    || !is_package_name(&release.asset.name)
                     || release.asset.bytes == 0
                     || !hex(&release.asset.sha256, 64)
                     || !(hex(&release.source_commit, 40) || hex(&release.source_commit, 64))

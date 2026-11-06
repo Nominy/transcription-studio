@@ -183,7 +183,7 @@ impl MarketplaceClient {
             || parts[4] != release.tag
             || parts[5] != release.asset.name
             || !parts.iter().all(|part| crate::catalog::safe_token(part))
-            || !release.asset.name.ends_with(".sonusext")
+            || !crate::catalog::is_package_name(&release.asset.name)
         {
             return Err(invalid("invalid GitHub release asset URL"));
         }

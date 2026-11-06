@@ -72,12 +72,12 @@ pub fn draft_audio_guard(
     }
     let problem = if status.loaded_tracks == 0 {
         format!(
-            "No speaker-lane audio is loaded. {captured_tracks} generic/native track(s) cannot cover {} speaker lane(s).",
+            "No speaker audio is loaded for {} speaker tracks.",
             status.total_lanes
         )
     } else {
         format!(
-            "Only {} of {} speaker lane(s) are loaded for drafting audio.",
+            "Only {} of {} speaker tracks have audio loaded.",
             status.loaded_tracks, status.total_lanes
         )
     };
@@ -86,9 +86,7 @@ pub fn draft_audio_guard(
         captured_speaker_lanes: status.loaded_tracks,
         captured_tracks,
         can_use_partial_audio: status.loaded_tracks > 0,
-        message: format!(
-            "{problem} Audio cues may miss laughter or other audible events if the draft starts now."
-        ),
+        message: format!("{problem} The draft may miss laughter or other sounds if it starts now."),
     })
 }
 
@@ -111,7 +109,7 @@ pub fn resolve_draft_audio(
                 captured_speaker_lanes: 0,
                 captured_tracks: 0,
                 can_use_partial_audio: false,
-                message: "Drafting audio retry found no native speaker-lane audio.".to_string(),
+                message: "No speaker audio was found.".to_string(),
             })),
         DraftAudioMode::UseAvailableAudio => Ok(tracks),
     }

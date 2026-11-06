@@ -7,7 +7,22 @@ use studio_core::{AudioLane, Project, Segment};
 use time::OffsetDateTime;
 
 use super::model::{GeneratedReview, ReviewerSession};
+use sonus_babel_domain::i18n::localized;
 use sonus_gold::polish::DraftingConfig;
+
+fn not_a_babel_task() -> &'static str {
+    localized(
+        "Magic Review is only available for Babel tasks.",
+        "Magic Review доступен только для задач Babel.",
+    )
+}
+
+fn review_tasks_only() -> &'static str {
+    localized(
+        "Magic Review is only available for review tasks.",
+        "Magic Review доступен только для задач ревью.",
+    )
+}
 
 const META_EXTRA_PACKAGE: &str = "babel.extra.package";
 const META_EXTRA_TRACK_PREFIX: &str = "babel.extra.track.";
@@ -96,8 +111,8 @@ pub fn review_action_id(project: &Project) -> Option<String> {
 /// For L2 tasks `original` is the L1 baseline (`actionLevel` 1, decision `pass`, original texts
 /// and timings preserved in segment metadata).
 pub fn build_reviewer_payload(project: &Project) -> Result<Value> {
-    let review_action_id = review_action_id(project)
-        .ok_or_else(|| anyhow!("current project has no Babel review action id"))?;
+    let review_action_id =
+        review_action_id(project).ok_or_else(|| anyhow!("{}", not_a_babel_task()))?;
     let package_extra = package_extra(project);
     let captured_at = current_utc_timestamp();
     Ok(json!({
@@ -110,10 +125,10 @@ pub fn build_reviewer_payload(project: &Project) -> Result<Value> {
 
 /// `(reviewActionId, current normalized state)` of an L2+ review task.
 pub(super) fn current_review_action(project: &Project) -> Result<(String, Value)> {
-    let review_action_id = review_action_id(project)
-        .ok_or_else(|| anyhow!("current project has no Babel review action id"))?;
+    let review_action_id =
+        review_action_id(project).ok_or_else(|| anyhow!("{}", not_a_babel_task()))?;
     if project_review_action_level(project).unwrap_or(0) <= 1 {
-        bail!("Magic Review is only available for L2 review tasks.");
+        bail!("{}", review_tasks_only());
     }
     let current = normalized_review_action(
         project,
@@ -419,7 +434,12 @@ fn selected_segment<'a>(
     selected_segment_id
         .and_then(|id| project.segment(id))
         .or_else(|| sorted_segments(project).into_iter().next())
-        .ok_or_else(|| anyhow!("selected segment is not available"))
+        .ok_or_else(|| {
+            anyhow!(
+                "{}",
+                localized("Select a segment first.", "Сначала выберите сегмент.")
+            )
+        })
 }
 
 fn sorted_segments(project: &Project) -> Vec<&Segment> {

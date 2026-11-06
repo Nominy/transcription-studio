@@ -28,15 +28,34 @@ pub fn manifest() -> Result<ExtensionManifest, serde_json::Error> {
 
 /// Pass this contribution to the host's owner-scoped provider registry. The host
 /// attaches it only to enabled Local documents and drops its collection on disable.
-pub fn providers() -> DocumentProviders {
+pub fn providers(language: Language) -> DocumentProviders {
     DocumentProviders {
-        diagnostics: vec![Arc::new(BasicChecks)],
+        diagnostics: vec![Arc::new(BasicChecks { language })],
         ..Default::default()
     }
 }
 
+/// UI language of the messages this provider emits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Language {
+    #[default]
+    En,
+    Ru,
+}
+
+impl Language {
+    fn pick(self, en: &'static str, ru: &'static str) -> &'static str {
+        match self {
+            Language::En => en,
+            Language::Ru => ru,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
-pub struct BasicChecks;
+pub struct BasicChecks {
+    pub language: Language,
+}
 
 fn finding(segment: &Segment, rule: &str, severity: Severity, message: &str) -> Diagnostic {
     Diagnostic {
@@ -67,7 +86,7 @@ fn line_separator(c: char) -> bool {
         '\r' | '\n' | '\u{0085}' | '\u{2028}' | '\u{2029}' | '\u{000b}' | '\u{000c}'
     )
 }
-fn whitespace(segment: &Segment, revision: u64, out: &mut Vec<Diagnostic>) {
+fn whitespace(segment: &Segment, language: Language, revision: u64, out: &mut Vec<Diagnostic>) {
     let bytes = segment.text.as_bytes();
     let mut cursor = 0;
     while cursor < bytes.len() {
@@ -82,9 +101,17 @@ fn whitespace(segment: &Segment, revision: u64, out: &mut Vec<Diagnostic>) {
         // Only transcript boundaries, not line indentation or trailing Markdown
         // line-break spaces, are trimmed. Internal line breaks are never edited.
         let (rule, message, replacement) = if start == 0 {
-            ("leading-whitespace", "Leading horizontal whitespace", "")
+            (
+                "leading-whitespace",
+                language.pick("Starts with a space", "Начинается с пробела"),
+                "",
+            )
         } else if cursor == bytes.len() {
-            ("trailing-whitespace", "Trailing horizontal whitespace", "")
+            (
+                "trailing-whitespace",
+                language.pick("Ends with a space", "Заканчивается пробелом"),
+                "",
+            )
         } else if cursor - start > 1
             && !segment.text[..start]
                 .chars()
@@ -95,7 +122,11 @@ fn whitespace(segment: &Segment, revision: u64, out: &mut Vec<Diagnostic>) {
                 .next()
                 .is_some_and(line_separator)
         {
-            ("repeated-whitespace", "Repeated horizontal whitespace", " ")
+            (
+                "repeated-whitespace",
+                language.pick("Double spaces", "Двойные пробелы"),
+                " ",
+            )
         } else {
             continue;
         };
@@ -104,7 +135,9 @@ fn whitespace(segment: &Segment, revision: u64, out: &mut Vec<Diagnostic>) {
         let mut diagnostic = finding(segment, rule, Severity::Hint, message);
         diagnostic.range = Some(range);
         diagnostic.fixes.push(QuickFix {
-            title: "Normalize this whitespace".into(),
+            title: language
+                .pick("Remove extra spaces", "Убрать лишние пробелы")
+                .into(),
             expected_revision: revision,
             edits: vec![DocumentEdit::ReplaceText {
                 segment_id: segment.id.clone(),
@@ -121,13 +154,13 @@ impl DiagnosticProvider for BasicChecks {
         let mut diagnostics = Vec::new();
         let mut lanes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for (index, segment) in project.segments.iter().enumerate() {
-            whitespace(segment, revision, &mut diagnostics);
+            whitespace(segment, self.language, revision, &mut diagnostics);
             if segment.text.trim().is_empty() {
                 diagnostics.push(finding(
                     segment,
                     "empty-transcript",
                     Severity::Warning,
-                    "Segment has no transcript text",
+                    self.language.pick("Empty segment", "Пустой сегмент"),
                 ));
             }
             if !valid_timing(segment) {
@@ -135,7 +168,8 @@ impl DiagnosticProvider for BasicChecks {
                     segment,
                     "invalid-timing",
                     Severity::Error,
-                    "Timing must be finite, nonnegative and ordered",
+                    self.language
+                        .pick("End time is before start time", "Конец раньше начала"),
                 ));
             } else if segment.end_seconds > segment.start_seconds {
                 lanes.entry(&segment.lane_id).or_default().push(index);
@@ -170,7 +204,10 @@ impl DiagnosticProvider for BasicChecks {
                 &project.segments[index],
                 "same-lane-overlap",
                 Severity::Warning,
-                "Segment overlaps another segment in the same lane",
+                self.language.pick(
+                    "Overlaps another segment on this track",
+                    "Пересекается с другим сегментом на дорожке",
+                ),
             ));
         }
         DiagnosticCollection {

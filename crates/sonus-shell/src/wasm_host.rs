@@ -516,7 +516,7 @@ pub fn activate(
         .iter()
         .any(|permission| !package.grants.contains(permission))
     {
-        bail!("explicit permission approval is missing");
+        bail!("This extension's permissions haven't been approved.");
     }
     let registry = cx.global::<ContributionRegistry>();
     let mut available = registry.manifests();
@@ -528,7 +528,7 @@ pub fn activate(
                 && version.matches(&manifest.version)
                 && registry.is_enabled(dependency)
         }) {
-            bail!("missing enabled dependency: {dependency} {version}");
+            bail!("Turn on {dependency} {version} first.");
         }
     }
     if let Some(model) = shell.editor_model(cx) {
@@ -552,7 +552,7 @@ pub fn activate(
                 }
             }
         } else if registry.required_by_active_mode(&owner) {
-            bail!("replacement removes the currently open mode");
+            bail!("This update would close the open workspace. Close the project first.");
         }
     }
     // Runtime::load validates and activates the replacement before discarding the previous
@@ -569,7 +569,7 @@ pub fn activate(
         let ticket = cx.update_global::<WasmExtensions, _>(|state, _cx| {
             let entry = state.entries.get_mut(&owner).expect("existing entry");
             if entry.pending.is_some() {
-                bail!("activation already in progress");
+                bail!("An update is already in progress.");
             }
             let pending = PendingActivation {
                 manifest: package.manifest.clone(),
@@ -585,7 +585,7 @@ pub fn activate(
                 .collect();
             entry.pending = Some(pending);
             entry.activation_error = None;
-            entry.status.state = "reloading".into();
+            entry.status.state = "Reloading…".into();
             Ok(ticket)
         })?;
         return Ok(acknowledge(owner, ticket, cx));
@@ -623,8 +623,8 @@ pub fn activate(
     let status = ExtensionStatus {
         owner: owner.clone(),
         version: manifest.version.to_string(),
-        state: "activating".into(),
-        last_event: "activation requested".into(),
+        state: "Starting…".into(),
+        last_event: "Starting…".into(),
         logs: vec![],
         contributions: vec![],
         grants: grants.clone(),
@@ -680,8 +680,8 @@ pub fn activate(
                     remove_owned(&pump_owner, cx);
                     record(
                         &pump_owner,
-                        "failed",
-                        "host output queue overflow; instance terminated",
+                        "Stopped",
+                        "The extension sent too much data and was stopped",
                         cx,
                     );
                     return;
@@ -737,14 +737,14 @@ pub fn activate(
                         let result = cx.update_global::<WasmExtensions, _>(|extensions, _| {
                             let entry =
                                 extensions.entries.get_mut(&pump_owner).ok_or_else(|| {
-                                    anyhow!("extension disappeared during activation")
+                                    anyhow!("The extension was removed while starting.")
                                 })?;
                             if let Some(error) = entry.activation_error.take() {
                                 bail!(error);
                             }
                             entry.pending = None;
                             entry.ready = true;
-                            entry.status.state = "active".into();
+                            entry.status.state = "Running".into();
                             Ok(())
                         });
                         cx.update_global::<ContributionRegistry, _>(|registry, _| {
@@ -794,13 +794,15 @@ fn acknowledge(owner: String, ticket: Ticket, cx: &mut App) -> ActivationTicket 
                             if let Err(error) = sender.try_send(Message::Barrier(reply)) {
                                 if let Message::Barrier(reply) = error.into_inner() {
                                     let _ = reply.try_send(Err(anyhow!(
-                                        "activation output queue unavailable"
+                                        "The extension stopped responding while starting."
                                     )));
                                 }
                                 remove_owned(&owner, cx);
                             }
                         } else {
-                            let _ = reply.try_send(Err(anyhow!("extension owner disappeared")));
+                            let _ = reply.try_send(Err(anyhow!(
+                                "The extension was removed while starting."
+                            )));
                         }
                     });
                     break;
@@ -822,9 +824,9 @@ fn acknowledge(owner: String, ticket: Ticket, cx: &mut App) -> ActivationTicket 
                                 *entry.host.grants.lock().expect("grants") =
                                     entry.status.grants.clone();
                                 entry.status.state = if entry.status.contributions.is_empty() {
-                                    "failed"
+                                    "Problem"
                                 } else {
-                                    "active"
+                                    "Running"
                                 }
                                 .into();
                                 push_log(&mut entry.status, &error.to_string());
@@ -870,7 +872,7 @@ pub fn disable(owner: &str, cx: &mut App) -> Result<ActivationTicket> {
         .global::<ContributionRegistry>()
         .required_by_active_mode(owner)
     {
-        bail!("extension is required by the open mode");
+        bail!("This extension is needed by the open workspace.");
     }
     if !cx.has_global::<WasmExtensions>() {
         cx.set_global(WasmExtensions::default());
@@ -882,7 +884,7 @@ pub fn disable(owner: &str, cx: &mut App) -> Result<ActivationTicket> {
         });
     }
     remove_owned(owner, cx);
-    record(owner, "disabled", "runtime cancelled and unloaded", cx);
+    record(owner, "Stopped", "Stopped", cx);
     let (reply, receiver) = mpsc::sync_channel(1);
     let _ = reply.try_send(Ok(()));
     Ok(ActivationTicket {
@@ -925,7 +927,7 @@ pub fn invoke(owner: &str, invocation: Invocation, cx: &mut App) {
             if let Some(request) = request {
                 crate::wasm_ui::request_failed(owner, request, cx);
             }
-            record(owner, "error", &error.to_string(), cx);
+            record(owner, "Problem", &error.to_string(), cx);
             return;
         }
     };
@@ -956,7 +958,7 @@ pub fn invoke(owner: &str, invocation: Invocation, cx: &mut App) {
                     if let Some(request) = request {
                         crate::wasm_ui::request_failed(&owner, request, cx);
                     }
-                    record(&owner, "error", &error.to_string(), cx);
+                    record(&owner, "Problem", &error.to_string(), cx);
                 });
             }
             break;
@@ -974,9 +976,7 @@ fn push_log(status: &mut ExtensionStatus, message: &str) {
     if status.logs.len() == 64 {
         status.logs.remove(0);
     }
-    status
-        .logs
-        .push(format!("{:?} {message}", std::time::SystemTime::now()));
+    status.logs.push(message.to_owned());
 }
 fn record(owner: &str, state: &str, message: &str, cx: &mut App) {
     cx.update_global::<WasmExtensions, _>(|extensions, _| {
@@ -1071,8 +1071,8 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
         {
             record(
                 owner,
-                "active",
-                "stale or unassociated publication discarded",
+                "Running",
+                "Ignored an update for a project that is closed or off limits",
                 cx,
             );
             return;
@@ -1114,7 +1114,7 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
         Output::Removed | Output::Activated => unreachable!(),
     };
     match result {
-        Ok(()) => record(owner, "active", "guest output accepted", cx),
+        Ok(()) => record(owner, "Running", "Update received", cx),
         Err(error) => {
             cx.update_global::<WasmExtensions, _>(|extensions, _| {
                 if let Some(entry) = extensions.entries.get_mut(owner)
@@ -1124,7 +1124,7 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
                     entry.activation_error = Some(error.to_string());
                 }
             });
-            record(owner, "error", &error.to_string(), cx);
+            record(owner, "Problem", &error.to_string(), cx);
         }
     }
 }
@@ -1321,14 +1321,14 @@ pub fn set_document_access(
     cx: &mut App,
 ) -> Result<()> {
     if !sonus_extension::manifest::valid_id(owner) {
-        bail!("invalid extension identity");
+        bail!("This extension ID isn't valid.");
     }
     if !cx.has_global::<WasmExtensions>() {
         cx.set_global(WasmExtensions::default());
     }
     cx.update_global::<WasmExtensions, _>(|state, _| {
         if state.desired_scopes.len() >= 256 && !state.desired_scopes.contains_key(owner) {
-            bail!("too many document scope approvals");
+            bail!("Too many extensions have been given project access.");
         }
         state.desired_scopes.insert(owner.into(), access.clone());
         if let Some(entry) = state.entries.get_mut(owner) {

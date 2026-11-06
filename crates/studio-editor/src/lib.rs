@@ -4,6 +4,7 @@ mod sample;
 pub use sample::load_sample_project;
 pub mod edit;
 pub mod editor_model;
+pub mod i18n;
 pub mod timeline_model;
 pub mod timing;
 pub mod track_filter;

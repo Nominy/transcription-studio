@@ -19,6 +19,7 @@ use super::model::{
     parse_template_search,
 };
 use super::snapshot::ReviewSnapshot;
+use sonus_babel_domain::i18n::localized;
 use sonus_gold::polish::{
     AudioTrack, BackendHealth, DraftResult, DraftStreamEvent, DraftStreamStep,
     RedistributionPreview, SseParser, draft_stream_step, parse_backend_health, parse_draft_result,
@@ -45,24 +46,32 @@ pub struct ReviewCredentials {
 
 impl ReviewCredentials {
     /// Validates the Review settings: key `sk-or-…` (≤512 chars, no whitespace); model blank
-    /// (backend default) or `provider/model` (≤128 chars).
+    /// (server default) or `author/model` (≤128 chars).
     pub fn new(api_key: &str, model: &str) -> Result<Self> {
         let api_key = api_key.trim();
         if api_key.is_empty() {
-            bail!("Add your OpenRouter key for Review in Settings.");
+            bail!("{}", missing_key_message());
         }
         if !api_key.starts_with("sk-or-")
             || api_key.chars().count() > MAX_KEY_CHARS
             || api_key.chars().any(char::is_whitespace)
         {
             bail!(
-                "The Review OpenRouter key in Settings must start with sk-or-, contain no spaces and be at most {MAX_KEY_CHARS} characters."
+                "{}",
+                localized(
+                    "The key must start with sk-or-.",
+                    "Ключ должен начинаться с sk-or-."
+                )
             );
         }
         let model = model.trim();
         if !model.is_empty() && !is_valid_model_id(model) {
             bail!(
-                "The Review model in Settings must look like provider/model (for example cloudflare/clef-omni)."
+                "{}",
+                localized(
+                    "The model must look like author/model.",
+                    "Модель должна выглядеть как author/model."
+                )
             );
         }
         Ok(Self {
@@ -74,6 +83,13 @@ impl ReviewCredentials {
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
     }
+}
+
+fn missing_key_message() -> &'static str {
+    localized(
+        "Add an OpenRouter key in Settings › Babel.",
+        "Добавьте ключ OpenRouter в Настройки › Babel.",
+    )
 }
 
 impl fmt::Debug for ReviewCredentials {
@@ -336,13 +352,16 @@ impl ReviewBackend {
         }
     }
 
-    /// A client sending `credentials` on paid routes. Fails when this backend's origin is not
+    /// A client sending `credentials` on paid routes. Fails when this server's origin is not
     /// allowed to receive keys.
     pub fn with_credentials(&self, credentials: ReviewCredentials) -> Result<Self> {
         if !key_transport_allowed(&self.base_url) {
             bail!(
-                "Review keys are only sent to https://reviewgen.ovh or a localhost backend, not {}.",
-                self.base_url
+                "{}",
+                localized(
+                    "Your OpenRouter key is only sent to reviewgen.ovh or a server on this computer.",
+                    "Ключ OpenRouter отправляется только на reviewgen.ovh или сервер на этом компьютере.",
+                )
             );
         }
         Ok(Self {
@@ -356,14 +375,14 @@ impl ReviewBackend {
     }
 
     /// Sends one request and returns the raw success body (`done` payload for stream requests).
-    /// Non-2xx → `review backend returned HTTP <code>: <body>`. Paid routes without credentials
+    /// Non-2xx → `review server returned HTTP <code>: <body>`. Paid routes without credentials
     /// fail before sending.
     pub async fn send(&self, request: &ReviewBackendRequest) -> Result<String> {
         let credentials = if request.requires_openrouter_key() {
             Some(
                 self.credentials
                     .as_ref()
-                    .ok_or_else(|| anyhow!("Add your OpenRouter key for Review in Settings."))?,
+                    .ok_or_else(|| anyhow!("{}", missing_key_message()))?,
             )
         } else {
             None
@@ -383,10 +402,10 @@ impl ReviewBackend {
         let payload = response
             .text()
             .await
-            .context("review backend response read failed")?;
+            .context("review server response read failed")?;
         if !status.is_success() {
             bail!(
-                "review backend returned HTTP {}: {}",
+                "review server returned HTTP {}: {}",
                 status.as_u16(),
                 payload
             );
@@ -457,11 +476,11 @@ impl ReviewBackend {
             .send()
             .await
             .map_err(reqwest::Error::without_url)
-            .context("review backend request failed")?;
+            .context("review server request failed")?;
         let status = response.status();
         if status.is_redirection() {
             bail!(
-                "review backend returned HTTP {}: redirects are not followed",
+                "review server returned HTTP {}: redirects are not followed",
                 status.as_u16()
             );
         }
@@ -632,7 +651,7 @@ impl ReviewBackend {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(StreamFailure::Rejected(anyhow!(
-                "review backend returned HTTP {}: {}",
+                "review server returned HTTP {}: {}",
                 status.as_u16(),
                 body
             )));

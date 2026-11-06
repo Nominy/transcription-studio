@@ -29,6 +29,8 @@ notify = "8"
 sha2 = "0.10"
 tempfile.workspace = true
 futures-lite = "2"
+sys-locale = "0.3"
+time = { workspace = true, features = ["local-offset"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

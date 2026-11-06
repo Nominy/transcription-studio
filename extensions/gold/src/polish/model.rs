@@ -147,11 +147,12 @@ pub fn parse_backend_health(payload: &str) -> Result<BackendHealth> {
 
 /// Parses `{ draftRows: [...], summary: {...} }` (final payload of a draft generation).
 pub fn parse_draft_result(payload: &str) -> Result<DraftResult> {
-    let value = serde_json::from_str::<Value>(payload).context("malformed draft response")?;
+    let value = serde_json::from_str::<Value>(payload)
+        .context("The draft couldn't be read. (malformed JSON)")?;
     let rows = value
         .get("draftRows")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("draft response did not include draftRows"))?
+        .ok_or_else(|| anyhow!("The draft couldn't be read. (no draftRows)"))?
         .iter()
         .map(|row| {
             let row_id = row
@@ -159,12 +160,14 @@ pub fn parse_draft_result(payload: &str) -> Result<DraftResult> {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| anyhow!("draft row is missing rowId"))?
+                .ok_or_else(|| anyhow!("The draft couldn't be read. (row without rowId)"))?
                 .to_string();
             let rewritten_text = row
                 .get("rewrittenText")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("draft row `{row_id}` is missing rewrittenText"))?
+                .ok_or_else(|| {
+                    anyhow!("The draft couldn't be read. (row {row_id} has no rewrittenText)")
+                })?
                 .to_string();
             Ok(DraftRow {
                 rewritten_text,
@@ -218,7 +221,7 @@ pub fn parse_redistribution(
     let results = value
         .get("results")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("redistribution response did not include results"))?;
+        .ok_or_else(|| anyhow!("The result couldn't be read. (no results)"))?;
     let groups = request_payload
         .get("groups")
         .and_then(Value::as_array)

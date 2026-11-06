@@ -4,6 +4,7 @@ pub mod polish;
 pub mod root;
 pub mod screens;
 pub mod services;
+pub mod text;
 
 use editor::panels::{
     capabilities::CapabilityPanel,
@@ -62,11 +63,13 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         screens::ShellModels::init(cx);
     }
     polish::install(cx);
+    let russian = text::is_russian(cx);
+    let t = move |en: &'static str, ru: &'static str| if russian { ru } else { en };
     cx.global_mut::<ProviderRegistry>().register_type(
         ID,
         ProviderContribution {
             id: PROVIDER_ID.into(),
-            label: "Babel account".into(),
+            label: t("Babel account", "Аккаунт Babel").into(),
             multiple: true,
             setup: Rc::new(|_shell, setup, window, cx| {
                 cx.new(|cx| screens::auth::AuthScreen::new(setup, window, cx))
@@ -78,7 +81,6 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     root::rediscover_accounts(cx);
     let registry = cx.global_mut::<ContributionRegistry>();
-    registry.set_contexts(ID, vec![ID.into(), ERRORS_ID.into(), FILE_ID.into()]);
     registry.register_document_provider_factory(
         ID,
         "sonus.babel.domain",
@@ -90,7 +92,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ModeContribution {
             id: ID.into(),
             label: "Babel".into(),
-            description: "Transcription tasks".into(),
+            description: t("Transcription tasks", "Задачи транскрипции").into(),
             launch: Rc::new(root::launch),
         },
     )?;
@@ -98,8 +100,8 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         ModeContribution {
             id: ERRORS_ID.into(),
-            label: "Babel error review".into(),
-            description: "Error review tasks".into(),
+            label: t("Babel error review", "Babel: ревью ошибок").into(),
+            description: t("Error review tasks", "Задачи ревью ошибок").into(),
             launch: Rc::new(root::launch),
         },
     )?;
@@ -107,15 +109,19 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         ModeContribution {
             id: FILE_ID.into(),
-            label: "Babel file".into(),
-            description: "Edit an exported task offline".into(),
+            label: t("Babel file", "Файл Babel").into(),
+            description: t(
+                "Edit an exported task offline",
+                "Редактировать экспортированную задачу офлайн",
+            )
+            .into(),
             launch: Rc::new(screens::local_files::launch),
         },
     )?;
     registry.register_panel(
         ID,
         "sonus.babel.context",
-        "Task context",
+        t("Task context", "Контекст задачи"),
         PanelLocation::Inspector,
         Rc::new(|shell, window, cx| {
             let model = model(&shell, cx);
@@ -125,7 +131,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.feedback",
-        "Feedback",
+        t("Feedback", "Отзыв"),
         PanelLocation::Sidebar,
         Rc::new(|shell, window, cx| {
             let model = model(&shell, cx);
@@ -135,7 +141,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.assistant",
-        "Babel assistant",
+        t("Babel assistant", "Помощник Babel"),
         PanelLocation::Sidebar,
         Rc::new(|shell, window, cx| {
             let model = model(&shell, cx);
@@ -157,7 +163,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.grader",
-        "Grader",
+        t("Grader", "Оценка"),
         PanelLocation::Overlay,
         Rc::new(|shell, window, cx| {
             let model = model(&shell, cx);
@@ -167,7 +173,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.actions",
-        "Babel task actions",
+        t("Task actions", "Действия с задачей"),
         PanelLocation::Transport,
         Rc::new(|shell, window, cx| {
             let model = model(&shell, cx);
@@ -188,7 +194,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.review-settings",
-        "Babel AI review",
+        t("AI review", "ИИ-ревью"),
         PanelLocation::Settings,
         Rc::new(|_, window, cx| {
             cx.new(|cx| screens::review_settings::ReviewSettingsView::new(window, cx))
@@ -198,26 +204,26 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     for (id, label, shortcut, action) in [
         (
             "sonus.babel.submit",
-            "Submit task",
+            t("Submit", "Отправить"),
             Some("ctrl-enter"),
             TaskPanels::request_submit
                 as fn(&mut TaskPanels, &mut Window, &mut Context<TaskPanels>),
         ),
         (
             "sonus.babel.skip",
-            "Skip chunk",
+            t("Skip", "Пропустить"),
             None,
             TaskPanels::request_skip,
         ),
         (
             "sonus.babel.flag",
-            "Flag recording",
+            t("Flag recording", "Пометить запись"),
             None,
             TaskPanels::request_admin_flag,
         ),
         (
             "sonus.babel.drop-claim",
-            "Drop claim",
+            t("Release task", "Отпустить задачу"),
             None,
             TaskPanels::drop_claim,
         ),
@@ -243,7 +249,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.babel.feedback".into(),
-            label: "Feedback".into(),
+            label: t("Feedback", "Отзыв").into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|shell, window, cx| {
@@ -257,7 +263,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.babel.grader".into(),
-            label: "Grade review".into(),
+            label: t("Grade", "Оценить").into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|shell, window, cx| {
@@ -269,7 +275,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.babel.edit-annotation".into(),
-            label: "Edit annotation".into(),
+            label: t("Edit annotation", "Изменить аннотацию").into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|shell, window, cx| {
@@ -368,17 +374,17 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     for (id, label, command) in [
         (
             "sonus.babel.autofix-row",
-            "Autofix selected row",
+            t("Fix this segment", "Исправить сегмент"),
             "babel.autofix-row",
         ),
         (
             "sonus.babel.autofix-all",
-            "Autofix all rows",
+            t("Fix all segments", "Исправить все сегменты"),
             "babel.autofix-all",
         ),
         (
             "sonus.babel.skaz-selection",
-            "Convert selection to SKAZ",
+            t("Convert to СКАЗ", "Преобразовать в СКАЗ"),
             "babel.skaz-selection",
         ),
     ] {
@@ -407,7 +413,10 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             ID,
             CommandContribution {
                 id: id.clone(),
-                label: format!("Replace selected spoken digits with {digit}"),
+                label: text::fill(
+                    t("Replace with {digit}", "Заменить на {digit}"),
+                    &[("digit", &digit.to_string())],
+                ),
                 shortcut: None,
                 toolbar: false,
                 run: Rc::new(move |shell, _, cx| {
@@ -435,7 +444,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ID,
         CommandContribution {
             id: "sonus.babel.acknowledge-warning".into(),
-            label: "Acknowledge warning".into(),
+            label: t("Dismiss warning", "Скрыть предупреждение").into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|shell, _, cx| {
@@ -476,8 +485,16 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         registry.set_command_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
     for (id, label, start) in [
-        ("sonus.babel.relay-start", "Start subaccount relay", true),
-        ("sonus.babel.relay-stop", "Stop subaccount relay", false),
+        (
+            "sonus.babel.relay-start",
+            t("Start sub-account relay", "Запустить ретранслятор"),
+            true,
+        ),
+        (
+            "sonus.babel.relay-stop",
+            t("Stop sub-account relay", "Остановить ретранслятор"),
+            false,
+        ),
     ] {
         registry.register_command(
             ID,

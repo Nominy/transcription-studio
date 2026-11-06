@@ -211,9 +211,10 @@ pub fn backend_status(status: &HostStatus) -> BackendStatus {
         let message = match &status.webgpu.reason {
             Some(reason) if !reason.trim().is_empty() => reason.clone(),
             _ if status.webgpu.available => {
-                "This PC's GPU lacks WebGPU shader-f16, which local models need.".to_string()
+                "This computer's graphics card lacks WebGPU shader-f16, which local AI needs."
+                    .to_string()
             }
-            _ => "WebGPU is unavailable on this PC.".to_string(),
+            _ => "WebGPU is unavailable on this computer.".to_string(),
         };
         return BackendStatus::Unavailable {
             kind: InferenceErrorKind::NoWebGpu,
@@ -308,7 +309,7 @@ pub fn decode<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, InferenceError> {
     serde_json::from_value(value).map_err(|error| {
         InferenceError::other(format!(
-            "The local inference page returned an invalid {method} result: {error}"
+            "The AI engine returned an invalid {method} result. ({error})"
         ))
     })
 }

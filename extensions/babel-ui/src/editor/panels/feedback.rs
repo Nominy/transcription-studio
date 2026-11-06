@@ -21,11 +21,17 @@ use sonus_babel_services::review::{
 };
 
 use super::task::{Drawer, TaskPanels};
+use crate::text;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::ui::{caption, muted};
 use sonus_shell::services::spawn_service_in;
 
-const RATINGS: [(u8, &str); 3] = [(1, "1 Good"), (2, "2 OK"), (3, "3 Needs Work")];
+/// Rating buttons: value and label (EN, RU).
+const RATINGS: [(u8, &str, &str); 3] = [
+    (1, "1 · Good", "1 · Хорошо"),
+    (2, "2 · OK", "2 · Нормально"),
+    (3, "3 · Needs work", "3 · Нужно доработать"),
+];
 
 impl TaskPanels {
     /// Loads the live feedback form (worker id → form → inputs → saved draft).
@@ -35,7 +41,10 @@ impl TaskPanels {
         self.feedback = Some(FeedbackForm::loading(is_tts));
         self.feedback_attempt += 1;
         self.sync_feedback_submit_state(cx);
-        self.status("Loading required L2 feedback form...", cx);
+        self.status(
+            text::localized(cx, "Loading the feedback form…", "Загрузка формы отзыва…"),
+            cx,
+        );
         let attempt = self.feedback_attempt;
         let generation = self.generation;
         let babel = crate::services::document_client(&self.model, cx);
@@ -56,7 +65,10 @@ impl TaskPanels {
                 match result {
                     Ok(form) => {
                         this.feedback = Some(form);
-                        this.status("Required L2 feedback form loaded.", cx);
+                        this.status(
+                            text::localized(cx, "Feedback form loaded.", "Форма отзыва загружена."),
+                            cx,
+                        );
                     }
                     Err(error) => {
                         let message = format!("{error:#}");
@@ -64,7 +76,15 @@ impl TaskPanels {
                             form.mark_bootstrap_failed(message.clone());
                         }
                         this.drawer = Drawer::Feedback;
-                        this.status(message, cx);
+                        this.status(
+                            text::failed(
+                                cx,
+                                "Couldn't load the feedback form.",
+                                "Не удалось загрузить форму отзыва.",
+                                message,
+                            ),
+                            cx,
+                        );
                     }
                 }
                 this.sync_feedback_submit_state(cx);
@@ -121,7 +141,10 @@ impl TaskPanels {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.status("Saving feedback draft...", cx);
+        self.status(
+            text::localized(cx, "Saving feedback…", "Сохранение отзыва…"),
+            cx,
+        );
         self.sync_feedback_submit_state(cx);
         let babel = crate::services::document_client(&self.model, cx);
         let generation = self.generation;
@@ -140,14 +163,27 @@ impl TaskPanels {
                 };
                 let next = form.finish_save(&sent, result);
                 let message = match (&error, next.is_some()) {
-                    (None, false) => "Feedback draft saved.".to_string(),
-                    (None, true) => {
-                        "Feedback changed while saving; saving the latest draft...".to_string()
+                    (None, false) => {
+                        text::localized(cx, "Feedback saved.", "Отзыв сохранён.").to_string()
                     }
-                    (Some(error), false) => format!("Feedback draft save failed: {error}"),
-                    (Some(error), true) => {
-                        format!("Feedback draft save failed ({error}); saving the latest draft...")
-                    }
+                    (None, true) => text::localized(
+                        cx,
+                        "Feedback changed while saving. Saving the latest version…",
+                        "Отзыв изменился во время сохранения. Сохраняем последнюю версию…",
+                    )
+                    .to_string(),
+                    (Some(error), false) => text::failed(
+                        cx,
+                        "Couldn't save the feedback.",
+                        "Не удалось сохранить отзыв.",
+                        error,
+                    ),
+                    (Some(error), true) => text::failed(
+                        cx,
+                        "Couldn't save the feedback. Saving the latest version…",
+                        "Не удалось сохранить отзыв. Сохраняем последнюю версию…",
+                        error,
+                    ),
                 };
                 this.status(message, cx);
                 match next {
@@ -174,14 +210,29 @@ impl TaskPanels {
         cx: &mut Context<Self>,
     ) -> Result<usize, String> {
         let Some(form) = self.feedback.as_mut() else {
-            return Err("Couldn't find the feedback form.".to_string());
+            return Err(text::localized(
+                cx,
+                "Couldn't find the feedback form.",
+                "Не удалось найти форму отзыва.",
+            )
+            .to_string());
         };
         if form.read_only || form.is_loading() || form.bootstrap_error().is_some() {
-            return Err("The feedback form is not editable right now.".to_string());
+            return Err(text::localized(
+                cx,
+                "The feedback form can't be edited right now.",
+                "Форму отзыва сейчас нельзя изменить.",
+            )
+            .to_string());
         }
         let applied = form.apply_reviewer_feedback(feedback);
         if !feedback.is_empty() && applied == 0 {
-            return Err("Couldn't find the feedback form fields for this feedback.".to_string());
+            return Err(text::localized(
+                cx,
+                "Couldn't find the form fields for this feedback.",
+                "Не удалось найти поля формы для этого отзыва.",
+            )
+            .to_string());
         }
         let graded = form.apply_grade_scores(grades);
         self.drawer = Drawer::Feedback;
@@ -240,8 +291,12 @@ impl FeedbackPanel {
             let input = match self.comments.get(key) {
                 Some(input) => input.clone(),
                 None => {
-                    let input =
-                        self.new_editor("Provide specific, actionable feedback...", window, cx);
+                    let placeholder = text::localized(
+                        cx,
+                        "What should the transcriber change?",
+                        "Что расшифровщику стоит изменить?",
+                    );
+                    let input = self.new_editor(placeholder, window, cx);
                     self._subscriptions.push(cx.subscribe_in(
                         &input,
                         window,
@@ -266,7 +321,8 @@ impl FeedbackPanel {
             let input = match &self.other {
                 Some(input) => input.clone(),
                 None => {
-                    let input = self.new_editor("Add optional feedback...", window, cx);
+                    let placeholder = text::localized(cx, "Anything else?", "Что-нибудь ещё?");
+                    let input = self.new_editor(placeholder, window, cx);
                     self._subscriptions.push(cx.subscribe_in(
                         &input,
                         window,
@@ -318,12 +374,11 @@ impl FeedbackPanel {
         let editable = !form.read_only && form.bootstrap_error().is_none() && !form.is_loading();
         let ratings = h_flex()
             .gap_1()
-            .children(RATINGS.iter().map(|(value, label)| {
-                let value = *value;
+            .children(RATINGS.iter().map(|&(value, en, ru)| {
                 let panels = self.panels.clone();
                 Button::new(SharedString::from(format!("rating-{key}-{value}")))
                     .small()
-                    .label(*label)
+                    .label(text::localized(cx, en, ru))
                     .when(rating == value, |button| button.primary())
                     .when(rating != value, |button| button.outline())
                     .disabled(!editable)
@@ -362,54 +417,89 @@ impl FeedbackPanel {
                                 theme.warning
                             })
                             .child(if complete {
-                                "Required · Complete"
+                                text::localized(cx, "Required · done", "Обязательно · готово")
                             } else {
-                                "Required · Comment needed"
+                                text::localized(
+                                    cx,
+                                    "Required · add a comment",
+                                    "Обязательно · добавьте комментарий",
+                                )
                             }),
                     ),
             )
             .children(description.map(|description| muted(description, cx)))
-            .child(caption("Rating *", cx))
+            .child(caption(text::localized(cx, "Rating *", "Оценка *"), cx))
             .child(ratings)
-            .child(caption("Comment *", cx))
+            .child(caption(
+                text::localized(cx, "Comment *", "Комментарий *"),
+                cx,
+            ))
             .children(comment)
             .child(muted(format!("{comment_len}/{FEEDBACK_MAX_COMMENT_LENGTH}"), cx).text_right())
     }
 
-    fn autosave_label(form: &FeedbackForm) -> (SharedString, Option<SharedString>) {
+    fn autosave_label(form: &FeedbackForm, cx: &App) -> (SharedString, Option<SharedString>) {
         if form.read_only {
-            ("Read-only".into(), None)
+            (
+                text::localized(cx, "Read-only", "Только чтение").into(),
+                None,
+            )
         } else if form.is_loading() {
-            ("Loading feedback".into(), None)
+            (
+                text::localized(cx, "Loading feedback", "Загрузка отзыва").into(),
+                None,
+            )
         } else if form.bootstrap_error().is_some() {
-            ("Feedback unavailable".into(), None)
+            (
+                text::localized(cx, "Feedback unavailable", "Отзыв недоступен").into(),
+                None,
+            )
         } else if let Some(error) = form.last_autosave_error() {
             (
-                format!("Autosave failed: {error}").into(),
-                Some("Edit again to retry automatically.".into()),
+                text::failed(
+                    cx,
+                    "Autosave didn't work.",
+                    "Автосохранение: не удалось.",
+                    error,
+                )
+                .into(),
+                Some(
+                    text::localized(
+                        cx,
+                        "Edit again to retry.",
+                        "Измените текст, чтобы повторить.",
+                    )
+                    .into(),
+                ),
             )
         } else if form.is_saving() {
-            ("Autosaving".into(), None)
+            (text::localized(cx, "Saving…", "Сохранение…").into(), None)
         } else if form.last_saved().is_some() {
-            ("All changes saved".into(), None)
+            (
+                text::localized(cx, "All changes saved", "Все изменения сохранены").into(),
+                None,
+            )
         } else {
-            ("Autosave is on".into(), None)
+            (
+                text::localized(cx, "Autosave is on", "Автосохранение включено").into(),
+                None,
+            )
         }
     }
 
-    fn footer_state(form: &FeedbackForm) -> &'static str {
+    fn footer_state(form: &FeedbackForm, cx: &App) -> &'static str {
         if form.read_only {
-            "Feedback received"
+            text::localized(cx, "Feedback received", "Отзыв получен")
         } else if form.bootstrap_error().is_some() {
-            "Feedback unavailable"
+            text::localized(cx, "Feedback unavailable", "Отзыв недоступен")
         } else if form.save_has_error() {
-            "Save failed"
+            text::localized(cx, "Couldn't save", "Не удалось сохранить")
         } else if form.is_saving() {
-            "Saving..."
+            text::localized(cx, "Saving…", "Сохранение…")
         } else if form.is_ready() {
-            "Ready"
+            text::localized(cx, "Ready", "Готово")
         } else {
-            "Complete all fields"
+            text::localized(cx, "Fill in all fields", "Заполните все поля")
         }
     }
 
@@ -434,7 +524,11 @@ impl FeedbackPanel {
             let panels = self.panels.clone();
             return v_flex().child(
                 notice(
-                    "The feedback form could not be loaded.",
+                    text::localized(
+                        cx,
+                        "Couldn't load the feedback form.",
+                        "Не удалось загрузить форму отзыва.",
+                    ),
                     error.to_string().into(),
                     cx,
                 )
@@ -444,7 +538,7 @@ impl FeedbackPanel {
                         Button::new("feedback-retry")
                             .small()
                             .outline()
-                            .label("Retry loading")
+                            .label(text::localized(cx, "Try again", "Повторить"))
                             .on_click(move |_, window, cx| {
                                 panels
                                     .update(cx, |panels, cx| panels.bootstrap_feedback(window, cx));
@@ -455,13 +549,18 @@ impl FeedbackPanel {
         }
         if form.is_loading() {
             let title = if form.read_only {
-                "Loading feedback"
+                text::localized(cx, "Loading feedback", "Загрузка отзыва")
             } else {
-                "Loading rubric categories"
+                text::localized(cx, "Loading the rubric", "Загрузка рубрики")
             };
             return v_flex().child(notice(
                 title,
-                "Your feedback form will appear here when it is ready.".into(),
+                text::localized(
+                    cx,
+                    "The feedback form will appear here.",
+                    "Форма отзыва появится здесь.",
+                )
+                .into(),
                 cx,
             ));
         }
@@ -473,22 +572,31 @@ impl FeedbackPanel {
             && form.draft().other_feedback.trim().is_empty();
         if form.read_only && draft_empty {
             return v_flex().child(notice(
-                "No feedback was provided",
-                "This completed review does not contain rubric feedback.".into(),
+                text::localized(cx, "No feedback", "Отзыва нет"),
+                text::localized(
+                    cx,
+                    "This review was completed without rubric feedback.",
+                    "Эта проверка завершена без отзыва по рубрике.",
+                )
+                .into(),
                 cx,
             ));
         }
         if form.rubric_fields.is_empty() {
             return v_flex().child(notice(
-                "No rubric categories are available",
-                "Retry loading the form before completing this review.".into(),
+                text::localized(cx, "No rubric categories", "Нет категорий рубрики"),
+                text::localized(
+                    cx,
+                    "Reload the form before completing this review.",
+                    "Загрузите форму заново, прежде чем завершить проверку.",
+                )
+                .into(),
                 cx,
             ));
         }
         let mut body = v_flex().gap_3();
         for field in &form.rubric_fields {
-            body =
-                body.child(self.render_field(form, field.key, field.label, field.description, cx));
+            body = body.child(self.render_field(form, field.key, field.title(), field.hint(), cx));
         }
         if form.has_other_feedback {
             let len = form.draft().other_feedback.chars().count();
@@ -504,15 +612,24 @@ impl FeedbackPanel {
                         h_flex()
                             .justify_between()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Other Feedback"),
+                                div().text_sm().font_weight(FontWeight::SEMIBOLD).child(
+                                    text::localized(cx, "Other feedback", "Другие замечания"),
+                                ),
                             )
-                            .child(muted("Optional", cx)),
+                            .child(muted(text::localized(cx, "Optional", "Необязательно"), cx)),
                     )
-                    .child(muted("Share any additional comments or observations.", cx))
-                    .child(caption("Additional comments", cx))
+                    .child(muted(
+                        text::localized(
+                            cx,
+                            "Anything else the transcriber should know.",
+                            "Всё, что ещё стоит знать расшифровщику.",
+                        ),
+                        cx,
+                    ))
+                    .child(caption(
+                        text::localized(cx, "Additional comments", "Дополнительные комментарии"),
+                        cx,
+                    ))
                     .children(
                         self.other
                             .as_ref()
@@ -545,14 +662,21 @@ impl Render for FeedbackPanel {
         let grading_status = panels.review.grading_status.clone();
         let theme = cx.theme();
         let (title, description) = if form.read_only {
-            ("Feedback Received", "Review the feedback provided.")
+            (
+                text::localized(cx, "Feedback received", "Отзыв получен"),
+                text::localized(cx, "Feedback on this task.", "Отзыв по этой задаче."),
+            )
         } else {
             (
-                "L1 Feedback Form",
-                "Provide feedback for the L1 transcriber.",
+                text::localized(cx, "L1 feedback", "Отзыв для L1"),
+                text::localized(
+                    cx,
+                    "Feedback for the L1 transcriber.",
+                    "Отзыв для расшифровщика L1.",
+                ),
             )
         };
-        let (autosave, autosave_hint) = Self::autosave_label(&form);
+        let (autosave, autosave_hint) = Self::autosave_label(&form, cx);
         let required = form.rubric_fields.len();
         let completed = form
             .rubric_fields
@@ -602,7 +726,7 @@ impl Render for FeedbackPanel {
                                         .small()
                                         .outline()
                                         .icon(IconName::Bot)
-                                        .label("Magic Review")
+                                        .label(text::localized(cx, "Magic Review", "Magic Review"))
                                         .loading(generating)
                                         .disabled(magic_disabled)
                                         .on_click(move |_, window, cx| {
@@ -615,7 +739,7 @@ impl Render for FeedbackPanel {
                                     Button::new("feedback-grade-review")
                                         .small()
                                         .outline()
-                                        .label("Grade review")
+                                        .label(text::localized(cx, "Grade", "Оценить"))
                                         .disabled(magic_disabled)
                                         .on_click(move |_, _, cx| {
                                             grade.update(cx, |panels, cx| panels.open_grader(cx));
@@ -627,11 +751,18 @@ impl Render for FeedbackPanel {
                                     .small()
                                     .ghost()
                                     .icon(IconName::Close)
-                                    .tooltip("Close feedback")
+                                    .tooltip(text::localized(cx, "Close feedback", "Закрыть отзыв"))
                                     .on_click(move |_, _, cx| {
                                         close.update(cx, |panels, cx| {
                                             panels.toggle_drawer(Drawer::Feedback, cx);
-                                            panels.status("Feedback panel closed.", cx);
+                                            panels.status(
+                                                text::localized(
+                                                    cx,
+                                                    "Feedback closed.",
+                                                    "Отзыв закрыт.",
+                                                ),
+                                                cx,
+                                            );
                                         });
                                     }),
                             ),
@@ -667,16 +798,22 @@ impl Render for FeedbackPanel {
                     .border_color(theme.border)
                     .child(
                         v_flex()
-                            .child(caption("Completion", cx))
-                            .child(div().text_sm().child(format!(
-                                "{completed} of {required} required sections complete"
+                            .child(caption(text::localized(cx, "Progress", "Прогресс"), cx))
+                            .child(div().text_sm().child(text::localized_fmt(
+                                cx,
+                                "{completed} of {required} required sections done",
+                                "Готово {completed} из {required} обязательных разделов",
+                                &[
+                                    ("completed", &completed.to_string()),
+                                    ("required", &required.to_string()),
+                                ],
                             ))),
                     )
                     .child(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(Self::footer_state(&form)),
+                            .child(Self::footer_state(&form, cx)),
                     ),
             )
             .into_any_element()

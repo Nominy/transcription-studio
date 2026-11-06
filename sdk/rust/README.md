@@ -35,7 +35,7 @@ background work. Cargo compilation is a restart boundary (incremental artifacts
 survive cancellation); a failed smoke test restarts the test, not an external or
 paid operation. Do not publish the `runtime-probes` feature build.
 
-`package.ps1` emits an immutable `example.hello-panel-0.1.0.sonusext`, plus its byte
+`package.ps1` emits an immutable `example.hello-panel-0.1.0.exaudio`, plus its byte
 size and SHA-256 receipt. The ZIP has `manifest.json`, `module.wasm`, and
 `assets/LICENSE`, matching the GitHub marketplace installer. It refuses to replace
 an existing release artifact. Upload that file to the author's versioned GitHub

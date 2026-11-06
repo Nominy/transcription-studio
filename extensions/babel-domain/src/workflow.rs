@@ -9,6 +9,7 @@ use studio_babel::{META_REVIEW_ACTION_DECISION, export_json, import_json};
 use studio_core::{EditorCommand, Project, Segment, SegmentMutationPolicy};
 
 use crate::babel_metadata::META_DROP_CLAIM_DROPPED;
+use crate::i18n::{localized, localized_fmt};
 use studio_editor::workflow::StudioWorkflow;
 
 const META_SELECTED_COMPARE_ACTION_ID: &str = "studio.babel.diff.selectedCompareActionId";
@@ -354,19 +355,30 @@ impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandPro
         use sonus_extension::document::{CommandOutcome, DocumentEdit, DocumentTransaction};
 
         if command != "babel.acknowledge-low-confidence-word" {
-            return Err(format!("Unknown Babel review command `{command}`."));
+            return Err(format!("Unknown Babel review command {command}."));
         }
-        let segment_id = request.segment_id.ok_or("No annotation selected.")?;
-        let segment = request
-            .project
-            .segment(segment_id)
-            .ok_or_else(|| format!("Segment `{segment_id}` was not found."))?;
+        let segment_id = request
+            .segment_id
+            .ok_or_else(|| localized("No segment selected.", "Сегмент не выбран.").to_owned())?;
+        let segment = request.project.segment(segment_id).ok_or_else(|| {
+            localized(
+                "The segment no longer exists.",
+                "Сегмент больше не существует.",
+            )
+            .to_owned()
+        })?;
         let word_index = request
             .arguments
             .get("word_index")
             .and_then(Value::as_u64)
             .and_then(|index| usize::try_from(index).ok())
-            .ok_or("A valid low-confidence word index is required.")?;
+            .ok_or_else(|| {
+                localized(
+                    "Choose a low-confidence word.",
+                    "Выберите слово с низкой уверенностью.",
+                )
+                .to_owned()
+            })?;
         let reviewable: std::collections::BTreeSet<_> =
             crate::presentation::build_transcript_word_views(segment)
                 .into_iter()
@@ -374,12 +386,18 @@ impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandPro
                 .map(|word| word.index)
                 .collect();
         if !reviewable.contains(&word_index) {
-            return Err("That low-confidence word was not found.".into());
+            return Err(localized(
+                "That word is no longer marked low-confidence.",
+                "Это слово больше не помечено как слово с низкой уверенностью.",
+            )
+            .into());
         }
-        let mut state = self
-            .acknowledgements
-            .lock()
-            .map_err(|_| "Low-confidence review state is unavailable.")?;
+        let mut state = self.acknowledgements.lock().map_err(|_| {
+            localized(
+                "Couldn't record the review. Try again.",
+                "Не удалось записать проверку. Попробуйте снова.",
+            )
+        })?;
         if state.revision != Some(request.revision) {
             state.words.clear();
             state.revision = Some(request.revision);
@@ -390,8 +408,13 @@ impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandPro
         let total = reviewable.len();
         if !reviewable.iter().all(|index| acknowledged.contains(index)) {
             return Ok(CommandOutcome {
-                status: Some(format!(
-                    "Reviewed {reviewed} of {total} low-confidence words in {segment_id}."
+                status: Some(localized_fmt(
+                    "Reviewed {reviewed} of {total} low-confidence words",
+                    "Проверено {reviewed} из {total} слов с низкой уверенностью",
+                    &[
+                        ("reviewed", &reviewed.to_string()),
+                        ("total", &total.to_string()),
+                    ],
                 )),
                 ..Default::default()
             });
@@ -404,13 +427,21 @@ impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandPro
         // A rejected transaction must not discard review progress.
         Ok(CommandOutcome {
             transaction: Some(DocumentTransaction {
-                label: "Low-confidence review".into(),
+                label: localized(
+                    "Low-confidence words reviewed",
+                    "Слова с низкой уверенностью проверены",
+                )
+                .into(),
                 expected_revision: request.revision,
                 edits: vec![DocumentEdit::ReplaceSegment { segment }],
             }),
-            status: Some(format!(
-                "Marked low-confidence words reviewed for {segment_id}."
-            )),
+            status: Some(
+                localized(
+                    "All low-confidence words reviewed",
+                    "Все слова с низкой уверенностью проверены",
+                )
+                .into(),
+            ),
             ..Default::default()
         })
     }

@@ -428,9 +428,16 @@ fn paint_region_decorations(
             // fits, else just outside an edge; text stays neutral so red/green both read.
             let chip_width = |line: &ShapedLine| f32::from(line.width()) + 2.0 * CHIP_PAD * s;
             let gap = 3.0 * s;
-            let loop_chip = looping.then(|| shape("Loop".into(), px(TIME_SIZE * s), color, window));
+            let loop_chip = looping.then(|| {
+                let label = crate::screens::ui::localized(cx, "Loop", "Повтор");
+                shape(label.into(), px(TIME_SIZE * s), color, window)
+            });
             let length_chip = shape(
-                selection_length_label(range.duration_seconds()).into(),
+                selection_length_label(
+                    range.duration_seconds(),
+                    crate::screens::ui::localized(cx, "s", "с"),
+                )
+                .into(),
                 px(TIME_SIZE * s),
                 palette.text,
                 window,

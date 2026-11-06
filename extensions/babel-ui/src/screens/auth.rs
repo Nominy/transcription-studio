@@ -21,6 +21,7 @@ use sonus_babel_services::subaccounts;
 use sonus_shell::{ProviderInstance, ProviderSetup};
 
 use crate::screens::ShellModels;
+use crate::text::{failed, localized};
 use sonus_shell::services::spawn_service_in;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -55,16 +56,18 @@ impl AuthScreen {
         let (flow, pending) = Self::initial_flow(&setup);
         let identifier = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Phone or e-mail")
+                .placeholder(localized(cx, "Phone or e-mail", "Телефон или e-mail"))
                 .default_value(flow.identifier.clone())
         });
-        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Code"));
+        let code =
+            cx.new(|cx| InputState::new(window, cx).placeholder(localized(cx, "Code", "Код")));
         let host_url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Relay address")
+                .placeholder(localized(cx, "Relay address", "Адрес ретранслятора"))
                 .default_value(flow.subaccount_host_url.clone())
         });
-        let subaccount_code = cx.new(|cx| InputState::new(window, cx).placeholder("Code"));
+        let subaccount_code =
+            cx.new(|cx| InputState::new(window, cx).placeholder(localized(cx, "Code", "Код")));
         let subscriptions = vec![
             Self::watch(&identifier, Field::Identifier, window, cx),
             Self::watch(&code, Field::Code, window, cx),
@@ -246,7 +249,10 @@ impl AuthScreen {
                     flow.identifier = this.flow.identifier.clone();
                     this.set_flow(flow, window, cx);
                 }
-                Err(error) => this.fail(format!("{error:#}"), cx),
+                Err(error) => this.fail(
+                    failed(cx, "Couldn't sign in", "Не удалось войти", error),
+                    cx,
+                ),
             },
         ));
     }
@@ -256,7 +262,10 @@ impl AuthScreen {
             return;
         }
         let Some(account) = &self.pending else {
-            self.fail("Start the sign-in again.".into(), cx);
+            self.fail(
+                localized(cx, "Start the sign-in again.", "Начните вход заново.").into(),
+                cx,
+            );
             return;
         };
         let code = self.flow.code.trim().to_string();
@@ -268,7 +277,10 @@ impl AuthScreen {
             async move { auth::verify_login(&store_path, &code).await },
             |this, result, window, cx| match result {
                 Ok(_) => this.finish_direct(window, cx),
-                Err(error) => this.fail(format!("{error:#}"), cx),
+                Err(error) => this.fail(
+                    failed(cx, "Couldn't sign in", "Не удалось войти", error),
+                    cx,
+                ),
             },
         ));
     }
@@ -285,7 +297,15 @@ impl AuthScreen {
             identifier: self.flow.identifier.trim().to_string(),
         };
         if let Err(error) = account.store.save_record(&record) {
-            self.fail(format!("The sign-in could not be saved: {error:#}"), cx);
+            self.fail(
+                failed(
+                    cx,
+                    "Couldn't save the sign-in",
+                    "Не удалось сохранить вход",
+                    error,
+                ),
+                cx,
+            );
             return;
         }
         self.setup.done(account.id, account.label, window, cx);
@@ -307,7 +327,12 @@ impl AuthScreen {
                 self.set_flow(flow, window, cx)
             }
             Err(error) => {
-                self.flow.error = Some(format!("Sign-in restart failed: {error:#}"));
+                self.flow.error = Some(failed(
+                    cx,
+                    "Couldn't restart the sign-in",
+                    "Не удалось начать вход заново",
+                    error,
+                ));
                 cx.notify();
             }
         }
@@ -342,7 +367,10 @@ impl AuthScreen {
             async move { subaccounts::login_with_code(&host_url, &code).await },
             |this, result, window, cx| match result {
                 Ok(session) => this.finish_relay(session, window, cx),
-                Err(error) => this.fail(format!("{error:#}"), cx),
+                Err(error) => this.fail(
+                    failed(cx, "Couldn't sign in", "Не удалось войти", error),
+                    cx,
+                ),
             },
         ));
     }
@@ -368,7 +396,15 @@ impl AuthScreen {
                 })
             });
         if let Err(error) = saved {
-            self.fail(format!("The sign-in could not be saved: {error:#}"), cx);
+            self.fail(
+                failed(
+                    cx,
+                    "Couldn't save the sign-in",
+                    "Не удалось сохранить вход",
+                    error,
+                ),
+                cx,
+            );
             return;
         }
         let relay = ShellModels::relay(cx);
@@ -377,7 +413,12 @@ impl AuthScreen {
         });
         if let Err(error) = remembered {
             window.push_notification(
-                Notification::warning(format!("Relay URL could not be remembered: {error}")),
+                Notification::warning(failed(
+                    cx,
+                    "Couldn't remember the relay address",
+                    "Не удалось запомнить адрес ретранслятора",
+                    error,
+                )),
                 cx,
             );
             relay.update(cx, |relay, cx| {
@@ -387,18 +428,33 @@ impl AuthScreen {
         self.setup.done(account.id, account.label, window, cx);
     }
 
-    fn texts(&self) -> (&'static str, &'static str) {
+    fn texts(&self, cx: &App) -> (&'static str, &'static str) {
         if self.flow.is_subaccount_mode() {
             (
-                "Sub-account sign-in",
-                "Enter the relay address and the code from the account owner.",
+                localized(cx, "Sub-account sign-in", "Вход в под-аккаунт"),
+                localized(
+                    cx,
+                    "Enter the relay address and the code from the account owner.",
+                    "Введите адрес ретранслятора и код от владельца аккаунта.",
+                ),
             )
         } else if self.flow.is_code_step() {
-            ("Enter the code", "Babel sent a code to your phone.")
+            (
+                localized(cx, "Enter the code", "Введите код"),
+                localized(
+                    cx,
+                    "Babel sent a code to your phone.",
+                    "Babel отправил код на ваш телефон.",
+                ),
+            )
         } else {
             (
-                "Sign in to Babel",
-                "Use the phone number or e-mail of your Babel account.",
+                localized(cx, "Sign in to Babel", "Вход в Babel"),
+                localized(
+                    cx,
+                    "Use the phone number or e-mail of your Babel account.",
+                    "Укажите телефон или e-mail аккаунта Babel.",
+                ),
             )
         }
     }
@@ -415,12 +471,16 @@ impl AuthScreen {
                     self.actions(
                         Button::new("use-babel")
                             .ghost()
-                            .label("Use a Babel account instead")
+                            .label(localized(
+                                cx,
+                                "Use a Babel account instead",
+                                "Войти через аккаунт Babel",
+                            ))
                             .disabled(pending)
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.switch_to_babel(window, cx)),
                             ),
-                        "Sign in",
+                        localized(cx, "Sign in", "Войти"),
                         self.flow.can_submit_subaccount_login(),
                         cx,
                     ),
@@ -430,12 +490,12 @@ impl AuthScreen {
                 self.actions(
                     Button::new("back-to-login")
                         .ghost()
-                        .label("Use another number")
+                        .label(localized(cx, "Use another number", "Другой номер"))
                         .disabled(pending)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.back_to_login(window, cx)),
                         ),
-                    "Sign in",
+                    localized(cx, "Sign in", "Войти"),
                     self.flow.can_submit_code(),
                     cx,
                 ),
@@ -445,14 +505,18 @@ impl AuthScreen {
                 self.actions(
                     Button::new("use-subaccount")
                         .ghost()
-                        .label("I have a sub-account code")
+                        .label(localized(
+                            cx,
+                            "I have a sub-account code",
+                            "У меня код под-аккаунта",
+                        ))
                         .disabled(pending)
                         .on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.switch_to_subaccount(window, cx)
                             }),
                         ),
-                    "Continue",
+                    localized(cx, "Continue", "Продолжить"),
                     self.flow.can_start_login(),
                     cx,
                 ),
@@ -480,7 +544,7 @@ impl AuthScreen {
 
 impl Render for AuthScreen {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (heading, subtitle) = self.texts();
+        let (heading, subtitle) = self.texts(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let danger = theme.danger;
@@ -517,15 +581,14 @@ impl Render for AuthScreen {
                         .text_xs()
                         .text_color(muted)
                         .child(Spinner::new().small())
-                        .child("Signing in…"),
+                        .child(localized(cx, "Signing in…", "Вход…")),
                 )
             })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("Your sign-in stays on this device."),
-            );
+            .child(div().text_xs().text_color(muted).child(localized(
+                cx,
+                "Your sign-in stays on this device.",
+                "Данные входа остаются на этом устройстве.",
+            )));
         div()
             .id("auth-screen")
             .size_full()

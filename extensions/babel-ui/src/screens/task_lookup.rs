@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use crate::text::localized;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt as _, h_flex, v_flex};
@@ -12,13 +13,39 @@ use sonus_babel_domain::editor_model::task_lookup::{
     TaskLookupEffect, TaskLookupEvent, TaskLookupState,
 };
 
-const STITCHED_DESCRIPTION: &str =
-    "Claim a specific stitched transcription or view a transcription in read-only mode.";
-const READ_ONLY_DESCRIPTION: &str = "View a transcription in read-only mode.";
-const QA_DESCRIPTION: &str = "Claim a diff's QA task or view a task in read-only mode.";
-const CONFIRM_EDIT_BODY: &str = "Are you sure you want to edit the stitched transcript? You will \
-     have to submit again to mark the transcript as verified. For audits, please use the \
-     read-only flow.";
+fn stitched_description(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "Take a specific task or view one read-only.",
+        "Возьмите конкретную задачу или откройте её только для чтения.",
+    )
+}
+
+fn read_only_description(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "View a task read-only.",
+        "Откройте задачу только для чтения.",
+    )
+}
+
+fn qa_description(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "Take a QA task for a diff or view a task read-only.",
+        "Возьмите QA-задачу по диффу или откройте задачу только для чтения.",
+    )
+}
+
+fn confirm_edit_body(cx: &App) -> &'static str {
+    localized(
+        cx,
+        "Editing reopens this task: you will need to submit it again to mark it verified. \
+         For audits, open it read-only.",
+        "Редактирование снова открывает задачу: её нужно будет отправить ещё раз, чтобы \
+         отметить проверенной. Для аудита откройте её только для чтения.",
+    )
+}
 
 type OnEffect = Rc<dyn Fn(TaskLookupEffect, &TaskLookupState, &mut Window, &mut App)>;
 
@@ -61,17 +88,21 @@ impl TaskLookupView {
     ) -> Self {
         let processed = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Processed transcription ID (stitched queue)")
+                .placeholder(localized(cx, "Task ID", "ID задачи"))
                 .default_value(state.processed_transcription_id.clone())
         });
         let review_action = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Review action ID (read-only)")
+                .placeholder(localized(
+                    cx,
+                    "Review ID (read-only)",
+                    "ID просмотра (только чтение)",
+                ))
                 .default_value(state.review_action_id.clone())
         });
         let qa_diff = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Diff ID (QA)")
+                .placeholder(localized(cx, "Diff ID (QA)", "ID диффа (QA)"))
                 .default_value(state.qa_diff_id.clone())
         });
         let subscriptions = vec![
@@ -155,15 +186,15 @@ impl TaskLookupView {
 
     fn render_select(&self, cx: &mut Context<Self>) -> Div {
         let description = if self.state.shows_qa_claim() {
-            QA_DESCRIPTION
+            qa_description(cx)
         } else if self.state.show_stitched_option {
-            STITCHED_DESCRIPTION
+            stitched_description(cx)
         } else {
-            READ_ONLY_DESCRIPTION
+            read_only_description(cx)
         };
         v_flex()
             .gap_3()
-            .child(title("Find a task"))
+            .child(title(localized(cx, "Find a task", "Найти задачу")))
             .child(body(description, cx))
             .when(self.state.shows_qa_claim(), |this| {
                 this.child(Input::new(&self.qa_diff))
@@ -180,7 +211,7 @@ impl TaskLookupView {
                         this.child(
                             Button::new("claim-qa")
                                 .outline()
-                                .label("Claim QA task")
+                                .label(localized(cx, "Take QA task", "Взять QA-задачу"))
                                 .disabled(!self.state.can_claim_qa())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.apply(TaskLookupEvent::ClickClaimQa, window, cx)
@@ -191,7 +222,7 @@ impl TaskLookupView {
                         this.child(
                             Button::new("claim-stitched")
                                 .outline()
-                                .label("Claim stitched")
+                                .label(localized(cx, "Take task", "Взять задачу"))
                                 .disabled(!self.state.can_claim_stitched())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.apply(TaskLookupEvent::ClickClaimStitched, window, cx)
@@ -201,7 +232,7 @@ impl TaskLookupView {
                     .child(
                         Button::new("view-read-only")
                             .primary()
-                            .label("View read-only")
+                            .label(localized(cx, "View read-only", "Только чтение"))
                             .disabled(!self.state.can_view_read_only())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply(TaskLookupEvent::ClickReadOnly, window, cx)
@@ -213,21 +244,28 @@ impl TaskLookupView {
     fn render_confirm(&self, cx: &mut Context<Self>) -> Div {
         v_flex()
             .gap_3()
-            .child(title("Confirm edit"))
-            .child(body(CONFIRM_EDIT_BODY, cx))
+            .child(title(localized(
+                cx,
+                "Edit this task?",
+                "Редактировать задачу?",
+            )))
+            .child(body(confirm_edit_body(cx), cx))
             .child(
                 h_flex()
                     .justify_end()
                     .gap_2()
-                    .child(Button::new("cancel-edit").ghost().label("Cancel").on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.apply(TaskLookupEvent::CancelConfirmEdit, window, cx)
-                        }),
-                    ))
+                    .child(
+                        Button::new("cancel-edit")
+                            .ghost()
+                            .label(localized(cx, "Cancel", "Отмена"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.apply(TaskLookupEvent::CancelConfirmEdit, window, cx)
+                            })),
+                    )
                     .child(
                         Button::new("confirm-edit")
                             .primary()
-                            .label("Confirm edit")
+                            .label(localized(cx, "Edit", "Редактировать"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply(TaskLookupEvent::ConfirmEdit, window, cx)
                             })),

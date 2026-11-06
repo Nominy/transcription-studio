@@ -10,8 +10,9 @@ use sonus_babel_domain::edit::create_region::{
     OTHER_CATEGORY, intensity_label, primary_category_options, secondary_category_options,
 };
 
-use super::create_region::{intensity_picker, string_choices, update_dialog_state};
+use super::create_region::{category_choices, intensity_picker, update_dialog_state};
 use crate::services::document_dialogs;
+use crate::text::localized;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::ui::{
     choice, dialog_footer, dialog_header, error_text, field, primary_button,
@@ -32,7 +33,7 @@ impl EditAnnotationView {
             .unwrap_or_default();
         let description = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Describe the noise...")
+                .placeholder(localized(cx, "Describe the sound…", "Опишите звук…"))
                 .default_value(initial)
         });
         let subscriptions = vec![
@@ -98,14 +99,15 @@ impl Render for EditAnnotationView {
             return div().into_any_element();
         };
         let title = if dialog.is_new() {
-            "Add Annotation"
+            localized(cx, "Add annotation", "Добавить аннотацию")
         } else {
-            "Edit Annotation"
+            localized(cx, "Edit annotation", "Изменить аннотацию")
         };
         let intensity = intensity_picker(
             "edit-annotation-intensity",
             intensity_label(dialog.intensity),
             self.model.clone(),
+            cx,
             |doc, label| {
                 if let Some(dialog) = doc.edit_annotation_mut() {
                     dialog.set_intensity_label(&label);
@@ -117,8 +119,8 @@ impl Render for EditAnnotationView {
             let primary = choice(
                 "edit-annotation-primary",
                 (!dialog.primary_selection.is_empty()).then_some(&dialog.primary_selection),
-                string_choices(primary_category_options().iter().copied()),
-                "Select primary category",
+                category_choices(primary_category_options().iter().copied()),
+                localized(cx, "Primary category", "Основная категория"),
                 move |value, _, cx| {
                     update_dialog(&model, cx, |dialog| dialog.set_primary_selection(value));
                 },
@@ -129,8 +131,8 @@ impl Render for EditAnnotationView {
             let secondary = choice(
                 "edit-annotation-secondary",
                 (!dialog.secondary_selection.is_empty()).then_some(&dialog.secondary_selection),
-                string_choices(secondary_category_options(&dialog.primary_selection)),
-                "Select secondary category",
+                category_choices(secondary_category_options(&dialog.primary_selection)),
+                localized(cx, "Secondary category", "Дополнительная категория"),
                 move |value, _, cx| {
                     update_dialog(&model, cx, |dialog| dialog.set_secondary_selection(value));
                 },
@@ -142,26 +144,32 @@ impl Render for EditAnnotationView {
                 .child(
                     h_flex()
                         .gap_3()
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(field("Primary Category *", primary, cx)),
-                        )
+                        .child(div().flex_1().child(field(
+                            localized(cx, "Primary category *", "Основная категория *"),
+                            primary,
+                            cx,
+                        )))
                         .when(show_secondary, |this| {
                             this.child(div().flex_1().child(field(
-                                "Secondary Category *",
+                                localized(cx, "Secondary category *", "Дополнительная категория *"),
                                 secondary,
                                 cx,
                             )))
                         }),
                 )
                 .when(needs_description, |this| {
-                    this.child(field("Description *", Input::new(&self.description), cx))
+                    this.child(field(
+                        localized(cx, "Description *", "Описание *"),
+                        Input::new(&self.description),
+                        cx,
+                    ))
                 })
         } else {
             v_flex().child(field(
-                "Category",
-                div().text_sm().child("Background Noise"),
+                localized(cx, "Category", "Категория"),
+                div()
+                    .text_sm()
+                    .child(localized(cx, "Background noise", "Фоновый шум")),
                 cx,
             ))
         };
@@ -170,21 +178,30 @@ impl Render for EditAnnotationView {
             .gap_3()
             .child(dialog_header(title, None, cx))
             .child(categories)
-            .child(field("Intensity *", intensity, cx))
+            .child(field(
+                localized(cx, "Intensity *", "Интенсивность *"),
+                intensity,
+                cx,
+            ))
             .children(dialog.error.map(|error| error_text(error.to_string(), cx)))
             .child(
                 dialog_footer()
                     .child(
                         Button::new("edit-annotation-cancel")
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .on_click(move |_, window, cx| {
                                 cancel(&model, cx);
                                 window.close_dialog(cx);
                             }),
                     )
                     .child(
-                        primary_button("edit-annotation-save", "Save changes", false, false)
-                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+                        primary_button(
+                            "edit-annotation-save",
+                            localized(cx, "Save", "Сохранить"),
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     ),
             )
             .into_any_element()

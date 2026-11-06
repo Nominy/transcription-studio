@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::structure::AuditionKey;
+use crate::i18n::Text;
 
 /// Preference-store key the custom bindings JSON is saved under.
 pub const HOTKEY_STORAGE_KEY: &str = "studio.native.hotkeyBindings.v1";
@@ -112,8 +113,8 @@ editor_actions! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionDef {
     pub action: EditorAction,
-    pub section: &'static str,
-    pub description: &'static str,
+    pub section: Text,
+    pub description: Text,
     pub context: KeyContext,
     pub defaults: &'static [&'static str],
     /// Whether the user may rebind it (fixed text-editing keys are not configurable).
@@ -122,8 +123,8 @@ pub struct ActionDef {
 
 const fn def(
     action: EditorAction,
-    section: &'static str,
-    description: &'static str,
+    section: Text,
+    description: Text,
     context: KeyContext,
     defaults: &'static [&'static str],
 ) -> ActionDef {
@@ -139,12 +140,12 @@ const fn def(
 
 const fn fixed(
     action: EditorAction,
-    description: &'static str,
+    description: Text,
     defaults: &'static [&'static str],
 ) -> ActionDef {
     ActionDef {
         action,
-        section: "Transcript Text",
+        section: TEXT_EDITING,
         description,
         context: KeyContext::TranscriptText,
         defaults,
@@ -152,151 +153,189 @@ const fn fixed(
     }
 }
 
+const fn t(en: &'static str, ru: &'static str) -> Text {
+    Text::new(en, ru)
+}
+
 use EditorAction as A;
 use KeyContext::{CutPreview, Dialog, Global, Timeline, Transcript, TranscriptText};
 
-const GLOBAL: &str = "Global Controls";
-const TIMELINE: &str = "Timeline";
-const NAV: &str = "Transcript Navigation";
-const DIALOG: &str = "Dialog Controls";
-const HELPER: &str = "Helper Editing";
-const TIMELINE_EDITING: &str = "Timeline Editing";
-const CUT: &str = "Cut Preview";
+const GLOBAL: Text = t("General", "Общие");
+const TIMELINE: Text = t("Timeline", "Таймлайн");
+const NAV: Text = t("Transcript navigation", "Навигация по расшифровке");
+const DIALOG: Text = t("Dialogs", "Диалоги");
+const HELPER: Text = t("Helper editing", "Редактирование Helper");
+const TIMELINE_EDITING: Text = t("Timeline editing", "Редактирование таймлайна");
+const CUT: Text = t("Cut selection", "Выделение для разреза");
+const TEXT_EDITING: Text = t("Text editing", "Редактирование текста");
 
 /// All actions in hotkeys-dialog order.
 pub const ACTION_DEFS: &[ActionDef] = &[
-    def(A::PlayPause, GLOBAL, "Play/Pause", Timeline, &["space"]),
+    def(
+        A::PlayPause,
+        GLOBAL,
+        t("Play / pause", "Воспроизвести / пауза"),
+        Timeline,
+        &["space"],
+    ),
     def(
         A::PreviousSegment,
         GLOBAL,
-        "Seek to previous segment",
+        t("Go to previous segment", "К предыдущему сегменту"),
         Timeline,
         &["left"],
     ),
     def(
         A::NextSegment,
         GLOBAL,
-        "Seek to next segment",
+        t("Go to next segment", "К следующему сегменту"),
         Timeline,
         &["right"],
     ),
-    def(A::Undo, GLOBAL, "Undo", Timeline, &["secondary-z"]),
+    def(
+        A::Undo,
+        GLOBAL,
+        t("Undo", "Отменить"),
+        Timeline,
+        &["secondary-z"],
+    ),
     def(
         A::Redo,
         GLOBAL,
-        "Redo",
+        t("Redo", "Повторить"),
         Timeline,
         &["secondary-shift-z", "secondary-y"],
     ),
     def(
         A::OpenFind,
         GLOBAL,
-        "Find in transcript",
+        t("Find in transcript", "Поиск в расшифровке"),
         Global,
         &["secondary-f"],
     ),
     def(
         A::FindNext,
         GLOBAL,
-        "Find next match",
+        t("Next match", "Следующее совпадение"),
         Global,
         &["f3", "secondary-g"],
     ),
     def(
         A::FindPrevious,
         GLOBAL,
-        "Find previous match",
+        t("Previous match", "Предыдущее совпадение"),
         Global,
         &["shift-f3", "secondary-shift-g"],
     ),
     def(
         A::DeleteSelectedSegment,
         GLOBAL,
-        "Delete current segment when not typing",
+        t("Delete the selected segment", "Удалить выбранный сегмент"),
         Timeline,
         &["d"],
     ),
     def(
         A::BackToProjects,
         GLOBAL,
-        "Back to projects",
+        t("Back to Start", "На начальный экран"),
         Timeline,
         &["alt-left"],
     ),
     def(
         A::ToggleOverlay,
         TIMELINE,
-        "Toggle 1-second overlay",
+        t(
+            "Show or hide the 1-second overlay",
+            "Показать или скрыть секундную сетку",
+        ),
         Timeline,
         &["t"],
     ),
     def(
         A::SwitchGhostCursorLane,
         NAV,
-        "Switch ghost cursor lane",
+        t(
+            "Switch the ghost cursor to the other track",
+            "Переключить призрачный курсор на другую дорожку",
+        ),
         Transcript,
         &["tab"],
     ),
     def(
         A::FocusPreviousSegment,
         NAV,
-        "Focus previous row's text from its start",
+        t(
+            "Edit the previous segment's text",
+            "Редактировать текст предыдущего сегмента",
+        ),
         Timeline,
         &["shift-left"],
     ),
     def(
         A::FocusNextSegment,
         NAV,
-        "Focus next row's text from its start",
+        t(
+            "Edit the next segment's text",
+            "Редактировать текст следующего сегмента",
+        ),
         Timeline,
         &["shift-right"],
     ),
     def(
         A::CreateRegionSubmit,
         DIALOG,
-        "Submit Add Region dialog",
+        t("Add the new segment", "Добавить новый сегмент"),
         Dialog,
         &["secondary-enter"],
     ),
     def(
         A::CreateRegionEscape,
         DIALOG,
-        "Cancel Add Region input",
+        t("Cancel the new segment", "Отменить новый сегмент"),
         Dialog,
         &["escape"],
     ),
     def(
         A::EscapePressed,
         DIALOG,
-        "Close active dialog or cancel cut selection",
+        t(
+            "Close the dialog or clear the cut selection",
+            "Закрыть диалог или снять выделение",
+        ),
         Timeline,
         &["escape"],
     ),
     def(
         A::ActivateDefaultSurfaceAction,
         DIALOG,
-        "Activate default action",
+        t("Confirm", "Подтвердить"),
         Timeline,
         &["enter"],
     ),
     def(
         A::ResetSpeakerWorkflow,
         HELPER,
-        "Reset speaker workflow lanes",
+        t("Reset the speaker tracks", "Сбросить дорожки спикеров"),
         Global,
         &["alt-`"],
     ),
     def(
         A::SwitchSpeakerWorkflowLane1,
         HELPER,
-        "Switch active speaker workflow lane 1",
+        t(
+            "Switch to speaker track 1",
+            "Переключиться на дорожку спикера 1",
+        ),
         Global,
         &["alt-1"],
     ),
     def(
         A::SwitchSpeakerWorkflowLane2,
         HELPER,
-        "Switch active speaker workflow lane 2",
+        t(
+            "Switch to speaker track 2",
+            "Переключиться на дорожку спикера 2",
+        ),
         Global,
         &["alt-2"],
     ),
@@ -305,123 +344,179 @@ pub const ACTION_DEFS: &[ActionDef] = &[
     def(
         A::SwapSplitPanes,
         HELPER,
-        "Swap Split speaker panes",
+        t("Swap the speaker panes", "Поменять панели спикеров местами"),
         Global,
         &["secondary-i"],
     ),
     def(
         A::RewindPlaybackOneSecond,
         HELPER,
-        "Rewind playback 1000ms",
+        t("Rewind 1 second", "Назад на 1 секунду"),
         Global,
         &["alt-x"],
     ),
     def(
         A::MoveTextBeforeCaretToPreviousSegment,
         HELPER,
-        "Move text before caret to previous segment",
+        t(
+            "Move text before the cursor to the previous segment",
+            "Перенести текст до курсора в предыдущий сегмент",
+        ),
         TranscriptText,
         &["alt-["],
     ),
     def(
         A::MoveTextAfterCaretToNextSegment,
         HELPER,
-        "Move text after caret to next segment",
+        t(
+            "Move text after the cursor to the next segment",
+            "Перенести текст после курсора в следующий сегмент",
+        ),
         TranscriptText,
         &["alt-]"],
     ),
     def(
         A::IncreasePlaybackSpeed,
         TIMELINE_EDITING,
-        "Increase playback speed",
+        t("Faster", "Быстрее"),
         Timeline,
         &["shift-1"],
     ),
     def(
         A::DecreasePlaybackSpeed,
         TIMELINE_EDITING,
-        "Decrease playback speed",
+        t("Slower", "Медленнее"),
         Timeline,
         &["shift-2"],
     ),
     def(
         A::MergeSelectedSegmentAbove,
         TIMELINE_EDITING,
-        "Merge with previous segment",
+        t(
+            "Merge with previous segment",
+            "Объединить с предыдущим сегментом",
+        ),
         Timeline,
         &["alt-shift-up"],
     ),
     def(
         A::MergeSelectedSegmentBelow,
         TIMELINE_EDITING,
-        "Merge with next segment",
+        t(
+            "Merge with next segment",
+            "Объединить со следующим сегментом",
+        ),
         Timeline,
         &["alt-shift-down"],
     ),
     def(
         A::TrimCurrentSegmentToAudio,
         TIMELINE_EDITING,
-        "Trim current segment to nearby visible audio",
+        t(
+            "Trim the segment to the speech in it",
+            "Обрезать сегмент по речи",
+        ),
         Timeline,
         &["alt-r"],
     ),
     def(
         A::TrimAllVisibleSegmentsToAudio,
         TIMELINE_EDITING,
-        "Trim all visible segments to nearby visible audio",
+        t(
+            "Trim all visible segments to their speech",
+            "Обрезать все видимые сегменты по речи",
+        ),
         Timeline,
         &["alt-shift-r"],
     ),
     def(
         A::AutoInsertSegmentAtCaret,
         TIMELINE_EDITING,
-        "Create empty segment around nearest uncovered speech near caret",
+        t(
+            "Add a segment around the nearest speech",
+            "Добавить сегмент вокруг ближайшей речи",
+        ),
         Timeline,
         &["alt-c"],
     ),
     def(
         A::AutoSegmentVisibleSilences,
         TIMELINE_EDITING,
-        "Split visible segments on silence runs",
+        t(
+            "Split visible segments at silences",
+            "Разделить видимые сегменты по паузам",
+        ),
         Timeline,
         &["alt-shift-s"],
     ),
     def(
         A::CommitCutPreviewSmartSplit,
         CUT,
-        "Commit active cut preview with smart text split",
+        t(
+            "Split here, splitting the text by words",
+            "Разрезать здесь, разделив текст по словам",
+        ),
         CutPreview,
         &["s"],
     ),
     def(
         A::CommitCutPreviewPlainSplit,
         CUT,
-        "Commit active cut preview without smart text split",
+        t(
+            "Split here, keeping the text",
+            "Разрезать здесь, сохранив текст",
+        ),
         CutPreview,
         &["shift-s"],
     ),
     def(
         A::LoopCutPreviewOverlay,
         CUT,
-        "Loop playback over the cut selection (again: stop)",
+        t(
+            "Loop the selection (again to stop)",
+            "Повторять выделение (ещё раз — стоп)",
+        ),
         CutPreview,
         &["l"],
     ),
-    fixed(A::TextUndo, "Undo text edit in this row", &["secondary-z"]),
+    fixed(
+        A::TextUndo,
+        t("Undo text edit", "Отменить правку текста"),
+        &["secondary-z"],
+    ),
     fixed(
         A::TextRedo,
-        "Redo text edit in this row",
+        t("Redo text edit", "Повторить правку текста"),
         &["secondary-shift-z", "secondary-y"],
     ),
     fixed(
         A::TranscriptEscape,
-        "Leave the row and toggle playback",
+        t(
+            "Leave the segment and play / pause",
+            "Выйти из сегмента и воспроизвести / пауза",
+        ),
         &["escape"],
     ),
-    fixed(A::CompletionPrevious, "Previous completion", &["up"]),
-    fixed(A::CompletionNext, "Next completion", &["down"]),
-    fixed(A::CompletionAccept, "Accept completion", &["enter", "tab"]),
-    fixed(A::CompletionDismiss, "Dismiss completions", &["escape"]),
+    fixed(
+        A::CompletionPrevious,
+        t("Previous suggestion", "Предыдущая подсказка"),
+        &["up"],
+    ),
+    fixed(
+        A::CompletionNext,
+        t("Next suggestion", "Следующая подсказка"),
+        &["down"],
+    ),
+    fixed(
+        A::CompletionAccept,
+        t("Accept suggestion", "Принять подсказку"),
+        &["enter", "tab"],
+    ),
+    fixed(
+        A::CompletionDismiss,
+        t("Hide suggestions", "Скрыть подсказки"),
+        &["escape"],
+    ),
 ];
 
 impl EditorAction {

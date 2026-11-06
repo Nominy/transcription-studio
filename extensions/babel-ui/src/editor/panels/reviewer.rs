@@ -22,16 +22,48 @@ use sonus_babel_services::review::{
 
 use super::task::TaskPanels;
 use crate::services::BabelServices;
+use crate::text;
 use sonus_gold::prefs::AiPreferences;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::services::spawn_service_in;
 
 const AUTOSAVE_INTERVAL: Duration = Duration::from_millis(500);
-const REVIEW_CHANGED: &str = "The review changed. Refresh Magic Review before applying.";
-const GRADES_STALE: &str = "The transcript changed. Generate grades again.";
 /// Callers named in row-draft commit messages.
 const MAGIC_REVIEW: &str = "Magic Review";
 const GRADER: &str = "Review Grader";
+
+fn review_changed(cx: &App) -> &'static str {
+    text::localized(
+        cx,
+        "The review changed. Refresh Magic Review before applying.",
+        "Проверка изменилась. Обновите Magic Review перед применением.",
+    )
+}
+
+fn grades_stale(cx: &App) -> &'static str {
+    text::localized(
+        cx,
+        "The transcript changed. Generate grades again.",
+        "Расшифровка изменилась. Сгенерируйте оценки заново.",
+    )
+}
+
+fn preparing_review(cx: &App) -> &'static str {
+    text::localized(cx, "Preparing review…", "Подготовка проверки…")
+}
+
+fn no_feedback(cx: &App) -> &'static str {
+    text::localized(
+        cx,
+        "No feedback came back. Try again.",
+        "Отзыв не получен. Попробуйте снова.",
+    )
+}
+
+/// Grader failure for the workspace status line (single line, technical text after the dash).
+fn grader_failed(cx: &App, error: &str) -> String {
+    text::failed(cx, "Grader didn't work.", "Grader: не удалось.", error)
+}
 
 /// Grading prepared alongside a Magic Review run.
 enum GradeState {
@@ -178,18 +210,35 @@ impl TaskPanels {
         });
         let (backend, review_action_id, current) = match started {
             Ok(started) => started,
-            Err(error) => return self.status(format!("Magic Review failed: {error:#}"), cx),
+            Err(error) => {
+                return self.status(
+                    text::failed(
+                        cx,
+                        "Magic Review didn't work.",
+                        "Magic Review: не удалось.",
+                        error,
+                    ),
+                    cx,
+                );
+            }
         };
         self.review.cancel_run();
         self.review.workspace.clear();
         self.review.running = true;
         self.review.status = None;
-        self.review.grading_status = Some(("Preparing review…".into(), false));
+        self.review.grading_status = Some((preparing_review(cx).into(), false));
         if fast {
-            self.status("Magic Review: generating feedback…", cx);
+            self.status(
+                text::localized(
+                    cx,
+                    "Magic Review: generating feedback…",
+                    "Magic Review: генерация отзыва…",
+                ),
+                cx,
+            );
         } else {
             self.review.open = true;
-            self.review.busy = Some("Preparing review…".into());
+            self.review.busy = Some(preparing_review(cx).into());
         }
         self.start_review_run(backend, review_action_id, current, fast, window, cx);
     }
@@ -212,8 +261,8 @@ impl TaskPanels {
         };
         self.review.cancel_run();
         self.review.workspace.clear();
-        self.review.busy = Some("Refreshing…".into());
-        self.review.grading_status = Some(("Preparing review…".into(), false));
+        self.review.busy = Some(text::localized(cx, "Refreshing…", "Обновление…").into());
+        self.review.grading_status = Some((preparing_review(cx).into(), false));
         self.start_review_run(backend, review_action_id, current, false, window, cx);
     }
 
@@ -263,7 +312,10 @@ impl TaskPanels {
             grade: GradeState::Pending,
             awaiting_grades: None,
         });
-        self.review.grading_status = Some(("Generating grades…".into(), false));
+        self.review.grading_status = Some((
+            text::localized(cx, "Generating grades…", "Генерация оценок…").into(),
+            false,
+        ));
 
         let grader = backend.clone();
         let grade_snapshot = snapshot.clone();
@@ -286,7 +338,7 @@ impl TaskPanels {
                     }
                     match result {
                         Ok(review) if review.feedback.is_empty() => {
-                            this.fail_review("No feedback came back. Try again.".into(), cx);
+                            this.fail_review(no_feedback(cx).to_string(), cx);
                         }
                         Ok(review) => {
                             let feedback = review.feedback.clone();
@@ -312,9 +364,19 @@ impl TaskPanels {
                             this.review.workspace.replace_session(session);
                             this.review.running = false;
                             this.review.busy = None;
-                            this.review.status =
-                                Some(("Open a change to see the suggestion.".into(), false));
-                            this.status("Review opened.", cx);
+                            this.review.status = Some((
+                                text::localized(
+                                    cx,
+                                    "Open a change to see the suggestion.",
+                                    "Откройте изменение, чтобы увидеть предложение.",
+                                )
+                                .into(),
+                                false,
+                            ));
+                            this.status(
+                                text::localized(cx, "Review opened.", "Проверка открыта."),
+                                cx,
+                            );
                         }
                         Err(error) => this.fail_review(format!("{error:#}"), cx),
                     }
@@ -338,16 +400,26 @@ impl TaskPanels {
         match result {
             Ok(grade) => {
                 current.grade = GradeState::Ready(grade);
-                self.review.grading_status = Some(("Grades ready to apply".into(), false));
+                self.review.grading_status = Some((
+                    text::localized(cx, "Grades ready to apply", "Оценки готовы к применению")
+                        .into(),
+                    false,
+                ));
             }
             Err(error) => {
                 let error = format!("{error:#}");
                 current.grade = GradeState::Failed(error.clone());
-                self.review.grading_status =
-                    Some(("Grading failed — retry Magic Review".into(), true));
+                self.review.grading_status = Some((
+                    text::localized(
+                        cx,
+                        "Couldn't grade. Run Magic Review again.",
+                        "Не удалось оценить. Запустите Magic Review снова.",
+                    )
+                    .into(),
+                    true,
+                ));
                 if self.review.open {
-                    self.review.status =
-                        Some((format!("Review Grader failed: {error}").into(), true));
+                    self.review.status = Some((grader_failed(cx, &error).into(), true));
                 }
             }
         }
@@ -375,8 +447,18 @@ impl TaskPanels {
         };
         if matches!(current.grade, GradeState::Pending) {
             current.awaiting_grades = Some(feedback);
-            self.review.busy = self.review.open.then(|| "Waiting for grades…".into());
-            self.status("Magic Review: waiting for grades…", cx);
+            self.review.busy = self
+                .review
+                .open
+                .then(|| text::localized(cx, "Waiting for grades…", "Ожидание оценок…").into());
+            self.status(
+                text::localized(
+                    cx,
+                    "Magic Review: waiting for grades…",
+                    "Magic Review: ожидание оценок…",
+                ),
+                cx,
+            );
             return;
         }
         self.apply_review_results(run, feedback, window, cx);
@@ -395,16 +477,23 @@ impl TaskPanels {
         };
         let unchanged = transcript_matches(&self.model, MAGIC_REVIEW, &current.snapshot, cx);
         let grades = match (&current.grade, unchanged) {
-            (_, false) => Err(REVIEW_CHANGED.to_string()),
+            (_, false) => Err(review_changed(cx).to_string()),
             (GradeState::Ready(grade), true) => Ok(grade.grades.clone()),
-            (GradeState::Failed(error), true) => Err(format!("Review Grader failed: {error}")),
+            (GradeState::Failed(error), true) => Err(grader_failed(cx, error)),
             (GradeState::Pending, true) => return,
         };
         let grades = match grades {
             Ok(grades) => grades,
             Err(error) => {
-                self.review.grading_status =
-                    Some(("Grades not applied — retry Magic Review".into(), true));
+                self.review.grading_status = Some((
+                    text::localized(
+                        cx,
+                        "Grades not applied. Run Magic Review again.",
+                        "Оценки не применены. Запустите Magic Review снова.",
+                    )
+                    .into(),
+                    true,
+                ));
                 return self.fail_review(error, cx);
             }
         };
@@ -415,8 +504,26 @@ impl TaskPanels {
                 self.review.open = false;
                 self.review.running = false;
                 self.review.busy = None;
-                self.review.grading_status = Some(("Grades applied".into(), false));
-                self.status(format!("Applied feedback to {applied} categories."), cx);
+                self.review.grading_status = Some((
+                    text::localized(cx, "Grades applied", "Оценки применены").into(),
+                    false,
+                ));
+                self.status(
+                    text::localized_fmt(
+                        cx,
+                        "Applied feedback to {count}.",
+                        "Отзыв применён: {count}.",
+                        &[(
+                            "count",
+                            &text::count(
+                                applied as u64,
+                                ("category", "categories"),
+                                ("категория", "категории", "категорий"),
+                            ),
+                        )],
+                    ),
+                    cx,
+                );
             }
             Err(error) => self.fail_review(error, cx),
         }
@@ -431,7 +538,15 @@ impl TaskPanels {
         if self.review.open {
             self.review.status = Some((error.clone().into(), true));
         }
-        self.status(format!("Magic Review failed: {error}"), cx);
+        self.status(
+            text::failed(
+                cx,
+                "Magic Review didn't work.",
+                "Magic Review: не удалось.",
+                &error,
+            ),
+            cx,
+        );
         cx.notify();
     }
 
@@ -441,8 +556,15 @@ impl TaskPanels {
             self.save_review_comments(window, cx);
         }
         if self.review.run.is_some() {
-            self.review.grading_status =
-                Some(("Grading cancelled. Run Magic Review again.".into(), false));
+            self.review.grading_status = Some((
+                text::localized(
+                    cx,
+                    "Grading cancelled. Run Magic Review again.",
+                    "Оценка отменена. Запустите Magic Review снова.",
+                )
+                .into(),
+                false,
+            ));
         }
         self.review.cancel_run();
         self.review.open = false;
@@ -500,8 +622,8 @@ impl TaskPanels {
             .workspace
             .set_template_search_open(&card_id, false);
         self.mutate_session(
-            "Matching template…",
-            "Template matched.",
+            text::localized(cx, "Matching template…", "Подбор шаблона…"),
+            text::localized(cx, "Template matched.", "Шаблон подобран."),
             async move {
                 backend
                     .set_template_match(&session_id, &card, &template_id)
@@ -521,8 +643,8 @@ impl TaskPanels {
         let backend = Self::backend(cx);
         let session_id = self.review.workspace.session_id().to_string();
         self.mutate_session(
-            "Removing match…",
-            "Template removed.",
+            text::localized(cx, "Removing match…", "Удаление совпадения…"),
+            text::localized(cx, "Template removed.", "Шаблон удалён."),
             async move { backend.clear_template_match(&session_id, &card_id).await },
             window,
             cx,
@@ -541,8 +663,8 @@ impl TaskPanels {
         let session_id = self.review.workspace.session_id().to_string();
         self.review.ideas_open = true;
         self.mutate_session(
-            "Generating ideas…",
-            "Ideas ready.",
+            text::localized(cx, "Generating ideas…", "Генерация идей…"),
+            text::localized(cx, "Ideas ready.", "Идеи готовы."),
             async move { backend.generate_template_suggestions(&session_id).await },
             window,
             cx,
@@ -559,8 +681,14 @@ impl TaskPanels {
         let backend = Self::backend(cx);
         let session_id = self.review.workspace.session_id().to_string();
         let (busy, done) = match decision {
-            ProposalDecision::Approved => ("Approving…", "Suggestion approved."),
-            ProposalDecision::Rejected => ("Rejecting…", "Suggestion rejected."),
+            ProposalDecision::Approved => (
+                text::localized(cx, "Approving…", "Одобрение…"),
+                text::localized(cx, "Suggestion approved.", "Предложение одобрено."),
+            ),
+            ProposalDecision::Rejected => (
+                text::localized(cx, "Rejecting…", "Отклонение…"),
+                text::localized(cx, "Suggestion rejected.", "Предложение отклонено."),
+            ),
         };
         self.mutate_session(
             busy,
@@ -649,7 +777,13 @@ impl TaskPanels {
                 self.review.busy = None;
             }
             self.review.status = Some((
-                format!("Comments were not saved: {error}. Edit a comment to retry.").into(),
+                text::failed(
+                    cx,
+                    "Couldn't save the comments. Edit a comment to retry.",
+                    "Не удалось сохранить комментарии. Измените комментарий, чтобы повторить.",
+                    error,
+                )
+                .into(),
                 true,
             ));
         }
@@ -672,7 +806,7 @@ impl TaskPanels {
         }
     }
 
-    /// "Apply & Sync" / top "Apply" (`apply`) and "Apply without review" (`skip`).
+    /// "Apply and sync" / top "Apply" (`apply`) and "Apply without review" (`skip`).
     pub fn finalize_review(
         &mut self,
         mode: &'static str,
@@ -683,12 +817,12 @@ impl TaskPanels {
             return;
         }
         if self.review.run.is_none() {
-            self.review.status = Some((REVIEW_CHANGED.into(), true));
+            self.review.status = Some((review_changed(cx).into(), true));
             return cx.notify();
         }
         match self.review.workspace.request_finalize(mode) {
             Ok(next) => {
-                self.review.busy = Some("Applying…".into());
+                self.review.busy = Some(text::localized(cx, "Applying…", "Применение…").into());
                 self.follow_review_next(next, window, cx);
             }
             Err(error) => self.review.status = Some((format!("{error:#}").into(), true)),
@@ -731,8 +865,15 @@ impl TaskPanels {
                     Err(error) => {
                         this.review.busy = None;
                         this.review.status = Some((format!("{error:#}").into(), true));
-                        this.review.grading_status =
-                            Some(("Grades not applied — refresh Magic Review".into(), true));
+                        this.review.grading_status = Some((
+                            text::localized(
+                                cx,
+                                "Grades not applied. Refresh Magic Review.",
+                                "Оценки не применены. Обновите Magic Review.",
+                            )
+                            .into(),
+                            true,
+                        ));
                     }
                 }
                 cx.notify();
@@ -753,10 +894,15 @@ impl TaskPanels {
         if stale {
             self.grader.result = None;
             self.grader.snapshot = None;
-            self.grader.status = Some((GRADES_STALE.into(), true));
+            self.grader.status = Some((grades_stale(cx).into(), true));
         } else if self.grader.result.is_none() {
             self.grader.status = Some((
-                "Grades compare the original and reviewed transcript. 1 is best.".into(),
+                text::localized(
+                    cx,
+                    "Grades compare the original and reviewed transcript. 1 is best.",
+                    "Оценки сравнивают исходную и проверенную расшифровку. 1 — лучшая.",
+                )
+                .into(),
                 false,
             ));
         }
@@ -770,7 +916,7 @@ impl TaskPanels {
         cx.notify();
     }
 
-    /// "Generate grades" / "Regenerate".
+    /// "Generate grades" / "Generate again".
     pub fn generate_grades(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.grader.busy {
             return;
@@ -790,7 +936,10 @@ impl TaskPanels {
         self.grader.busy = true;
         self.grader.result = None;
         self.grader.snapshot = None;
-        self.grader.status = Some(("Reading transcripts…".into(), false));
+        self.grader.status = Some((
+            text::localized(cx, "Reading transcripts…", "Чтение расшифровок…").into(),
+            false,
+        ));
         let revision = self.grader.revision;
         let babel = crate::services::document_client(&self.model, cx);
         let task = spawn_service_in(
@@ -821,7 +970,7 @@ impl TaskPanels {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.grader.status = Some(("Grading…".into(), false));
+        self.grader.status = Some((text::localized(cx, "Grading…", "Оценка…").into(), false));
         let revision = self.grader.revision;
         let request = snapshot.clone();
         let task = spawn_service_in(
@@ -836,13 +985,15 @@ impl TaskPanels {
                     .map_err(|error| format!("{error:#}"))
                     .and_then(|grade| {
                         if grade.review_action_id != snapshot.review_action_id {
-                            return Err(
-                                "The grades are for another review. Generate grades again."
-                                    .to_string(),
-                            );
+                            return Err(text::localized(
+                                cx,
+                                "The grades are for another review. Generate grades again.",
+                                "Эти оценки для другой проверки. Сгенерируйте оценки заново.",
+                            )
+                            .to_string());
                         }
                         if !transcript_matches(&this.model, GRADER, &snapshot, cx) {
-                            return Err(GRADES_STALE.to_string());
+                            return Err(grades_stale(cx).to_string());
                         }
                         Ok(grade)
                     });
@@ -853,7 +1004,12 @@ impl TaskPanels {
                         this.grader.result = Some(grade);
                         this.grader.snapshot = Some(snapshot);
                         this.grader.status = Some((
-                            "Check the grades. Adjust any before applying.".into(),
+                            text::localized(
+                                cx,
+                                "Check the grades and adjust any before applying.",
+                                "Проверьте оценки и при необходимости измените их перед применением.",
+                            )
+                            .into(),
                             false,
                         ));
                         cx.notify();
@@ -906,7 +1062,7 @@ impl TaskPanels {
         if !transcript_matches(&self.model, GRADER, snapshot, cx) {
             self.grader.result = None;
             self.grader.snapshot = None;
-            self.grader.status = Some((GRADES_STALE.into(), true));
+            self.grader.status = Some((grades_stale(cx).into(), true));
             return cx.notify();
         }
         let grades = result.grades.clone();
@@ -915,7 +1071,7 @@ impl TaskPanels {
                 self.grader.result = None;
                 self.grader.snapshot = None;
                 self.grader.status = Some((
-                    "Grades applied. Your notes are untouched. Submit in Babel when ready.".into(),
+                    text::localized(cx, "Grades applied.", "Оценки применены.").into(),
                     false,
                 ));
             }

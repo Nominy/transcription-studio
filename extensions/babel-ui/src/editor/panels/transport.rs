@@ -23,8 +23,9 @@ use sonus_babel_domain::workflow::BabelWorkflowExt;
 use studio_editor::editor_model::SaveStatus;
 
 use super::dialogs::submit;
-use super::flows::SKIP_DISABLED_TOOLTIP;
+use super::flows::skip_disabled_tooltip;
 use super::task::{Drawer, TaskPanels, TaskPanelsEvent};
+use crate::text::{count, failed, localized, localized_fmt};
 use sonus_shell::ShellHandle;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::ui::{
@@ -74,17 +75,16 @@ impl TransportStrip {
         if counts.errors == 0 && counts.warnings == 0 {
             return None;
         }
-        let label = problem_summary(counts.errors, counts.warnings);
-        // Tabular figures, sized for counts with as many digits as the row count, both
+        let label = problem_summary(cx, counts.errors, counts.warnings);
         // plurals and both kinds: the count changing never moves the step buttons.
         let digits = doc.project().segments.len().max(1).to_string().len() as u32;
         let most = 10_usize.pow(digits) - 1;
         let label_slot = stable_text(
             label,
             [
-                problem_summary(most, 0),
-                problem_summary(0, most),
-                problem_summary(most, most),
+                problem_summary(cx, most, 0),
+                problem_summary(cx, 0, most),
+                problem_summary(cx, most, most),
             ],
         )
         .font_features(tabular_figures());
@@ -122,37 +122,38 @@ impl TransportStrip {
                 .child(nav(
                     "problem-previous",
                     IconName::ChevronUp,
-                    "Previous problem",
+                    localized(cx, "Previous problem", "Предыдущая проблема"),
                     -1,
                 ))
                 .child(nav(
                     "problem-next",
                     IconName::ChevronDown,
-                    "Next problem",
+                    localized(cx, "Next problem", "Следующая проблема"),
                     1,
                 )),
         )
     }
 
-    /// "Export" menu: Babel JSON file or Exaudio project folder.
-    fn render_export(&self) -> impl IntoElement + use<> {
+    fn render_export(&self, cx: &App) -> impl IntoElement + use<> {
         let model = self.model.clone();
+        let json_label = localized(cx, "Babel JSON…", "Babel JSON…");
+        let folder_label = localized(cx, "Project folder…", "Папка проекта…");
         Button::new("export")
             .ghost()
             .small()
             .icon(IconName::FolderOpen)
-            .label("Export")
-            .tooltip("Export this task")
+            .label(localized(cx, "Export", "Экспорт"))
+            .tooltip(localized(cx, "Export this task", "Экспортировать задачу"))
             .dropdown_menu(move |menu, _, _| {
                 let json = model.clone();
                 let folder = model.clone();
                 menu.item(
-                    PopupMenuItem::new("Babel JSON…").on_click(move |_, window, cx| {
+                    PopupMenuItem::new(json_label).on_click(move |_, window, cx| {
                         crate::screens::local_files::export_babel_json(&json, window, cx);
                     }),
                 )
                 .item(
-                    PopupMenuItem::new("Project folder…").on_click(move |_, window, cx| {
+                    PopupMenuItem::new(folder_label).on_click(move |_, window, cx| {
                         local_files::export_project_folder(&folder, window, cx);
                     }),
                 )
@@ -163,6 +164,8 @@ impl TransportStrip {
         let panels = self.panels.read(cx);
         let drawer = panels.drawer;
         let has_feedback = panels.feedback.is_some();
+        let opened = localized(cx, "Feedback panel opened", "Панель отзыва открыта");
+        let closed = localized(cx, "Feedback panel closed", "Панель отзыва закрыта");
         let toggle = |id: &'static str,
                       icon: IconName,
                       label: &'static str,
@@ -181,14 +184,7 @@ impl TransportStrip {
                         let opening = panels.drawer != target;
                         panels.toggle_drawer(target, cx);
                         if target == Drawer::Feedback {
-                            panels.status(
-                                if opening {
-                                    "Feedback panel opened."
-                                } else {
-                                    "Feedback panel closed."
-                                },
-                                cx,
-                            );
+                            panels.status(if opening { opened } else { closed }, cx);
                         }
                     });
                 })
@@ -199,16 +195,24 @@ impl TransportStrip {
                 this.child(toggle(
                     "toggle-feedback",
                     IconName::FileText,
-                    "Feedback",
-                    "Add feedback for L1 transcriber",
+                    localized(cx, "Feedback", "Отзыв"),
+                    localized(
+                        cx,
+                        "Leave feedback for the transcriber",
+                        "Оставить отзыв транскрибатору",
+                    ),
                     Drawer::Feedback,
                 ))
             })
             .child(toggle(
                 "toggle-assistant",
                 IconName::Bot,
-                "Assistant",
-                "Reviewer and drafting tools",
+                localized(cx, "Assistant", "Помощник"),
+                localized(
+                    cx,
+                    "Review and drafting tools",
+                    "Инструменты ревью и черновиков",
+                ),
                 Drawer::Assistant,
             ))
     }
@@ -226,10 +230,11 @@ impl TransportStrip {
                     .borrow()
                     .view(session)
                     .submit_eligibility(project);
-                let submit_copy = submit::copy(eligibility.kind);
-                let submit_tooltip = eligibility
-                    .blocker
-                    .map_or("Submit your review", |blocker| blocker.reason());
+                let submit_copy = submit::copy(eligibility.kind, cx);
+                let submit_tooltip = eligibility.blocker.map_or(
+                    localized(cx, "Submit this task", "Отправить задачу"),
+                    |blocker| blocker.reason(),
+                );
                 let skip = EditorSession::skip_chunk_available(project).then(|| {
                     (
                         flows.skip.pending,
@@ -247,20 +252,22 @@ impl TransportStrip {
                 if let Some(drop) = drop_claim {
                     let panels = self.panels.clone();
                     let dropping = drop.is_dropping || drop_pending;
+                    let releasing = localized(cx, "Releasing…", "Отпускаем…");
+                    let release = localized(cx, "Release task", "Отпустить задачу");
                     row = row.child(
                         Button::new("drop-claim")
                             .outline()
                             .small()
                             .child(stable_text(
-                                if drop.is_dropping {
-                                    "Dropping..."
-                                } else {
-                                    "Drop Claim"
-                                },
-                                ["Dropping...", "Drop Claim"],
+                                if drop.is_dropping { releasing } else { release },
+                                [releasing, release],
                             ))
-                            .accessibility_label("Drop Claim")
-                            .tooltip("Drop action for another worker")
+                            .accessibility_label(release)
+                            .tooltip(localized(
+                                cx,
+                                "Let another worker take this task",
+                                "Передать задачу другому исполнителю",
+                            ))
                             .loading(drop_pending)
                             .disabled(dropping)
                             .on_click(move |_, window, cx| {
@@ -274,11 +281,15 @@ impl TransportStrip {
                         Button::new("skip-chunk")
                             .outline()
                             .small()
-                            .label("Skip Chunk")
+                            .label(localized(cx, "Skip", "Пропустить"))
                             .tooltip(if allowed {
-                                "Archive this chunk and return to the project page."
+                                localized(
+                                    cx,
+                                    "Skip this chunk and go back to the project",
+                                    "Пропустить этот чанк и вернуться к проекту",
+                                )
                             } else {
-                                SKIP_DISABLED_TOOLTIP
+                                skip_disabled_tooltip(cx)
                             })
                             .disabled(pending || !allowed)
                             .on_click(move |_, window, cx| {
@@ -292,24 +303,25 @@ impl TransportStrip {
                         Button::new("flag-recording")
                             .outline()
                             .small()
-                            .label("Flag Recording")
+                            .label(localized(cx, "Flag recording", "Пометить запись"))
                             .on_click(move |_, window, cx| {
                                 panels
                                     .update(cx, |panels, cx| panels.request_admin_flag(window, cx));
                             }),
                     );
                 }
-                let (save_label, save_tooltip) = save_copy(&save_status, save_clickable);
+                let (save_label, save_tooltip) = save_copy(cx, &save_status, save_clickable);
                 let save_panels = self.panels.clone();
                 let submit_panels = self.panels.clone();
                 let saving = matches!(save_status, SaveStatus::Saving);
+                let submitting = localized(cx, "Submitting…", "Отправка…");
                 // Labels keep the width of their widest state, so saving or submitting never
                 // moves the buttons to their left.
                 row.child(
                     Button::new("save-progress")
                         .outline()
                         .small()
-                        .child(stable_text(save_label, SAVE_LABELS))
+                        .child(stable_text(save_label, save_labels(cx)))
                         .accessibility_label(save_label)
                         .tooltip(save_tooltip)
                         .loading(saving)
@@ -328,11 +340,11 @@ impl TransportStrip {
                         .small()
                         .child(stable_text(
                             if submit_pending {
-                                "Submitting..."
+                                submitting
                             } else {
                                 submit_copy.trigger
                             },
-                            ["Submitting...", submit_copy.trigger],
+                            [submitting, submit_copy.trigger],
                         ))
                         .accessibility_label(submit_copy.trigger)
                         .tooltip(submit_tooltip)
@@ -347,7 +359,7 @@ impl TransportStrip {
             }
             ReviewActionStrip::ReadOnly { notice, actions } => {
                 let mut row = h_flex().gap_1p5().when_some(notice, |this, notice| {
-                    this.child(muted(read_only_notice(notice), cx))
+                    this.child(muted(read_only_notice(cx, notice), cx))
                 });
                 for action in actions {
                     let panels = self.panels.clone();
@@ -356,7 +368,7 @@ impl TransportStrip {
                         Button::new(SharedString::from(format!("read-only-{command:?}")))
                             .outline()
                             .small()
-                            .label(read_only_label(command, action.disabled))
+                            .label(read_only_label(cx, command, action.disabled))
                             .disabled(action.disabled)
                             .on_click(move |_, window, cx| {
                                 panels.update(cx, |panels, cx| {
@@ -400,9 +412,9 @@ impl TransportStrip {
                 Switch::new("diff-toggle")
                     .checked(state.is_diff_mode)
                     .label(if state.annotation_mode {
-                        "Annotation Diff"
+                        localized(cx, "Annotation diff", "Сравнение аннотаций")
                     } else {
-                        "Diff View"
+                        localized(cx, "Diff view", "Сравнение")
                     })
                     .disabled(!state.diff_toggle_enabled())
                     .on_click(move |_, _, cx| {
@@ -421,56 +433,61 @@ impl TransportStrip {
                     .bg(theme.secondary)
                     .text_xs()
                     .child(match phase {
-                        AssessmentPhase::Practice => "Practice Mode",
-                        AssessmentPhase::Assessment => "Assessment",
+                        AssessmentPhase::Practice => localized(cx, "Practice", "Тренировка"),
+                        AssessmentPhase::Assessment => localized(cx, "Assessment", "Тест"),
                     }),
             );
         }
         if state.no_versions_hint_visible() {
             row = row.child(muted(
                 if state.annotation_mode {
-                    "No other versions to compare"
+                    localized(
+                        cx,
+                        "No other versions to compare",
+                        "Нет других версий для сравнения",
+                    )
                 } else {
-                    "No previous versions to compare"
+                    localized(
+                        cx,
+                        "No previous versions to compare",
+                        "Нет предыдущих версий для сравнения",
+                    )
                 },
                 cx,
             ));
         }
         if state.compare_select_visible() {
             row = row
-                .child(muted("Compare:", cx))
-                .child(self.render_compare(&state));
+                .child(muted(localized(cx, "Compare with", "Сравнить с"), cx))
+                .child(self.render_compare(&state, cx));
         }
         if state.unsaved_changes_badge_visible() {
-            row = row.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.warning)
-                    .child("Unsaved changes"),
-            );
+            row = row.child(div().text_xs().text_color(theme.warning).child(localized(
+                cx,
+                "Unsaved changes",
+                "Несохранённые изменения",
+            )));
         }
         if state.show_reviewers_control
             && !state.annotation_mode
             && state.assessment_phase.is_none()
         {
             let model = self.model.clone();
+            let shown_message =
+                localized(cx, "Reviewer feedback shown", "Отзывы ревьюеров показаны");
+            let hidden_message =
+                localized(cx, "Reviewer feedback hidden", "Отзывы ревьюеров скрыты");
             row = row.child(
                 Switch::new("reviewers-toggle")
                     .checked(state.reviewers_checked)
-                    .label("Reviewers")
+                    .label(localized(cx, "Reviewers", "Ревьюеры"))
                     .on_click(move |_, _, cx| {
                         model.update(cx, |model, cx| {
                             let shown = model.update_doc(cx, |doc| {
                                 doc.with_workflow(|workflow| workflow.toggle_diff_reviewers())
                             });
-                            model.set_status(
-                                if shown {
-                                    "Reviewer feedback shown."
-                                } else {
-                                    "Reviewer feedback hidden."
-                                },
-                                cx,
-                            );
+                            model
+                                .set_status(if shown { shown_message } else { hidden_message }, cx);
                         });
                     }),
             );
@@ -483,15 +500,11 @@ impl TransportStrip {
         Some(row)
     }
 
-    fn render_compare(&self, state: &DiffToolbarState) -> AnyElement {
+    fn render_compare(&self, state: &DiffToolbarState, cx: &App) -> AnyElement {
         if state.is_loading {
             return div()
                 .text_sm()
-                .child(if state.annotation_mode {
-                    "Loading…"
-                } else {
-                    "Loading..."
-                })
+                .child(localized(cx, "Loading…", "Загрузка…"))
                 .into_any_element();
         }
         let options = state
@@ -500,18 +513,14 @@ impl TransportStrip {
             .map(|option| Choice::new(option.id.clone(), option.label.clone()))
             .collect();
         let model = self.model.clone();
+        let status = localized(cx, "Version selected", "Версия выбрана");
         choice(
             "diff-compare",
             state.selected_compare_id.as_ref(),
             options,
-            if state.annotation_mode {
-                "Select version…"
-            } else {
-                "Select version..."
-            },
+            localized(cx, "Select version…", "Выберите версию…"),
             move |action_id: String, _, cx| {
                 model.update(cx, |model, cx| {
-                    let status = format!("Compare version `{action_id}` selected.");
                     model.update_doc(cx, |doc| {
                         doc.with_workflow(|workflow| workflow.set_diff_compare_action(action_id));
                     });
@@ -523,55 +532,118 @@ impl TransportStrip {
     }
 }
 
-fn problem_summary(errors: usize, warnings: usize) -> String {
-    let term = |count: usize, noun: &str| {
-        (count > 0).then(|| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
+fn problem_summary(cx: &App, errors: usize, warnings: usize) -> String {
+    crate::text::is_russian(cx);
+    let term = |n: usize, en: (&str, &str), ru: (&str, &str, &str)| {
+        (n > 0).then(|| count(n as u64, en, ru))
     };
-    [term(errors, "error"), term(warnings, "warning")]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(", ")
+    [
+        term(
+            errors,
+            ("problem", "problems"),
+            ("проблема", "проблемы", "проблем"),
+        ),
+        term(
+            warnings,
+            ("warning", "warnings"),
+            ("предупреждение", "предупреждения", "предупреждений"),
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// Every label [`save_copy`] returns (the save button is as wide as the widest).
-const SAVE_LABELS: [&str; 4] = ["Saving...", "Error - Retry", "Save progress", "Saved"];
+fn save_labels(cx: &App) -> [&'static str; 4] {
+    [
+        localized(cx, "Saving…", "Сохранение…"),
+        localized(cx, "Retry save", "Повторить сохранение"),
+        localized(cx, "Save", "Сохранить"),
+        localized(cx, "Saved", "Сохранено"),
+    ]
+}
 
-fn save_copy(status: &SaveStatus, clickable: bool) -> (&'static str, SharedString) {
+fn save_copy(cx: &App, status: &SaveStatus, clickable: bool) -> (&'static str, SharedString) {
+    let [saving, retry, save, saved] = save_labels(cx);
     match status {
-        SaveStatus::Saving => ("Saving...", "Saving your changes".into()),
+        SaveStatus::Saving => (
+            saving,
+            localized(cx, "Saving your changes", "Сохранение изменений").into(),
+        ),
         SaveStatus::Failed { message } => (
-            "Error - Retry",
+            retry,
             match message {
-                Some(message) => format!("Save failed: {message}").into(),
-                None => "Save failed. Retry to save changes.".into(),
+                Some(message) => {
+                    failed(cx, "Couldn't save.", "Не удалось сохранить.", message).into()
+                }
+                None => localized(
+                    cx,
+                    "Couldn't save. Try again.",
+                    "Не удалось сохранить. Попробуйте снова.",
+                )
+                .into(),
             },
         ),
-        SaveStatus::Dirty => ("Save progress", "You have unsaved changes".into()),
-        SaveStatus::Saved if clickable => ("Save progress", "You have unsaved changes".into()),
-        SaveStatus::Saved => ("Saved", "All changes saved".into()),
+        SaveStatus::Dirty => (
+            save,
+            localized(
+                cx,
+                "You have unsaved changes",
+                "Есть несохранённые изменения",
+            )
+            .into(),
+        ),
+        SaveStatus::Saved if clickable => (
+            save,
+            localized(
+                cx,
+                "You have unsaved changes",
+                "Есть несохранённые изменения",
+            )
+            .into(),
+        ),
+        SaveStatus::Saved => (
+            saved,
+            localized(cx, "All changes saved", "Все изменения сохранены").into(),
+        ),
     }
 }
 
-fn read_only_notice(notice: ReadOnlyNotice) -> &'static str {
+fn read_only_notice(cx: &App, notice: ReadOnlyNotice) -> &'static str {
     match notice {
-        ReadOnlyNotice::FinalSubmitted => {
-            "Submitted successfully! Our team will review and get back to you soon."
-        }
-        ReadOnlyNotice::AssessmentSession => {
-            "No changes will persist during this assessment session."
-        }
-        ReadOnlyNotice::ReadOnlySession => "No changes will persist during this read only session.",
+        ReadOnlyNotice::FinalSubmitted => localized(
+            cx,
+            "Submitted. The team will review it and get back to you.",
+            "Отправлено. Команда проверит и свяжется с вами.",
+        ),
+        ReadOnlyNotice::AssessmentSession => localized(
+            cx,
+            "This assessment is read only.",
+            "Этот тест только для чтения.",
+        ),
+        ReadOnlyNotice::ReadOnlySession => localized(
+            cx,
+            "This task is read only.",
+            "Эта задача только для чтения.",
+        ),
     }
 }
 
-fn read_only_label(command: ReadOnlyActionCommand, disabled: bool) -> &'static str {
+fn read_only_label(cx: &App, command: ReadOnlyActionCommand, disabled: bool) -> &'static str {
     match command {
-        ReadOnlyActionCommand::RetryPractice => "Retry Practice",
-        ReadOnlyActionCommand::TakeAssessment if disabled => "Loading Assessment...",
-        ReadOnlyActionCommand::TakeAssessment => "Take Assessment",
-        ReadOnlyActionCommand::RetryAssessment => "Retry",
-        ReadOnlyActionCommand::BackToProjects => "Back to Projects",
+        ReadOnlyActionCommand::RetryPractice => {
+            localized(cx, "Practice again", "Тренироваться снова")
+        }
+        ReadOnlyActionCommand::TakeAssessment if disabled => {
+            localized(cx, "Loading the assessment…", "Загрузка теста…")
+        }
+        ReadOnlyActionCommand::TakeAssessment => {
+            localized(cx, "Take the assessment", "Пройти тест")
+        }
+        ReadOnlyActionCommand::RetryAssessment => localized(cx, "Try again", "Попробовать снова"),
+        ReadOnlyActionCommand::BackToProjects => localized(cx, "Back to projects", "К проектам"),
     }
 }
 
@@ -601,104 +673,145 @@ fn metric_chip(
         })
 }
 
+/// `(name EN, name RU, text EN, text RU)` explanations under a metric tooltip.
+type Note = (&'static str, &'static str, &'static str, &'static str);
+
 fn tooltip_lines(
-    title: &'static str,
+    title: (&'static str, &'static str),
     lines: Vec<String>,
-    notes: &'static [(&'static str, &'static str)],
+    notes: &'static [Note],
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_, cx| {
         v_flex()
             .max_w(rems(22.5))
             .gap_1()
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(localized(cx, title.0, title.1)),
+            )
             .children(lines.iter().map(|line| div().text_xs().child(line.clone())))
             .child(
                 div()
                     .pt_1()
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(if notes.len() > 3 {
-                        "What do these mean?"
-                    } else {
-                        "What does this mean?"
-                    }),
+                    .child(localized(cx, "What these mean", "Что это значит")),
             )
-            .children(notes.iter().map(|(name, text)| {
+            .children(notes.iter().map(|(name_en, name_ru, text_en, text_ru)| {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("{name}: {text}"))
+                    .child(format!(
+                        "{}: {}",
+                        localized(cx, name_en, name_ru),
+                        localized(cx, text_en, text_ru)
+                    ))
             }))
             .into_any_element()
     }
 }
 
-const TIMESTAMP_NOTES: &[(&str, &str)] = &[
+const F1: (&str, &str) = ("F1", "F1");
+const PRECISION: (&str, &str) = ("Precision", "Точность");
+const RECALL: (&str, &str) = ("Recall", "Полнота");
+
+const TIMESTAMP_NOTES: &[Note] = &[
     (
-        "F1 Score",
-        "Overall timestamp alignment score combining Precision and Recall. 100% means both annotations have identical speech boundaries.",
+        F1.0,
+        F1.1,
+        "Overall timing score combining precision and recall. 100% means both annotations have the same speech boundaries.",
+        "Общая оценка таймингов, объединяющая точность и полноту. 100% — границы речи в обеих аннотациях совпадают.",
     ),
     (
-        "Recall",
-        "Low recall means the older annotation is missing speech the newer annotation captured, e.g. segments cut off early or started too late.",
+        RECALL.0,
+        RECALL.1,
+        "Low recall means the older annotation misses speech the newer one captured, e.g. segments cut off early or started late.",
+        "Низкая полнота — в старой аннотации нет речи, которую нашла новая: сегменты обрезаны рано или начаты поздно.",
     ),
     (
-        "Precision",
-        "Low precision means the older annotation marked time as speech that the newer annotation considers silence or background noise.",
+        PRECISION.0,
+        PRECISION.1,
+        "Low precision means the older annotation marked as speech what the newer one treats as silence or noise.",
+        "Низкая точность — старая аннотация отметила как речь то, что новая считает тишиной или шумом.",
     ),
     (
-        "Segments matched & tolerance",
-        "Segments paired one-to-one by word alignment (splits and merges excluded). The bars show what percentage of those matched segments have both start and end timestamps within ±50ms, ±100ms, and ±200ms.",
-    ),
-];
-const EVENT_NOTES: &[(&str, &str)] = &[
-    (
-        "F1 Score",
-        "Overall agreement on whether a sound event exists in each time window, ignoring label. 100% means the older and newer annotations agree on the exact presence and absence of all events.",
-    ),
-    (
-        "Precision",
-        "Low precision means the older annotation marks events the newer annotation considers silence.",
-    ),
-    (
-        "Recall",
-        "Low recall means the older annotation is missing events the newer annotation captured.",
+        "Matched segments and tolerance",
+        "Совпавшие сегменты и допуск",
+        "Segments paired one-to-one by word alignment (splits and merges excluded). The bars show how many matched segments have both start and end within ±50 ms, ±100 ms and ±200 ms.",
+        "Сегменты сопоставлены один к одному по выравниванию слов (без разделений и объединений). Полосы показывают долю совпавших сегментов, у которых начало и конец попадают в ±50 мс, ±100 мс и ±200 мс.",
     ),
 ];
-const LABEL_NOTES: &[(&str, &str)] = &[
+const EVENT_NOTES: &[Note] = &[
     (
-        "F1 Score",
-        "Agreement on primary label identity, macro-averaged across all label classes. 100% means the older and newer annotations assign the same label to every event window.",
+        F1.0,
+        F1.1,
+        "Overall agreement on whether a sound event exists in each time window, ignoring the label. 100% means both annotations agree on the presence and absence of every event.",
+        "Общее согласие о наличии звукового события в каждом окне времени без учёта метки. 100% — обе аннотации одинаково отмечают наличие и отсутствие всех событий.",
     ),
     (
-        "Precision",
-        "Low precision means the older annotation applies labels the newer annotation does not agree with.",
+        PRECISION.0,
+        PRECISION.1,
+        "Low precision means the older annotation marks events the newer one treats as silence.",
+        "Низкая точность — старая аннотация отмечает события, которые новая считает тишиной.",
     ),
     (
-        "Recall",
-        "Low recall means the older annotation is missing label categories the newer annotation uses.",
+        RECALL.0,
+        RECALL.1,
+        "Low recall means the older annotation misses events the newer one captured.",
+        "Низкая полнота — в старой аннотации нет событий, которые нашла новая.",
     ),
 ];
-const INTENSITY_NOTES: &[(&str, &str)] = &[
+const LABEL_NOTES: &[Note] = &[
     (
-        "F1 Score",
-        "Agreement on intensity group (low 0-1 vs. high 2-4) per event window. 100% means the older and newer annotations consistently rate the strength of every sound event the same way.",
+        F1.0,
+        F1.1,
+        "Agreement on the primary label, averaged across all label classes. 100% means both annotations assign the same label to every event window.",
+        "Согласие по основной метке, усреднённое по всем классам меток. 100% — обе аннотации ставят одну и ту же метку в каждом окне события.",
     ),
     (
-        "Precision",
-        "Low precision means the older annotation rates events as high intensity that the newer annotation considers low.",
+        PRECISION.0,
+        PRECISION.1,
+        "Low precision means the older annotation applies labels the newer one disagrees with.",
+        "Низкая точность — старая аннотация ставит метки, с которыми новая не согласна.",
     ),
     (
-        "Recall",
-        "Low recall means the older annotation rates events as low intensity that the newer annotation considers high.",
+        RECALL.0,
+        RECALL.1,
+        "Low recall means the older annotation misses label categories the newer one uses.",
+        "Низкая полнота — в старой аннотации нет категорий меток, которые использует новая.",
+    ),
+];
+const INTENSITY_NOTES: &[Note] = &[
+    (
+        F1.0,
+        F1.1,
+        "Agreement on the intensity group (low 0–1 vs. high 2–4) per event window. 100% means both annotations rate the strength of every sound event the same way.",
+        "Согласие по группе интенсивности (низкая 0–1 или высокая 2–4) в каждом окне события. 100% — обе аннотации одинаково оценивают силу каждого звукового события.",
+    ),
+    (
+        PRECISION.0,
+        PRECISION.1,
+        "Low precision means the older annotation rates as high intensity what the newer one rates low.",
+        "Низкая точность — старая аннотация считает высокой интенсивность, которую новая считает низкой.",
+    ),
+    (
+        RECALL.0,
+        RECALL.1,
+        "Low recall means the older annotation rates as low intensity what the newer one rates high.",
+        "Низкая полнота — старая аннотация считает низкой интенсивность, которую новая считает высокой.",
     ),
 ];
 
-fn triplet_lines(triplet: &MetricTriplet) -> Vec<String> {
+fn metric_line(cx: &App, name: (&'static str, &'static str), value: f64) -> String {
+    format!("{} {}", localized(cx, name.0, name.1), percent(value, 1))
+}
+
+fn triplet_lines(cx: &App, triplet: &MetricTriplet) -> Vec<String> {
     vec![
-        format!("F1 Score {}", percent(triplet.f1, 1)),
-        format!("Precision {}", percent(triplet.precision, 1)),
-        format!("Recall {}", percent(triplet.recall, 1)),
+        metric_line(cx, F1, triplet.f1),
+        metric_line(cx, PRECISION, triplet.precision),
+        metric_line(cx, RECALL, triplet.recall),
     ]
 }
 
@@ -712,50 +825,64 @@ fn render_metrics(metrics: &DiffMetrics, cx: &App) -> Div {
 fn render_transcription_metrics(metrics: &TranscriptionDiffMetrics, cx: &App) -> Div {
     let timestamp = &metrics.timestamp;
     let mut lines = vec![
-        format!("F1 Score {}", percent(timestamp.timeline.f1, 1)),
-        format!("Recall {}", percent(timestamp.timeline.recall, 1)),
-        format!("Precision {}", percent(timestamp.timeline.precision, 1)),
-        format!(
-            "{}/{} segments matched",
-            timestamp.matched_segments, timestamp.total_segments
+        metric_line(cx, F1, timestamp.timeline.f1),
+        metric_line(cx, RECALL, timestamp.timeline.recall),
+        metric_line(cx, PRECISION, timestamp.timeline.precision),
+        localized_fmt(
+            cx,
+            "{matched} of {total} segments matched",
+            "Совпало сегментов: {matched} из {total}",
+            &[
+                ("matched", &timestamp.matched_segments.to_string()),
+                ("total", &timestamp.total_segments.to_string()),
+            ],
         ),
     ];
+    let within = localized(cx, "ms", "мс");
     lines.extend([
-        format!("±50ms {}%", timestamp.within_50_ms),
-        format!("±100ms {}%", timestamp.within_100_ms),
-        format!("±200ms {}%", timestamp.within_200_ms),
+        format!("±50 {within} {}%", timestamp.within_50_ms),
+        format!("±100 {within} {}%", timestamp.within_100_ms),
+        format!("±200 {within} {}%", timestamp.within_200_ms),
     ]);
     let theme = cx.theme();
     h_flex()
         .gap_2()
         .child(metric_chip(
             "metric-shift",
-            format!("Avg shift: {}ms", timestamp.avg_shift_ms),
-            tooltip_lines("Timestamp Accuracy", lines, TIMESTAMP_NOTES),
+            localized_fmt(
+                cx,
+                "Avg shift {ms} ms",
+                "Средний сдвиг {ms} мс",
+                &[("ms", &timestamp.avg_shift_ms.to_string())],
+            ),
+            tooltip_lines(
+                ("Timing accuracy", "Точность таймингов"),
+                lines,
+                TIMESTAMP_NOTES,
+            ),
             cx,
         ))
-        .child(div().text_xs().child(format!(
-            "Word Diff: {}",
-            percent(metrics.overall_word_error_rate, 2)
+        .child(div().text_xs().child(localized_fmt(
+            cx,
+            "Word errors {rate}",
+            "Ошибки слов {rate}",
+            &[("rate", &percent(metrics.overall_word_error_rate, 2))],
         )))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.warning)
-                .child(format!("S {}", metrics.total_substitutions)),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.success)
-                .child(format!("A {}", metrics.total_insertions)),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.danger)
-                .child(format!("R {}", metrics.total_deletions)),
-        )
+        .child(div().text_xs().text_color(theme.warning).child(format!(
+            "{} {}",
+            localized(cx, "S", "З"),
+            metrics.total_substitutions
+        )))
+        .child(div().text_xs().text_color(theme.success).child(format!(
+            "{} {}",
+            localized(cx, "A", "Д"),
+            metrics.total_insertions
+        )))
+        .child(div().text_xs().text_color(theme.danger).child(format!(
+            "{} {}",
+            localized(cx, "R", "У"),
+            metrics.total_deletions
+        )))
 }
 
 fn render_annotation_metrics(metrics: &AnnotationDiffMetrics, cx: &App) -> Div {
@@ -763,30 +890,34 @@ fn render_annotation_metrics(metrics: &AnnotationDiffMetrics, cx: &App) -> Div {
         .gap_2()
         .child(metric_chip(
             "metric-event",
-            format!("Event {}", percent(metrics.event_detection.f1, 1)),
+            metric_line(cx, ("Events", "События"), metrics.event_detection.f1),
             tooltip_lines(
-                "Event Detection",
-                triplet_lines(&metrics.event_detection),
+                ("Event detection", "Обнаружение событий"),
+                triplet_lines(cx, &metrics.event_detection),
                 EVENT_NOTES,
             ),
             cx,
         ))
         .child(metric_chip(
             "metric-label",
-            format!("Label {}", percent(metrics.label_macro_average.f1, 1)),
+            metric_line(cx, ("Labels", "Метки"), metrics.label_macro_average.f1),
             tooltip_lines(
-                "Label Accuracy",
-                triplet_lines(&metrics.label_macro_average),
+                ("Label accuracy", "Точность меток"),
+                triplet_lines(cx, &metrics.label_macro_average),
                 LABEL_NOTES,
             ),
             cx,
         ))
         .child(metric_chip(
             "metric-intensity",
-            format!("Intensity {}", percent(metrics.intensity_calibration.f1, 1)),
+            metric_line(
+                cx,
+                ("Intensity", "Интенсивность"),
+                metrics.intensity_calibration.f1,
+            ),
             tooltip_lines(
-                "Intensity Calibration",
-                triplet_lines(&metrics.intensity_calibration),
+                ("Intensity calibration", "Калибровка интенсивности"),
+                triplet_lines(cx, &metrics.intensity_calibration),
                 INTENSITY_NOTES,
             ),
             cx,
@@ -822,7 +953,7 @@ impl Render for TransportStrip {
                             .flex_wrap()
                             .justify_end()
                             .gap_2()
-                            .child(self.render_export())
+                            .child(self.render_export(cx))
                             .child(toggles)
                             .child(vertical_rule(cx))
                             .child(actions),

@@ -751,9 +751,7 @@ pub fn parse_decision_response(payload: &Value) -> Result<ErrorLabelDraft, Error
     let whole = outside == "no";
     let with_secondary = whole && has_secondary == "yes";
     if with_secondary && secondary == "none" {
-        return Err(invalid(
-            "Clef’s answer was incomplete. Please review by hand.",
-        ));
+        return Err(invalid("The AI's answer was incomplete. Review by hand."));
     }
     let draft = ErrorLabelDraft {
         captures_whole_error: whole,

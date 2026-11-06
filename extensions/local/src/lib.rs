@@ -29,15 +29,18 @@ pub fn manifest() -> Result<ExtensionManifest, serde_json::Error> {
 }
 
 pub fn register(cx: &mut App) -> anyhow::Result<()> {
+    let label = localized(cx, "Local", "Локально");
+    let description = localized(
+        cx,
+        "Open audio and projects on this computer",
+        "Аудио и проекты на этом компьютере",
+    );
     cx.update_global::<ContributionRegistry, _>(|registry, _| {
         registry.register_mode(
             ID,
-            ModeContribution::with_window(
-                ID,
-                "Local",
-                "Open audio and projects on this computer",
-                |shell, _, _, cx| cx.new(|cx| LocalHome::new(shell, cx)).into(),
-            ),
+            ModeContribution::with_window(ID, label, description, |shell, _, _, cx| {
+                cx.new(|cx| LocalHome::new(shell, cx)).into()
+            }),
         )
     })
 }
@@ -118,6 +121,11 @@ impl LocalHome {
             multiple: true,
             prompt: Some(localized(cx, "Open audio", "Открыть аудио").into()),
         });
+        let strings = if localized(cx, "en", "ru") == "en" {
+            audio::ImportStrings::EN
+        } else {
+            audio::ImportStrings::RU
+        };
         self.busy = true;
         self.cancellation = Arc::new(AtomicBool::new(false));
         let cancel = self.cancellation.clone();
@@ -141,7 +149,7 @@ impl LocalHome {
                 };
                 let (sender, receiver) = async_channel::bounded(8);
                 cx.background_spawn(async move {
-                    let result = audio::import_audio(&paths, |done, total, path| {
+                    let result = audio::import_audio(&paths, strings, |done, total, path| {
                         if cancel.load(Ordering::Acquire) {
                             return false;
                         }
@@ -236,8 +244,8 @@ impl Render for LocalHome {
                     localized(cx, "Start", "Начать"),
                     Some(localized(
                         cx,
-                        "Open a recording and start editing. No account needed.",
-                        "Откройте запись и начните редактировать. Аккаунт не нужен.",
+                        "Open a recording and start editing.",
+                        "Откройте запись и начните редактировать.",
                     )),
                     cx,
                 )

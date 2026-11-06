@@ -91,20 +91,6 @@ impl UpdateChannel {
         }
     }
 
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Stable => "Stable",
-            Self::Alpha => "Alpha",
-        }
-    }
-
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Stable => "Tested releases published on GitHub.",
-            Self::Alpha => "Every build of the main branch. Newest features, rougher edges.",
-        }
-    }
-
     /// Where this channel's releases are read from (shown in Settings).
     pub const fn source_url(self) -> &'static str {
         match self {
@@ -239,36 +225,6 @@ impl UpdateState {
 
     pub fn is_error(&self) -> bool {
         self.phase == UpdatePhase::Failed
-    }
-
-    pub fn status_label(&self) -> String {
-        let channel = self.channel.label();
-        match self.phase {
-            UpdatePhase::Unsupported => {
-                "Updates are available in installed builds only.".to_string()
-            }
-            UpdatePhase::Idle => format!("Ready to check the {channel} channel."),
-            UpdatePhase::Checking => "Checking for updates...".to_string(),
-            UpdatePhase::UpdateAvailable => match self.available_version.as_ref() {
-                Some(version) => format!("Exaudio {version} is available."),
-                None => "An update is available.".to_string(),
-            },
-            UpdatePhase::UpToDate => format!("You are on the latest {channel} build."),
-            UpdatePhase::RemoteEmpty => {
-                format!("The {channel} channel has no releases for this platform yet.")
-            }
-            UpdatePhase::Installing => match self.download_percent {
-                Some(percent) => format!("Downloading update... {percent}%"),
-                None => "Downloading update...".to_string(),
-            },
-            UpdatePhase::Restarting => "Update installed. Restarting...".to_string(),
-            UpdatePhase::Failed => format!(
-                "Update failed: {}",
-                self.last_error
-                    .as_deref()
-                    .unwrap_or("unknown updater error")
-            ),
-        }
     }
 
     /// The version the unobtrusive update notice offers: an available update the user
@@ -456,7 +412,7 @@ mod tests {
         assert!(!state.can_check());
         assert!(!state.can_switch_channel());
         state.set_download_percent(42);
-        assert_eq!(state.status_label(), "Downloading update... 42%");
+        assert_eq!(state.download_percent, Some(42));
         state.finish_install(Err("disk full".to_string()));
         assert!(state.is_error());
         assert_eq!(state.download_percent, None);

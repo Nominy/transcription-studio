@@ -64,8 +64,14 @@ fn every_action_has_exactly_one_definition_with_section_and_description() {
         assert_eq!(count, 1, "{action:?} must have exactly one ActionDef");
         let def = action.def();
         assert_eq!(def.action, action);
-        assert!(!def.section.trim().is_empty(), "{action:?} section");
-        assert!(!def.description.trim().is_empty(), "{action:?} description");
+        assert!(
+            !def.section.en.trim().is_empty() && !def.section.ru.trim().is_empty(),
+            "{action:?} section"
+        );
+        assert!(
+            !def.description.en.trim().is_empty() && !def.description.ru.trim().is_empty(),
+            "{action:?} description"
+        );
     }
 }
 

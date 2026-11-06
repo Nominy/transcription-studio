@@ -63,12 +63,17 @@ fn register_formats(cx: &mut App) -> anyhow::Result<()> {
 
 #[cfg(feature = "basic-checks")]
 fn register_basic_checks(cx: &mut App) -> anyhow::Result<()> {
+    let language = if sonus_shell::screens::ui::localized(cx, "en", "ru") == "en" {
+        sonus_lint_basic::Language::En
+    } else {
+        sonus_lint_basic::Language::Ru
+    };
     cx.update_global::<sonus_shell::ContributionRegistry, _>(|registry, _| {
         registry.register_document_providers(
             sonus_lint_basic::ID,
             "sonus.lint-basic.checks",
             vec!["sonus.local".into()],
-            sonus_lint_basic::providers(),
+            sonus_lint_basic::providers(language),
         )
     })
 }

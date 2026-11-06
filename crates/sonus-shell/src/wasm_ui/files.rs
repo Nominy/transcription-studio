@@ -1,4 +1,5 @@
 use super::*;
+use crate::screens::ui::error_notification;
 use std::{
     io::Read,
     sync::atomic::{AtomicU64, Ordering},
@@ -71,14 +72,26 @@ fn import(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
     init(cx);
     if cx.global::<FileRequests>().imports.len() >= 32 {
         use gpui_kit::component::WindowExt as _;
-        window.push_notification("Too many pending imports", cx);
+        window.push_notification(
+            localized(
+                cx,
+                "Wait for the current import to finish.",
+                "Дождитесь завершения текущего импорта.",
+            ),
+            cx,
+        );
         return;
     }
+    let too_large = localized(
+        cx,
+        "This file is too large to import (over 16 MB).",
+        "Файл слишком большой для импорта (больше 16 МБ).",
+    );
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: true,
         directories: false,
         multiple: false,
-        prompt: Some("Import document".into()),
+        prompt: Some(localized(cx, "Import", "Импорт").into()),
     });
     window
         .spawn(cx, async move |cx| {
@@ -98,7 +111,7 @@ fn import(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                     let file = std::fs::File::open(path)?;
                     let mut bytes = Vec::new();
                     file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-                    anyhow::ensure!(bytes.len() <= 16 * 1024 * 1024, "import exceeds 16 MiB");
+                    anyhow::ensure!(bytes.len() <= 16 * 1024 * 1024, "{too_large}");
                     Ok::<_, anyhow::Error>(bytes)
                 })
                 .await;
@@ -107,7 +120,13 @@ fn import(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                 Err(error) => {
                     let _ = cx.update(|window, cx| {
                         use gpui_kit::component::WindowExt as _;
-                        window.push_notification(error.to_string(), cx);
+                        window.push_notification(
+                            error_notification(
+                                localized(cx, "Couldn't import.", "Не удалось импортировать."),
+                                Some(error.to_string().into()),
+                            ),
+                            cx,
+                        );
                     });
                     return;
                 }
@@ -161,7 +180,13 @@ fn import(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                         });
                     if let Err(error) = result {
                         use gpui_kit::component::WindowExt as _;
-                        window.push_notification(error.to_string(), cx);
+                        window.push_notification(
+                            error_notification(
+                                localized(cx, "Couldn't import.", "Не удалось импортировать."),
+                                Some(error.to_string().into()),
+                            ),
+                            cx,
+                        );
                     }
                 });
             } else {
@@ -175,7 +200,13 @@ fn import(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                         cx,
                     );
                     use gpui_kit::component::WindowExt as _;
-                    window.push_notification("Import timed out or its extension was unloaded", cx);
+                    window.push_notification(
+                        error_notification(
+                            localized(cx, "The import didn't finish.", "Импорт не завершился."),
+                            None,
+                        ),
+                        cx,
+                    );
                 });
             }
         })
@@ -185,7 +216,14 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
     init(cx);
     if cx.global::<FileRequests>().exports.len() >= 32 {
         use gpui_kit::component::WindowExt as _;
-        window.push_notification("Too many pending exports", cx);
+        window.push_notification(
+            localized(
+                cx,
+                "Wait for the current export to finish.",
+                "Дождитесь завершения текущего экспорта.",
+            ),
+            cx,
+        );
         return;
     }
     let Some(model) = shell.editor_model(cx) else {
@@ -193,7 +231,17 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
     };
     if !crate::wasm_host::document_associated(&owner, &model, cx) {
         use gpui_kit::component::WindowExt as _;
-        window.push_notification("Extension is not allowed to export this document", cx);
+        window.push_notification(
+            error_notification(
+                localized(
+                    cx,
+                    "This extension can't export this project.",
+                    "Расширение не может экспортировать этот проект.",
+                ),
+                None,
+            ),
+            cx,
+        );
         return;
     }
     let document_id = crate::wasm_host::document_handle(&model);
@@ -235,7 +283,13 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                         cx,
                     );
                     use gpui_kit::component::WindowExt as _;
-                    window.push_notification("Export timed out or its extension was unloaded", cx);
+                    window.push_notification(
+                        error_notification(
+                            localized(cx, "The export didn't finish.", "Экспорт не завершился."),
+                            None,
+                        ),
+                        cx,
+                    );
                 });
                 return;
             };
@@ -244,7 +298,7 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                     files: false,
                     directories: true,
                     multiple: false,
-                    prompt: Some("Choose export directory".into()),
+                    prompt: Some(localized(cx, "Choose a folder", "Выберите папку").into()),
                 })
             }) {
                 Ok(picked) => picked,
@@ -267,13 +321,24 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                 return;
             }
             let path = directory.join(name);
+            let Some(parent) = path.parent().map(std::path::Path::to_path_buf) else {
+                let _ = cx.update(|window, cx| {
+                    use gpui_kit::component::WindowExt as _;
+                    window.push_notification(
+                        localized(
+                            cx,
+                            "Choose a folder to export to.",
+                            "Выберите папку для экспорта.",
+                        ),
+                        cx,
+                    );
+                });
+                return;
+            };
             let result = cx
                 .background_spawn(async move {
                     use std::io::Write;
-                    let directory = path
-                        .parent()
-                        .ok_or_else(|| std::io::Error::other("export path has no parent"))?;
-                    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+                    let mut file = tempfile::NamedTempFile::new_in(parent)?;
                     file.write_all(&value.bytes)?;
                     file.as_file().sync_all()?;
                     file.persist_noclobber(path).map_err(|error| error.error)?;
@@ -282,13 +347,18 @@ fn export(owner: String, provider: String, shell: ShellHandle, window: &mut Wind
                 .await;
             let _ = cx.update(|window, cx| {
                 use gpui_kit::component::WindowExt as _;
-                window.push_notification(
-                    match result {
-                        Ok(()) => "Document exported".into(),
-                        Err(error) => format!("Export failed: {error}"),
-                    },
-                    cx,
-                );
+                match result {
+                    Ok(()) => {
+                        window.push_notification(localized(cx, "Exported", "Экспортировано"), cx)
+                    }
+                    Err(error) => window.push_notification(
+                        error_notification(
+                            localized(cx, "Couldn't export.", "Не удалось экспортировать."),
+                            Some(error.to_string().into()),
+                        ),
+                        cx,
+                    ),
+                }
             });
         })
         .detach();

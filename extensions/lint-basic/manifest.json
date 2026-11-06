@@ -1,10 +1,10 @@
 {
   "id": "sonus.lint-basic",
-  "name": "Basic transcript checks",
+  "name": "Basic checks",
   "version": "0.1.0",
   "api": "^0.1.0",
   "runtime": "native",
-  "description": "Optional Local checks for ASCII horizontal whitespace, empty transcripts, invalid timing and same-lane overlaps. No language or punctuation conventions are enforced.",
+  "description": "Flags empty segments, stray spaces, bad timing and overlaps.",
   "license": "MIT",
   "dependencies": {},
   "permissions": [{"kind": "document-read"}, {"kind": "document-edit"}],

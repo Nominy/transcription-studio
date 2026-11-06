@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
+use gpui_kit::App;
 use sonus_gold::bundle::{DOWNLOAD_STAGE, EXTRACT_STAGE};
+use sonus_shell::screens::ui::localized;
 use studio_inference::InferenceProgress;
 
 /// Studio's first local call installs Gold's runtime before any model work.
@@ -31,9 +33,9 @@ pub fn percent(fraction: f32) -> u32 {
     }
 }
 
-/// "Action… 45% · step"; without a value "Action… step".
+/// "Action… 45% · step"; without a value "Action… step". `action` ends with its own "…".
 pub fn label(action: &str, fraction: Option<f32>, step: &str) -> String {
-    let mut line = format!("{action}…");
+    let mut line = action.to_string();
     if let Some(fraction) = fraction {
         line.push_str(&format!(" {}%", percent(fraction)));
         if !step.is_empty() {
@@ -45,6 +47,68 @@ pub fn label(action: &str, fraction: Option<f32>, step: &str) -> String {
         line.push_str(step);
     }
     line
+}
+
+/// What one speaker track is going through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneAction {
+    Encoding,
+    Segmenting,
+    Decoding,
+    WritingText,
+}
+
+/// The sub-step behind a progress bar, rendered with [`Step::text`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Step {
+    #[default]
+    None,
+    Queued(u32),
+    WaitingForServer,
+    DownloadingComponents,
+    LoadingModels,
+    LoadingTextModel,
+    /// `speaker`: 1-based, only when more than one speaker track is processed.
+    Lane {
+        action: LaneAction,
+        speaker: Option<usize>,
+    },
+}
+
+impl Step {
+    pub fn text(self, cx: &App) -> String {
+        match self {
+            Step::None => String::new(),
+            Step::Queued(position) => localized(cx, "In queue ({n})", "В очереди ({n})")
+                .replace("{n}", &position.to_string()),
+            Step::WaitingForServer => {
+                localized(cx, "Waiting for the server", "Ожидание сервера").to_string()
+            }
+            Step::DownloadingComponents => {
+                localized(cx, "Downloading components", "Загрузка компонентов").to_string()
+            }
+            Step::LoadingModels => localized(cx, "Loading models", "Загрузка моделей").to_string(),
+            Step::LoadingTextModel => {
+                localized(cx, "Loading the text model", "Загрузка текстовой модели").to_string()
+            }
+            Step::Lane { action, speaker } => {
+                let action = match action {
+                    LaneAction::Encoding => localized(cx, "Encoding audio", "Кодирование аудио"),
+                    LaneAction::Segmenting => {
+                        localized(cx, "Splitting into segments", "Разбиение на сегменты")
+                    }
+                    LaneAction::Decoding => localized(cx, "Decoding speech", "Распознавание речи"),
+                    LaneAction::WritingText => localized(cx, "Writing text", "Запись текста"),
+                };
+                match speaker {
+                    Some(speaker) => localized(cx, "{action}, speaker {n}", "{action}, спикер {n}")
+                        .replace("{action}", action)
+                        .replace("{n}", &speaker.to_string()),
+                    None => action.to_string(),
+                }
+            }
+        }
+    }
 }
 
 /// Model loading/queueing; determinate only for a server-side bundle download.
@@ -151,11 +215,10 @@ impl<'a> Event<'a> {
     }
 }
 
-fn speaker(action: &str, index: usize, count: usize) -> String {
-    if count > 1 {
-        format!("{action} speaker {}", index + 1)
-    } else {
-        action.to_string()
+fn speaker(action: LaneAction, index: usize, count: usize) -> Step {
+    Step::Lane {
+        action,
+        speaker: (count > 1).then_some(index + 1),
     }
 }
 
@@ -175,8 +238,8 @@ impl LaneOrder {
         stage: LaneStage,
         lane_count: usize,
         shares: LaneShares,
-        text_action: &str,
-    ) -> (f32, String) {
+        text_action: LaneAction,
+    ) -> (f32, Step) {
         let index = match self.lanes.iter().position(|lane| lane == event.lane) {
             Some(index) => index,
             None => {
@@ -195,14 +258,14 @@ impl LaneOrder {
                 };
                 return (
                     shares.encode * (index_f + part) / count_f,
-                    speaker("encoding", index, count),
+                    speaker(LaneAction::Encoding, index, count),
                 );
             }
             LaneStage::Segment => {
                 let (start, share) = segment_phase(event.phase);
                 (
                     shares.segment * (start + share * event.ratio()),
-                    speaker("segmenting", index, count),
+                    speaker(LaneAction::Segmenting, index, count),
                 )
             }
             LaneStage::Text => {
@@ -240,7 +303,7 @@ pub struct TimingOverall {
     lane_count: usize,
     order: LaneOrder,
     pub fraction: Option<f32>,
-    pub step: String,
+    pub step: Step,
 }
 
 impl TimingOverall {
@@ -250,14 +313,14 @@ impl TimingOverall {
             lane_count,
             order: LaneOrder::default(),
             fraction: None,
-            step: String::new(),
+            step: Step::None,
         }
     }
 
     pub fn advance(&mut self, progress: &InferenceProgress) {
         if let InferenceProgress::Queued { position, .. } = progress {
             if *position > 0 && self.fraction.is_none() {
-                self.step = format!("queued #{position}");
+                self.step = Step::Queued(*position);
             }
             return;
         }
@@ -267,18 +330,18 @@ impl TimingOverall {
         let mut next = None;
         if event.phase == "waiting-local-pipeline" {
             if event.completed < event.total {
-                self.step = "waiting for the GPU".to_string();
+                self.step = Step::WaitingForServer;
             }
         } else if is_runtime_install(event.phase) {
-            self.step = "downloading the Gold runtime".to_string();
+            self.step = Step::DownloadingComponents;
         } else if event.phase == "loading-model" {
-            self.step = "loading models".to_string();
+            self.step = Step::LoadingModels;
             if event.total > 0 {
                 next = Some(TIMING_SETUP_SHARE * event.ratio());
             }
         } else if event.phase.starts_with("loading-") {
             if self.fraction.is_none() {
-                self.step = "loading models".to_string();
+                self.step = Step::LoadingModels;
             }
         } else if let Some(stage) = lane_stage(event.phase) {
             let (work, step) = self.order.work(
@@ -286,7 +349,7 @@ impl TimingOverall {
                 stage,
                 self.lane_count,
                 TIMING_LANE_SHARES,
-                "decoding",
+                LaneAction::Decoding,
             );
             self.step = step;
             next = Some(TIMING_SETUP_SHARE + TIMING_LANES_SHARE * work);
@@ -302,7 +365,7 @@ pub struct DraftTextOverall {
     order: LaneOrder,
     reencoding: bool,
     pub fraction: Option<f32>,
-    pub step: String,
+    pub step: Step,
 }
 
 impl DraftTextOverall {
@@ -312,14 +375,14 @@ impl DraftTextOverall {
             order: LaneOrder::default(),
             reencoding: false,
             fraction: None,
-            step: String::new(),
+            step: Step::None,
         }
     }
 
     pub fn advance(&mut self, progress: &InferenceProgress) {
         if let InferenceProgress::Queued { position, .. } = progress {
             if *position > 0 && self.fraction.is_none() {
-                self.step = format!("queued #{position}");
+                self.step = Step::Queued(*position);
             }
             return;
         }
@@ -331,13 +394,13 @@ impl DraftTextOverall {
         let mut next = None;
         if event.phase == "waiting-local-pipeline" {
             if event.completed < event.total {
-                self.step = "waiting for the GPU".to_string();
+                self.step = Step::WaitingForServer;
             }
         } else if is_runtime_install(event.phase) {
-            self.step = "downloading the Gold runtime".to_string();
+            self.step = Step::DownloadingComponents;
         } else if event.phase.starts_with("loading-") {
             if self.fraction.is_none() {
-                self.step = "loading the text model".to_string();
+                self.step = Step::LoadingTextModel;
             }
         } else if let Some(stage) = stage {
             let shares = if self.reencoding {
@@ -345,9 +408,13 @@ impl DraftTextOverall {
             } else {
                 DRAFT_TEXT_RETAINED_SHARES
             };
-            let (work, step) =
-                self.order
-                    .work(&event, stage, self.lane_count, shares, "writing text");
+            let (work, step) = self.order.work(
+                &event,
+                stage,
+                self.lane_count,
+                shares,
+                LaneAction::WritingText,
+            );
             self.step = step;
             next = Some(work);
         }
@@ -528,7 +595,13 @@ mod tests {
         for (seen, expected) in seen.iter().zip(expected) {
             assert!((seen - expected).abs() < 1e-4, "{seen} vs {expected}");
         }
-        assert_eq!(timing.step, "decoding speaker 2");
+        assert_eq!(
+            timing.step,
+            Step::Lane {
+                action: LaneAction::Decoding,
+                speaker: Some(2)
+            }
+        );
         assert_eq!(percent(timing.fraction.unwrap()), 99);
     }
 

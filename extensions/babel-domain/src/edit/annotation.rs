@@ -8,15 +8,34 @@ use super::create_region::{
     OTHER_CATEGORY, annotation_content, annotation_display_text, intensity_value_from_label,
     project_uses_hierarchical_annotation_labels, secondary_category_options_for,
 };
+use crate::i18n::localized;
 
 /// Why the annotation edit cannot be saved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditAnnotationError {
-    #[error("Intensity is required")]
     IntensityRequired,
-    #[error("Primary and secondary categories are required")]
     CategoryRequired,
 }
+
+impl EditAnnotationError {
+    /// Message shown in the dialog.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::IntensityRequired => localized("Choose an intensity.", "Выберите интенсивность."),
+            Self::CategoryRequired => {
+                localized("Choose both categories.", "Выберите обе категории.")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for EditAnnotationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for EditAnnotationError {}
 
 /// The open "edit annotation" dialog for one segment.
 #[derive(Debug, Clone, PartialEq)]

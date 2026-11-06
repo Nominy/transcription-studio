@@ -5,6 +5,7 @@
 use studio_core::Project;
 
 use crate::babel_metadata::{AssessmentPhase, metadata_bool};
+use crate::i18n::localized;
 
 use super::{EditorSession, EditorSessionView};
 
@@ -45,13 +46,29 @@ impl SubmitBlocker {
     /// User-facing reason shown on the disabled submit control.
     pub fn reason(self) -> &'static str {
         match self {
-            Self::MissingIntensity => "Please set intensity for all annotations",
-            Self::LintErrors => "Please fix linter errors",
-            Self::UnacknowledgedWarnings => "Please acknowledge all warnings",
-            Self::UnresolvedLowConfidence => "Please review all low-confidence words",
-            Self::FeedbackSaving => "Saving feedback...",
-            Self::FeedbackIncomplete => "Please complete the feedback form",
+            Self::MissingIntensity => localized(
+                "Set an intensity for every annotation",
+                "Укажите интенсивность для всех аннотаций",
+            ),
+            Self::LintErrors => localized("Fix the problems first", "Сначала исправьте проблемы"),
+            Self::UnacknowledgedWarnings => localized(
+                "Dismiss all warnings first",
+                "Сначала скройте все предупреждения",
+            ),
+            Self::UnresolvedLowConfidence => localized(
+                "Review all low-confidence words",
+                "Проверьте все слова с низкой уверенностью",
+            ),
+            Self::FeedbackSaving => localized("Saving feedback…", "Сохранение отзыва…"),
+            Self::FeedbackIncomplete => {
+                localized("Finish the feedback form", "Заполните форму отзыва")
+            }
         }
+    }
+
+    /// Whether the blocker concerns the feedback form (the UI opens the Feedback panel).
+    pub fn is_feedback(self) -> bool {
+        matches!(self, Self::FeedbackSaving | Self::FeedbackIncomplete)
     }
 }
 

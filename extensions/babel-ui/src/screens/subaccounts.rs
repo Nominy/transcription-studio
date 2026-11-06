@@ -14,7 +14,8 @@ use sonus_babel_services::babel::DashboardProject;
 use sonus_babel_services::subaccounts::owner::{self, ManagedSubaccount, OwnerDashboard};
 
 use crate::screens::ShellModels;
-use sonus_shell::screens::ui::{self, Tone};
+use crate::text::{count, is_russian, localized, localized_fmt};
+use sonus_shell::screens::ui;
 use sonus_shell::services::spawn_service_in;
 
 /// Asks the dashboard to (re)load projects for the access checkboxes.
@@ -37,7 +38,8 @@ pub struct SubaccountsView {
     subaccounts: Vec<ManagedSubaccount>,
     /// Draft project access per sub-account; empty = every project.
     assignments: BTreeMap<String, Vec<String>>,
-    error: Option<String>,
+    /// Plain headline plus optional technical text for the Details disclosure.
+    error: Option<(SharedString, Option<SharedString>)>,
     request: Option<Task<()>>,
     loaded: bool,
     _subscriptions: Vec<Subscription>,
@@ -51,11 +53,15 @@ impl SubaccountsView {
         let host = relay.read(cx).host_url().to_string();
         let host_url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Relay host URL")
+                .placeholder(localized(cx, "Relay address", "Адрес ретранслятора"))
                 .default_value(host)
         });
         let create_label = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Name a new sub-account, e.g. Travel laptop")
+            InputState::new(window, cx).placeholder(localized(
+                cx,
+                "Name for a new sub-account, e.g. Travel laptop",
+                "Название нового под-аккаунта, например «Ноутбук в дороге»",
+            ))
         });
         let subscriptions = vec![
             cx.subscribe_in(
@@ -124,7 +130,15 @@ impl SubaccountsView {
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let label = self.create_label.read(cx).value().trim().to_string();
         if label.is_empty() {
-            self.error = Some("Sub-account label is required.".to_string());
+            self.error = Some((
+                localized(
+                    cx,
+                    "Enter a name for the sub-account.",
+                    "Введите название под-аккаунта.",
+                )
+                .into(),
+                None,
+            ));
             cx.notify();
             return;
         }
@@ -141,7 +155,7 @@ impl SubaccountsView {
         {
             Ok(host) => host,
             Err(error) => {
-                self.error = Some(error);
+                self.error = Some((error.into(), None));
                 cx.notify();
                 return;
             }
@@ -175,7 +189,17 @@ impl SubaccountsView {
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         }
                     }
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(error) => {
+                        this.error = Some((
+                            localized(
+                                cx,
+                                "Couldn't update sub-accounts",
+                                "Не удалось обновить под-аккаунты",
+                            )
+                            .into(),
+                            Some(format!("{error:#}").into()),
+                        ))
+                    }
                 }
                 cx.notify();
             },
@@ -218,15 +242,29 @@ impl SubaccountsView {
             .iter()
             .filter(|id| !self.projects.iter().any(|p| &p.id == *id))
             .count();
-        let code = sub
-            .code
-            .as_deref()
-            .map(|code| format!("Login code {code}"))
-            .unwrap_or_else(|| "Login code hidden by relay".to_string());
+        let code = match sub.code.as_deref() {
+            Some(code) => localized_fmt(
+                cx,
+                "Login code {code}",
+                "Код входа {code}",
+                &[("code", code)],
+            ),
+            None => localized(
+                cx,
+                "Login code hidden by the relay",
+                "Ретранслятор скрывает код входа",
+            )
+            .to_string(),
+        };
+        is_russian(cx);
         let stats = format!(
-            "{} tasks · {} · {}",
-            sub.completed_tasks,
-            format_worked_time(sub.worked_seconds),
+            "{} · {} · {}",
+            count(
+                sub.completed_tasks,
+                ("task", "tasks"),
+                ("задача", "задачи", "задач")
+            ),
+            format_worked_time(sub.worked_seconds, cx),
             format_money_cents(sub.earnings_cents)
         );
 
@@ -235,12 +273,19 @@ impl SubaccountsView {
             access = access.child(
                 h_flex()
                     .gap_2()
-                    .child(ui::muted("Load projects to choose access by name.", cx))
+                    .child(ui::muted(
+                        localized(
+                            cx,
+                            "Load projects to choose access by name.",
+                            "Загрузите проекты, чтобы выбрать доступ по названию.",
+                        ),
+                        cx,
+                    ))
                     .child(
                         Button::new(SharedString::from(format!("load-projects-{}", sub.id)))
                             .ghost()
                             .xsmall()
-                            .label("Load projects")
+                            .label(localized(cx, "Load projects", "Загрузить проекты"))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(LoadProjects))),
                     ),
             );
@@ -266,10 +311,24 @@ impl SubaccountsView {
             }
         }
         if unknown > 0 {
+            is_russian(cx);
             access = access.child(ui::muted(
-                format!(
-                    "{unknown} saved assignment{} not in the current project list; refresh projects to review.",
-                    if unknown == 1 { " is" } else { "s are" }
+                localized_fmt(
+                    cx,
+                    "{n} not in the current project list. Refresh projects to review.",
+                    "{n} нет в текущем списке проектов. Обновите проекты, чтобы проверить.",
+                    &[(
+                        "n",
+                        &count(
+                            unknown as u64,
+                            ("saved assignment is", "saved assignments are"),
+                            (
+                                "сохранённого назначения",
+                                "сохранённых назначений",
+                                "сохранённых назначений",
+                            ),
+                        ),
+                    )],
                 ),
                 cx,
             ));
@@ -302,9 +361,17 @@ impl SubaccountsView {
                                             .child(sub.label.clone()),
                                     )
                                     .child(if sub.revoked {
-                                        Tag::danger().small().child("Revoked")
+                                        Tag::danger().small().child(localized(
+                                            cx,
+                                            "Revoked",
+                                            "Отозван",
+                                        ))
                                     } else {
-                                        Tag::success().small().child("Active")
+                                        Tag::success().small().child(localized(
+                                            cx,
+                                            "Active",
+                                            "Активен",
+                                        ))
                                     }),
                             )
                             .child(ui::muted(code, cx))
@@ -314,7 +381,7 @@ impl SubaccountsView {
                         Button::new(SharedString::from(format!("revoke-{}", sub.id)))
                             .danger()
                             .small()
-                            .label("Revoke")
+                            .label(localized(cx, "Revoke", "Отозвать"))
                             .disabled(pending || sub.revoked)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.send(OwnerRequest::Revoke(revoke_id.clone()), window, cx)
@@ -332,9 +399,17 @@ impl SubaccountsView {
                             .justify_between()
                             .child(div().text_xs().font_weight(FontWeight::MEDIUM).child(
                                 if all_projects {
-                                    "Project access · every project"
+                                    localized(
+                                        cx,
+                                        "Project access · every project",
+                                        "Доступ к проектам · все проекты",
+                                    )
                                 } else {
-                                    "Project access · selected projects"
+                                    localized(
+                                        cx,
+                                        "Project access · selected projects",
+                                        "Доступ к проектам · выбранные проекты",
+                                    )
                                 },
                             ))
                             .child(
@@ -347,7 +422,11 @@ impl SubaccountsView {
                                         )))
                                         .ghost()
                                         .xsmall()
-                                        .label("Allow every project")
+                                        .label(localized(
+                                            cx,
+                                            "Allow every project",
+                                            "Разрешить все проекты",
+                                        ))
                                         .disabled(pending || all_projects)
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
@@ -364,7 +443,7 @@ impl SubaccountsView {
                                         )))
                                         .outline()
                                         .xsmall()
-                                        .label("Save access")
+                                        .label(localized(cx, "Save access", "Сохранить доступ"))
                                         .disabled(pending)
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
@@ -392,8 +471,12 @@ impl Render for SubaccountsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.pending();
         let controls = ui::card(
-            "Relay connection",
-            Some("Sub-accounts sign in through your relay. Load it to manage logins and project access."),
+            localized(cx, "Relay", "Ретранслятор"),
+            Some(localized(
+                cx,
+                "Sub-accounts sign in through your relay. Load it to manage logins and project access.",
+                "Под-аккаунты входят через ваш ретранслятор. Загрузите его, чтобы управлять входами и доступом к проектам.",
+            )),
             cx,
         )
         .child(
@@ -404,7 +487,7 @@ impl Render for SubaccountsView {
                     Button::new("owner-refresh")
                         .outline()
                         .icon(IconName::RefreshCw)
-                        .label("Load")
+                        .label(localized(cx, "Load", "Загрузить"))
                         .loading(pending)
                         .disabled(pending)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -420,21 +503,25 @@ impl Render for SubaccountsView {
                     Button::new("owner-create")
                         .primary()
                         .icon(IconName::Plus)
-                        .label("Create")
+                        .label(localized(cx, "Create", "Создать"))
                         .disabled(pending)
                         .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
                 ),
         )
-        .when_some(self.error.clone(), |this, error| {
-            this.child(ui::banner(Tone::Danger, "Sub-account request failed", Some(error.into()), None, cx))
+        .when_some(self.error.clone(), |this, (headline, technical)| {
+            this.child(ui::error_block(headline, technical, cx))
         });
 
         let list = if self.subaccounts.is_empty() {
             v_flex().child(ui::muted(
                 if self.loaded {
-                    "No sub-accounts yet. Create one above."
+                    localized(cx, "No sub-accounts yet.", "Под-аккаунтов пока нет.")
                 } else {
-                    "Load the relay to see your sub-accounts."
+                    localized(
+                        cx,
+                        "Load the relay to see your sub-accounts.",
+                        "Загрузите ретранслятор, чтобы увидеть под-аккаунты.",
+                    )
                 },
                 cx,
             ))
@@ -488,13 +575,26 @@ fn toggle_assignment(
     ids
 }
 
-fn format_worked_time(seconds: u64) -> String {
+fn format_worked_time(seconds: u64, cx: &App) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     if hours > 0 {
-        format!("{hours}h {minutes}m")
+        localized_fmt(
+            cx,
+            "{hours}h {minutes}m",
+            "{hours} ч {minutes} мин",
+            &[
+                ("hours", &hours.to_string()),
+                ("minutes", &minutes.to_string()),
+            ],
+        )
     } else {
-        format!("{minutes}m")
+        localized_fmt(
+            cx,
+            "{minutes}m",
+            "{minutes} мин",
+            &[("minutes", &minutes.to_string())],
+        )
     }
 }
 

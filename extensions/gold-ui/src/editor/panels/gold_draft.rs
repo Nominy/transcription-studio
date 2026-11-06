@@ -3,7 +3,7 @@
 //! Gold Draft follows the extension's overlay: word timestamps on the configured backend
 //! (This PC / Remote GPU), draft text from those timings, then **writing the drafted segments
 //! over the timed tracks** (replacement first, as Gold does), and optionally an OpenRouter
-//! polish streamed row by row. "Restore original" restores the rows as written by the draft
+//! polish streamed row by row. "Undo polish" restores the rows as written by the draft
 //! (post-timestamps, pre-polish), not the transcript from before the draft. Word timings are
 //! installed into the document (smart split, Alt+Click seek, ghost cursor, auto-segmentation)
 //! and cached per task.
@@ -41,13 +41,14 @@ use studio_waveform::DecodedAudio;
 use super::gold_progress::{
     DraftProgress, DraftStage as Stage, DraftTextOverall, StageWeights, TimingOverall, label,
 };
-use crate::editor::inference_audio::{read_lane_audio, until_cancelled};
+use crate::editor::inference_audio::{AudioReadError, read_lane_audio, until_cancelled};
 use crate::editor::timing_cache::{SavedTiming, TimingCache, lane_timings, timed_lanes};
 use crate::screens::ai_settings::AiSettingsView;
 use crate::services::GoldServices;
 use sonus_shell::editor::model::{EditorModel, LaneSource};
 use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
 use sonus_shell::editor::panels::ui::{caption, muted};
+use sonus_shell::screens::ui::{details, error_notification, localized};
 
 /// Changed/failed rows listed in the Changes panel.
 const CHANGES_LIMIT: usize = 40;
@@ -66,11 +67,13 @@ pub enum DraftMode {
     TimestampsOnly,
 }
 
-/// A failure the dialog shows, with the backend's error kind to pick the action.
+/// A failure the dialog shows, with the backend's error kind to pick the action. `message`
+/// is plain text; `detail` is technical text shown under "Details".
 #[derive(Debug, Clone, PartialEq)]
 struct RunError {
     kind: InferenceErrorKind,
     message: String,
+    detail: Option<String>,
 }
 
 impl RunError {
@@ -78,6 +81,7 @@ impl RunError {
         Self {
             kind: InferenceErrorKind::Other,
             message: message.into(),
+            detail: None,
         }
     }
 
@@ -85,19 +89,36 @@ impl RunError {
     fn gone() -> Self {
         Self {
             kind: InferenceErrorKind::Cancelled,
-            message: "Gold Draft was closed.".to_string(),
+            message: String::new(),
+            detail: None,
         }
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self, cx: &App) -> &'static str {
         match self.kind {
-            InferenceErrorKind::NeedsModels => "Set up the models on this PC first",
-            InferenceErrorKind::NoWebGpu => "This PC can't run the local models",
-            InferenceErrorKind::NoCapacity => "No remote GPU is free right now",
-            InferenceErrorKind::ReleaseMismatch => "The server runs another model release",
-            InferenceErrorKind::Unsupported => "This backend can't draft",
-            InferenceErrorKind::Cancelled => "Cancelled",
-            InferenceErrorKind::Other => "Gold Draft failed",
+            InferenceErrorKind::NeedsModels => {
+                localized(cx, "Download the models first", "Сначала скачайте модели")
+            }
+            InferenceErrorKind::NoWebGpu => localized(
+                cx,
+                "This computer can't run the models",
+                "Этот компьютер не может запускать модели",
+            ),
+            InferenceErrorKind::NoCapacity => {
+                localized(cx, "The remote server is busy", "Удалённый сервер занят")
+            }
+            InferenceErrorKind::ReleaseMismatch => {
+                localized(cx, "The server needs an update", "Серверу нужно обновление")
+            }
+            InferenceErrorKind::Unsupported => localized(
+                cx,
+                "Drafting isn't available here",
+                "Черновик здесь недоступен",
+            ),
+            InferenceErrorKind::Cancelled => localized(cx, "Cancelled", "Отменено"),
+            InferenceErrorKind::Other => {
+                localized(cx, "Drafting failed", "Не удалось создать черновик")
+            }
         }
     }
 
@@ -117,6 +138,7 @@ impl From<InferenceError> for RunError {
         Self {
             kind: error.kind,
             message: error.message,
+            detail: None,
         }
     }
 }
@@ -125,15 +147,44 @@ impl From<InferenceError> for RunError {
 enum Phase {
     Running {
         stage: Stage,
-        /// "Creating timestamps on this PC", "Writing Draft text", …
+        /// "Aligning words on this computer…", "Writing text…", …
         action: String,
-        /// Current sub-step ("encoding speaker 1", "3/24 segments"); may be empty.
+        /// Current sub-step ("Encoding audio, speaker 1", "3 of 24 segments"); may be empty.
         step: String,
     },
     /// Polish waits for a choice about missing speaker audio.
     AudioGuard(DraftAudioGuard),
     Ready,
     Failed(RunError),
+}
+
+/// Why polishing stopped: a plain headline and, for a failed request, the technical text.
+#[derive(Debug, Clone, PartialEq)]
+struct PolishError {
+    headline: String,
+    detail: Option<String>,
+}
+
+impl PolishError {
+    fn plain(headline: impl Into<String>) -> Self {
+        Self {
+            headline: headline.into(),
+            detail: None,
+        }
+    }
+
+    /// A polish request that failed: the draft stays, `detail` goes under "Details".
+    fn failed(cx: &App, detail: String) -> Self {
+        Self {
+            headline: localized(
+                cx,
+                "Draft is ready, but polishing failed. Keep the draft or try polishing again.",
+                "Черновик готов, но доработка не удалась. Оставьте черновик или попробуйте снова.",
+            )
+            .to_string(),
+            detail: Some(detail),
+        }
+    }
 }
 
 /// Streamed polish state.
@@ -144,13 +195,13 @@ struct Polish {
     completed: usize,
     total: usize,
     done: bool,
-    error: Option<String>,
+    error: Option<PolishError>,
 }
 
 impl Polish {
     /// Refinement failed: the written draft is kept, so rows streamed before the failure are
     /// dropped (neither listed as changes nor applied).
-    fn fail(&mut self, error: String) {
+    fn fail(&mut self, error: PolishError) {
         self.rows.clear();
         self.summary = None;
         self.error = Some(error);
@@ -169,7 +220,6 @@ impl Polish {
 struct Run {
     mode: DraftMode,
     location: ExecutionLocation,
-    task_id: String,
     phase: Phase,
     progress: DraftProgress,
     /// Overall progress of the timing run and of the draft-text pass behind the bar.
@@ -216,8 +266,7 @@ struct SegmentToast;
 /// one-row text pass, each with its own bar.
 struct SegmentBars {
     seq: u64,
-    /// "this PC" / "the remote GPU".
-    place: &'static str,
+    location: ExecutionLocation,
     timing: TimingOverall,
     text: DraftTextOverall,
     shown: String,
@@ -313,7 +362,7 @@ impl GoldDraftPanel {
             if let Some((saved, lanes)) = found {
                 this.update(cx, |this, cx| {
                     if this.saved.is_none() {
-                        this.install_timing(Arc::new(saved), &lanes, false, cx);
+                        this.install_timing(Arc::new(saved), &lanes, cx);
                     }
                 })
                 .ok();
@@ -322,36 +371,44 @@ impl GoldDraftPanel {
         .detach();
     }
 
-    /// Installs a timing run into the document and remembers it (`store`: also writes the
-    /// per-task cache).
+    /// Installs a timing run into the document and remembers it.
     fn install_timing(
         &mut self,
         saved: Arc<SavedTiming>,
         lanes: &[LaneAudio],
-        store: bool,
         cx: &mut Context<Self>,
     ) {
         let timings = lane_timings(&saved.timing, lanes);
         self.model.update(cx, |model, cx| {
             model.update_doc(cx, |doc| doc.install_word_timings(timings));
         });
-        self.saved = Some(saved.clone());
-        if store {
-            let cache = self.cache.clone();
-            let task_id = self.task_id(cx);
-            cx.spawn(async move |this, cx| {
-                let stored = cx
-                    .background_spawn(async move { cache.store(&task_id, &saved) })
-                    .await;
-                if let Err(error) = stored {
-                    this.update(cx, |this, cx| {
-                        this.status(format!("Word timestamps could not be saved: {error}"), cx)
-                    })
-                    .ok();
-                }
-            })
-            .detach();
-        }
+        self.saved = Some(saved);
+    }
+
+    /// Writes a timing run to the per-task cache; a failure is a toast.
+    fn store_timing(&self, saved: Arc<SavedTiming>, window: &mut Window, cx: &mut Context<Self>) {
+        let cache = self.cache.clone();
+        let task_id = self.task_id(cx);
+        let headline = localized(
+            cx,
+            "Couldn't save the word alignment.",
+            "Не удалось сохранить выравнивание слов.",
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let stored = cx
+                .background_spawn(async move { cache.store(&task_id, &saved) })
+                .await;
+            if let Err(error) = stored {
+                this.update_in(cx, |_, window, cx| {
+                    window.push_notification(
+                        error_notification(headline, Some(error.to_string().into())),
+                        cx,
+                    );
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     // ---- Gold Draft dialog ----------------------------------------------------------------
@@ -369,7 +426,7 @@ impl GoldDraftPanel {
     /// Close: cancels inference in flight; rows already written stay.
     fn close(&mut self, cx: &mut Context<Self>) {
         if self.run.as_ref().is_some_and(Run::is_running) {
-            self.status("Gold Draft cancelled.", cx);
+            self.status(localized(cx, "Draft cancelled", "Черновик отменён"), cx);
         }
         self.job = None;
         self.run = None;
@@ -379,8 +436,9 @@ impl GoldDraftPanel {
 
     fn start(&mut self, mode: DraftMode, window: &mut Window, cx: &mut Context<Self>) {
         self.job = None;
+        let commit_label = localized(cx, "AI draft", "Черновик ИИ");
         self.model.update(cx, |model, cx| {
-            match model.update_doc(cx, |doc| doc.commit_pending_drafts("Gold Draft")) {
+            match model.update_doc(cx, |doc| doc.commit_pending_drafts(commit_label)) {
                 Ok(outcome) => model.apply_outcome(outcome, cx),
                 Err(error) => model.set_status(error.to_string(), cx),
             }
@@ -397,14 +455,23 @@ impl GoldDraftPanel {
         let load = model.audio_load();
         let sources = model.inference_lane_sources();
         let refusal = if doc.is_read_only() {
-            Some("Gold Draft is unavailable: this task is read-only.".to_string())
+            Some(localized(
+                cx,
+                "This project is read only.",
+                "Этот проект только для чтения.",
+            ))
         } else if load.pending > 0 {
-            Some(
-                "Waiting for audio: speaker audio is still loading. Try again in a moment."
-                    .to_string(),
-            )
+            Some(localized(
+                cx,
+                "Audio is still loading. Try again in a moment.",
+                "Аудио ещё загружается. Попробуйте через мгновение.",
+            ))
         } else if sources.is_empty() {
-            Some("Gold Draft needs the speaker audio, and none of it is loaded.".to_string())
+            Some(localized(
+                cx,
+                "No audio is loaded for the speakers.",
+                "Аудио спикеров не загружено.",
+            ))
         } else {
             None
         };
@@ -425,10 +492,9 @@ impl GoldDraftPanel {
         let mut run = Run {
             mode,
             location,
-            task_id: task_id.clone(),
             phase: Phase::Running {
                 stage: Stage::Timestamps,
-                action: "Reading transcript".to_string(),
+                action: localized(cx, "Reading transcript…", "Чтение расшифровки…").to_string(),
                 step: String::new(),
             },
             progress: DraftProgress::new(stages, weights),
@@ -476,7 +542,7 @@ impl GoldDraftPanel {
             }
             Err(error) => run.phase = Phase::Failed(error),
         }
-        let message = self.headline();
+        let message = self.headline(cx);
         self.status(message, cx);
         cx.notify();
     }
@@ -496,7 +562,7 @@ impl GoldDraftPanel {
         }
     }
 
-    /// A status step without a value of its own ("Capturing audio"); the bar holds.
+    /// A status step without a value of its own ("Preparing audio…"); the bar holds.
     fn set_action(&mut self, action: &str, cx: &mut Context<Self>) {
         if let Some(Run {
             phase:
@@ -532,17 +598,17 @@ impl GoldDraftPanel {
             Stage::Timestamps => {
                 run.timing.advance(&progress);
                 run.progress.advance(Stage::Timestamps, run.timing.fraction);
-                step.clone_from(&run.timing.step);
+                *step = run.timing.step.text(cx);
             }
             Stage::Drafting => {
                 if run.text.fraction.is_none() {
-                    *action = "Writing Draft text".to_string();
+                    *action = localized(cx, "Writing text…", "Запись текста…").to_string();
                 }
                 run.text.advance(&progress);
                 // Rendering the prepared rows is the small remainder of the stage.
                 run.progress
                     .advance(Stage::Drafting, run.text.fraction.map(|f| 0.95 * f));
-                step.clone_from(&run.text.step);
+                *step = run.text.step.text(cx);
             }
             Stage::Writing | Stage::Refining => return,
         }
@@ -562,19 +628,32 @@ impl GoldDraftPanel {
         let count = draft.rows.len();
         self.enter(
             Stage::Writing,
-            format!("Writing {count} segments"),
+            localized(cx, "Writing {n} segments…", "Запись {n} сегментов…")
+                .replace("{n}", &count.to_string()),
             String::new(),
             cx,
         );
         let location = cx.global::<GoldServices>().ai.execution_location;
         if self.run.as_ref().map(|run| run.location) != Some(location) {
-            return Err(RunError::other(
-                "\"Where to draft\" changed during the run. Generate again.",
-            ));
+            return Err(RunError::other(localized(
+                cx,
+                "Settings changed during the run. Start again.",
+                "Настройки изменились во время работы. Начните заново.",
+            )));
         }
         // LLM rows stay verbatim (the A/B that chose the LLM judged its raw output); CTC rows
         // drop word-final ellipses (Gold overlay `runL0Replacement`).
         let llm_text = draft.models["e2e"]["llm"].as_bool() == Some(true);
+        let unknown_track = localized(
+            cx,
+            "The draft doesn't match the tracks in this project.",
+            "Черновик не совпадает с дорожками в этом проекте.",
+        );
+        let changed = localized(
+            cx,
+            "The transcript changed during the run. Start again.",
+            "Расшифровка изменилась во время работы. Начните заново.",
+        );
         let rows = draft
             .rows
             .into_iter()
@@ -582,11 +661,10 @@ impl GoldDraftPanel {
                 let lane = lanes
                     .iter()
                     .find(|lane| lane_name(lane) == row.lane)
-                    .ok_or_else(|| {
-                        RunError::other(format!(
-                            "The draft returned rows for an unknown track `{}`.",
-                            row.lane
-                        ))
+                    .ok_or_else(|| RunError {
+                        kind: InferenceErrorKind::Other,
+                        message: unknown_track.to_string(),
+                        detail: Some(row.lane.clone()),
                     })?;
                 Ok(DraftedRow {
                     lane_id: lane.lane_id.clone(),
@@ -603,9 +681,7 @@ impl GoldDraftPanel {
         let snapshot = self.model.update(cx, |model, cx| {
             model.update_doc(cx, |doc| {
                 if doc.transcription_row_snapshot() != before {
-                    return Err(RunError::other(
-                        "The transcript changed while drafting. Generate again.",
-                    ));
+                    return Err(RunError::other(changed));
                 }
                 doc.replace_lane_rows(timed_lane_ids, rows)
                     .map_err(|error| RunError::other(error.to_string()))?;
@@ -616,7 +692,15 @@ impl GoldDraftPanel {
             run.snapshot = Some(snapshot);
             run.timed_tracks = timed_lane_ids.len();
         }
-        self.status(format!("Gold Draft wrote {count} segments."), cx);
+        self.status(
+            localized(
+                cx,
+                "Draft written to {n} segments",
+                "Черновик записан в {n} сегментов",
+            )
+            .replace("{n}", &count.to_string()),
+            cx,
+        );
         Ok(())
     }
 
@@ -638,7 +722,7 @@ impl GoldDraftPanel {
         run.progress = DraftProgress::new(vec![Stage::Refining], StageWeights::TextReady);
         run.phase = Phase::Running {
             stage: Stage::Refining,
-            action: "Refining".to_string(),
+            action: localized(cx, "Polishing…", "Доработка…").to_string(),
             step: String::new(),
         };
         self.job = Some(cx.spawn_in(window, async move |this, cx| {
@@ -649,15 +733,22 @@ impl GoldDraftPanel {
     }
 
     /// Polish request inputs: payload from the current (drafted) rows plus captured audio.
-    fn prepare_polish(&mut self, cx: &mut Context<Self>) -> Result<PolishRequest, String> {
+    fn prepare_polish(&mut self, cx: &mut Context<Self>) -> Result<PolishRequest, PolishError> {
         let services = cx.global::<GoldServices>();
         let settings = &services.ai;
-        let provider = services
-            .polish
-            .as_ref()
-            .ok_or_else(|| "No polish provider is available for this document.".to_string())?;
+        let provider = services.polish.as_ref().ok_or_else(|| {
+            PolishError::plain(localized(
+                cx,
+                "Polishing isn't available for this project.",
+                "Доработка недоступна для этого проекта.",
+            ))
+        })?;
         if !settings.gold_polish_enabled {
-            return Err("Refinement is off in settings.".to_string());
+            return Err(PolishError::plain(localized(
+                cx,
+                "Polishing is turned off in Settings › AI.",
+                "Доработка выключена в Настройки › ИИ.",
+            )));
         }
         let config = DraftingConfig::from_inputs(
             &settings.gold_openrouter_key,
@@ -671,9 +762,13 @@ impl GoldDraftPanel {
             .prepare_payload(doc.project(), &config)
             .map_err(|error| {
                 if settings.gold_openrouter_key.trim().is_empty() {
-                    "Refinement needs an OpenRouter API key in settings.".to_string()
+                    PolishError::plain(localized(
+                        cx,
+                        "Add an OpenRouter key in Settings › AI to polish.",
+                        "Добавьте ключ OpenRouter в Настройки › ИИ.",
+                    ))
                 } else {
-                    format!("{error:#}")
+                    PolishError::failed(cx, format!("{error:#}"))
                 }
             })?;
         Ok((payload, capture_audio(&self.model, cx)))
@@ -687,8 +782,8 @@ impl GoldDraftPanel {
             .map_or(0, Vec::len);
         self.enter(
             Stage::Refining,
-            "Refining".to_string(),
-            format!("{segments} segments"),
+            localized(cx, "Polishing…", "Доработка…").to_string(),
+            localized(cx, "{n} segments", "{n} сегментов").replace("{n}", &segments.to_string()),
             cx,
         );
         if let Some(run) = self.run.as_mut() {
@@ -727,7 +822,9 @@ impl GoldDraftPanel {
             DraftStreamEvent::Started { total_rows } => {
                 polish.total = total_rows;
                 run.progress.advance(Stage::Refining, Some(0.0));
-                format!("0/{total_rows} segments")
+                localized(cx, "{i} of {n} segments", "{i} из {n} сегментов")
+                    .replace("{i}", "0")
+                    .replace("{n}", &total_rows.to_string())
             }
             DraftStreamEvent::Row {
                 row,
@@ -760,9 +857,16 @@ impl GoldDraftPanel {
                         Some(completed_rows as f32 / total_rows as f32),
                     );
                 }
-                format!("{completed_rows}/{total_rows} segments")
+                localized(cx, "{i} of {n} segments", "{i} из {n} сегментов")
+                    .replace("{i}", &completed_rows.to_string())
+                    .replace("{n}", &total_rows.to_string())
             }
-            DraftStreamEvent::Reconnecting => "connection lost, reconnecting".to_string(),
+            DraftStreamEvent::Reconnecting => localized(
+                cx,
+                "Connection lost, reconnecting…",
+                "Связь потеряна, переподключение…",
+            )
+            .to_string(),
         };
         if let Phase::Running { step: shown, .. } = &mut run.phase {
             *shown = step;
@@ -770,7 +874,7 @@ impl GoldDraftPanel {
         cx.notify();
     }
 
-    fn finish_polish(&mut self, result: Result<DraftResult, String>, cx: &mut Context<Self>) {
+    fn finish_polish(&mut self, result: Result<DraftResult, PolishError>, cx: &mut Context<Self>) {
         let rows = match result.as_ref() {
             Ok(result) => draft_row_previews(self.model.read(cx).doc().project(), result),
             Err(_) => Vec::new(),
@@ -811,21 +915,35 @@ impl GoldDraftPanel {
             .polish
             .as_ref()
             .map_or_else(Vec::new, Polish::rows_to_apply);
+        let kept = localized(
+            cx,
+            "Draft kept for {n} segments",
+            "Черновик оставлен для {n} сегментов",
+        );
         if rows.is_empty() {
             let count = snapshot.len();
-            self.status(format!("Applied to {count} segments."), cx);
+            self.status(kept.replace("{n}", &count.to_string()), cx);
             self.close(cx);
             return;
         }
+        let structure_changed = localized(
+            cx,
+            "The segments changed since the draft was made. Make a new draft.",
+            "Сегменты изменились после создания черновика. Сделайте новый черновик.",
+        );
+        let rows_gone = localized(
+            cx,
+            "The draft's segments are no longer in this project.",
+            "Сегментов черновика больше нет в этом проекте.",
+        );
+        let undo_label = localized(cx, "Keep draft", "Оставить черновик");
         let result = self.model.update(cx, |model, cx| {
             let applied = model.update_doc(cx, |doc| {
                 if !same_structure(&doc.transcription_row_snapshot(), &snapshot) {
-                    return Err(
-                        "Apply refused: segments were added, removed, moved or resized since the draft was written."
-                            .to_string(),
-                    );
+                    return Err(structure_changed.to_string());
                 }
-                let edits: Vec<_> = rows.into_iter()
+                let edits: Vec<_> = rows
+                    .into_iter()
                     .filter(|row| doc.project().segment(&row.row_id).is_some())
                     .map(|row| DocumentEdit::ReplaceText {
                         segment_id: row.row_id,
@@ -835,13 +953,15 @@ impl GoldDraftPanel {
                     .collect();
                 let count = edits.len();
                 if count == 0 {
-                    return Err("Apply drafting found no rows present in this project.".to_string());
+                    return Err(rows_gone.to_string());
                 }
-                let outcome = doc.apply_transaction(DocumentTransaction {
-                    label: "Apply draft".to_string(),
-                    expected_revision: doc.session().current_edit_revision(),
-                    edits,
-                }).map_err(|error| error.to_string())?;
+                let outcome = doc
+                    .apply_transaction(DocumentTransaction {
+                        label: undo_label.to_string(),
+                        expected_revision: doc.session().current_edit_revision(),
+                        edits,
+                    })
+                    .map_err(|error| error.to_string())?;
                 Ok((count, outcome))
             });
             applied.map(|(count, outcome)| {
@@ -851,7 +971,7 @@ impl GoldDraftPanel {
         });
         match result {
             Ok(applied) => {
-                self.status(format!("Applied to {applied} segments."), cx);
+                self.status(kept.replace("{n}", &applied.to_string()), cx);
                 self.close(cx);
             }
             Err(error) => {
@@ -868,14 +988,12 @@ impl GoldDraftPanel {
         let Some(snapshot) = self.run.as_ref().and_then(|run| run.snapshot.clone()) else {
             return;
         };
+        let undone = localized(cx, "Polish undone", "Доработка отменена");
         let result = self.model.update(cx, |model, cx| {
             let result = model.update_doc(cx, |doc| doc.restore_row_texts(&snapshot));
             match result {
                 Ok(outcome) => {
-                    let message = outcome
-                        .status
-                        .clone()
-                        .unwrap_or_else(|| "Restored.".to_string());
+                    let message = outcome.status.clone().unwrap_or_else(|| undone.to_string());
                     model.apply_outcome(outcome, cx);
                     Ok(message)
                 }
@@ -897,38 +1015,74 @@ impl GoldDraftPanel {
     }
 
     /// Status line: `Action… 45% · sub-step`, or the outcome.
-    fn headline(&self) -> String {
+    fn headline(&self, cx: &App) -> String {
         let Some(run) = self.run.as_ref() else {
             return String::new();
         };
         match &run.phase {
             Phase::Running { action, step, .. } => label(action, run.progress.fraction, step),
-            Phase::AudioGuard(_) => "Refinement needs a decision about speaker audio.".to_string(),
-            Phase::Failed(error) => format!("{}: {}", error.title(), error.message),
+            Phase::AudioGuard(_) => localized(
+                cx,
+                "Polishing is waiting for your choice about the audio.",
+                "Доработка ждёт вашего выбора по аудио.",
+            )
+            .to_string(),
+            Phase::Failed(error) => error.title(cx).to_string(),
             Phase::Ready => match run.mode {
-                DraftMode::TimestampsOnly => format!(
-                    "Timestamps ready for {} track(s). Smart split, Alt+Click and auto-segmentation use them now.",
-                    self.saved
+                DraftMode::TimestampsOnly => localized(
+                    cx,
+                    "Words aligned on {n} tracks. Smart split and Alt+click now snap to words.",
+                    "Слова выровнены на {n} дорожках. Умное разделение и Alt+клик теперь привязаны к словам.",
+                )
+                .replace(
+                    "{n}",
+                    &self
+                        .saved
                         .as_ref()
                         .map_or(0, |saved| saved.timing.tracks.len())
+                        .to_string(),
                 ),
                 DraftMode::Draft => match &run.polish {
                     Some(Polish {
                         error: Some(error), ..
-                    }) => format!(
-                        "Draft kept. Refinement failed: {error} Apply the draft or retry refinement."
-                    ),
+                    }) => error.headline.clone(),
                     Some(polish) => {
-                        let (changed, _, failed) = polish_summary(polish);
-                        format!("Draft ready. {changed} changed, {failed} left as is.")
+                        let (changed, unchanged, _) = polish_summary(polish);
+                        localized(
+                            cx,
+                            "Draft ready — {a} segments changed, {b} unchanged.",
+                            "Черновик готов — изменено {a}, без изменений {b}.",
+                        )
+                        .replace("{a}", &changed.to_string())
+                        .replace("{b}", &unchanged.to_string())
                     }
-                    None => format!(
-                        "Draft ready: {} segments.",
-                        run.snapshot.as_ref().map_or(0, Vec::len)
+                    None => localized(
+                        cx,
+                        "Draft ready — {n} segments.",
+                        "Черновик готов — {n} сегментов.",
+                    )
+                    .replace(
+                        "{n}",
+                        &run.snapshot.as_ref().map_or(0, Vec::len).to_string(),
                     ),
                 },
             },
         }
+    }
+
+    /// Technical text behind the status line (a failed polish request).
+    fn headline_detail(&self) -> Option<SharedString> {
+        let run = self.run.as_ref()?;
+        if !matches!(run.phase, Phase::Ready) {
+            return None;
+        }
+        run.polish
+            .as_ref()?
+            .error
+            .as_ref()?
+            .detail
+            .clone()
+            .map(SharedString::from)
     }
 
     // ---- Alt+Shift+G ----------------------------------------------------------------------
@@ -944,21 +1098,21 @@ impl GoldDraftPanel {
     ) {
         self.segment_seq += 1;
         let seq = self.segment_seq;
-        let toast = move |message: String, kind: Option<bool>| {
-            let note = match kind {
-                None => Notification::info(message).autohide(false),
-                Some(true) => Notification::success(message),
-                Some(false) => Notification::error(message).autohide(false),
-            };
+        let toast_id = move |note: Notification| {
             note.id1::<SegmentToast>(SharedString::from(format!("segment-{seq}")))
         };
+        let commit_label = localized(cx, "Fill segment", "Заполнить сегмент");
         self.model.update(cx, |model, cx| {
-            if let Ok(outcome) =
-                model.update_doc(cx, |doc| doc.commit_pending_drafts("Transcribe segment"))
+            if let Ok(outcome) = model.update_doc(cx, |doc| doc.commit_pending_drafts(commit_label))
             {
                 model.apply_outcome(outcome, cx);
             }
         });
+        let no_audio = localized(
+            cx,
+            "This track has no audio loaded.",
+            "У этой дорожки не загружено аудио.",
+        );
         let model = self.model.read(cx);
         let prepared = model
             .doc()
@@ -972,22 +1126,18 @@ impl GoldDraftPanel {
                 {
                     Ok((target, sources, model.doc().project().id.clone()))
                 } else {
-                    Err("Transcribe segment: this track's audio is not loaded.".to_string())
+                    Err(no_audio.to_string())
                 }
             });
         let (target, sources, task_id) = match prepared {
             Ok(prepared) => prepared,
             Err(message) => {
-                window.push_notification(toast(message, Some(false)), cx);
+                window.push_notification(toast_id(error_notification(message, None)), cx);
                 return;
             }
         };
         let services = cx.global::<GoldServices>();
         let location = services.ai.execution_location;
-        let place = match location {
-            ExecutionLocation::Local => "this PC",
-            ExecutionLocation::Remote => "the remote GPU",
-        };
         let lane_count = sources.len().clamp(1, 2);
         let input = SegmentInput {
             task_id,
@@ -996,11 +1146,14 @@ impl GoldDraftPanel {
             saved: self.saved.clone(),
             target: target.clone(),
         };
-        let first = format!("Transcribing on {place}…");
-        window.push_notification(toast(first.clone(), None), cx);
+        let first = fill_action(location, cx);
+        window.push_notification(
+            toast_id(Notification::info(first.clone()).autohide(false)),
+            cx,
+        );
         self.segment_bars = Some(SegmentBars {
             seq,
-            place,
+            location,
             timing: TimingOverall::new(lane_count),
             text: DraftTextOverall::new(lane_count),
             shown: first,
@@ -1022,17 +1175,30 @@ impl GoldDraftPanel {
                                 model.apply_outcome(outcome, cx);
                                 Ok(message)
                             }
-                            Err(refusal) => Err(refusal.to_string()),
+                            Err(refusal) => Err(RunError::other(refusal.to_string())),
                         }
                     }),
-                    Err(error) => Err(format!("Transcribe segment failed: {}", error.message)),
+                    Err(error) => Err(error),
                 };
-                let (message, ok) = match outcome {
-                    Ok(message) => (message, true),
-                    Err(message) => (message, false),
-                };
-                this.status(message.clone(), cx);
-                window.push_notification(toast(message, Some(ok)), cx);
+                match outcome {
+                    Ok(message) => {
+                        this.status(message.clone(), cx);
+                        window.push_notification(toast_id(Notification::success(message)), cx);
+                    }
+                    Err(error) => {
+                        this.status(error.message.clone(), cx);
+                        window.push_notification(
+                            toast_id(
+                                error_notification(
+                                    error.message,
+                                    error.detail.map(SharedString::from),
+                                )
+                                .autohide(false),
+                            ),
+                            cx,
+                        );
+                    }
+                }
             })
             .ok();
         }));
@@ -1057,16 +1223,16 @@ impl GoldDraftPanel {
         let message = if stage == Stage::Timestamps {
             bars.timing.advance(&progress);
             label(
-                &format!("Creating timestamps on {}", bars.place),
+                align_action(bars.location, cx),
                 bars.timing.fraction,
-                &bars.timing.step,
+                &bars.timing.step.text(cx),
             )
         } else {
             bars.text.advance(&progress);
             label(
-                &format!("Transcribing on {}", bars.place),
+                &fill_action(bars.location, cx),
                 bars.text.fraction,
-                &bars.text.step,
+                &bars.text.step.text(cx),
             )
         };
         if message == bars.shown {
@@ -1086,8 +1252,8 @@ impl GoldDraftPanel {
     fn render_summary(&self, run: &Run, cx: &App) -> Div {
         let theme = cx.theme();
         let location = match run.location {
-            ExecutionLocation::Local => "This PC",
-            ExecutionLocation::Remote => "Remote GPU",
+            ExecutionLocation::Local => localized(cx, "This computer", "Этот компьютер"),
+            ExecutionLocation::Remote => localized(cx, "Remote server", "Удалённый сервер"),
         };
         let segments = run.snapshot.as_ref().map_or_else(
             || self.model.read(cx).doc().transcription_row_snapshot().len(),
@@ -1095,8 +1261,12 @@ impl GoldDraftPanel {
         );
         let mut pills = vec![
             badge(location, accent(), cx),
-            badge(&format!("Task {}", run.task_id), theme.muted_foreground, cx),
-            badge(&format!("{segments} segments"), theme.muted_foreground, cx),
+            badge(
+                &localized(cx, "{n} segments", "{n} сегментов")
+                    .replace("{n}", &segments.to_string()),
+                theme.muted_foreground,
+                cx,
+            ),
         ];
         // Gold's pills: the result's rewritten/unchanged/failed counts (the written draft
         // counts as all rewritten until a refinement result replaces it), or the stream's
@@ -1109,7 +1279,9 @@ impl GoldDraftPanel {
             Some(polish) => {
                 if polish.total > 0 {
                     pills.push(badge(
-                        &format!("{}/{} done", polish.completed, polish.total),
+                        &localized(cx, "{a} of {b} done", "{a} из {b} готово")
+                            .replace("{a}", &polish.completed.to_string())
+                            .replace("{b}", &polish.total.to_string()),
                         theme.muted_foreground,
                         cx,
                     ));
@@ -1124,14 +1296,20 @@ impl GoldDraftPanel {
             }
         };
         if let Some((rewritten, unchanged, failed)) = counts {
-            pills.push(badge(&format!("{rewritten} rewritten"), theme.success, cx));
             pills.push(badge(
-                &format!("{unchanged} unchanged"),
+                &localized(cx, "{n} changed", "{n} изменено")
+                    .replace("{n}", &rewritten.to_string()),
+                theme.success,
+                cx,
+            ));
+            pills.push(badge(
+                &localized(cx, "{n} unchanged", "{n} без изменений")
+                    .replace("{n}", &unchanged.to_string()),
                 theme.muted_foreground,
                 cx,
             ));
             pills.push(badge(
-                &format!("{failed} failed"),
+                &localized(cx, "{n} failed", "{n} не удалось").replace("{n}", &failed.to_string()),
                 if failed > 0 {
                     theme.danger
                 } else {
@@ -1142,16 +1320,22 @@ impl GoldDraftPanel {
         }
         v_flex()
             .gap_1()
-            .child(caption("Summary", cx))
+            .child(caption(localized(cx, "Summary", "Итог"), cx))
             .child(h_flex().gap_1().flex_wrap().children(pills))
     }
 
     fn render_changes(&self, run: &Run, cx: &App) -> Div {
         let theme = cx.theme();
         let empty_state = |text: &'static str| muted(text, cx);
+        let waiting = localized(
+            cx,
+            "Waiting for the first segment…",
+            "Ожидание первого сегмента…",
+        );
+        let no_changes = localized(cx, "No changes", "Без изменений");
         let body: AnyElement = match (&run.snapshot, &run.polish) {
-            (None, _) => empty_state("Waiting for the first segment…").into_any_element(),
-            (Some(_), None) => empty_state("No changes.").into_any_element(),
+            (None, _) => empty_state(waiting).into_any_element(),
+            (Some(_), None) => empty_state(no_changes).into_any_element(),
             (Some(snapshot), Some(polish)) => {
                 let changed: Vec<&DraftRowPreview> = polish
                     .rows
@@ -1161,11 +1345,11 @@ impl GoldDraftPanel {
                     .collect();
                 if changed.is_empty() {
                     empty_state(if polish.done || polish.error.is_some() {
-                        "No changes."
+                        no_changes
                     } else if polish.rows.is_empty() {
-                        "Waiting for the first segment…"
+                        waiting
                     } else {
-                        "No changes yet."
+                        localized(cx, "No changes yet", "Пока без изменений")
                     })
                     .into_any_element()
                 } else {
@@ -1176,10 +1360,14 @@ impl GoldDraftPanel {
                                 .iter()
                                 .position(|row| row.segment_id == preview.row.row_id)
                                 .map_or_else(|| "?".to_string(), |index| (index + 1).to_string());
-                            let status_color = match preview.row.status.as_str() {
-                                "rewritten" => theme.success,
-                                "failed" => theme.danger,
-                                _ => theme.muted_foreground,
+                            let (status_text, status_color) = match preview.row.status.as_str() {
+                                "rewritten" => (localized(cx, "changed", "изменён"), theme.success),
+                                "failed" => (localized(cx, "failed", "не удалось"), theme.danger),
+                                "unchanged" => (
+                                    localized(cx, "unchanged", "без изменений"),
+                                    theme.muted_foreground,
+                                ),
+                                _ => (localized(cx, "pending", "ожидает"), theme.muted_foreground),
                             };
                             let pane = |label: &'static str, text: &str| {
                                 v_flex()
@@ -1191,7 +1379,7 @@ impl GoldDraftPanel {
                                     .bg(theme.secondary)
                                     .child(caption(label, cx))
                                     .child(div().text_sm().child(if text.trim().is_empty() {
-                                        "(empty)".to_string()
+                                        localized(cx, "(empty)", "(пусто)").to_string()
                                     } else {
                                         text.to_string()
                                     }))
@@ -1209,19 +1397,32 @@ impl GoldDraftPanel {
                                             div()
                                                 .text_xs()
                                                 .font_weight(FontWeight::SEMIBOLD)
-                                                .child(format!("Segment {index}")),
+                                                .child(
+                                                    localized(cx, "Segment {i}", "Сегмент {i}")
+                                                        .replace("{i}", &index),
+                                                ),
                                         )
-                                        .child(badge(&preview.row.status, status_color, cx))
+                                        .child(badge(status_text, status_color, cx))
                                         .when(preview.applied, |row| {
-                                            row.child(badge("applied", theme.success, cx))
+                                            row.child(badge(
+                                                localized(cx, "applied", "применён"),
+                                                theme.success,
+                                                cx,
+                                            ))
                                         }),
                                 )
                                 .child(
                                     h_flex()
                                         .gap_2()
                                         .items_start()
-                                        .child(pane("Before", &preview.original_text))
-                                        .child(pane("After", &preview.row.rewritten_text)),
+                                        .child(pane(
+                                            localized(cx, "Before", "До"),
+                                            &preview.original_text,
+                                        ))
+                                        .child(pane(
+                                            localized(cx, "After", "После"),
+                                            &preview.row.rewritten_text,
+                                        )),
                                 )
                                 .when(!preview.row.warnings.is_empty(), |row| {
                                     row.child(
@@ -1236,7 +1437,10 @@ impl GoldDraftPanel {
                 }
             }
         };
-        v_flex().gap_1().child(caption("Changes", cx)).child(body)
+        v_flex()
+            .gap_1()
+            .child(caption(localized(cx, "Changes", "Изменения"), cx))
+            .child(body)
     }
 
     fn render_problem(&self, run: &Run, cx: &mut Context<Self>) -> Option<Div> {
@@ -1256,9 +1460,14 @@ impl GoldDraftPanel {
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.danger)
-                                .child(error.title()),
+                                .child(error.title(cx)),
                         )
-                        .child(div().text_sm().child(error.message.clone()))
+                        .when(!error.message.is_empty(), |this| {
+                            this.child(div().text_sm().child(error.message.clone()))
+                        })
+                        .when_some(error.detail.clone(), |this, detail| {
+                            this.child(details(detail.into(), cx))
+                        })
                         .child(
                             h_flex()
                                 .gap_1()
@@ -1267,7 +1476,11 @@ impl GoldDraftPanel {
                                         Button::new("gold-setup-models")
                                             .small()
                                             .primary()
-                                            .label("Set up models")
+                                            .label(localized(
+                                                cx,
+                                                "Download models",
+                                                "Скачать модели",
+                                            ))
                                             .on_click(|_, window, cx| open_ai_settings(window, cx)),
                                     )
                                 })
@@ -1275,7 +1488,7 @@ impl GoldDraftPanel {
                                     Button::new("gold-try-again")
                                         .small()
                                         .outline()
-                                        .label("Try again")
+                                        .label(localized(cx, "Try again", "Попробовать снова"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             let mode = this
                                                 .run
@@ -1289,13 +1502,20 @@ impl GoldDraftPanel {
             }
             Phase::AudioGuard(guard) => {
                 let message = if guard.captured_speaker_lanes == 0 {
-                    "Couldn't capture speaker audio. The draft may miss laughter and other sounds."
-                        .to_string()
-                } else {
-                    format!(
-                        "Captured audio for {} of {} speakers. The draft may miss laughter and other sounds.",
-                        guard.captured_speaker_lanes, guard.expected_speaker_lanes
+                    localized(
+                        cx,
+                        "Couldn't read the audio. The draft may miss laughter and other sounds.",
+                        "Не удалось прочитать аудио. В черновике могут отсутствовать смех и другие звуки.",
                     )
+                    .to_string()
+                } else {
+                    localized(
+                        cx,
+                        "Only {a} of {b} speakers have audio. The draft may miss laughter and other sounds.",
+                        "Аудио есть только у {a} из {b} спикеров. В черновике могут отсутствовать смех и другие звуки.",
+                    )
+                    .replace("{a}", &guard.captured_speaker_lanes.to_string())
+                    .replace("{b}", &guard.expected_speaker_lanes.to_string())
                 };
                 Some(
                     v_flex()
@@ -1312,7 +1532,7 @@ impl GoldDraftPanel {
                                     Button::new("gold-retry-audio")
                                         .small()
                                         .outline()
-                                        .label("Retry audio")
+                                        .label(localized(cx, "Try again", "Попробовать снова"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.restart_polish(DraftAudioMode::Guard, window, cx)
                                         })),
@@ -1324,7 +1544,11 @@ impl GoldDraftPanel {
                                             Button::new("gold-use-audio")
                                                 .small()
                                                 .outline()
-                                                .label("Use captured audio")
+                                                .label(localized(
+                                                    cx,
+                                                    "Continue with what loaded",
+                                                    "Продолжить с тем, что загрузилось",
+                                                ))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.restart_polish(
                                                         DraftAudioMode::UseAvailableAudio,
@@ -1339,7 +1563,11 @@ impl GoldDraftPanel {
                                     Button::new("gold-text-only")
                                         .small()
                                         .outline()
-                                        .label("Continue without audio")
+                                        .label(localized(
+                                            cx,
+                                            "Continue without audio",
+                                            "Продолжить без аудио",
+                                        ))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.restart_polish(
                                                 DraftAudioMode::TextOnly,
@@ -1364,7 +1592,8 @@ impl Render for GoldDraftPanel {
         };
         let theme = cx.theme().clone();
         let running = run.is_running();
-        let headline = self.headline();
+        let headline = self.headline(cx);
+        let headline_detail = self.headline_detail();
         // Gold shows the bar only while busy (`activity.hidden = !busy`): a finished, failed
         // or paused run has no bar.
         let fraction = match &run.phase {
@@ -1406,27 +1635,37 @@ impl Render for GoldDraftPanel {
                                 div()
                                     .text_base()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Gold Draft"),
+                                    .child(localized(cx, "AI draft", "Черновик ИИ")),
                             ),
                     )
-                    .child(muted("Review before you save or submit.", cx)),
+                    .child(muted(
+                        localized(
+                            cx,
+                            "Check the result before you keep it.",
+                            "Проверьте результат, прежде чем оставить его.",
+                        ),
+                        cx,
+                    )),
             )
             .child(
                 Button::new("gold-close")
                     .small()
                     .ghost()
                     .icon(IconName::Close)
-                    .label("Close")
+                    .label(localized(cx, "Close", "Закрыть"))
                     .tooltip(if running {
-                        "Close and cancel the run"
+                        localized(cx, "Close and cancel", "Закрыть и отменить")
                     } else {
-                        "Close"
+                        localized(cx, "Close", "Закрыть")
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             );
         let status = v_flex()
             .gap_2()
             .child(div().text_sm().child(headline))
+            .when_some(headline_detail, |this, detail| {
+                this.child(details(detail, cx))
+            })
             .when_some(fraction, |this, value| {
                 this.child(Progress::new("gold-progress").value(value))
             })
@@ -1452,10 +1691,12 @@ impl Render for GoldDraftPanel {
                         Button::new("gold-restore")
                             .small()
                             .outline()
-                            .label("Restore original")
-                            .tooltip(
-                                "Restore the segments as the draft wrote them, before refinement",
-                            )
+                            .label(localized(cx, "Undo polish", "Отменить доработку"))
+                            .tooltip(localized(
+                                cx,
+                                "Go back to the text before polishing",
+                                "Вернуть текст до доработки",
+                            ))
                             .disabled(running || !has_snapshot)
                             .on_click(cx.listener(|this, _, _, cx| this.restore(cx))),
                     )
@@ -1465,7 +1706,7 @@ impl Render for GoldDraftPanel {
                             Button::new("gold-retry-polish")
                                 .small()
                                 .outline()
-                                .label("Retry refinement")
+                                .label(localized(cx, "Polish again", "Доработать снова"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.restart_polish(DraftAudioMode::Guard, window, cx)
                                 })),
@@ -1475,7 +1716,7 @@ impl Render for GoldDraftPanel {
                         Button::new("gold-apply")
                             .small()
                             .primary()
-                            .label("Apply draft")
+                            .label(localized(cx, "Keep draft", "Оставить черновик"))
                             .disabled(!ready || !has_snapshot)
                             .on_click(cx.listener(|this, _, _, cx| this.apply(cx))),
                     )
@@ -1485,7 +1726,7 @@ impl Render for GoldDraftPanel {
                     Button::new("gold-done")
                         .small()
                         .primary()
-                        .label("Done")
+                        .label(localized(cx, "Done", "Готово"))
                         .disabled(running)
                         .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                 )
@@ -1520,10 +1761,11 @@ impl Render for GoldDraftPanel {
 /// Opens Settings → AI (models, where to draft) over the editor.
 pub fn open_ai_settings(window: &mut Window, cx: &mut App) {
     let view = cx.new(|cx| AiSettingsView::new(window, cx));
+    let title = localized(cx, "AI settings", "Настройки ИИ");
     window.open_dialog(cx, move |dialog, window, _| {
         dialog
             .w(rems(44.).to_pixels(window.rem_size()))
-            .title("AI settings")
+            .title(title)
             .child(
                 div()
                     .id("ai-settings-dialog")
@@ -1532,6 +1774,36 @@ pub fn open_ai_settings(window: &mut Window, cx: &mut App) {
                     .child(view.clone()),
             )
     });
+}
+
+/// "Aligning words on this computer…" / "… on the remote server…".
+fn align_action(location: ExecutionLocation, cx: &App) -> &'static str {
+    match location {
+        ExecutionLocation::Local => localized(
+            cx,
+            "Aligning words on this computer…",
+            "Выравнивание слов на этом компьютере…",
+        ),
+        ExecutionLocation::Remote => localized(
+            cx,
+            "Aligning words on the remote server…",
+            "Выравнивание слов на удалённом сервере…",
+        ),
+    }
+}
+
+/// "Filling the segment on this computer…" / "… on the remote server…".
+fn fill_action(location: ExecutionLocation, cx: &App) -> String {
+    let place = match location {
+        ExecutionLocation::Local => localized(cx, "this computer", "этот компьютер"),
+        ExecutionLocation::Remote => localized(cx, "the remote server", "удалённый сервер"),
+    };
+    localized(
+        cx,
+        "Filling the segment on {place}…",
+        "Заполнение сегмента: {place}…",
+    )
+    .replace("{place}", place)
 }
 
 /// `(rewritten, unchanged, failed)` of a polish result.
@@ -1628,22 +1900,44 @@ where
             .await;
     // A backend may keep clones of the sink; stop forwarding instead of waiting for it.
     drop(pump);
-    result.unwrap_or_else(|| {
-        Err(InferenceError::new(
-            InferenceErrorKind::Cancelled,
-            "Cancelled.",
-        ))
-    })
+    result.unwrap_or_else(|| Err(InferenceError::new(InferenceErrorKind::Cancelled, "")))
 }
 
-/// Reads the lanes' Original WAVs off the UI thread.
+/// Reads the lanes' Original WAVs off the UI thread. A failure names the track in plain
+/// words; the path and OS error go under "Details".
 async fn read_lanes(
     sources: Vec<LaneSource>,
     cx: &mut AsyncWindowContext,
 ) -> Result<Vec<LaneAudio>, RunError> {
-    cx.background_spawn(async move { read_lane_audio(&sources) })
-        .await
-        .map_err(|error| RunError::other(format!("{error:#}")))
+    let lanes = cx
+        .background_spawn(async move { read_lane_audio(&sources) })
+        .await;
+    lanes.map_err(|error| {
+        let detail = error
+            .chain()
+            .skip(1)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ");
+        let message = match error.downcast_ref::<AudioReadError>() {
+            Some(read) => cx
+                .update(|_, cx| {
+                    localized(
+                        cx,
+                        "Couldn't read the audio for {label}.",
+                        "Не удалось прочитать аудио дорожки {label}.",
+                    )
+                    .replace("{label}", &read.label)
+                })
+                .unwrap_or_default(),
+            None => error.to_string(),
+        };
+        RunError {
+            kind: InferenceErrorKind::Other,
+            message,
+            detail: Some(detail),
+        }
+    })
 }
 
 /// The saved timing run when it covers exactly `lanes`, else a new one from `backend`.
@@ -1682,8 +1976,9 @@ async fn timing_for(
     });
     let installed = saved.clone();
     let lanes = lanes.clone();
-    this.update(cx, |this, cx| {
-        this.install_timing(installed, &lanes, true, cx)
+    this.update_in(cx, |this, window, cx| {
+        this.install_timing(installed.clone(), &lanes, cx);
+        this.store_timing(installed, window, cx);
     })
     .map_err(|_| RunError::gone())?;
     Ok((saved, true))
@@ -1696,11 +1991,12 @@ async fn run_draft(
 ) -> Result<(), RunError> {
     let lanes = Arc::new(read_lanes(input.sources, cx).await?);
     this.update(cx, |this, cx| {
-        let action = match this.run.as_ref().map(|run| run.location) {
-            Some(ExecutionLocation::Remote) => "Creating timestamps on the remote GPU",
-            _ => "Creating timestamps on this PC",
-        };
-        this.enter(Stage::Timestamps, action.to_string(), String::new(), cx)
+        let location = this
+            .run
+            .as_ref()
+            .map_or(ExecutionLocation::Local, |run| run.location);
+        let action = align_action(location, cx).to_string();
+        this.enter(Stage::Timestamps, action, String::new(), cx)
     })
     .map_err(|_| RunError::gone())?;
     let (saved, _) = timing_for(
@@ -1718,7 +2014,8 @@ async fn run_draft(
     }
 
     this.update(cx, |this, cx| {
-        this.enter(Stage::Drafting, "Drafting".to_string(), String::new(), cx)
+        let action = localized(cx, "Drafting…", "Черновик…").to_string();
+        this.enter(Stage::Drafting, action, String::new(), cx)
     })
     .map_err(|_| RunError::gone())?;
     let backend = input.backend.clone();
@@ -1781,8 +2078,10 @@ async fn run_polish(
             return Ok(());
         }
     };
-    this.update(cx, |this, cx| this.set_action("Capturing audio", cx))
-        .map_err(|_| RunError::gone())?;
+    this.update(cx, |this, cx| {
+        this.set_action(localized(cx, "Preparing audio…", "Подготовка аудио…"), cx)
+    })
+    .map_err(|_| RunError::gone())?;
     let (status, tracks) = capture.await;
     let tracks = match resolve_draft_audio(mode, &status, tracks) {
         Ok(tracks) => tracks,
@@ -1795,9 +2094,16 @@ async fn run_polish(
     this.update(cx, |this, cx| this.start_refining(cx))
         .map_err(|_| RunError::gone())?;
     let review = cx
-        .update(|_, cx| cx.global::<GoldServices>().polish.clone())
-        .map_err(|_| RunError::gone())?
-        .ok_or_else(|| RunError::other("The polish provider was unloaded."))?;
+        .update(|_, cx| {
+            cx.global::<GoldServices>().polish.clone().ok_or_else(|| {
+                RunError::other(localized(
+                    cx,
+                    "Polishing isn't available for this project.",
+                    "Доработка недоступна для этого проекта.",
+                ))
+            })
+        })
+        .map_err(|_| RunError::gone())??;
     let (events_tx, events_rx) = async_channel::unbounded::<DraftStreamEvent>();
     let pump = {
         let this = this.clone();
@@ -1829,12 +2135,18 @@ async fn run_polish(
     .await;
     // Let already-sent rows land before the final result replaces them.
     pump.await;
-    let result = match result {
-        Some(result) => result.map_err(|error| format!("{error:#}")),
-        None => Err("Cancelled.".to_string()),
-    };
-    this.update(cx, |this, cx| this.finish_polish(result, cx))
-        .map_err(|_| RunError::gone())?;
+    this.update(cx, |this, cx| {
+        let result = match result {
+            Some(result) => result.map_err(|error| PolishError::failed(cx, format!("{error:#}"))),
+            None => Err(PolishError::plain(localized(
+                cx,
+                "Polishing was cancelled.",
+                "Доработка отменена.",
+            ))),
+        };
+        this.finish_polish(result, cx)
+    })
+    .map_err(|_| RunError::gone())?;
     Ok(())
 }
 
@@ -1855,7 +2167,7 @@ async fn run_segment(
     cx: &mut AsyncWindowContext,
 ) -> Result<String, RunError> {
     let lanes = Arc::new(read_lanes(input.sources, cx).await?);
-    let (saved, _) = timing_for(
+    let timing = timing_for(
         &this,
         cx,
         input.backend.clone(),
@@ -1866,12 +2178,19 @@ async fn run_segment(
             this.segment_progress(seq, Stage::Timestamps, progress, window, cx)
         },
     )
-    .await?;
+    .await;
+    let (saved, _) = timing.map_err(|error| fill_failed(error, cx))?;
     let target = input.target;
     let lane = lanes
         .iter()
         .find(|lane| lane.lane_id == target.lane_id)
-        .ok_or_else(|| RunError::other("This track's audio is not loaded."))?;
+        .ok_or_else(|| {
+            RunError::other(localized_async(
+                cx,
+                "This track has no audio loaded.",
+                "У этой дорожки не загружено аудио.",
+            ))
+        })?;
     let row = PreservedRow {
         row_id: target.segment_id.clone(),
         speaker_key: lane_name(lane).to_string(),
@@ -1895,21 +2214,54 @@ async fn run_segment(
                 .await
         },
     )
-    .await?;
+    .await
+    .map_err(|error| fill_failed(error.into(), cx))?;
     let text = response
         .rows
         .iter()
         .find(|row| row.id == target.segment_id)
         .or_else(|| (response.rows.len() == 1).then(|| &response.rows[0]))
         .map(|row| row.text.clone())
-        .ok_or_else(|| RunError::other("the backend returned no text for this segment."))?;
+        .ok_or_else(|| {
+            RunError::other(localized_async(
+                cx,
+                "Nothing was heard in this segment.",
+                "В этом сегменте ничего не распознано.",
+            ))
+        })?;
     Ok(text)
+}
+
+/// `localized` from an async window context.
+fn localized_async(
+    cx: &mut AsyncWindowContext,
+    en: &'static str,
+    ru: &'static str,
+) -> &'static str {
+    cx.update(|_, cx| localized(cx, en, ru)).unwrap_or(en)
+}
+
+/// A backend failure while filling a segment: one headline, the message under "Details".
+fn fill_failed(error: RunError, cx: &mut AsyncWindowContext) -> RunError {
+    let headline = localized_async(
+        cx,
+        "Couldn't fill the segment.",
+        "Не удалось заполнить сегмент.",
+    );
+    RunError {
+        kind: error.kind,
+        message: headline.to_string(),
+        detail: error
+            .detail
+            .or(Some(error.message))
+            .filter(|detail| !detail.is_empty()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui glob import would shadow `#[test]`.
-    use super::{DraftRow, DraftRowPreview, DraftSummary, Polish};
+    use super::{DraftRow, DraftRowPreview, DraftSummary, Polish, PolishError};
 
     fn streamed(id: &str, status: &str) -> DraftRowPreview {
         DraftRowPreview {
@@ -1941,10 +2293,10 @@ mod tests {
         };
         assert_eq!(polish.rows_to_apply().len(), 1);
 
-        polish.fail("model overloaded".to_string());
+        polish.fail(PolishError::plain("model overloaded"));
 
         assert!(polish.rows_to_apply().is_empty());
         assert!(polish.rows.is_empty());
-        assert_eq!(polish.error.as_deref(), Some("model overloaded"));
+        assert!(polish.error.is_some());
     }
 }

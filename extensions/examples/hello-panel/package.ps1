@@ -14,7 +14,7 @@ if ($bytes.Length -gt 16777216 -or $bytes.Length -lt 8) { throw 'Component must 
 $header = ($bytes[0..7] | ForEach-Object { $_.ToString('X2') }) -join ''
 if ($header -ne '0061736D0D000100') { throw 'Expected a WebAssembly component, not a core module' }
 $null = New-Item -ItemType Directory -Force -Path $OutputDirectory
-$destination = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "$($manifest.id)-$($manifest.version).sonusext"
+$destination = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "$($manifest.id)-$($manifest.version).exaudio"
 if (Test-Path -LiteralPath $destination) { throw "Release artifact already exists: $destination (immutable releases must not be overwritten)" }
 $temp = "$destination.tmp-$([Guid]::NewGuid().ToString('N'))"
 try {

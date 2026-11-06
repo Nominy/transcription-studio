@@ -6,11 +6,26 @@ use sonus_babel_services::babel::DashboardProject;
 use sonus_babel_services::relay::{RelayLaunchConfig, RelayProcess, RelayStatus};
 use sonus_babel_services::subaccounts::{self, owner};
 
+use crate::text::{localized, localized_fmt, with_detail};
+
 /// User-facing outcome of a relay action; the root shows it as a notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayEvent {
     Info(SharedString),
-    Error(SharedString),
+    /// Plain headline; the technical text is shown under Details.
+    Error {
+        headline: SharedString,
+        detail: Option<SharedString>,
+    },
+}
+
+impl RelayEvent {
+    fn error(headline: &'static str, error: impl std::fmt::Display) -> Self {
+        Self::Error {
+            headline: headline.into(),
+            detail: Some(error.to_string().into()),
+        }
+    }
 }
 
 pub struct RelayModel {
@@ -55,14 +70,20 @@ impl RelayModel {
         self.process.can_stop()
     }
 
-    pub fn status_label(&self) -> String {
+    /// Plain status; a failure's technical text follows the em dash.
+    pub fn status_label(&self, cx: &App) -> String {
         match self.process.status() {
-            RelayStatus::Stopped => "Stopped".to_string(),
-            RelayStatus::Starting => "Starting…".to_string(),
-            RelayStatus::Running => format!("Running at {}", self.process.url()),
-            RelayStatus::Failed => format!(
-                "Failed: {}",
-                self.process.last_error().unwrap_or("unknown error")
+            RelayStatus::Stopped => localized(cx, "Stopped", "Остановлен").to_string(),
+            RelayStatus::Starting => localized(cx, "Starting…", "Запуск…").to_string(),
+            RelayStatus::Running => localized_fmt(
+                cx,
+                "Running at {url}",
+                "Работает: {url}",
+                &[("url", self.process.url())],
+            ),
+            RelayStatus::Failed => with_detail(
+                localized(cx, "Not running", "Не работает"),
+                self.process.last_error().unwrap_or(""),
             ),
         }
     }
@@ -88,15 +109,20 @@ impl RelayModel {
 
     pub fn start(&mut self, cx: &mut Context<Self>) {
         if !self.process.can_start() {
+            let status = self.status_label(cx);
             cx.emit(RelayEvent::Info(
-                format!("Sub-account relay is already {}.", self.status_label()).into(),
+                localized_fmt(
+                    cx,
+                    "The relay is already running — {status}",
+                    "Ретранслятор уже запущен — {status}",
+                    &[("status", &status)],
+                )
+                .into(),
             ));
             return;
         }
         let report = |error: anyhow::Error, cx: &mut Context<Self>| {
-            cx.emit(RelayEvent::Error(
-                format!("Sub-account relay start failed: {error:#}").into(),
-            ));
+            cx.emit(start_failed(cx, error));
             cx.notify();
         };
         let config = match RelayLaunchConfig::from_environment() {
@@ -125,22 +151,28 @@ impl RelayModel {
                         Ok(normalized) => self.host_url = normalized,
                         Err(error) => {
                             self.host_url = url.clone();
-                            cx.emit(RelayEvent::Error(
-                                format!(
-                                    "Relay running at {url}; URL was not remembered: {error:#}"
-                                )
-                                .into(),
+                            cx.emit(RelayEvent::error(
+                                localized(
+                                    cx,
+                                    "The relay is running, but its address couldn't be saved.",
+                                    "Ретранслятор работает, но его адрес не удалось сохранить.",
+                                ),
+                                format!("{error:#}"),
                             ));
                         }
                     }
                 }
                 cx.emit(RelayEvent::Info(
-                    format!("Sub-account relay running at {url}.").into(),
+                    localized_fmt(
+                        cx,
+                        "Relay running at {url}",
+                        "Ретранслятор работает: {url}",
+                        &[("url", &url)],
+                    )
+                    .into(),
                 ));
             }
-            Err(error) => cx.emit(RelayEvent::Error(
-                format!("Sub-account relay start failed: {error:#}").into(),
-            )),
+            Err(error) => cx.emit(start_failed(cx, error)),
         }
         cx.notify();
     }
@@ -149,11 +181,20 @@ impl RelayModel {
         self.start_task = None;
         let was_running = self.process.can_stop();
         let event = match self.process.stop() {
-            Ok(()) if was_running => RelayEvent::Info("Sub-account relay stopped.".into()),
-            Ok(()) => RelayEvent::Info("Sub-account relay is not running.".into()),
-            Err(error) => {
-                RelayEvent::Error(format!("Sub-account relay stop failed: {error:#}").into())
+            Ok(()) if was_running => {
+                RelayEvent::Info(localized(cx, "Relay stopped", "Ретранслятор остановлен").into())
             }
+            Ok(()) => RelayEvent::Info(
+                localized(cx, "The relay isn't running", "Ретранслятор не запущен").into(),
+            ),
+            Err(error) => RelayEvent::error(
+                localized(
+                    cx,
+                    "Couldn't stop the relay.",
+                    "Не удалось остановить ретранслятор.",
+                ),
+                format!("{error:#}"),
+            ),
         };
         cx.emit(event);
         cx.notify();
@@ -192,11 +233,27 @@ impl RelayModel {
             |this, result, cx| {
                 this.sync_task = None;
                 if let Err(error) = result {
-                    cx.emit(RelayEvent::Error(
-                        format!("Sub-account project sync failed: {error:#}").into(),
+                    cx.emit(RelayEvent::error(
+                        localized(
+                            cx,
+                            "Couldn't send the project list to the relay.",
+                            "Не удалось передать список проектов ретранслятору.",
+                        ),
+                        format!("{error:#}"),
                     ));
                 }
             },
         ));
     }
+}
+
+fn start_failed(cx: &App, error: anyhow::Error) -> RelayEvent {
+    RelayEvent::error(
+        localized(
+            cx,
+            "Couldn't start the relay.",
+            "Не удалось запустить ретранслятор.",
+        ),
+        format!("{error:#}"),
+    )
 }

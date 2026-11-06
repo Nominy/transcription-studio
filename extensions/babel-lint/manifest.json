@@ -1,10 +1,10 @@
 {
   "id": "sonus.babel-lint",
-  "name": "Babel transcript lint",
+  "name": "Babel checks",
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
-  "description": "Babel Gold and Helper transcript diagnostics, language configuration and server issue merging.",
+  "description": "Babel's transcription rules with automatic fixes.",
   "license": "MIT",
   "dependencies": {},
   "permissions": [{"kind": "document-read"}],

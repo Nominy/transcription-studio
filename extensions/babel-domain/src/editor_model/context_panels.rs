@@ -1,18 +1,19 @@
 //! Script-context and original-script panel data extracted from Babel task metadata.
 
+use crate::i18n::localized;
 use serde_json::Value;
 use studio_core::Project;
 
 const META_EXTRA_PACKAGE: &str = "babel.extra.package";
 
-/// Context fields shown in the script-context panel, in display order: `(key, label)`.
-pub const SCRIPT_CONTEXT_FIELDS: [(&str, &str); 6] = [
-    ("character", "Character"),
-    ("physical", "Physical"),
-    ("emotional", "Emotional"),
-    ("speech", "Speech"),
-    ("vocal", "Vocal"),
-    ("preamble", "Preamble"),
+/// Context fields shown in the script-context panel, in display order: `(key, en, ru)`.
+pub const SCRIPT_CONTEXT_FIELDS: [(&str, &str, &str); 6] = [
+    ("character", "Character", "Персонаж"),
+    ("physical", "Physical", "Физическое состояние"),
+    ("emotional", "Emotional", "Эмоциональное состояние"),
+    ("speech", "Speech", "Речь"),
+    ("vocal", "Vocal", "Голос"),
+    ("preamble", "Preamble", "Вступление"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,13 +46,17 @@ pub fn script_context(project: &Project) -> Option<ScriptContext> {
     );
     let fields = SCRIPT_CONTEXT_FIELDS
         .iter()
-        .filter_map(|&(key, label)| {
+        .filter_map(|&(key, en, ru)| {
             let value = project
                 .metadata
                 .get(&format!("studio.babel.scriptContext.{key}"))
                 .and_then(|value| non_empty_string(value.clone()))
                 .or_else(|| context_field_from_extra(project, key))?;
-            Some(ScriptContextField { key, label, value })
+            Some(ScriptContextField {
+                key,
+                label: localized(en, ru),
+                value,
+            })
         })
         .collect::<Vec<_>>();
     if emotion.is_none() && fields.is_empty() {

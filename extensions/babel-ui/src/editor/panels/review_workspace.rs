@@ -16,6 +16,7 @@ use sonus_babel_services::review::{
 };
 
 use super::task::TaskPanels;
+use crate::text;
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
 use sonus_shell::editor::panels::ui::{caption, muted};
@@ -46,7 +47,11 @@ impl ReviewWorkspacePanel {
         let session_comment = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 6)
-                .placeholder("Anything else about this review?")
+                .placeholder(text::localized(
+                    cx,
+                    "Anything else about this review?",
+                    "Что-нибудь ещё об этой проверке?",
+                ))
         });
         let subscriptions = vec![
             cx.observe_in(&panels, window, |this, panels, window, cx| {
@@ -128,9 +133,19 @@ impl ReviewWorkspacePanel {
         let comment = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 6)
-                .placeholder("What should change?")
+                .placeholder(text::localized(
+                    cx,
+                    "What should change?",
+                    "Что нужно изменить?",
+                ))
         });
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search templates…"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(text::localized(
+                cx,
+                "Search templates…",
+                "Поиск шаблонов…",
+            ))
+        });
         let id = card_id.to_string();
         self._subscriptions.push(cx.subscribe(
             &comment,
@@ -213,9 +228,9 @@ impl ReviewWorkspacePanel {
                     )
                     .when(!expanded, |this| {
                         this.child(muted(
-                            card.template_title
-                                .clone()
-                                .unwrap_or_else(|| "No template selected".to_string()),
+                            card.template_title.clone().unwrap_or_else(|| {
+                                text::localized(cx, "No template", "Шаблон не выбран").to_string()
+                            }),
                             cx,
                         ))
                     }),
@@ -227,7 +242,7 @@ impl ReviewWorkspacePanel {
                     Button::new(SharedString::from(format!("rw-unmatch-{id}")))
                         .xsmall()
                         .danger()
-                        .label("Remove match")
+                        .label(text::localized(cx, "Remove match", "Убрать совпадение"))
                         .disabled(busy)
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
@@ -239,7 +254,7 @@ impl ReviewWorkspacePanel {
             })
             .child(badge(
                 if card.kind.is_empty() {
-                    "UNKNOWN"
+                    text::localized(cx, "Unknown", "Неизвестно")
                 } else {
                     card.kind.as_str()
                 },
@@ -269,7 +284,7 @@ impl ReviewWorkspacePanel {
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.warning)
-                                .child("Suggestion"),
+                                .child(text::localized(cx, "Suggestion", "Предложение")),
                         )
                         .children(
                             card.opinion_text
@@ -285,7 +300,10 @@ impl ReviewWorkspacePanel {
                 body = body.child(
                     v_flex()
                         .gap_1()
-                        .child(caption("Your comment", cx))
+                        .child(caption(
+                            text::localized(cx, "Your comment", "Ваш комментарий"),
+                            cx,
+                        ))
                         .child(Textarea::new(&inputs.comment).disabled(busy)),
                 );
             }
@@ -317,9 +335,9 @@ impl ReviewWorkspacePanel {
                     .small()
                     .outline()
                     .label(if card.matched_template_id.is_some() {
-                        "Change template"
+                        text::localized(cx, "Change template", "Сменить шаблон")
                     } else {
-                        "Match template"
+                        text::localized(cx, "Match template", "Подобрать шаблон")
                     })
                     .disabled(busy)
                     .on_click(move |_, _, cx| {
@@ -334,11 +352,8 @@ impl ReviewWorkspacePanel {
             .template_title
             .clone()
             .or_else(|| card.matched_template_id.clone())
-            .unwrap_or_else(|| "No template selected".to_string());
-        let mut source = card.match_source_label().to_string();
-        if let Some(template_id) = &card.matched_template_id {
-            source.push_str(&format!(" · {template_id}"));
-        }
+            .unwrap_or_else(|| text::localized(cx, "No template", "Шаблон не выбран").to_string());
+        let source = card.match_source_label().to_string();
         let input = self.cards.get(&card.id).map(|inputs| inputs.search.clone());
         v_flex()
             .gap_2()
@@ -346,7 +361,10 @@ impl ReviewWorkspacePanel {
             .rounded(theme.radius)
             .border_1()
             .border_color(theme.border)
-            .child(caption("Template match", cx))
+            .child(caption(
+                text::localized(cx, "Template match", "Совпадение с шаблоном"),
+                cx,
+            ))
             .child(
                 div()
                     .text_sm()
@@ -359,10 +377,17 @@ impl ReviewWorkspacePanel {
                     .map(|text| muted(text, cx)),
             )
             .child(muted(source, cx))
-            .children(
-                card.previous_template()
-                    .map(|previous| muted(format!("Originally matched: {previous}"), cx)),
-            )
+            .children(card.previous_template().map(|previous| {
+                muted(
+                    text::localized_fmt(
+                        cx,
+                        "Previously matched: {template}",
+                        "Ранее подобран: {template}",
+                        &[("template", previous)],
+                    ),
+                    cx,
+                )
+            }))
             .children(input.map(|input| Input::new(&input).small().disabled(busy)))
             .child(self.render_search_results(card, &search, busy, cx))
             .child(
@@ -374,7 +399,7 @@ impl ReviewWorkspacePanel {
                         Button::new(SharedString::from(format!("rw-search-clear-{id}")))
                             .small()
                             .danger()
-                            .label("Remove match")
+                            .label(text::localized(cx, "Remove match", "Убрать совпадение"))
                             .disabled(busy || card.matched_template_id.is_none())
                             .on_click(move |_, window, cx| {
                                 p.update(cx, |panels, cx| {
@@ -388,7 +413,7 @@ impl ReviewWorkspacePanel {
                         Button::new(SharedString::from(format!("rw-search-cancel-{id}")))
                             .small()
                             .ghost()
-                            .label("Cancel")
+                            .label(text::localized(cx, "Cancel", "Отмена"))
                             .disabled(busy)
                             .on_click(move |_, _, cx| {
                                 p.update(cx, |panels, cx| {
@@ -409,7 +434,7 @@ impl ReviewWorkspacePanel {
     ) -> AnyElement {
         let theme = cx.theme();
         if search.loading {
-            return muted("Searching…", cx).into_any_element();
+            return muted(text::localized(cx, "Searching…", "Поиск…"), cx).into_any_element();
         }
         if let Some(error) = &search.error {
             return div()
@@ -422,7 +447,8 @@ impl ReviewWorkspacePanel {
             return if search.query.trim().is_empty() {
                 div().into_any_element()
             } else {
-                muted("No results.", cx).into_any_element()
+                muted(text::localized(cx, "No results.", "Ничего не найдено."), cx)
+                    .into_any_element()
             };
         }
         let results = search.results.iter().map(|template| {
@@ -461,7 +487,7 @@ impl ReviewWorkspacePanel {
                         )))
                         .xsmall()
                         .primary()
-                        .label("Select")
+                        .label(text::localized(cx, "Select", "Выбрать"))
                         .disabled(busy)
                         .on_click(move |_, window, cx| {
                             p.update(cx, |panels, cx| {
@@ -487,11 +513,11 @@ impl ReviewWorkspacePanel {
     fn render_idea(&self, idea: &ReviewerSuggestion, busy: bool, cx: &App) -> Div {
         let theme = cx.theme();
         let pending = idea.is_pending();
-        let decide = |decision: ProposalDecision, label: &'static str| {
+        let decide = |decision: ProposalDecision, id: &'static str, label: &'static str| {
             let p = self.panels.clone();
             let proposal = idea.proposal_id.clone();
             let button = Button::new(SharedString::from(format!(
-                "rw-idea-{label}-{}",
+                "rw-idea-{id}-{}",
                 idea.proposal_id
             )))
             .xsmall()
@@ -508,9 +534,9 @@ impl ReviewWorkspacePanel {
             }
         };
         let title = if idea.title.trim().is_empty() {
-            idea.target_template_id
-                .clone()
-                .unwrap_or_else(|| "Untitled suggestion".to_string())
+            idea.target_template_id.clone().unwrap_or_else(|| {
+                text::localized(cx, "Untitled suggestion", "Предложение без названия").to_string()
+            })
         } else {
             idea.title.clone()
         };
@@ -546,7 +572,15 @@ impl ReviewWorkspacePanel {
                     .clone()
                     .map(|text| div().text_xs().child(text)),
             )
-            .child(muted(format!("Reason: {}", idea.reason), cx))
+            .child(muted(
+                text::localized_fmt(
+                    cx,
+                    "Reason: {reason}",
+                    "Причина: {reason}",
+                    &[("reason", &idea.reason)],
+                ),
+                cx,
+            ))
             .when(!idea.report_texts.is_empty(), |this| {
                 this.child(
                     v_flex()
@@ -554,7 +588,10 @@ impl ReviewWorkspacePanel {
                         .p_2()
                         .rounded(theme.radius)
                         .bg(theme.muted)
-                        .child(caption("Proposed text", cx))
+                        .child(caption(
+                            text::localized(cx, "Proposed text", "Предлагаемый текст"),
+                            cx,
+                        ))
                         .children(
                             idea.report_texts.iter().map(|text| {
                                 div().text_xs().whitespace_normal().child(text.clone())
@@ -565,8 +602,16 @@ impl ReviewWorkspacePanel {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(decide(ProposalDecision::Approved, "Approve"))
-                    .child(decide(ProposalDecision::Rejected, "Reject")),
+                    .child(decide(
+                        ProposalDecision::Approved,
+                        "approve",
+                        text::localized(cx, "Approve", "Одобрить"),
+                    ))
+                    .child(decide(
+                        ProposalDecision::Rejected,
+                        "reject",
+                        text::localized(cx, "Reject", "Отклонить"),
+                    )),
             )
     }
 }
@@ -589,7 +634,7 @@ fn evidence_block(card: &ReviewerCard, cx: &App) -> Option<Div> {
                     .text_sm()
                     .whitespace_normal()
                     .child(if text.is_empty() {
-                        "(empty)".to_string()
+                        text::localized(cx, "(empty)", "(пусто)").to_string()
                     } else {
                         text.to_string()
                     }),
@@ -605,8 +650,12 @@ fn evidence_block(card: &ReviewerCard, cx: &App) -> Option<Div> {
             h_flex()
                 .gap_2()
                 .items_start()
-                .child(pane("Before", &before, None))
-                .child(pane("After", &after, inline_diff)),
+                .child(pane(text::localized(cx, "Before", "До"), &before, None))
+                .child(pane(
+                    text::localized(cx, "After", "После"),
+                    &after,
+                    inline_diff,
+                )),
         ),
         EvidenceDetail::Raw(text) => Some(
             v_flex()
@@ -615,7 +664,10 @@ fn evidence_block(card: &ReviewerCard, cx: &App) -> Option<Div> {
                 .rounded(theme.radius)
                 .border_1()
                 .border_color(theme.border)
-                .child(caption("Evidence", cx))
+                .child(caption(
+                    text::localized(cx, "Evidence", "Подтверждение"),
+                    cx,
+                ))
                 .child(
                     div()
                         .text_xs()
@@ -650,9 +702,17 @@ impl Render for ReviewWorkspacePanel {
         let grading = review.grading_status.clone();
         let ideas_open = review.ideas_open;
         let save_note = if review.workspace.comment_save_in_flight() {
-            Some("Saving comments…")
+            Some(text::localized(
+                cx,
+                "Saving comments…",
+                "Сохранение комментариев…",
+            ))
         } else if review.workspace.comments_dirty() {
-            Some("Unsaved comments")
+            Some(text::localized(
+                cx,
+                "Unsaved comments",
+                "Несохранённые комментарии",
+            ))
         } else {
             None
         };
@@ -686,12 +746,12 @@ impl Render for ReviewWorkspacePanel {
                             .flex_1()
                             .text_base()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Review"),
+                            .child(text::localized(cx, "Review", "Проверка")),
                     )
                     .child(
                         action(
                             "rw-refresh",
-                            "Refresh",
+                            text::localized(cx, "Refresh", "Обновить"),
                             !has_session || busy,
                             TaskPanels::refresh_review,
                         )
@@ -700,19 +760,34 @@ impl Render for ReviewWorkspacePanel {
                     .child(
                         action(
                             "rw-apply-top",
-                            "Apply",
+                            text::localized(cx, "Apply", "Применить"),
                             !has_session || busy,
                             |panels, window, cx| panels.finalize_review("apply", window, cx),
                         )
                         .primary(),
                     )
                     .child(
-                        action("rw-close", "Close", busy, TaskPanels::close_review)
-                            .ghost()
-                            .icon(IconName::Close),
+                        action(
+                            "rw-close",
+                            text::localized(cx, "Close", "Закрыть"),
+                            busy,
+                            TaskPanels::close_review,
+                        )
+                        .ghost()
+                        .icon(IconName::Close),
                     ),
             )
-            .children(busy_label.map(|label| muted(format!("Working… {label}"), &*cx)))
+            .children(busy_label.map(|label| {
+                muted(
+                    text::localized_fmt(
+                        cx,
+                        "Working… {label}",
+                        "Выполняется… {label}",
+                        &[("label", &label)],
+                    ),
+                    &*cx,
+                )
+            }))
             .children(status.map(|(text, error)| {
                 div()
                     .text_xs()
@@ -736,8 +811,18 @@ impl Render for ReviewWorkspacePanel {
 
         let mut body = v_flex().gap_3().p_3();
         match &session {
-            None if busy => body = body.child(muted("Preparing review…", cx)),
-            None => body = body.child(muted("Review not available.", cx)),
+            None if busy => {
+                body = body.child(muted(
+                    text::localized(cx, "Preparing review…", "Подготовка проверки…"),
+                    cx,
+                ))
+            }
+            None => {
+                body = body.child(muted(
+                    text::localized(cx, "Review unavailable.", "Проверка недоступна."),
+                    cx,
+                ))
+            }
             Some(session) => {
                 let matched = session
                     .cards
@@ -751,17 +836,36 @@ impl Render for ReviewWorkspacePanel {
                         h_flex()
                             .gap_2()
                             .flex_wrap()
-                            .child(div().flex_1().text_sm().child(format!(
-                                "{} changes · {matched} matched · {} suggestions",
-                                session.cards.len(),
-                                session.suggestions.len()
+                            .child(div().flex_1().text_sm().child(text::localized_fmt(
+                                cx,
+                                "{changes} · {matched} matched · {suggestions}",
+                                "{changes} · подобрано: {matched} · {suggestions}",
+                                &[
+                                    (
+                                        "changes",
+                                        &text::count(
+                                            session.cards.len() as u64,
+                                            ("change", "changes"),
+                                            ("изменение", "изменения", "изменений"),
+                                        ),
+                                    ),
+                                    ("matched", &matched.to_string()),
+                                    (
+                                        "suggestions",
+                                        &text::count(
+                                            session.suggestions.len() as u64,
+                                            ("suggestion", "suggestions"),
+                                            ("предложение", "предложения", "предложений"),
+                                        ),
+                                    ),
+                                ],
                             )))
                             .children(save_note.map(|note| muted(note, cx)))
                             .child(
                                 Button::new("rw-expand-all")
                                     .xsmall()
                                     .ghost()
-                                    .label("Expand All")
+                                    .label(text::localized(cx, "Expand all", "Развернуть все"))
                                     .on_click(move |_, _, cx| {
                                         p.update(cx, |panels, cx| {
                                             panels.review.workspace.set_all_expanded(true);
@@ -773,7 +877,7 @@ impl Render for ReviewWorkspacePanel {
                                 Button::new("rw-collapse-all")
                                     .xsmall()
                                     .ghost()
-                                    .label("Collapse All")
+                                    .label(text::localized(cx, "Collapse all", "Свернуть все"))
                                     .on_click(move |_, _, cx| {
                                         q.update(cx, |panels, cx| {
                                             panels.review.workspace.set_all_expanded(false);
@@ -784,7 +888,11 @@ impl Render for ReviewWorkspacePanel {
                             .child(
                                 action(
                                     "rw-rescan",
-                                    "Rescan for suggestions",
+                                    text::localized(
+                                        cx,
+                                        "Rescan for suggestions",
+                                        "Искать предложения снова",
+                                    ),
                                     busy,
                                     TaskPanels::rescan_template_ideas,
                                 )
@@ -793,7 +901,14 @@ impl Render for ReviewWorkspacePanel {
                             ),
                     )
                     .when(session.cards.is_empty(), |this| {
-                        this.child(muted("No changes were detected for this review.", cx))
+                        this.child(muted(
+                            text::localized(
+                                cx,
+                                "No changes found in this review.",
+                                "В этой проверке нет изменений.",
+                            ),
+                            cx,
+                        ))
                     });
                 for card in &session.cards {
                     body = body.child(self.render_card(card, busy, cx));
@@ -811,16 +926,22 @@ impl Render for ReviewWorkspacePanel {
                                     .flex_1()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(format!(
-                                        "Template ideas ({})",
-                                        session.suggestions.len()
+                                    .child(text::localized_fmt(
+                                        cx,
+                                        "Template ideas ({count})",
+                                        "Идеи шаблонов ({count})",
+                                        &[("count", &session.suggestions.len().to_string())],
                                     )),
                             )
                             .child(
                                 Button::new("rw-ideas-toggle")
                                     .xsmall()
                                     .ghost()
-                                    .label(if ideas_open { "Hide" } else { "Show" })
+                                    .label(if ideas_open {
+                                        text::localized(cx, "Hide", "Скрыть")
+                                    } else {
+                                        text::localized(cx, "Show", "Показать")
+                                    })
                                     .on_click(move |_, _, cx| {
                                         toggle.update(cx, |panels, cx| {
                                             panels.review.ideas_open = !panels.review.ideas_open;
@@ -837,13 +958,30 @@ impl Render for ReviewWorkspacePanel {
                                 .child(
                                     h_flex()
                                         .gap_2()
-                                        .child(caption("Overall comment", cx))
-                                        .child(muted("Optional", cx)),
+                                        .child(caption(
+                                            text::localized(
+                                                cx,
+                                                "Overall comment",
+                                                "Общий комментарий",
+                                            ),
+                                            cx,
+                                        ))
+                                        .child(muted(
+                                            text::localized(cx, "Optional", "Необязательно"),
+                                            cx,
+                                        )),
                                 )
                                 .child(Textarea::new(&self.session_comment).disabled(busy)),
                         )
                         .when(session.suggestions.is_empty(), |this| {
-                            this.child(muted("No template suggestions yet.", cx))
+                            this.child(muted(
+                                text::localized(
+                                    cx,
+                                    "No template suggestions yet.",
+                                    "Предложений по шаблонам пока нет.",
+                                ),
+                                cx,
+                            ))
                         })
                         .children(
                             session
@@ -865,7 +1003,7 @@ impl Render for ReviewWorkspacePanel {
             .child(
                 action(
                     "rw-skip",
-                    "Apply without review",
+                    text::localized(cx, "Apply without review", "Применить без проверки"),
                     !has_session || busy,
                     |panels, window, cx| panels.finalize_review("skip", window, cx),
                 )
@@ -874,7 +1012,7 @@ impl Render for ReviewWorkspacePanel {
             .child(
                 action(
                     "rw-apply",
-                    "Apply & Sync",
+                    text::localized(cx, "Apply and sync", "Применить и синхронизировать"),
                     !has_session || busy,
                     |panels, window, cx| panels.finalize_review("apply", window, cx),
                 )

@@ -8,7 +8,6 @@ use crate::{
     ShellHandle,
 };
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -122,7 +121,14 @@ pub fn open_setup_dialog(
         .cloned()
     else {
         window.push_notification(
-            Notification::error(format!("Provider is not installed: {provider_id}")),
+            ui::error_notification(
+                localized(
+                    cx,
+                    "This account type isn't installed.",
+                    "Этот тип аккаунта не установлен.",
+                ),
+                Some(provider_id.to_string().into()),
+            ),
             cx,
         );
         on_done(None, window, cx);
@@ -163,7 +169,7 @@ pub fn status_detail(status: &ProviderStatus, cx: &App) -> String {
             localized(cx, "Signed in", "Выполнен вход").into()
         }
         ProviderStatus::Ready { detail } => detail.clone(),
-        ProviderStatus::NeedsSignIn => localized(cx, "Sign in required", "Требуется вход").into(),
+        ProviderStatus::NeedsSignIn => localized(cx, "Sign in again", "Войдите снова").into(),
         ProviderStatus::Error(error) => error.clone(),
     }
 }
@@ -272,14 +278,6 @@ impl Render for Chooser {
             .p_6()
             .gap_4()
             .child(div().text_xl().child(self.title.clone()))
-            .child(ui::muted(
-                localized(
-                    cx,
-                    "Choose the account to use.",
-                    "Выберите аккаунт, который будет использоваться.",
-                ),
-                cx,
-            ))
             .child(self.list(cx).max_w(px(560.)))
     }
 }
@@ -323,15 +321,7 @@ pub fn accounts_card(
     on_change: Rc<dyn Fn(&mut App)>,
     cx: &App,
 ) -> Div {
-    let card = ui::card(
-        localized(cx, "Accounts", "Аккаунты"),
-        Some(localized(
-            cx,
-            "Accounts you signed in to while opening a workspace.",
-            "Аккаунты, в которые вы входили при открытии рабочего пространства.",
-        )),
-        cx,
-    );
+    let card = ui::card(localized(cx, "Accounts", "Аккаунты"), None, cx);
     if sections.is_empty() {
         return card.child(ui::muted(
             localized(cx, "No accounts yet.", "Аккаунтов пока нет."),

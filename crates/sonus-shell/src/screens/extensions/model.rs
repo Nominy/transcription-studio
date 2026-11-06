@@ -1,6 +1,7 @@
 use crate::{
     ShellHandle,
     contributions::ContributionRegistry,
+    screens::ui::localized,
     services::{AppServices, spawn_service},
 };
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -15,7 +16,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::Read,
     path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 pub const DEFAULT_INDEX: &str =
@@ -60,7 +61,7 @@ pub fn shared(shell: ShellHandle, cx: &mut App) -> Entity<ExtensionsModel> {
     cx.global::<SharedExtensions>().0.clone()
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Removal {
     Enable,
     Disable,
@@ -80,13 +81,15 @@ pub enum Preview {
     },
     Removal {
         id: String,
+        name: String,
+        version: String,
         action: Removal,
         generation: u64,
         blockers: Vec<String>,
-        details: Vec<String>,
     },
     Rollback {
         generation: u64,
+        /// Human lines describing the previous set (`{name} {version}`, `Remove {name}`).
         lines: Vec<String>,
         blockers: Vec<String>,
     },
@@ -102,117 +105,75 @@ impl Preview {
             | Self::Rollback { blockers, .. } => blockers.is_empty(),
         }
     }
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![];
+    /// Everything that stops the action, as plain sentences.
+    pub fn blockers(&self) -> &[String] {
         match self {
-            Self::Install {
-                owner,
-                plan,
-                developer,
-                generation,
-            } => {
-                lines.push(format!("Installation generation / Поколение установки: {generation} · selected / выбрано: {owner}"));
-                if let Some(source) = developer {
-                    lines.push(format!("UNREVIEWED DEVELOPER SOURCE / НЕПРОВЕРЕННЫЙ ИСТОЧНИК: {}\nSHA256: {}\n{} bytes", source.source.display(), source.sha256, source.bytes));
-                    manifest_lines(&source.manifest, &mut lines);
-                }
-                for change in &plan.changes {
-                    lines.push(format!("{change:?}"));
-                }
-                for release in &plan.releases {
-                    lines.push(format!(
-                        "{} · {} bytes · SHA256 {}",
-                        release.asset.url, release.asset.bytes, release.asset.sha256
-                    ));
-                    manifest_lines(&release.manifest, &mut lines);
-                }
-                for (id, permissions) in &plan.requested_permissions {
-                    lines.push(format!("NEW GRANTS / НОВЫЕ РАЗРЕШЕНИЯ: {id}"));
-                    lines.extend(permissions.iter().map(permission_label));
-                }
-                for (id, reasons) in &plan.required_by {
-                    lines.push(format!(
-                        "{id} ← {}",
-                        reasons.iter().cloned().collect::<Vec<_>>().join(", ")
-                    ));
-                }
-                lines.extend(
-                    plan.blockers
-                        .iter()
-                        .map(|error| format!("BLOCKED / ЗАПРЕЩЕНО: {error}")),
-                );
-            }
-            Self::Folder {
-                directory,
-                manifest,
-                blockers,
-            } => {
-                lines.push(format!(
-                    "UNREVIEWED WATCHED FOLDER / НЕПРОВЕРЕННАЯ ОТСЛЕЖИВАЕМАЯ ПАПКА: {}",
-                    directory.display()
-                ));
-                lines.push("Approval trusts future code changes in this folder within the approved identity and grants. / Разрешение распространяется на изменения кода этой папки в пределах ID и разрешений.".into());
-                manifest_lines(manifest, &mut lines);
-                lines.extend(
-                    blockers
-                        .iter()
-                        .map(|error| format!("BLOCKED / ЗАПРЕЩЕНО: {error}")),
-                );
-            }
-            Self::Removal {
-                id,
-                action,
-                generation,
-                blockers,
-                details,
-            } => {
-                lines.push(format!("{action:?}: {id} · generation {generation}"));
-                lines.extend(details.iter().cloned());
-                lines.push("Runtime contributions, publications and subscriptions are removed on disable/uninstall. Retained rollback packages are not deleted. / При отключении и удалении очищаются команды, панели и подписки. Пакеты отката сохраняются.".into());
-                lines.extend(blockers.iter().cloned());
-            }
-            Self::Rollback {
-                generation,
-                lines: changes,
-                blockers,
-            } => {
-                lines.push(format!("Restore previous COMPLETE dependency set / Восстановить ПОЛНЫЙ предыдущий набор, generation {generation}"));
-                lines.extend(changes.iter().cloned());
-                lines.extend(blockers.iter().cloned());
-            }
+            Self::Install { plan, .. } => &plan.blockers,
+            Self::Folder { blockers, .. }
+            | Self::Removal { blockers, .. }
+            | Self::Rollback { blockers, .. } => blockers,
         }
-        lines
     }
 }
-fn manifest_lines(manifest: &ExtensionManifest, lines: &mut Vec<String>) {
-    lines.push(format!(
-        "{} ({}) {} · {} · API {}",
-        manifest.name, manifest.id, manifest.version, manifest.license, manifest.api
-    ));
-    if manifest.permissions.is_empty() {
-        lines.push("Permissions: none / Разрешений нет".into());
-    }
-    lines.extend(manifest.permissions.iter().map(permission_label));
-    for (id, version) in &manifest.dependencies {
-        lines.push(format!("Dependency / Зависимость: {id} {version}"));
-    }
-}
-pub(super) fn permission_label(permission: &Permission) -> String {
+/// What a permission lets the extension do, as the tail of "This extension can:".
+pub(super) fn permission_label(permission: &Permission, cx: &App) -> String {
+    use crate::screens::ui::localized;
     match permission {
-        Permission::DocumentRead => "Read document / Чтение документа".into(),
-        Permission::DocumentEdit => "Edit document / Изменение документа".into(),
-        Permission::AudioRead => "Read audio samples / Чтение аудиоданных".into(),
-        Permission::TransportControl => {
-            "Control playback and seek / Управление воспроизведением".into()
+        Permission::DocumentRead => {
+            localized(cx, "read your transcript", "читать расшифровку").into()
         }
-        Permission::SelectionControl => "Change editor selection / Изменение выделения".into(),
-        Permission::FilePicker => "Request file picker / Открытие диалога выбора файла".into(),
-        Permission::Storage => "Private extension storage / Хранилище расширения".into(),
-        Permission::Secrets => "Private extension secrets / Секреты расширения".into(),
+        Permission::DocumentEdit => {
+            localized(cx, "edit your transcript", "изменять расшифровку").into()
+        }
+        Permission::AudioRead => localized(cx, "read the audio", "читать аудио").into(),
+        Permission::TransportControl => {
+            localized(cx, "control playback", "управлять воспроизведением").into()
+        }
+        Permission::SelectionControl => {
+            localized(cx, "change the selection", "менять выделение").into()
+        }
+        Permission::FilePicker => {
+            localized(cx, "ask you to pick files", "запрашивать выбор файлов").into()
+        }
+        Permission::Storage => {
+            localized(cx, "keep its own settings", "хранить свои настройки").into()
+        }
+        Permission::Secrets => {
+            localized(cx, "store keys and passwords", "хранить ключи и пароли").into()
+        }
         Permission::Network(host) => {
-            format!("HTTPS network access / Сетевой доступ: {host} (exact host / точный адрес)")
+            localized(cx, "connect to {host}", "подключаться к {host}").replace("{host}", host)
         }
     }
+}
+
+/// Display name of an extension id: the registry or catalog name, else the id itself.
+pub(super) fn extension_name(id: &str, catalog: Option<&Catalog>, cx: &App) -> String {
+    if let Some(manifest) = cx
+        .global::<ContributionRegistry>()
+        .manifests()
+        .into_iter()
+        .find(|manifest| manifest.id == id)
+    {
+        return manifest.name;
+    }
+    catalog
+        .and_then(|catalog| catalog.extensions.iter().find(|entry| entry.id == id))
+        .and_then(|entry| {
+            entry
+                .releases
+                .iter()
+                .max_by(|a, b| a.version.cmp(&b.version))
+        })
+        .map(|release| release.manifest.name.clone())
+        .unwrap_or_else(|| id.to_owned())
+}
+
+/// One failed operation: a plain headline and the technical text behind "Details".
+#[derive(Clone, Debug)]
+pub struct Failure {
+    pub headline: String,
+    pub detail: Option<String>,
 }
 
 /// Emitted after a successful catalog/package transaction with the newly activated
@@ -232,7 +193,7 @@ pub struct ExtensionsModel {
     pub offline: bool,
     pub from_cache: bool,
     pub status: String,
-    pub error: Option<String>,
+    pub error: Option<Failure>,
     pub logs: VecDeque<String>,
     pub developer_folders: BTreeMap<String, (PathBuf, ExtensionManifest)>,
     pub global_document_access: bool,
@@ -247,16 +208,32 @@ impl ExtensionsModel {
         if self.logs.len() == 128 {
             self.logs.pop_front();
         }
-        self.logs
-            .push_back(format!("{:?} {}", SystemTime::now(), value.into()));
+        let now =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        self.logs.push_back(format!(
+            "{:02}:{:02}:{:02}  {}",
+            now.hour(),
+            now.minute(),
+            now.second(),
+            value.into()
+        ));
     }
-    pub fn fail(&mut self, error: String, cx: &mut Context<Self>) {
-        self.log(&error);
-        self.error = Some(error);
+    /// Ends the current operation with a plain `headline`; `detail` is the technical text.
+    pub fn fail(&mut self, headline: String, detail: Option<String>, cx: &mut Context<Self>) {
+        match &detail {
+            Some(detail) => self.log(format!("{headline} — {detail}")),
+            None => self.log(&headline),
+        }
+        self.error = Some(Failure { headline, detail });
         self.busy = false;
         self.control = None;
         self.progress_task = None;
         cx.notify();
+    }
+    /// [`fail`](Self::fail) with "Something went wrong." as the headline.
+    fn fail_with(&mut self, error: impl std::fmt::Display, cx: &mut Context<Self>) {
+        let headline = localized(cx, "Something went wrong.", "Что-то пошло не так.").to_owned();
+        self.fail(headline, Some(error.to_string()), cx);
     }
     fn begin(&mut self, status: &str, cx: &mut Context<Self>) -> OperationControl {
         self.busy = true;
@@ -272,22 +249,48 @@ impl ExtensionsModel {
             while let Ok(progress) = receiver.recv().await {
                 if this
                     .update(cx, |this, cx| {
-                        let total = progress
-                            .total
-                            .map(|total| total.to_string())
-                            .unwrap_or_else(|| "?".into());
-                        let unit = match progress.stage {
-                            marketplace::Stage::Downloading => "bytes / байт",
-                            marketplace::Stage::Extracting => "entries / файлов",
-                            _ => "units / единиц",
+                        let name = progress
+                            .extension
+                            .as_deref()
+                            .map(|id| extension_name(id, this.catalog.as_ref(), cx))
+                            .unwrap_or_else(|| localized(cx, "catalog", "каталог").to_owned());
+                        this.status = match progress.stage {
+                            marketplace::Stage::Downloading => {
+                                let mb = |bytes: u64| format!("{:.1}", bytes as f64 / 1_048_576.0);
+                                match progress.total {
+                                    Some(total) => localized(
+                                        cx,
+                                        "Downloading {name} — {done} of {total} MB",
+                                        "Загрузка {name} — {done} из {total} МБ",
+                                    )
+                                    .replace("{total}", &mb(total)),
+                                    None => localized(
+                                        cx,
+                                        "Downloading {name} — {done} MB",
+                                        "Загрузка {name} — {done} МБ",
+                                    )
+                                    .to_owned(),
+                                }
+                                .replace("{name}", &name)
+                                .replace("{done}", &mb(progress.completed))
+                            }
+                            marketplace::Stage::Extracting => {
+                                localized(cx, "Unpacking…", "Распаковка…").to_owned()
+                            }
+                            marketplace::Stage::Preparing => {
+                                localized(cx, "Verifying…", "Проверка…").to_owned()
+                            }
+                            marketplace::Stage::Activating => {
+                                localized(cx, "Starting {name}…", "Запуск {name}…")
+                                    .replace("{name}", &name)
+                            }
+                            marketplace::Stage::Completed => {
+                                localized(cx, "Finishing…", "Завершение…").to_owned()
+                            }
+                            marketplace::Stage::Cancelled => {
+                                localized(cx, "Cancelling…", "Отмена…").to_owned()
+                            }
                         };
-                        this.status = format!(
-                            "{:?} · {} · {}/{total} {unit} · {:.1}s",
-                            progress.stage,
-                            progress.extension.as_deref().unwrap_or("index"),
-                            progress.completed,
-                            this.started.elapsed().as_secs_f64()
-                        );
                         cx.notify();
                     })
                     .is_err()
@@ -300,7 +303,9 @@ impl ExtensionsModel {
         control
     }
     fn finish(&mut self, status: &str, cx: &mut Context<Self>) {
-        self.log(status);
+        if !status.is_empty() {
+            self.log(status);
+        }
         self.status = status.into();
         self.busy = false;
         self.control = None;
@@ -311,7 +316,7 @@ impl ExtensionsModel {
         if let Some(control) = &self.control {
             control.cancel();
         }
-        self.status = "Stopping / Остановка: network and staging cancel; an atomic commit already in progress finishes or recovers.".into();
+        self.status = localized(cx, "Cancelling…", "Отмена…").into();
         cx.notify();
     }
     pub fn set_index(&mut self, source: String, cx: &mut Context<Self>) {
@@ -319,7 +324,16 @@ impl ExtensionsModel {
             return;
         }
         if let Err(error) = MarketplaceClient::new(&source, self.root.join("catalog-cache.json")) {
-            self.fail(error.to_string(), cx);
+            self.fail(
+                localized(
+                    cx,
+                    "This catalog address can't be used.",
+                    "Этот адрес каталога нельзя использовать.",
+                )
+                .into(),
+                Some(error.to_string()),
+                cx,
+            );
             return;
         }
         if let Err(error) = cx
@@ -327,7 +341,16 @@ impl ExtensionsModel {
             .storage
             .set_value(INDEX_KEY, source.clone())
         {
-            self.fail(error.to_string(), cx);
+            self.fail(
+                localized(
+                    cx,
+                    "Couldn't save this setting.",
+                    "Не удалось сохранить настройку.",
+                )
+                .into(),
+                Some(error.to_string()),
+                cx,
+            );
             return;
         }
         self.index = source;
@@ -342,7 +365,7 @@ impl ExtensionsModel {
         self.preview = None;
         self.offline = offline;
         let control = self.begin(
-            "Loading validated index / Загрузка проверенного индекса",
+            localized(cx, "Refreshing catalog…", "Обновление каталога…"),
             cx,
         );
         let root = self.root.clone();
@@ -366,25 +389,41 @@ impl ExtensionsModel {
                     Ok(snapshot) => {
                         this.catalog = Some(snapshot.catalog);
                         this.from_cache = snapshot.from_cache;
-                        this.error = snapshot.refresh_error;
+                        this.error = snapshot.refresh_error.map(|error| Failure {
+                            headline: localized(
+                                cx,
+                                "Couldn't reach the catalog.",
+                                "Не удалось открыть каталог.",
+                            )
+                            .into(),
+                            detail: Some(error),
+                        });
                     }
                     Err(error) => {
                         this.from_cache = this.catalog.is_some();
-                        this.error = Some(format!(
-                            "{}: {error}. Bundled extensions remain available. / Встроенные расширения доступны.",
-                            this.index
-                        ));
+                        this.error = Some(Failure {
+                            headline: localized(
+                                cx,
+                                "Couldn't reach the catalog.",
+                                "Не удалось открыть каталог.",
+                            )
+                            .into(),
+                            detail: Some(format!("{}: {error}", this.index)),
+                        });
                     }
                 }
                 if let Err(error) = state {
-                    this.error = Some(format!(
-                        "Installation state: {error}. Do not modify extensions until the store is readable."
-                    ));
+                    this.error = Some(Failure {
+                        headline: localized(
+                            cx,
+                            "Extension settings couldn't be read. Restart Exaudio before changing extensions.",
+                            "Не удалось прочитать настройки расширений. Перезапустите Exaudio.",
+                        )
+                        .into(),
+                        detail: Some(error.to_string()),
+                    });
                 }
-                this.finish(
-                    "Catalog refresh finished / Обновление каталога завершено",
-                    cx,
-                );
+                this.finish(localized(cx, "Catalog up to date", "Каталог обновлён"), cx);
             },
         ));
     }
@@ -398,7 +437,7 @@ impl ExtensionsModel {
         let source = self.index.clone();
         let host = self.host(cx);
         let control = self.begin(
-            "Restoring installed extensions / Восстановление расширений",
+            localized(cx, "Starting extensions…", "Запуск расширений…"),
             cx,
         );
         self.task = Some(spawn_service(
@@ -431,11 +470,26 @@ impl ExtensionsModel {
                     }
                     match packages {
                         Ok(packages) => this.activate_startup(packages, cx),
-                        Err(error) => this.fail(format!("Installed extension validation failed: {error:#}. Enable missing dependencies or disable the affected package, then retry activation."), cx),
+                        Err(error) => this.fail(
+                            localized(
+                                cx,
+                                "Some extensions couldn't start.",
+                                "Некоторые расширения не запустились.",
+                            )
+                            .into(),
+                            Some(format!("{error:#}")),
+                            cx,
+                        ),
                     }
                 }
                 Err(error) => this.fail(
-                    format!("Cannot restore installed extensions: {error:#}"),
+                    localized(
+                        cx,
+                        "Some extensions couldn't start.",
+                        "Некоторые расширения не запустились.",
+                    )
+                    .into(),
+                    Some(format!("{error:#}")),
                     cx,
                 ),
             },
@@ -459,29 +513,77 @@ impl ExtensionsModel {
             for (index, prepared) in packages.into_iter().enumerate() {
                 let owner = prepared.package.manifest.id.clone();
                 let ticket = this.update(cx, |this, cx| {
-                    if this.control.as_ref().is_some_and(OperationControl::is_cancelled) { bail!("Startup activation cancelled"); }
-                    this.status = format!("Restoring / Восстановление {}/{total}: {owner}", index + 1); cx.notify();
-                    crate::wasm_host::activate(shell.clone(), prepared.package, root.join("data"), prepared.assets, cx)
+                    if this
+                        .control
+                        .as_ref()
+                        .is_some_and(OperationControl::is_cancelled)
+                    {
+                        bail!("startup activation cancelled");
+                    }
+                    let name = extension_name(&owner, this.catalog.as_ref(), cx);
+                    this.status = localized(
+                        cx,
+                        "Starting {name} ({i} of {n})…",
+                        "Запуск {name} ({i} из {n})…",
+                    )
+                    .replace("{name}", &name)
+                    .replace("{i}", &(index + 1).to_string())
+                    .replace("{n}", &total.to_string());
+                    cx.notify();
+                    crate::wasm_host::activate(
+                        shell.clone(),
+                        prepared.package,
+                        root.join("data"),
+                        prepared.assets,
+                        cx,
+                    )
                 });
                 let result = match ticket {
                     Ok(Ok(ticket)) => wait_activation(&ticket, cx).await,
-                    Ok(Err(error)) => Err(error), Err(error) => Err(error),
+                    Ok(Err(error)) => Err(error),
+                    Err(error) => Err(error),
                 };
-                if !already_enabled.contains(&owner) { added.push(owner); }
-                if let Err(error) = result { failure = Some(error); break; }
+                if !already_enabled.contains(&owner) {
+                    added.push(owner);
+                }
+                if let Err(error) = result {
+                    failure = Some(error);
+                    break;
+                }
             }
             if let Some(error) = failure {
                 let mut cleanup_errors = Vec::new();
                 for owner in added.into_iter().rev() {
                     match this.update(cx, |_, cx| crate::wasm_host::disable(&owner, cx)) {
-                        Ok(Ok(ticket)) => if let Err(error) = wait_activation(&ticket, cx).await { cleanup_errors.push(error.to_string()); },
+                        Ok(Ok(ticket)) => {
+                            if let Err(error) = wait_activation(&ticket, cx).await {
+                                cleanup_errors.push(error.to_string());
+                            }
+                        }
                         Ok(Err(error)) => cleanup_errors.push(error.to_string()),
                         Err(error) => cleanup_errors.push(error.to_string()),
                     }
                 }
-                this.update(cx, |this, cx| this.fail(format!("Startup activation failed: {error:#}. Store unchanged; use Retry activation after correcting the error. {}", cleanup_errors.join("; ")), cx)).ok();
+                this.update(cx, |this, cx| {
+                    let mut detail = format!("{error:#}");
+                    if !cleanup_errors.is_empty() {
+                        detail.push_str("\ncleanup: ");
+                        detail.push_str(&cleanup_errors.join("; "));
+                    }
+                    this.fail(
+                        localized(
+                            cx,
+                            "Some extensions couldn't start.",
+                            "Некоторые расширения не запустились.",
+                        )
+                        .into(),
+                        Some(detail),
+                        cx,
+                    )
+                })
+                .ok();
             } else {
-                this.update(cx, |this, cx| this.finish(&format!("Restored {total}/{total} managed extensions / Восстановлено {total}/{total} расширений"), cx)).ok();
+                this.update(cx, |this, cx| this.finish("", cx)).ok();
             }
         }));
     }
@@ -545,7 +647,16 @@ impl ExtensionsModel {
         }
         self.global_document_access = false;
         let Some(catalog) = &self.catalog else {
-            self.fail("Refresh a validated catalog before reviewing a release. / Обновите проверенный каталог.".into(), cx);
+            self.fail(
+                localized(
+                    cx,
+                    "Refresh the catalog first.",
+                    "Сначала обновите каталог.",
+                )
+                .into(),
+                None,
+                cx,
+            );
             return;
         };
         let plan = marketplace::plan_release(
@@ -579,7 +690,19 @@ impl ExtensionsModel {
                     .find(|release| release.asset.url == url)
             })
             .cloned();
-        match release { Some(release) => self.preview_release(release, cx), None => self.fail("URL is not an exact reviewed release URL in the current index. Refresh the index or choose a local developer package for explicit source review. / URL отсутствует в проверенном индексе.".into(), cx) }
+        match release {
+            Some(release) => self.preview_release(release, cx),
+            None => self.fail(
+                localized(
+                    cx,
+                    "This link isn't in the catalog. To install anyway, download the file and use “Install from file”.",
+                    "Этой ссылки нет в каталоге. Чтобы установить всё равно, скачайте файл и используйте «Установить из файла».",
+                )
+                .into(),
+                None,
+                cx,
+            ),
+        }
     }
     pub fn preview_path(&mut self, path: PathBuf, directory: bool, cx: &mut Context<Self>) {
         if self.busy {
@@ -590,18 +713,18 @@ impl ExtensionsModel {
             && path
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_none_or(|extension| !extension.eq_ignore_ascii_case("sonusext"))
+                .is_none_or(|extension| {
+                    !extension.eq_ignore_ascii_case(sonus_marketplace::PACKAGE_EXTENSION)
+                })
         {
             self.fail(
-                "Choose a .sonusext package. / Выберите пакет .sonusext.".into(),
+                localized(cx, "Choose an .exaudio file.", "Выберите файл .exaudio.").into(),
+                None,
                 cx,
             );
             return;
         }
-        let control = self.begin(
-            "Inspecting local source / Проверка локального источника",
-            cx,
-        );
+        let control = self.begin(localized(cx, "Checking file…", "Проверка файла…"), cx);
         self.task = Some(spawn_service(
             cx,
             async move {
@@ -623,7 +746,14 @@ impl ExtensionsModel {
                     .as_ref()
                     .is_some_and(OperationControl::is_cancelled)
                 {
-                    this.finish("Inspection cancelled; no changes applied / Проверка отменена; изменений нет", cx);
+                    this.finish(
+                        localized(
+                            cx,
+                            "Cancelled. Nothing changed.",
+                            "Отменено. Ничего не изменилось.",
+                        ),
+                        cx,
+                    );
                     return;
                 }
                 match result {
@@ -644,10 +774,7 @@ impl ExtensionsModel {
                             developer: Some(source),
                             generation: this.installed.generation,
                         });
-                        this.finish(
-                            "Local package ready for review / Пакет готов к проверке",
-                            cx,
-                        );
+                        this.finish("", cx);
                     }
                     Ok(LocalPreview::Folder(directory, manifest)) => {
                         let registry = cx.global::<ContributionRegistry>();
@@ -659,7 +786,14 @@ impl ExtensionsModel {
                                 .iter()
                                 .any(|m| m.id == manifest.id && m.runtime == Runtime::Native)
                         {
-                            blockers.push("This identity is installed/bundled; use a distinct developer ID or uninstall the managed package first. / ID уже установлен или встроен.".into());
+                            blockers.push(
+                                localized(
+                                    cx,
+                                    "An extension with this ID is already installed.",
+                                    "Расширение с таким ID уже установлено.",
+                                )
+                                .into(),
+                            );
                         }
                         for (id, version) in &manifest.dependencies {
                             if !available.iter().any(|m| {
@@ -667,9 +801,15 @@ impl ExtensionsModel {
                                     && version.matches(&m.version)
                                     && registry.is_enabled(id)
                             }) {
-                                blockers.push(format!(
-                                    "Enable dependency first / Включите зависимость: {id} {version}"
-                                ));
+                                let name = extension_name(id, this.catalog.as_ref(), cx);
+                                blockers.push(
+                                    localized(
+                                        cx,
+                                        "Turn on {name} first.",
+                                        "Сначала включите {name}.",
+                                    )
+                                    .replace("{name}", &format!("{name} {version}")),
+                                );
                             }
                         }
                         this.preview = Some(Preview::Folder {
@@ -677,12 +817,18 @@ impl ExtensionsModel {
                             manifest,
                             blockers,
                         });
-                        this.finish(
-                            "Developer folder ready for review / Папка готова к проверке",
-                            cx,
-                        );
+                        this.finish("", cx);
                     }
-                    Err(error) => this.fail(format!("Local source rejected: {error:#}"), cx),
+                    Err(error) => this.fail(
+                        localized(
+                            cx,
+                            "This file can't be installed.",
+                            "Этот файл нельзя установить.",
+                        )
+                        .into(),
+                        Some(format!("{error:#}")),
+                        cx,
+                    ),
                 }
             },
         ));
@@ -705,11 +851,19 @@ impl ExtensionsModel {
                     .or_else(|| self.installed.disabled.get(&id))
                     .map(|installed| &installed.manifest)
             });
-        let mut details = Vec::new();
+        let (name, version) = manifest
+            .map(|manifest| (manifest.name.clone(), manifest.version.to_string()))
+            .unwrap_or_else(|| (id.clone(), String::new()));
         if let Some(manifest) = manifest {
-            manifest_lines(manifest, &mut details);
             if matches!(action, Removal::Uninstall) && manifest.runtime == Runtime::Native {
-                blockers.push("Bundled native files cannot be uninstalled. / Встроенные файлы нельзя удалить.".into());
+                blockers.push(
+                    localized(
+                        cx,
+                        "Built-in extensions can be turned off but not removed.",
+                        "Встроенные расширения можно выключить, но не удалить.",
+                    )
+                    .into(),
+                );
             }
             if matches!(action, Removal::Enable) {
                 for (dependency, version) in &manifest.dependencies {
@@ -718,9 +872,11 @@ impl ExtensionsModel {
                             && version.matches(&candidate.version)
                             && registry.is_enabled(dependency)
                     }) {
-                        blockers.push(format!(
-                            "Enable dependency first / Включите зависимость: {dependency} {version}"
-                        ));
+                        let dependency_name = extension_name(dependency, self.catalog.as_ref(), cx);
+                        blockers.push(
+                            localized(cx, "Turn on {name} first.", "Сначала включите {name}.")
+                                .replace("{name}", &format!("{dependency_name} {version}")),
+                        );
                     }
                 }
             }
@@ -730,37 +886,48 @@ impl ExtensionsModel {
                 .global::<ContributionRegistry>()
                 .required_by_active_mode(&id)
         {
-            blockers.push("Required by the active mode; close its document first. / Требуется активному режиму; закройте документ.".into());
+            blockers.push(
+                localized(
+                    cx,
+                    "The open project needs it. Close the project first.",
+                    "Оно нужно открытому проекту. Сначала закройте проект.",
+                )
+                .into(),
+            );
         }
         if !matches!(action, Removal::Enable) {
-            for installed in self
+            let needs_it = localized(
+                cx,
+                "{a} needs it. Turn off {a} first.",
+                "Оно нужно для «{a}». Сначала выключите «{a}».",
+            );
+            let dependents = self
                 .installed
                 .active
                 .values()
-                .filter(|installed| installed.manifest.id != id)
-            {
-                if let Some(version) = installed.manifest.dependencies.get(&id) {
-                    blockers.push(format!("{} requires {id} {version}; disable the dependent extension first. / Сначала отключите зависимое расширение.", installed.manifest.id));
-                }
-            }
-            for manifest in manifests
-                .iter()
-                .filter(|manifest| manifest.id != id && registry.is_enabled(&manifest.id))
-            {
-                if let Some(version) = manifest.dependencies.get(&id) {
-                    blockers.push(format!(
-                        "{} requires {id} {version}; disable the dependent extension first.",
-                        manifest.id
-                    ));
+                .map(|installed| &installed.manifest)
+                .filter(|manifest| manifest.id != id)
+                .chain(
+                    manifests
+                        .iter()
+                        .filter(|manifest| manifest.id != id && registry.is_enabled(&manifest.id)),
+                );
+            for dependent in dependents {
+                if dependent.dependencies.contains_key(&id) {
+                    let line = needs_it.replace("{a}", &dependent.name);
+                    if !blockers.contains(&line) {
+                        blockers.push(line);
+                    }
                 }
             }
         }
         self.preview = Some(Preview::Removal {
             id,
+            name,
+            version,
             action,
             generation: self.installed.generation,
             blockers,
-            details,
         });
         cx.notify();
     }
@@ -773,10 +940,16 @@ impl ExtensionsModel {
         };
         let mut lines = vec![];
         for installed in previous.active.values() {
-            manifest_lines(&installed.manifest, &mut lines);
+            lines.push(format!(
+                "{} {}",
+                installed.manifest.name, installed.manifest.version
+            ));
         }
         for id in previous.disabled.keys() {
-            lines.push(format!("Disabled / Отключено: {id}"));
+            lines.push(
+                localized(cx, "{name} (off)", "{name} (выключено)")
+                    .replace("{name}", &extension_name(id, self.catalog.as_ref(), cx)),
+            );
         }
         for id in self
             .installed
@@ -785,7 +958,10 @@ impl ExtensionsModel {
             .chain(self.installed.disabled.keys())
         {
             if !previous.active.contains_key(id) && !previous.disabled.contains_key(id) {
-                lines.push(format!("Remove / Удалить: {id}"));
+                lines.push(
+                    localized(cx, "Remove {name}", "Удалить {name}")
+                        .replace("{name}", &extension_name(id, self.catalog.as_ref(), cx)),
+                );
             }
         }
         let host = self.host(cx);
@@ -805,10 +981,16 @@ impl ExtensionsModel {
                     })
             })
             .map(|requirement| {
-                format!(
-                    "{} requires {} {}",
-                    requirement.required_by, requirement.extension, requirement.version
-                )
+                localized(cx, "{a} needs {b} {v}.", "Для «{a}» нужно {b} {v}.")
+                    .replace(
+                        "{a}",
+                        &extension_name(&requirement.required_by, self.catalog.as_ref(), cx),
+                    )
+                    .replace(
+                        "{b}",
+                        &extension_name(&requirement.extension, self.catalog.as_ref(), cx),
+                    )
+                    .replace("{v}", &requirement.version.to_string())
             })
             .collect();
         self.preview = Some(Preview::Rollback {
@@ -840,7 +1022,9 @@ impl ExtensionsModel {
             } => Some(id.clone()),
             _ => None,
         };
-        if let Preview::Removal { id, action, .. } = &preview
+        if let Preview::Removal {
+            id, name, action, ..
+        } = &preview
             && cx
                 .global::<ContributionRegistry>()
                 .manifests()
@@ -850,14 +1034,28 @@ impl ExtensionsModel {
             let result = match action {
                 Removal::Enable => crate::contributions::enable_extension(id, cx),
                 Removal::Disable => crate::contributions::unload_extension(id, cx),
-                Removal::Uninstall => Err(anyhow!("Bundled files cannot be uninstalled")),
+                Removal::Uninstall => Err(anyhow!("built-in extensions cannot be removed")),
             };
             match result {
-                Ok(()) => self.finish(
-                    "Bundled extension state changed / Состояние встроенного расширения изменено",
+                Ok(()) => {
+                    let status = if matches!(action, Removal::Enable) {
+                        localized(cx, "{name} turned on", "{name} включено")
+                    } else {
+                        localized(cx, "{name} turned off", "{name} выключено")
+                    }
+                    .replace("{name}", name);
+                    self.finish(&status, cx)
+                }
+                Err(error) => self.fail(
+                    localized(
+                        cx,
+                        "This extension can't start.",
+                        "Это расширение не может запуститься.",
+                    )
+                    .into(),
+                    Some(format!("{error:#}")),
                     cx,
                 ),
-                Err(error) => self.fail(error.to_string(), cx),
             }
             return;
         }
@@ -876,7 +1074,7 @@ impl ExtensionsModel {
             if let Err(error) =
                 crate::wasm_host::set_document_access(&manifest.id, access, self.shell.clone(), cx)
             {
-                self.fail(error.to_string(), cx);
+                self.fail_with(format!("{error:#}"), cx);
                 return;
             }
             match crate::wasm_host::watch_development(
@@ -890,9 +1088,15 @@ impl ExtensionsModel {
                 Ok(()) => {
                     self.document_scopes
                         .insert(manifest.id.clone(), global_access);
+                    let folder = directory
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| directory.display().to_string());
+                    let status = localized(cx, "Watching {folder}", "Слежу за {folder}")
+                        .replace("{folder}", &folder);
                     self.developer_folders
                         .insert(manifest.id.clone(), (directory, manifest));
-                    self.finish("Developer watcher started; activation/reload status is shown in extension logs. / Наблюдение запущено; результат активации в журнале.", cx);
+                    self.finish(&status, cx);
                 }
                 Err(error) => {
                     let prior = if self.global_access_for(&manifest.id) {
@@ -906,14 +1110,18 @@ impl ExtensionsModel {
                         self.shell.clone(),
                         cx,
                     );
+                    let mut detail = format!("{error:#}");
+                    if let Err(error) = restored {
+                        detail.push_str(&format!("; scope restoration failed: {error}"));
+                    }
                     self.fail(
-                        format!(
-                            "Developer activation: {error:#}{}",
-                            restored
-                                .err()
-                                .map(|error| format!("; scope restoration failed: {error}"))
-                                .unwrap_or_default()
-                        ),
+                        localized(
+                            cx,
+                            "This extension can't start.",
+                            "Это расширение не может запуститься.",
+                        )
+                        .into(),
+                        Some(detail),
                         cx,
                     );
                 }
@@ -926,7 +1134,7 @@ impl ExtensionsModel {
         let catalog = self.catalog_or_empty();
         let before = self.installed.clone();
         let mut grants = self.grants();
-        let control = self.begin("Preparing transaction / Подготовка транзакции", cx);
+        let control = self.begin(localized(cx, "Installing…", "Установка…"), cx);
         self.task = Some(spawn_service(
             cx,
             async move {
@@ -1036,10 +1244,10 @@ impl ExtensionsModel {
                             store.restore_failed_activation(next.generation, &before, &host);
                         match restored {
                             Ok(_) => Err(error.context(
-                                "Cannot read activation package; prior installation restored",
+                                "cannot read activation package; prior installation restored",
                             )),
                             Err(recovery) => {
-                                Err(anyhow!("{error:#}; RESTORATION FAILED: {recovery}"))
+                                Err(anyhow!("{error:#}; restoration failed: {recovery}"))
                             }
                         }
                     }
@@ -1049,7 +1257,19 @@ impl ExtensionsModel {
                 Ok(transaction) => this.activate_transaction(transaction, cx),
                 Err(error) => {
                     this.reload_state();
-                    this.fail(format!("Extension operation failed: {error:#}"), cx);
+                    let cancelled = error.to_string().starts_with("Cancelled before");
+                    if cancelled {
+                        this.finish(
+                            localized(
+                                cx,
+                                "Cancelled. Nothing changed.",
+                                "Отменено. Ничего не изменилось.",
+                            ),
+                            cx,
+                        );
+                    } else {
+                        this.fail_with(format!("{error:#}"), cx);
+                    }
                 }
             },
         ));
@@ -1068,8 +1288,13 @@ impl ExtensionsModel {
             .required_by_active_mode(owner)
         {
             self.fail(
-                "The developer extension is required by the active mode. Close its document first."
-                    .into(),
+                localized(
+                    cx,
+                    "The open project needs it. Close the project first.",
+                    "Оно нужно открытому проекту. Сначала закройте проект.",
+                )
+                .into(),
+                None,
                 cx,
             );
             return;
@@ -1081,32 +1306,35 @@ impl ExtensionsModel {
             crate::wasm_host::stop_watching(owner, cx);
             self.developer_folders.remove(owner);
             self.document_scopes.remove(owner);
-            self.finish("Developer watcher stopped / Наблюдение остановлено", cx);
+            self.finish(
+                localized(cx, "Stopped watching", "Слежение остановлено"),
+                cx,
+            );
             return;
         }
         match crate::wasm_host::disable(owner, cx) {
             Ok(ticket) => {
                 self.developer_folders.remove(owner);
                 self.document_scopes.remove(owner);
-                self.begin("Stopping developer extension / Остановка расширения", cx);
+                self.begin(localized(cx, "Stopping…", "Остановка…"), cx);
                 self.await_single(ticket, cx);
             }
-            Err(error) => self.fail(error.to_string(), cx),
+            Err(error) => self.fail_with(format!("{error:#}"), cx),
         }
     }
     fn await_single(&mut self, ticket: crate::wasm_host::ActivationTicket, cx: &mut Context<Self>) {
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = wait_activation(&ticket, cx).await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.finish("Extension stopped / Расширение остановлено", cx),
-                Err(error) => this.fail(error.to_string(), cx),
+                Ok(()) => this.finish(localized(cx, "Stopped", "Остановлено"), cx),
+                Err(error) => this.fail_with(format!("{error:#}"), cx),
             })
             .ok();
         }));
     }
     fn activate_transaction(&mut self, transaction: Transaction, cx: &mut Context<Self>) {
         self.progress_task = None;
-        self.status = "Activating runtime and contributions / Активация среды и компонентов".into();
+        self.status = localized(cx, "Starting…", "Запуск…").into();
         cx.notify();
         let shell = self.shell.clone();
         let root = self.root.clone();
@@ -1118,7 +1346,9 @@ impl ExtensionsModel {
             for prepared in packages {
                 let owner = prepared.package.manifest.id.clone();
                 let ticket = this.update(cx, |this, cx| {
-                    this.status = format!("Activating / Активация: {owner}"); cx.notify();
+                    let name = extension_name(&owner, this.catalog.as_ref(), cx);
+                    this.status = localized(cx, "Starting {name}…", "Запуск {name}…").replace("{name}", &name);
+                    cx.notify();
                     if scope_owner.as_deref() == Some(owner.as_str()) {
                         let access = if global_access { crate::wasm_host::DocumentAccess::Global } else { crate::wasm_host::DocumentAccess::DeclaredModes };
                         crate::wasm_host::set_document_access(&owner, access, shell.clone(), cx)?;
@@ -1149,7 +1379,10 @@ impl ExtensionsModel {
                     if let Err(failure) = result { error = Some(failure); }
                 }
             if let Some(failure) = error {
-                this.update(cx, |this, cx| { this.status = format!("Recovering prior installation / Восстановление: {failure:#}"); cx.notify(); }).ok();
+                this.update(cx, |this, cx| {
+                    this.status = localized(cx, "Something went wrong; restoring the previous state…", "Произошла ошибка; возвращаю предыдущее состояние…").into();
+                    cx.notify();
+                }).ok();
                 let recovery_root = root.clone(); let failed = next.generation; let prior = before.clone(); let host = host.clone();
                 let restored = cx.background_spawn(async move {
                     let store = InstallationStore::open(&recovery_root)?;
@@ -1182,8 +1415,28 @@ impl ExtensionsModel {
                     Err(error) => recovery_errors.push(error.to_string()),
                 }
                 this.update(cx, |this, cx| {
-                    let recovery = if recovery_errors.is_empty() { "Prior installation restored / Предыдущая установка восстановлена".into() } else { format!("RECOVERY ERROR / ОШИБКА ВОССТАНОВЛЕНИЯ: {}. Restart after repairing the installation store.", recovery_errors.join("; ")) };
-                    this.fail(format!("Activation failed: {failure:#}. {recovery}"), cx);
+                    let (headline, status) = if recovery_errors.is_empty() {
+                        (
+                            localized(cx, "Something went wrong.", "Что-то пошло не так."),
+                            localized(cx, "Previous state restored", "Предыдущее состояние восстановлено"),
+                        )
+                    } else {
+                        (
+                            localized(
+                                cx,
+                                "Couldn't restore the previous state. Restart Exaudio.",
+                                "Не удалось восстановить предыдущее состояние. Перезапустите Exaudio.",
+                            ),
+                            "",
+                        )
+                    };
+                    let mut detail = format!("{failure:#}");
+                    if !recovery_errors.is_empty() {
+                        detail.push_str("\nrecovery: ");
+                        detail.push_str(&recovery_errors.join("; "));
+                    }
+                    this.fail(headline.into(), Some(detail), cx);
+                    this.status = status.into();
                 }).ok();
             } else {
                 let added: Vec<String> = next
@@ -1192,18 +1445,32 @@ impl ExtensionsModel {
                     .filter(|owner| !before.active.contains_key(*owner))
                     .cloned()
                     .collect();
+                let changed_ids: Vec<String> = next
+                    .active
+                    .iter()
+                    .filter(|(owner, installed)| before.active.get(*owner) != Some(*installed))
+                    .map(|(owner, _)| owner.clone())
+                    .collect();
                 let cleanup_root = root.clone();
                 let cleanup = cx.background_spawn(async move {
                     InstallationStore::open(cleanup_root)?.collect_unreferenced(&before)
                 }).await;
                 this.update(cx, |this, cx| {
+                    let installed = changed_ids
+                        .iter()
+                        .map(|owner| extension_name(owner, this.catalog.as_ref(), cx))
+                        .collect::<Vec<_>>();
+                    let status = if installed.is_empty() {
+                        localized(cx, "Done", "Готово").to_owned()
+                    } else {
+                        localized(cx, "{name} installed", "{name} установлено").replace("{name}", &installed.join(", "))
+                    };
                     this.installed = next;
                     if let Some(owner) = scope_owner { this.document_scopes.insert(owner, global_access); }
                     this.document_scopes.retain(|owner, _| this.installed.active.contains_key(owner) || this.developer_folders.contains_key(owner));
-                    this.finish("Extension transaction completed and runtime activated / Транзакция завершена, расширения активированы", cx);
+                    this.finish(&status, cx);
                     if let Err(error) = cleanup {
-                        this.error = Some(format!("Activation succeeded; unused package cleanup failed: {error}. Referenced packages were preserved."));
-                        this.log(format!("Cleanup: {error}"));
+                        this.log(format!("cleanup: {error}"));
                     }
                     if !added.is_empty() {
                         cx.emit(ExtensionsEvent::Activated(added));

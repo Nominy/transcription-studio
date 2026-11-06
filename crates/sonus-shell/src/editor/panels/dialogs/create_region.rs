@@ -1,5 +1,6 @@
 //! Plain-text segment creation. Domain forms are contributed through command effects.
 use crate::editor::model::EditorModel;
+use crate::screens::ui::localized;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -23,7 +24,7 @@ impl RegionDialog {
         let text = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(state.text)
-                .placeholder("Segment text")
+                .placeholder(localized(cx, "What was said…", "Что было сказано…"))
         });
         let start = cx.new(|cx| InputState::new(window, cx).default_value(state.start_draft));
         let end = cx.new(|cx| InputState::new(window, cx).default_value(state.end_draft));
@@ -93,9 +94,14 @@ impl Render for RegionDialog {
             .map(|d| d.selected_lane_id.clone())
             .unwrap_or_default();
         let lanes = self.model.read(cx).doc().project().lanes.clone();
+        let selected_label = lanes
+            .iter()
+            .find(|lane| lane.id == selected)
+            .map(|lane| lane.label.clone())
+            .unwrap_or(selected);
         let model = self.model.clone();
         let tracks = Button::new("region-track")
-            .label(selected)
+            .label(selected_label)
             .disabled(created)
             .dropdown_menu(move |mut menu, _, _| {
                 for lane in &lanes {
@@ -117,7 +123,11 @@ impl Render for RegionDialog {
             });
         v_flex()
             .gap_3()
-            .child(super::super::ui::dialog_header("Segment", None, cx))
+            .child(super::super::ui::dialog_header(
+                localized(cx, "New segment", "Новый сегмент"),
+                None,
+                cx,
+            ))
             .child(tracks)
             .child(
                 h_flex()
@@ -138,7 +148,7 @@ impl Render for RegionDialog {
                     .child(
                         Button::new("region-cancel")
                             .small()
-                            .label("Cancel")
+                            .label(localized(cx, "Cancel", "Отмена"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.model.update(cx, |model, cx| {
                                     model.update_doc(cx, |doc| doc.cancel_create_region())
@@ -150,7 +160,7 @@ impl Render for RegionDialog {
                         Button::new("region-create")
                             .small()
                             .primary()
-                            .label("Apply")
+                            .label(localized(cx, "Add", "Добавить"))
                             .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     ),
             )

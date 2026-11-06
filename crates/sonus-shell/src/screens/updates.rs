@@ -5,13 +5,12 @@
 use std::time::Instant;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use studio_services::updater::{self, UpdateChannel, UpdateState};
 
-use crate::screens::ShellModels;
+use crate::screens::{ShellModels, ui};
 use crate::services::{AppServices, spawn_service};
 
 /// This binary's version (`STUDIO_BUILD_VERSION` from packaging, else the crate version).
@@ -166,17 +165,92 @@ impl UpdaterModel {
     }
 }
 
-/// Small "update available" card with Install / Skip, or `None` when there is nothing to
-/// offer. Placed in the dashboard sidebar so it never covers the editor.
+/// Channel name shown in Settings and the notice.
+pub fn channel_label(channel: UpdateChannel, cx: &App) -> &'static str {
+    match channel {
+        UpdateChannel::Stable => ui::localized(cx, "Stable", "Стабильный"),
+        UpdateChannel::Alpha => ui::localized(cx, "Early access", "Ранний доступ"),
+    }
+}
+
+/// One line on what the channel delivers.
+pub fn channel_description(channel: UpdateChannel, cx: &App) -> &'static str {
+    match channel {
+        UpdateChannel::Stable => ui::localized(
+            cx,
+            "Tested releases published on GitHub.",
+            "Проверенные выпуски, опубликованные на GitHub.",
+        ),
+        UpdateChannel::Alpha => ui::localized(
+            cx,
+            "Every build of the main branch: newest features first.",
+            "Каждая сборка основной ветки: новые функции раньше всех.",
+        ),
+    }
+}
+
+/// The updater's current state in one sentence; the failure detail is returned separately
+/// so the caller can show it under "Details".
+pub fn status_text(state: &UpdateState, cx: &App) -> (String, Option<SharedString>) {
+    let channel = channel_label(state.channel, cx);
+    let text = match state.phase {
+        updater::UpdatePhase::Unsupported => ui::localized(
+            cx,
+            "Updates work in installed builds only.",
+            "Обновления работают только в установленных сборках.",
+        )
+        .to_string(),
+        updater::UpdatePhase::Idle => ui::localized(cx, "Channel: {channel}", "Канал: {channel}")
+            .replace("{channel}", channel),
+        updater::UpdatePhase::Checking => {
+            ui::localized(cx, "Checking for updates…", "Проверка обновлений…").to_string()
+        }
+        updater::UpdatePhase::UpdateAvailable => match state.available_version.as_ref() {
+            Some(version) => ui::localized(
+                cx,
+                "Exaudio {version} is ready to install",
+                "Доступна версия Exaudio {version}",
+            )
+            .replace("{version}", version),
+            None => ui::localized(cx, "An update is ready to install", "Доступно обновление")
+                .to_string(),
+        },
+        updater::UpdatePhase::UpToDate => {
+            ui::localized(cx, "Up to date", "Установлена последняя версия").to_string()
+        }
+        updater::UpdatePhase::RemoteEmpty => ui::localized(
+            cx,
+            "No releases for this platform yet",
+            "Для этой платформы пока нет выпусков",
+        )
+        .to_string(),
+        updater::UpdatePhase::Installing => match state.download_percent {
+            Some(percent) => ui::localized(cx, "Downloading… {p}%", "Загрузка… {p}%")
+                .replace("{p}", &percent.to_string()),
+            None => ui::localized(cx, "Downloading…", "Загрузка…").to_string(),
+        },
+        updater::UpdatePhase::Restarting => {
+            ui::localized(cx, "Installed. Restarting…", "Установлено. Перезапуск…").to_string()
+        }
+        updater::UpdatePhase::Failed => {
+            let text = ui::localized(cx, "Couldn't update.", "Не удалось обновить.").to_string();
+            return (text, state.last_error.clone().map(SharedString::from));
+        }
+    };
+    (text, None)
+}
+
+/// Small "update available" card with Update / Not now, or `None` when there is nothing to
+/// offer. Placed on Start so it never covers the editor.
 pub fn update_notice(cx: &App) -> Option<Div> {
     let model = ShellModels::updater(cx);
     let updater = model.read(cx);
     let version = updater.notice_version()?.to_string();
     let state = updater.state();
     let theme = cx.theme();
-    let detail = match state.phase {
-        updater::UpdatePhase::Installing | updater::UpdatePhase::Failed => state.status_label(),
-        _ => format!("{} channel", state.channel.label()),
+    let (detail, detail_text) = match state.phase {
+        updater::UpdatePhase::Installing | updater::UpdatePhase::Failed => status_text(state, cx),
+        _ => (channel_label(state.channel, cx).to_string(), None),
     };
     Some(
         v_flex()
@@ -188,10 +262,14 @@ pub fn update_notice(cx: &App) -> Option<Div> {
             .border_color(theme.border)
             .bg(theme.background)
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(format!("Exaudio {version} is available")),
+                div().text_sm().font_weight(FontWeight::MEDIUM).child(
+                    ui::localized(
+                        cx,
+                        "Exaudio {version} is ready to install",
+                        "Доступна версия Exaudio {version}",
+                    )
+                    .replace("{version}", &version),
+                ),
             )
             .child(
                 div()
@@ -203,6 +281,9 @@ pub fn update_notice(cx: &App) -> Option<Div> {
                     })
                     .child(detail),
             )
+            .when_some(detail_text, |this, detail| {
+                this.child(ui::details(detail, cx))
+            })
             .child(
                 h_flex()
                     .gap_1()
@@ -210,7 +291,7 @@ pub fn update_notice(cx: &App) -> Option<Div> {
                         Button::new("update-notice-install")
                             .primary()
                             .xsmall()
-                            .label("Install")
+                            .label(ui::localized(cx, "Update", "Обновить"))
                             .disabled(!state.can_install())
                             .on_click(|_, _, cx| {
                                 ShellModels::updater(cx)
@@ -222,15 +303,20 @@ pub fn update_notice(cx: &App) -> Option<Div> {
                             Button::new("update-notice-skip")
                                 .ghost()
                                 .xsmall()
-                                .label("Skip")
+                                .label(ui::localized(cx, "Not now", "Не сейчас"))
                                 .on_click(|_, window, cx| {
                                     let saved = ShellModels::updater(cx)
                                         .update(cx, |updater, cx| updater.skip_offered_version(cx));
                                     if let Err(error) = saved {
                                         window.push_notification(
-                                            Notification::warning(format!(
-                                                "Skipped version could not be saved: {error}"
-                                            )),
+                                            ui::warning_notification(
+                                                ui::localized(
+                                                    cx,
+                                                    "Couldn't remember the skipped version.",
+                                                    "Не удалось запомнить пропущенную версию.",
+                                                ),
+                                                Some(error.to_string().into()),
+                                            ),
                                             cx,
                                         );
                                     }

@@ -9,7 +9,8 @@ use super::{
 use crate::{ProviderRegistry, ShellHandle, contributions::ContributionRegistry};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Disableable, Selectable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{Disableable, IconName, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use model::{DEFAULT_INDEX, ExtensionsEvent, ExtensionsModel, Preview, Removal};
@@ -30,6 +31,7 @@ pub struct ExtensionsView {
     url: Entity<InputState>,
     index: Entity<InputState>,
     selected: Option<String>,
+    advanced: bool,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -71,7 +73,7 @@ fn offer_next(
     let Some((provider, mode_label)) = pending.pop() else {
         return;
     };
-    let title = format!("{} {mode_label}", text(cx, "Sign in to", "Вход в"));
+    let title = text(cx, "Sign in to {mode}", "Вход: {mode}").replace("{mode}", &mode_label);
     let next_shell = shell.clone();
     accounts::open_setup_dialog(
         shell,
@@ -87,6 +89,26 @@ fn offer_next(
     );
 }
 
+/// Where an extension comes from, for the list row and the details card.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    BuiltIn,
+    Installed,
+    Developer,
+    Catalog,
+}
+
+impl Source {
+    fn label(self, cx: &App) -> &'static str {
+        match self {
+            Self::BuiltIn => text(cx, "Built in", "Встроено"),
+            Self::Installed => text(cx, "Installed", "Установлено"),
+            Self::Developer => text(cx, "Developer", "Разработка"),
+            Self::Catalog => text(cx, "Available", "Доступно"),
+        }
+    }
+}
+
 impl ExtensionsView {
     pub fn new(shell: ShellHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let model = model::shared(shell.clone(), cx);
@@ -97,10 +119,7 @@ impl ExtensionsView {
                 "Поиск расширений",
             ))
         });
-        let url = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://github.com/…/releases/download/…/*.sonusext")
-        });
+        let url = cx.new(|cx| InputState::new(window, cx).placeholder("https://…/*.exaudio"));
         let source = model.read(cx).index.clone();
         let index = cx.new(|cx| InputState::new(window, cx).default_value(source));
         let subscriptions = vec![
@@ -133,6 +152,7 @@ impl ExtensionsView {
             url,
             index,
             selected: None,
+            advanced: false,
             focus,
             _subscriptions: subscriptions,
         }
@@ -145,11 +165,16 @@ impl ExtensionsView {
     }
 
     fn choose(&mut self, directory: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = if directory {
+            text(cx, "Open developer folder", "Открыть папку разработчика")
+        } else {
+            text(cx, "Install from file", "Установить из файла")
+        };
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: !directory,
             directories: directory,
             multiple: false,
-            prompt: Some(text(cx, "Review extension", "Проверить расширение").into()),
+            prompt: Some(prompt.into()),
         });
         let model = self.model.clone();
         window
@@ -165,7 +190,16 @@ impl ExtensionsView {
                 Ok(Err(error)) => {
                     cx.update(|_, cx| {
                         model.update(cx, |model, cx| {
-                            model.fail(format!("File picker: {error}"), cx)
+                            model.fail(
+                                text(
+                                    cx,
+                                    "Couldn't open the file picker.",
+                                    "Не удалось открыть выбор файла.",
+                                )
+                                .into(),
+                                Some(error.to_string()),
+                                cx,
+                            )
                         })
                     })
                     .ok();
@@ -229,6 +263,45 @@ impl ExtensionsView {
         manifests
     }
 
+    /// Where `id` comes from, and the developer folder when it is one.
+    fn source(&self, id: &str, cx: &App) -> (Source, Option<std::path::PathBuf>) {
+        let model = self.model.read(cx);
+        let registry = cx.global::<ContributionRegistry>();
+        let installed = model
+            .installed
+            .active
+            .get(id)
+            .or_else(|| model.installed.disabled.get(id));
+        let dev = model
+            .developer_folders
+            .get(id)
+            .map(|(directory, _)| directory.clone())
+            .or_else(|| {
+                crate::wasm_host::status(cx)
+                    .into_iter()
+                    .find(|status| status.owner == id)
+                    .and_then(|status| status.development_directory)
+            });
+        if installed.is_none()
+            && registry
+                .manifests()
+                .iter()
+                .any(|m| m.id == id && m.runtime == sonus_extension::Runtime::Native)
+        {
+            return (Source::BuiltIn, None);
+        }
+        if dev.is_some() {
+            return (Source::Developer, dev);
+        }
+        match installed.map(|installed| &installed.provenance) {
+            Some(InstallProvenance::Reviewed { .. }) => (Source::Installed, None),
+            Some(InstallProvenance::Developer { source }) => {
+                (Source::Developer, Some(source.clone()))
+            }
+            None => (Source::Catalog, None),
+        }
+    }
+
     fn details(&self, manifest: &ExtensionManifest, cx: &Context<Self>) -> Div {
         let model = self.model.read(cx);
         let registry = cx.global::<ContributionRegistry>();
@@ -237,21 +310,8 @@ impl ExtensionsView {
             .active
             .get(&manifest.id)
             .or_else(|| model.installed.disabled.get(&manifest.id));
-        let bundled = installed.is_none()
-            && registry
-                .manifests()
-                .iter()
-                .any(|m| m.id == manifest.id && m.runtime == sonus_extension::Runtime::Native);
-        let dev = model
-            .developer_folders
-            .get(&manifest.id)
-            .map(|(directory, _)| directory.clone())
-            .or_else(|| {
-                crate::wasm_host::status(cx)
-                    .into_iter()
-                    .find(|status| status.owner == manifest.id)
-                    .and_then(|status| status.development_directory)
-            });
+        let (source, dev) = self.source(&manifest.id, cx);
+        let bundled = source == Source::BuiltIn;
         let entry = model.catalog.as_ref().and_then(|catalog| {
             catalog
                 .extensions
@@ -272,45 +332,29 @@ impl ExtensionsView {
         let required = registry
             .required_by()
             .get(&manifest.id)
-            .map(|reasons| reasons.iter().cloned().collect::<Vec<_>>().join(", "))
-            .unwrap_or_default();
+            .is_some_and(|reasons| !reasons.is_empty());
         let busy = model.busy;
-        let source = if bundled {
-            text(cx, "Bundled · native", "Встроенное · native").to_owned()
-        } else if let Some(directory) = &dev {
-            format!(
-                "{} · {}",
-                text(cx, "Developer folder", "Папка разработчика"),
-                directory.display()
-            )
-        } else if let Some(installed) = installed {
-            match &installed.provenance {
-                InstallProvenance::Reviewed { .. } => text(
-                    cx,
-                    "Installed · reviewed index",
-                    "Установлено · проверенный индекс",
-                )
-                .to_owned(),
-                InstallProvenance::Developer { source } => format!(
-                    "{} · {}",
-                    text(cx, "Developer package", "Пакет разработчика"),
-                    source.display()
-                ),
-            }
-        } else {
-            text(cx, "Catalog", "Каталог").to_owned()
-        };
         let active = registry.is_enabled(&manifest.id);
         let id = manifest.id.clone();
         let mut card = ui::card(manifest.name.clone(), Some(&manifest.description), cx)
-            .child(ui::detail_row("ID", manifest.id.clone(), cx))
-            .child(ui::detail_row(text(cx, "Source", "Источник"), source, cx))
+            .child(
+                ui::detail_row(text(cx, "From", "Откуда"), source.label(cx), cx).when_some(
+                    dev.clone(),
+                    |this, path| {
+                        this.child(
+                            ui::muted(path.display().to_string(), cx)
+                                .min_w_0()
+                                .truncate(),
+                        )
+                    },
+                ),
+            )
             .child(ui::detail_row(
-                text(cx, "State", "Состояние"),
+                text(cx, "Status", "Состояние"),
                 if active {
-                    text(cx, "Enabled", "Включено")
+                    text(cx, "On", "Включено")
                 } else {
-                    text(cx, "Not active", "Не активно")
+                    text(cx, "Off", "Выключено")
                 },
                 cx,
             ))
@@ -323,36 +367,28 @@ impl ExtensionsView {
                 text(cx, "License", "Лицензия"),
                 manifest.license.clone(),
                 cx,
-            ))
-            .child(ui::detail_row(
-                text(cx, "Required host API", "Требуемый API"),
-                manifest.api.to_string(),
-                cx,
-            ))
-            .child(ui::detail_row(
-                text(cx, "Required by active mode", "Требуется активному режиму"),
-                if required.is_empty() {
-                    "—".to_owned()
-                } else {
-                    required.clone()
-                },
+            ));
+        if required {
+            card = card.child(ui::muted(
+                text(
+                    cx,
+                    "Needed by the open workspace",
+                    "Нужно открытому пространству",
+                ),
                 cx,
             ));
+        }
         if !bundled {
             card = card.child(ui::detail_row(
-                text(cx, "Document scope", "Доступ к документам"),
+                text(cx, "Can access", "Доступ"),
                 if model.global_access_for(&manifest.id) {
                     text(
                         cx,
-                        "All documents · explicit session approval",
-                        "Все документы · явное согласие на сессию",
+                        "All projects (this session)",
+                        "Все проекты (в этой сессии)",
                     )
                 } else {
-                    text(
-                        cx,
-                        "Only modes requiring this extension",
-                        "Только режимы, которым нужно расширение",
-                    )
+                    text(cx, "Its own workspace only", "Только своё пространство")
                 },
                 cx,
             ));
@@ -362,23 +398,18 @@ impl ExtensionsView {
                 "https://github.com/{}/{}",
                 entry.repository.owner, entry.repository.name
             );
-            let publisher_label = if dev.is_some()
-                || installed.is_some_and(|installed| {
-                    matches!(&installed.provenance, InstallProvenance::Developer { .. })
-                }) {
-                text(
-                    cx,
-                    "Catalog author (local source is unreviewed)",
-                    "Автор каталога (локальный источник не проверен)",
-                )
+            let author = if source == Source::Developer {
+                text(cx, "{author} (not verified)", "{author} (не проверено)")
+                    .replace("{author}", &entry.publisher)
             } else {
-                text(cx, "Author", "Автор")
+                entry.publisher.clone()
             };
             card = card
-                .child(ui::detail_row(publisher_label, entry.publisher.clone(), cx))
+                .child(ui::detail_row(text(cx, "Author", "Автор"), author, cx))
                 .child(
                     Button::new("extension-repository")
-                        .label(repo.clone())
+                        .label(text(cx, "Open on GitHub", "Открыть на GitHub"))
+                        .tooltip(repo.clone())
                         .small()
                         .on_click(move |_, _, cx| cx.open_url(&repo)),
                 );
@@ -386,37 +417,20 @@ impl ExtensionsView {
             installed.map(|installed| &installed.provenance)
         {
             let url = release.asset.url.clone();
-            card = card
-                .child(ui::detail_row(
-                    text(cx, "Original release", "Исходный релиз"),
-                    url.clone(),
-                    cx,
-                ))
-                .child(
-                    Button::new("extension-original-release")
-                        .label(text(
-                            cx,
-                            "Open original GitHub release",
-                            "Открыть исходный релиз GitHub",
-                        ))
-                        .small()
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                );
+            card = card.child(
+                Button::new("extension-original-release")
+                    .label(text(cx, "Release page", "Страница релиза"))
+                    .tooltip(url.clone())
+                    .small()
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+            );
         } else {
             card = card.child(ui::detail_row(
-                text(cx, "Author / repo", "Автор / репо"),
+                text(cx, "Author", "Автор"),
                 if bundled {
-                    text(
-                        cx,
-                        "Bundled with this application; no catalog provenance declared",
-                        "Поставляется с приложением; источник каталога не заявлен",
-                    )
+                    "Exaudio"
                 } else {
-                    text(
-                        cx,
-                        "Not declared in a validated catalog",
-                        "Не заявлен в проверенном каталоге",
-                    )
+                    text(cx, "Unknown", "Неизвестно")
                 },
                 cx,
             ));
@@ -424,34 +438,51 @@ impl ExtensionsView {
         if let Err(error) = manifest.check_host_compatibility() {
             card = card.child(ui::banner(
                 ui::Tone::Warning,
-                text(cx, "Incompatible version", "Несовместимая версия"),
+                text(
+                    cx,
+                    "Not compatible with this version of Exaudio",
+                    "Несовместимо с этой версией Exaudio",
+                ),
                 Some(error.to_string().into()),
                 None,
                 cx,
             ));
         }
-        if let Some(latest) = &latest {
-            card = card.child(ui::detail_row(
-                text(cx, "Compatible", "Совместимая"),
-                latest.version.to_string(),
+        if latest.is_none() && source == Source::Catalog {
+            card = card.child(ui::muted(
+                text(
+                    cx,
+                    "No compatible version in the catalog.",
+                    "В каталоге нет совместимой версии.",
+                ),
                 cx,
             ));
-        } else if !bundled && dev.is_none() {
-            card = card.child(ui::muted(text(cx, "No compatible reviewed release is available. Refresh the index or inspect its withdrawal/API requirements.", "Нет совместимой проверенной версии. Обновите индекс и проверьте требования API или отзыв версии."), cx));
         }
-        card = card.child(ui::caption(text(cx, "Permissions", "Разрешения"), cx));
         if manifest.permissions.is_empty() {
-            card = card.child(ui::muted(text(cx, "None", "Нет"), cx));
+            card = card.child(ui::muted(
+                text(
+                    cx,
+                    "This extension needs no permissions.",
+                    "Этому расширению не нужны разрешения.",
+                ),
+                cx,
+            ));
+        } else {
+            card = card.child(ui::caption(
+                text(cx, "This extension can:", "Это расширение может:"),
+                cx,
+            ));
+            for permission in &manifest.permissions {
+                card = card.child(ui::muted(model::permission_label(permission, cx), cx));
+            }
         }
-        for permission in &manifest.permissions {
-            card = card.child(ui::muted(model::permission_label(permission), cx));
-        }
-        card = card.child(ui::caption(text(cx, "Dependencies", "Зависимости"), cx));
+        card = card.child(ui::caption(text(cx, "Also needs", "Также нужно"), cx));
         if manifest.dependencies.is_empty() {
-            card = card.child(ui::muted(text(cx, "None", "Нет"), cx));
+            card = card.child(ui::muted(text(cx, "nothing", "ничего"), cx));
         }
         for (dependency, requirement) in &manifest.dependencies {
-            card = card.child(ui::muted(format!("{dependency} {requirement}"), cx));
+            let name = model::extension_name(dependency, model.catalog.as_ref(), cx);
+            card = card.child(ui::muted(format!("{name} {requirement}"), cx));
         }
         let mut controls = h_flex().gap_2().flex_wrap();
         if let Some(release) = latest.filter(|release| {
@@ -466,9 +497,9 @@ impl ExtensionsView {
                 Button::new("extension-install")
                     .primary()
                     .label(if installed.is_some() {
-                        text(cx, "Review update", "Проверить обновление")
+                        text(cx, "Update…", "Обновить…")
                     } else {
-                        text(cx, "Review install", "Проверить установку")
+                        text(cx, "Install…", "Установить…")
                     })
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -477,32 +508,34 @@ impl ExtensionsView {
                     })),
             );
         }
-        if installed.is_some() {
+        if installed.is_some() || bundled {
             let target = id.clone();
-            let removal = if model.installed.active.contains_key(&id) {
+            let removal = if active {
                 Removal::Disable
             } else {
                 Removal::Enable
             };
             controls = controls.child(
                 Button::new("extension-toggle")
-                    .label(if matches!(removal, Removal::Disable) {
-                        text(cx, "Disable", "Отключить")
+                    .label(if active {
+                        text(cx, "Turn off", "Выключить")
                     } else {
-                        text(cx, "Enable", "Включить")
+                        text(cx, "Turn on", "Включить")
                     })
-                    .disabled(busy || !required.is_empty())
+                    .disabled(busy || required)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.model.update(cx, |model, cx| {
                             model.preview_removal(target.clone(), removal, cx)
                         })
                     })),
             );
+        }
+        if installed.is_some() {
             let target = id.clone();
             controls = controls.child(
                 Button::new("extension-uninstall")
-                    .label(text(cx, "Uninstall", "Удалить"))
-                    .disabled(busy || !required.is_empty())
+                    .label(text(cx, "Remove", "Удалить"))
+                    .disabled(busy || required)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.model.update(cx, |model, cx| {
                             model.preview_removal(target.clone(), Removal::Uninstall, cx)
@@ -510,36 +543,11 @@ impl ExtensionsView {
                     })),
             );
         }
-        if bundled {
-            let target = id.clone();
-            let action = if active {
-                Removal::Disable
-            } else {
-                Removal::Enable
-            };
-            controls = controls.child(
-                Button::new("extension-native-toggle")
-                    .label(if active {
-                        text(cx, "Disable", "Отключить")
-                    } else {
-                        text(cx, "Enable", "Включить")
-                    })
-                    .disabled(busy || !required.is_empty())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.update(cx, |model, cx| {
-                            model.preview_removal(target.clone(), action, cx)
-                        })
-                    })),
-            );
-        }
-        if let Some(directory) = dev {
+        if let Some(directory) = dev.filter(|_| source == Source::Developer && installed.is_none())
+        {
             controls = controls.child(
                 Button::new("extension-reload")
-                    .label(text(
-                        cx,
-                        "Review / reload folder",
-                        "Проверить / перезагрузить папку",
-                    ))
+                    .label(text(cx, "Reload", "Перезагрузить"))
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.model.update(cx, |model, cx| {
@@ -550,14 +558,9 @@ impl ExtensionsView {
             let target = id.clone();
             controls = controls.child(
                 Button::new("extension-stop-development")
-                    .label(text(
-                        cx,
-                        "Stop development extension",
-                        "Остановить расширение",
-                    ))
+                    .label(text(cx, "Stop", "Остановить"))
                     .disabled(
-                        busy || !required.is_empty()
-                            || (!active && !model.developer_folders.contains_key(&id)),
+                        busy || required || (!active && !model.developer_folders.contains_key(&id)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.model
@@ -569,18 +572,18 @@ impl ExtensionsView {
             card = card.child(ui::muted(
                 text(
                     cx,
-                    "Bundled files are read-only and cannot be uninstalled from this page.",
-                    "Встроенные файлы доступны только для чтения и не удаляются с этой страницы.",
+                    "Built-in extensions can be turned off but not removed.",
+                    "Встроенные расширения можно выключить, но не удалить.",
                 ),
                 cx,
             ));
         }
-        if !required.is_empty() {
+        if required {
             card = card.child(ui::muted(
                 text(
                     cx,
-                    "Close the active mode/document before disabling or uninstalling.",
-                    "Закройте активный режим/документ перед отключением или удалением.",
+                    "Close the open project first.",
+                    "Сначала закройте открытый проект.",
                 ),
                 cx,
             ));
@@ -589,27 +592,206 @@ impl ExtensionsView {
     }
 
     fn consent(&self, preview: &Preview, cx: &Context<Self>) -> Div {
-        let mut card = ui::card(
-            text(
-                cx,
-                "Review changes before approval",
-                "Проверьте изменения перед подтверждением",
+        let model = self.model.read(cx);
+        let catalog = model.catalog.as_ref();
+        let installed = |id: &str| {
+            model.installed.active.contains_key(id) || model.installed.disabled.contains_key(id)
+        };
+        let (title, verb) = match preview {
+            Preview::Install {
+                owner,
+                developer,
+                plan,
+                ..
+            } => {
+                let name = developer
+                    .as_ref()
+                    .map(|source| source.manifest.name.clone())
+                    .or_else(|| {
+                        plan.releases
+                            .iter()
+                            .find(|release| &release.manifest.id == owner)
+                            .map(|release| release.manifest.name.clone())
+                    })
+                    .unwrap_or_else(|| model::extension_name(owner, catalog, cx));
+                if installed(owner) {
+                    (
+                        text(cx, "Update {name}?", "Обновить {name}?").replace("{name}", &name),
+                        text(cx, "Update", "Обновить"),
+                    )
+                } else {
+                    (
+                        text(cx, "Install {name}?", "Установить {name}?").replace("{name}", &name),
+                        text(cx, "Install", "Установить"),
+                    )
+                }
+            }
+            Preview::Folder { manifest, .. } => (
+                text(cx, "Install {name}?", "Установить {name}?").replace("{name}", &manifest.name),
+                text(cx, "Install", "Установить"),
             ),
-            None,
-            cx,
-        );
-        for line in preview.lines() {
-            card = card.child(ui::muted(line, cx));
+            Preview::Removal { name, action, .. } => match action {
+                Removal::Enable => (
+                    text(cx, "Turn on {name}?", "Включить {name}?").replace("{name}", name),
+                    text(cx, "Turn on", "Включить"),
+                ),
+                Removal::Disable => (
+                    text(cx, "Turn off {name}?", "Выключить {name}?").replace("{name}", name),
+                    text(cx, "Turn off", "Выключить"),
+                ),
+                Removal::Uninstall => (
+                    text(cx, "Remove {name}?", "Удалить {name}?").replace("{name}", name),
+                    text(cx, "Remove", "Удалить"),
+                ),
+            },
+            Preview::Rollback { .. } => (
+                text(
+                    cx,
+                    "Go back to the previous set of extensions?",
+                    "Вернуть предыдущий набор расширений?",
+                )
+                .to_owned(),
+                text(cx, "Go back", "Вернуть"),
+            ),
+        };
+        let mut card = ui::card(title, None, cx);
+        match preview {
+            Preview::Install {
+                plan, developer, ..
+            } => {
+                if let Some(source) = developer {
+                    let detail = format!(
+                        "{}\n{} bytes\nSHA-256 {}",
+                        source.source.display(),
+                        source.bytes,
+                        source.sha256
+                    );
+                    card = card.child(
+                        v_flex().gap_1().child(ui::banner(
+                            ui::Tone::Warning,
+                            text(
+                                cx,
+                                "This file isn't from the catalog. Only install extensions you trust.",
+                                "Этот файл не из каталога. Устанавливайте только расширения, которым доверяете.",
+                            ),
+                            None,
+                            None,
+                            cx,
+                        ))
+                        .child(ui::details(detail.into(), cx)),
+                    );
+                    card = card.child(ui::muted(
+                        format!("{} {}", source.manifest.name, source.manifest.version),
+                        cx,
+                    ));
+                }
+                for release in &plan.releases {
+                    card = card.child(ui::muted(
+                        format!("{} {}", release.manifest.name, release.manifest.version),
+                        cx,
+                    ));
+                }
+                if plan.requested_permissions.values().any(|p| !p.is_empty()) {
+                    card = card.child(ui::caption(
+                        text(cx, "It will be able to:", "Оно сможет:"),
+                        cx,
+                    ));
+                    for (id, permissions) in &plan.requested_permissions {
+                        if plan.requested_permissions.len() > 1 {
+                            card =
+                                card.child(ui::muted(model::extension_name(id, catalog, cx), cx));
+                        }
+                        for permission in permissions {
+                            card =
+                                card.child(ui::muted(model::permission_label(permission, cx), cx));
+                        }
+                    }
+                }
+            }
+            Preview::Folder {
+                directory,
+                manifest,
+                ..
+            } => {
+                card = card
+                    .child(ui::muted(
+                        text(
+                            cx,
+                            "Developer folder. Changes you make in it are loaded automatically.",
+                            "Папка разработчика. Изменения в ней подхватываются автоматически.",
+                        ),
+                        cx,
+                    ))
+                    .child(ui::muted(directory.display().to_string(), cx))
+                    .child(ui::muted(
+                        format!("{} {}", manifest.name, manifest.version),
+                        cx,
+                    ));
+                if !manifest.permissions.is_empty() {
+                    card = card.child(ui::caption(
+                        text(cx, "It will be able to:", "Оно сможет:"),
+                        cx,
+                    ));
+                    for permission in &manifest.permissions {
+                        card = card.child(ui::muted(model::permission_label(permission, cx), cx));
+                    }
+                }
+            }
+            Preview::Removal {
+                name,
+                version,
+                action,
+                ..
+            } => {
+                card = card.child(ui::muted(format!("{name} {version}"), cx));
+                if !matches!(action, Removal::Enable) {
+                    card = card.child(ui::muted(
+                        text(
+                            cx,
+                            "Its panels and commands go away.",
+                            "Его панели и команды исчезнут.",
+                        ),
+                        cx,
+                    ));
+                }
+            }
+            Preview::Rollback { lines, .. } => {
+                for line in lines {
+                    card = card.child(ui::muted(line.clone(), cx));
+                }
+            }
         }
-        card = card.child(ui::muted(text(cx, "Approval grants exactly the permissions shown above to these versions. Dependencies are installed as one set. Cancel leaves the current installation unchanged.", "Подтверждение выдаёт перечисленные разрешения именно этим версиям. Зависимости устанавливаются единым набором. Отмена сохраняет текущую установку."), cx));
-        if self.model.read(cx).document_scope_available() {
-            let global_access = self.model.read(cx).global_document_access;
-            card = card.child(Button::new("extension-global-document-consent")
-                .label(if global_access { text(cx, "All documents: allowed for this session", "Все документы: разрешено на эту сессию") } else { text(cx, "All documents: not allowed (click to opt in)", "Все документы: не разрешено (нажмите для согласия)") })
-                .selected(global_access)
-                .disabled(self.model.read(cx).busy)
-                .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |model, cx| { model.global_document_access = !model.global_document_access; cx.notify(); }))))
-                .child(ui::muted(text(cx, "Default access is limited to modes that require the selected extension. This additional opt-in applies only to the selected extension ID, never its dependencies, and resets at restart. Manifest permissions are still enforced.", "По умолчанию доступны только режимы, которым требуется выбранное расширение. Дополнительное согласие относится только к выбранному ID, не к зависимостям, и сбрасывается при перезапуске. Разрешения манифеста всё равно проверяются."), cx));
+        for blocker in preview.blockers() {
+            card = card.child(ui::error_block(
+                text(
+                    cx,
+                    "Can't continue: {sentence}",
+                    "Нельзя продолжить: {sentence}",
+                )
+                .replace("{sentence}", blocker),
+                None,
+                cx,
+            ));
+        }
+        if model.document_scope_available() {
+            let global_access = model.global_document_access;
+            card = card.child(
+                Switch::new("extension-global-document-consent")
+                    .checked(global_access)
+                    .disabled(model.busy)
+                    .label(text(
+                        cx,
+                        "Allow access to all projects until I quit Exaudio",
+                        "Разрешить доступ ко всем проектам до выхода из Exaudio",
+                    ))
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        let checked = *checked;
+                        this.model.update(cx, |model, cx| {
+                            model.global_document_access = checked;
+                            cx.notify();
+                        })
+                    })),
+            );
         }
         card.child(
             h_flex()
@@ -617,8 +799,8 @@ impl ExtensionsView {
                 .child(
                     Button::new("approve-extension-plan")
                         .primary()
-                        .label(text(cx, "Approve and apply", "Разрешить и применить"))
-                        .disabled(self.model.read(cx).busy || !preview.can_apply())
+                        .label(verb)
+                        .disabled(model.busy || !preview.can_apply())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.model.update(cx, |model, cx| model.approve(cx))
                         })),
@@ -626,7 +808,7 @@ impl ExtensionsView {
                 .child(
                     Button::new("dismiss-extension-plan")
                         .label(text(cx, "Cancel", "Отмена"))
-                        .disabled(self.model.read(cx).busy)
+                        .disabled(model.busy)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.model.update(cx, |model, cx| {
                                 model.preview = None;
@@ -635,6 +817,153 @@ impl ExtensionsView {
                         })),
                 ),
         )
+    }
+
+    fn advanced(&self, cx: &Context<Self>) -> Div {
+        let model = self.model.read(cx);
+        let busy = model.busy;
+        let offline = model.offline;
+        let can_rollback = model.installed.previous.is_some();
+        let logs = model.logs.clone();
+        let mut runtime_logs: Vec<String> = Vec::new();
+        for status in crate::wasm_host::status(cx) {
+            let name = model::extension_name(&status.owner, model.catalog.as_ref(), cx);
+            runtime_logs.push(format!("{name}  {} · {}", status.state, status.last_event));
+            runtime_logs.extend(status.logs.iter().map(|line| format!("{name}  {line}")));
+        }
+        runtime_logs.extend(cx.global::<ContributionRegistry>().errors.iter().map(
+            |(owner, error)| {
+                format!(
+                    "{}  {error}",
+                    model::extension_name(owner, model.catalog.as_ref(), cx)
+                )
+            },
+        ));
+        v_flex()
+            .gap_4()
+            .child(
+                ui::card(text(cx, "Install", "Установка"), None, cx)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().child(Input::new(&self.url)))
+                            .child(
+                                Button::new("review-extension-url")
+                                    .label(text(cx, "Install from link…", "Установить по ссылке…"))
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, _, cx| this.preview_url(cx))),
+                            ),
+                    )
+                    .child(ui::muted(
+                        text(
+                            cx,
+                            "Only links listed in the catalog are accepted.",
+                            "Принимаются только ссылки из каталога.",
+                        ),
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("review-extension-file")
+                                    .label(text(cx, "Install from file…", "Установить из файла…"))
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.choose(false, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("review-extension-folder")
+                                    .label(text(
+                                        cx,
+                                        "Open developer folder…",
+                                        "Открыть папку разработчика…",
+                                    ))
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.choose(true, window, cx)
+                                    })),
+                            ),
+                    )
+                    .child(ui::muted(
+                        text(
+                            cx,
+                            "Changes in a developer folder are reloaded automatically. If a reload fails, the last working version keeps running.",
+                            "Изменения в папке разработчика подхватываются автоматически. Если перезагрузка не удалась, продолжает работать последняя рабочая версия.",
+                        ),
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("offline-extensions")
+                                    .label(text(cx, "Work offline", "Без сети"))
+                                    .selected(offline)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.model
+                                            .update(cx, |model, cx| model.refresh(true, cx))
+                                    })),
+                            )
+                            .child(
+                                Button::new("rollback-extensions")
+                                    .label(text(
+                                        cx,
+                                        "Restore previous set…",
+                                        "Вернуть предыдущий набор…",
+                                    ))
+                                    .disabled(busy || !can_rollback)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.model
+                                            .update(cx, |model, cx| model.preview_rollback(cx))
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                ui::card(
+                    text(cx, "Catalog source", "Источник каталога"),
+                    Some(text(
+                        cx,
+                        "Extensions are listed and verified by this catalog. Change it only if you know who runs the new one.",
+                        "Этот каталог перечисляет и проверяет расширения. Меняйте его, только если знаете, кто ведёт новый.",
+                    )),
+                    cx,
+                )
+                .child(Input::new(&self.index))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("save-extension-index")
+                                .label(text(cx, "Use this source", "Использовать этот источник"))
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.save_index(cx))),
+                        )
+                        .child(
+                            Button::new("default-extension-index")
+                                .ghost()
+                                .label(text(cx, "Default", "По умолчанию"))
+                                .tooltip(DEFAULT_INDEX)
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.index.update(cx, |input, cx| {
+                                        input.set_value(DEFAULT_INDEX, window, cx)
+                                    });
+                                    this.save_index(cx);
+                                })),
+                        ),
+                ),
+            )
+            .child(
+                ui::card(text(cx, "Log", "Журнал"), None, cx).children(
+                    logs.into_iter()
+                        .chain(runtime_logs)
+                        .map(|line| ui::muted(line, cx).font_family("monospace")),
+                ),
+            )
     }
 }
 
@@ -652,7 +981,7 @@ impl Render for ExtensionsView {
         let offline = model.offline;
         let cached = model.from_cache;
         let catalog_available = model.catalog.is_some();
-        let can_rollback = model.installed.previous.is_some();
+        let has_errors = !cx.global::<ContributionRegistry>().errors.is_empty();
         let preview = model
             .preview
             .as_ref()
@@ -687,43 +1016,65 @@ impl Render for ExtensionsView {
             .contains(&query)
         };
         let visible: Vec<_> = inventory.values().filter(matches).collect();
-        let runtime = crate::wasm_host::status(cx);
+        let registry = cx.global::<ContributionRegistry>();
         let rows: Vec<_> = visible
             .iter()
             .map(|manifest| {
                 let id = manifest.id.clone();
-                let installed = model
-                    .installed
-                    .active
+                let (source, _) = self.source(&id, cx);
+                let enabled = registry.is_enabled(&id);
+                let required = registry
+                    .required_by()
                     .get(&id)
-                    .or_else(|| model.installed.disabled.get(&id));
-                let source = if manifest.runtime == sonus_extension::Runtime::Native {
-                    text(cx, "bundled", "встроено")
-                } else if model.developer_folders.contains_key(&id)
-                    || runtime
-                        .iter()
-                        .any(|status| status.owner == id && status.development_directory.is_some())
-                    || installed.is_some_and(|installed| {
-                        matches!(&installed.provenance, InstallProvenance::Developer { .. })
-                    })
-                {
-                    text(cx, "developer", "разработка")
-                } else if installed.is_some() {
-                    text(cx, "installed", "установлено")
-                } else {
-                    text(cx, "catalog", "каталог")
-                };
-                Button::new(SharedString::from(format!("extension-{}", id)))
-                    .label(format!(
-                        "{} · {} · {source}",
-                        manifest.name, manifest.version
-                    ))
+                    .is_some_and(|reasons| !reasons.is_empty());
+                let selected = self.selected.as_deref() == Some(id.as_str());
+                let select_id = id.clone();
+                let toggle_id = id.clone();
+                h_flex()
                     .w_full()
-                    .selected(self.selected.as_deref() == Some(id.as_str()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = Some(id.clone());
-                        cx.notify();
-                    }))
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Button::new(SharedString::from(format!("extension-{}", id)))
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .items_start()
+                                    .gap_0p5()
+                                    .child(manifest.name.clone())
+                                    .child(ui::muted(
+                                        format!("{} · {}", manifest.version, source.label(cx)),
+                                        cx,
+                                    )),
+                            )
+                            .selected(selected)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.selected = Some(select_id.clone());
+                                cx.notify();
+                            })),
+                    )
+                    .when(source != Source::Catalog, |this| {
+                        this.child(
+                            Switch::new(SharedString::from(format!("extension-switch-{}", id)))
+                                .checked(enabled)
+                                .disabled(busy || required)
+                                .accessibility_label(manifest.name.clone())
+                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                    let action = if *checked {
+                                        Removal::Enable
+                                    } else {
+                                        Removal::Disable
+                                    };
+                                    let id = toggle_id.clone();
+                                    this.selected = Some(id.clone());
+                                    this.model.update(cx, |model, cx| {
+                                        model.preview_removal(id, action, cx)
+                                    })
+                                })),
+                        )
+                    })
             })
             .collect();
         let selected = self
@@ -732,51 +1083,77 @@ impl Render for ExtensionsView {
             .and_then(|id| visible.iter().find(|manifest| &manifest.id == id).copied())
             .or_else(|| visible.first().copied());
         let details = selected.map(|manifest| self.details(manifest, cx));
-        let logs = self.model.read(cx).logs.clone();
-        let mut runtime_logs: Vec<_> = runtime
-            .into_iter()
-            .map(|status| {
-                format!(
-                    "{} · {} · {}\n{}",
-                    status.owner,
-                    status.state,
-                    status.last_event,
-                    status.logs.join("\n")
-                )
-            })
-            .collect();
-        runtime_logs.extend(
-            cx.global::<ContributionRegistry>()
-                .errors
-                .iter()
-                .map(|(owner, error)| format!("{owner}: {error}")),
-        );
-        let mut page = v_flex().id("extensions-page").track_focus(&self.focus).size_full().overflow_y_scroll().p_6().gap_4()
-            .child(h_flex().gap_3()
-                .child(Button::new("extensions-close").label(text(cx, "Close", "Закрыть")).on_click(|_, window, cx| window.close_dialog(cx)))
-                .child(div().text_xl().child(text(cx, "Extensions / Marketplace", "Расширения / Маркетплейс"))))
-            .child(ui::muted(text(cx, "Bundled extensions work offline. Marketplace packages are sandboxed WASM; native DLL loading is not supported.", "Встроенные расширения работают без сети. Пакеты маркетплейса — изолированный WASM; загрузка сторонних DLL запрещена."), cx))
-            .child(h_flex().gap_2()
-                .child(div().flex_1().child(Input::new(&self.search)))
-                .child(Button::new("refresh-extensions").label(text(cx, "Refresh", "Обновить")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |model, cx| model.refresh(false, cx)))))
-                .child(Button::new("offline-extensions").label(text(cx, "Use cache / offline", "Кэш / без сети")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |model, cx| model.refresh(true, cx)))))
-                .child(Button::new("retry-extension-activation").label(text(cx, "Retry activation", "Повторить активацию")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |model, cx| model.restore_startup(cx)))))
-                .child(Button::new("rollback-extensions").label(text(cx, "Review rollback", "Проверить откат")).disabled(busy || !can_rollback).on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |model, cx| model.preview_rollback(cx))))))
-            .child(ui::detail_row(text(cx, "Catalog state", "Состояние каталога"), if !catalog_available { text(cx, "Unavailable · bundled extensions remain available", "Недоступен · встроенные расширения доступны") } else if offline { text(cx, "Offline · validated cache only", "Без сети · проверенный кэш") } else if cached { text(cx, "Cached · inspect refresh status below", "Кэш · состояние обновления ниже") } else { text(cx, "Online · validated index", "Онлайн · проверенный индекс") }, cx))
-            .child(ui::muted(status, cx));
+        let catalog_state = if !catalog_available {
+            text(cx, "Catalog: unavailable", "Каталог: недоступен")
+        } else if offline {
+            text(cx, "Catalog: offline", "Каталог: без сети")
+        } else if cached {
+            text(cx, "Catalog: cached", "Каталог: из кэша")
+        } else {
+            text(cx, "Catalog: up to date", "Каталог: обновлён")
+        };
+        let advanced = self.advanced;
+        let mut page = v_flex()
+            .id("extensions-page")
+            .track_focus(&self.focus)
+            .size_full()
+            .overflow_y_scroll()
+            .p_6()
+            .gap_4()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        Button::new("extensions-close")
+                            .label(text(cx, "Close", "Закрыть"))
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(div().text_xl().child(text(cx, "Extensions", "Расширения"))),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_1().child(Input::new(&self.search)))
+                    .child(
+                        Button::new("refresh-extensions")
+                            .label(text(cx, "Refresh catalog", "Обновить каталог"))
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.update(cx, |model, cx| model.refresh(false, cx))
+                            })),
+                    )
+                    .when(has_errors || error.is_some(), |this| {
+                        this.child(
+                            Button::new("retry-extension-activation")
+                                .label(text(cx, "Retry", "Повторить"))
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.model.update(cx, |model, cx| model.restore_startup(cx))
+                                })),
+                        )
+                    }),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(ui::muted(catalog_state, cx))
+                    .child(ui::muted(status, cx)),
+            );
         if let Some(error) = error {
             page = page.child(ui::banner(
                 ui::Tone::Danger,
-                text(cx, "Operation failed", "Операция не выполнена"),
-                Some(error.into()),
-                None,
+                text(cx, "Something went wrong", "Что-то пошло не так"),
+                Some(error.headline.into()),
+                error
+                    .detail
+                    .map(|detail| ui::details(detail.into(), cx).into_any_element()),
                 cx,
             ));
         }
         if busy {
             page = page.child(
                 Button::new("cancel-extension-operation")
-                    .label(text(cx, "Cancel pending work", "Отменить незавершённое"))
+                    .label(text(cx, "Cancel", "Отмена"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |model, cx| model.cancel(cx))
                     })),
@@ -789,7 +1166,7 @@ impl Render for ExtensionsView {
             h_flex()
                 .items_start()
                 .gap_4()
-                .child(v_flex().w(rems(20.)).gap_2().children(rows))
+                .child(v_flex().w(rems(22.)).gap_2().children(rows))
                 .child(
                     div()
                         .flex_1()
@@ -798,31 +1175,39 @@ impl Render for ExtensionsView {
                 ),
         );
         if inventory.is_empty() {
-            page = page.child(ui::muted(text(cx, "No extensions registered and no validated catalog available. Check the index source and refresh.", "Нет зарегистрированных расширений и проверенного каталога. Проверьте источник индекса и обновите."), cx));
+            page = page.child(ui::muted(
+                text(
+                    cx,
+                    "No extensions available. Check the catalog source under Advanced.",
+                    "Расширения недоступны. Проверьте источник каталога в разделе «Дополнительно».",
+                ),
+                cx,
+            ));
         } else if visible.is_empty() {
             page = page.child(ui::muted(
                 text(
                     cx,
-                    "No matching extensions. Clear or change the search query.",
-                    "Расширения не найдены. Очистите или измените поиск.",
+                    "Nothing matches your search.",
+                    "По запросу ничего не найдено.",
                 ),
                 cx,
             ));
         }
-        page.child(ui::card(text(cx, "Install package / development", "Установить пакет / разработка"), None, cx)
-            .child(h_flex().gap_2().child(div().flex_1().child(Input::new(&self.url)))
-                .child(Button::new("review-extension-url").label(text(cx, "Review URL", "Проверить URL")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.preview_url(cx)))))
-            .child(ui::muted(text(cx, "URLs must exactly match a release in the reviewed index. Unindexed files require separate developer-source approval.", "URL должен точно совпадать с релизом проверенного индекса. Для неизвестного файла требуется отдельное разрешение источника разработчика."), cx))
-            .child(h_flex().gap_2()
-                .child(Button::new("review-extension-file").label(text(cx, "Open .sonusext…", "Открыть .sonusext…")).disabled(busy).on_click(cx.listener(|this, _, window, cx| this.choose(false, window, cx))))
-                .child(Button::new("review-extension-folder").label(text(cx, "Load developer folder…", "Загрузить папку разработчика…")).disabled(busy).on_click(cx.listener(|this, _, window, cx| this.choose(true, window, cx)))))
-            .child(ui::muted(text(cx, "Developer folders are explicitly trusted, watched with debounce, and never loaded as native code. Invalid reloads retain the last working instance; inspect logs below.", "Папки разработчика требуют явного доверия и отслеживаются с задержкой. Нативный код не загружается. Ошибка обновления сохраняет рабочий экземпляр; журнал ниже."), cx)))
-            .child(ui::card(text(cx, "Trusted index source", "Доверенный источник индекса"), None, cx)
-                .child(ui::muted(text(cx, "Changing this source changes whom you trust to publish reviewed packages. A configured endpoint is not proof the repository has been published.", "Смена источника меняет издателя, которому вы доверяете. Настроенный адрес не означает, что репозиторий уже опубликован."), cx))
-                .child(Input::new(&self.index))
-                .child(ui::muted(format!("Default: {DEFAULT_INDEX}"), cx))
-                .child(Button::new("save-extension-index").label(text(cx, "Trust source and refresh", "Доверять источнику и обновить")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.save_index(cx)))))
-            .child(ui::card(text(cx, "Extension logs", "Журнал расширений"), None, cx)
-                .children(logs.into_iter().chain(runtime_logs).map(|line| ui::muted(line, cx))))
+        page.child(
+            Button::new("extensions-advanced")
+                .ghost()
+                .small()
+                .icon(if advanced {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .label(text(cx, "Advanced", "Дополнительно"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.advanced = !this.advanced;
+                    cx.notify();
+                })),
+        )
+        .when(advanced, |this| this.child(self.advanced(cx)))
     }
 }

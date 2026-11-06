@@ -41,6 +41,7 @@ use studio_editor::transcript_model::{TranscriptActionCommand, TranscriptRowView
 
 use crate::editor::model::{EditorEvent, EditorModel};
 use crate::keymap::{ActiveKeymap, keystroke_string};
+use crate::screens::ui::localized;
 use layout::{
     ACTIONS_W, CELL_PX, ID_W, LINT_W, REVIEWER_W, RowMetrics, TEXT_PX, TIME_W, TRACK_W, TextMetrics,
 };
@@ -167,7 +168,9 @@ impl TranscriptView {
                 .auto_grow(1, MAX_EDITOR_ROWS)
                 .soft_wrap(true)
         });
-        let time_input = cx.new(|cx| InputState::new(window, cx).placeholder("mm:ss.cc"));
+        let time_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(localized(cx, "mm:ss.cc", "мм:сс.сс"))
+        });
 
         let view = cx.entity().downgrade();
         let subscriptions = vec![
@@ -436,9 +439,9 @@ impl TranscriptView {
         self.text_input.update(cx, |input, cx| {
             input.set_placeholder(
                 if transcription {
-                    "What was said…"
+                    localized(cx, "What was said…", "Что было сказано…")
                 } else {
-                    "Annotation…"
+                    localized(cx, "Annotation…", "Аннотация…")
                 },
                 window,
                 cx,
@@ -1027,12 +1030,23 @@ impl TranscriptView {
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.muted_foreground)
-            .when(cells.id, |el| el.child(label("#", Some(ID_W))))
-            .when(cells.track, |el| el.child(label("Speaker", Some(TRACK_W))))
-            .when(cells.start, |el| el.child(label("Start", Some(TIME_W))))
-            .when(cells.end, |el| el.child(label("End", Some(TIME_W))))
+            .when(cells.id, |el| {
+                el.child(label(localized(cx, "#", "№"), Some(ID_W)))
+            })
+            .when(cells.track, |el| {
+                el.child(label(localized(cx, "Speaker", "Спикер"), Some(TRACK_W)))
+            })
+            .when(cells.start, |el| {
+                el.child(label(localized(cx, "Start", "Начало"), Some(TIME_W)))
+            })
+            .when(cells.end, |el| {
+                el.child(label(localized(cx, "End", "Конец"), Some(TIME_W)))
+            })
             .when(cells.reviewer, |el| {
-                el.child(label("Reviewer", Some(REVIEWER_W)))
+                el.child(label(
+                    localized(cx, "Reviewer", "Ревьюер"),
+                    Some(REVIEWER_W),
+                ))
             })
             .when(cells.text, |el| {
                 el.child(
@@ -1041,7 +1055,7 @@ impl TranscriptView {
                         .min_w_0()
                         .relative()
                         .pl(TEXT_PX)
-                        .child("Text")
+                        .child(localized(cx, "Text", "Текст"))
                         .child(
                             canvas(
                                 move |bounds, window, _| {
@@ -1063,7 +1077,7 @@ impl TranscriptView {
                         .w(LINT_W)
                         .flex_none()
                         .justify_center()
-                        .child("Issues"),
+                        .child(localized(cx, "Checks", "Проверки")),
                 )
             })
             .when(cells.actions, |el| el.child(div().w(ACTIONS_W).flex_none()))
@@ -1071,8 +1085,12 @@ impl TranscriptView {
 
     fn render_empty_state(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let title = "No segments yet";
-        let description = "Click and drag on the waveform above to create a region, then add text.";
+        let title = localized(cx, "No segments yet", "Пока нет сегментов");
+        let description = localized(
+            cx,
+            "Drag across the waveform to create a segment, then type what was said.",
+            "Выделите участок на волне, чтобы создать сегмент, и введите текст.",
+        );
 
         v_flex()
             .flex_1()

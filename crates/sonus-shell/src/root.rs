@@ -5,11 +5,10 @@ use crate::{
     ContributionRegistry, DocumentOrigin, ModeContribution, ModeLaunchContext,
     ProviderContribution, ProviderEnvironment, ProviderInstance, ProviderRegistry, ProviderStatus,
     editor::{EditorScreen, EditorScreenEvent, model::EditorModel},
-    screens::{self, accounts},
+    screens::{self, accounts, ui},
     tray,
 };
 use gpui_kit::component::button::Button;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
 use sonus_extension::ModeLaunch;
@@ -97,9 +96,14 @@ impl ShellHandle {
             .provider_type(&instance.provider)
         {
             Some(provider) => (provider.status)(instance, cx),
-            None => {
-                ProviderStatus::Error(format!("Provider is not installed: {}", instance.provider))
-            }
+            None => ProviderStatus::Error(
+                ui::localized(
+                    cx,
+                    "This account type isn't installed.",
+                    "Этот тип аккаунта не установлен.",
+                )
+                .into(),
+            ),
         }
     }
     pub fn open_document(
@@ -149,7 +153,14 @@ impl ShellHandle {
             handler(self.clone(), arguments, window, cx);
         } else {
             window.push_notification(
-                Notification::error(format!("Document command unavailable: {command}")),
+                ui::error_notification(
+                    ui::localized(
+                        cx,
+                        "This command isn't available.",
+                        "Эта команда недоступна.",
+                    ),
+                    Some(command.to_string().into()),
+                ),
                 cx,
             );
         }
@@ -160,7 +171,14 @@ impl ShellHandle {
             handler(self.clone(), window, cx);
         } else {
             window.push_notification(
-                Notification::error(format!("Command unavailable: {command}")),
+                ui::error_notification(
+                    ui::localized(
+                        cx,
+                        "This command isn't available.",
+                        "Эта команда недоступна.",
+                    ),
+                    Some(command.to_string().into()),
+                ),
                 cx,
             );
         }
@@ -213,7 +231,14 @@ impl StudioRoot {
         if self.editor_model(cx).is_some_and(|m| {
             m.read(cx).doc().session().is_dirty || m.read(cx).doc().has_pending_drafts()
         }) {
-            anyhow::bail!("Save or close the current document before opening another");
+            anyhow::bail!(
+                "{}",
+                ui::localized(
+                    cx,
+                    "Save or close the open project first.",
+                    "Сначала сохраните или закройте открытый проект."
+                )
+            );
         }
         if !cx
             .global::<ContributionRegistry>()
@@ -221,7 +246,13 @@ impl StudioRoot {
             .iter()
             .any(|m| m.id == origin.mode_id)
         {
-            anyhow::bail!("The document's mode is not installed: {}", origin.mode_id);
+            return Err(
+                anyhow::anyhow!("mode {} is not installed", origin.mode_id).context(ui::localized(
+                    cx,
+                    "This project's workspace isn't installed.",
+                    "Рабочее пространство этого проекта не установлено.",
+                )),
+            );
         }
         cx.global_mut::<ContributionRegistry>()
             .enter_mode(&origin.mode_id)?;
@@ -293,7 +324,7 @@ impl StudioRoot {
             let mode = match entered {
                 Ok(mode) => mode,
                 Err(error) => {
-                    window.push_notification(Notification::error(error.to_string()), cx);
+                    window.push_notification(ui::workspace_open_failed(&error, cx), cx);
                     return;
                 }
             };
@@ -336,7 +367,7 @@ impl StudioRoot {
             let width = (window.viewport_size().width - px(64.)).min(px(1200.));
             let height = (window.viewport_size().height - px(160.)).max(px(240.));
             dialog
-                .title(screens::ui::localized(cx, "Add-ons", "Дополнения"))
+                .title(ui::localized(cx, "Extensions", "Расширения"))
                 .w(width)
                 .child(div().h(height).min_h_0().child(view.clone()))
         });
@@ -429,13 +460,13 @@ fn resolve_instance(
     let registry = cx.global::<ProviderRegistry>();
     let Some(provider) = registry.provider_type(&provider_id).cloned() else {
         window.push_notification(
-            Notification::error(format!(
-                "{} needs the {provider_id} provider, which is not installed",
-                mode.label
-            )),
+            ui::error_notification(
+                ui::localized(cx, "Couldn't open {mode}.", "Не удалось открыть {mode}.")
+                    .replace("{mode}", &mode.label),
+                Some(format!("account type {provider_id} is not installed").into()),
+            ),
             cx,
         );
-        handle.show_home(window, cx);
         return;
     };
     let instances = registry.instances(&provider_id);
@@ -443,11 +474,7 @@ fn resolve_instance(
         return show_setup(handle, mode, provider, None, window, cx);
     }
     let Some(instance) = registry.selected(&provider_id) else {
-        let title = format!(
-            "{} · {}",
-            mode.label,
-            screens::ui::localized(cx, "Choose an account", "Выберите аккаунт")
-        );
+        let title = ui::localized(cx, "Which account?", "Какой аккаунт?");
         let pick_handle = handle.clone();
         let pick_mode = mode.clone();
         let pick_provider = provider_id.clone();
@@ -494,7 +521,17 @@ fn resolve_instance(
             show_setup(handle, mode, provider, Some(instance), window, cx)
         }
         ProviderStatus::Error(error) => {
-            window.push_notification(Notification::error(error), cx);
+            window.push_notification(
+                ui::error_notification(
+                    ui::localized(
+                        cx,
+                        "Couldn't check the sign-in.",
+                        "Не удалось проверить вход.",
+                    ),
+                    Some(error.into()),
+                ),
+                cx,
+            );
             show_setup(handle, mode, provider, Some(instance), window, cx)
         }
     }
@@ -510,11 +547,8 @@ fn show_setup(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let title = format!(
-        "{} {}",
-        screens::ui::localized(cx, "Sign in to", "Вход в"),
-        mode.label
-    );
+    let title =
+        ui::localized(cx, "Sign in to {mode}", "Вход: {mode}").replace("{mode}", &mode.label);
     let done_handle = handle.clone();
     let on_done: accounts::SetupOutcome = Box::new(move |instance, window, cx| match instance {
         Some(instance) => launch(done_handle, mode, Some(instance), window, cx),
@@ -592,7 +626,7 @@ impl Render for StudioRoot {
                             )
                             .child(
                                 Button::new("mode-extensions")
-                                    .label(screens::ui::localized(cx, "Add-ons", "Дополнения"))
+                                    .label(ui::localized(cx, "Extensions", "Расширения"))
                                     .on_click(move |_, window, cx| {
                                         extensions.show_extensions(window, cx)
                                     }),
@@ -630,8 +664,16 @@ fn demo_audio_dir() -> Option<PathBuf> {
 
 pub fn open_demo(shell: &ShellHandle, window: &mut Window, cx: &mut App) -> anyhow::Result<()> {
     let project = studio_editor::load_sample_project()?;
-    let audio = demo_audio_dir()
-        .ok_or_else(|| anyhow::anyhow!("Demo audio is missing from this installation."))?;
+    let audio = demo_audio_dir().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            ui::localized(
+                cx,
+                "The demo audio is missing from this installation.",
+                "В этой установке нет демо-аудио."
+            )
+        )
+    })?;
     let environment = ProviderEnvironment::local(project.id.clone(), Some(audio));
     shell.open_document(
         project,

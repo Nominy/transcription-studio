@@ -23,8 +23,8 @@ cargo install --locked --git @@SDK_URL@@ --rev @@SDK_COMMIT@@ sonus-extension-in
 cargo build --release --target wasm32-unknown-unknown
 wasm-tools component new target/wasm32-unknown-unknown/release/@@CRATE_ARTIFACT@@.wasm -o module.wasm
 wasm-tools validate module.wasm
-sonus-extension-index pack manifest.json module.wasm @@EXTENSION_ID@@-@@VERSION@@.sonusext LICENSE
-sonus-extension-index preview-developer @@EXTENSION_ID@@-@@VERSION@@.sonusext
+sonus-extension-index pack manifest.json module.wasm @@EXTENSION_ID@@-@@VERSION@@.exaudio LICENSE
+sonus-extension-index preview-developer @@EXTENSION_ID@@-@@VERSION@@.exaudio
 ```
 
 Commit the generated `Cargo.lock` before tagging a release so dependency resolution is
@@ -45,7 +45,7 @@ repository. It checks the repository identity and exact `v<manifest version>` ta
 the real WASM component, validates and packages it, and generates the index record from the
 actual archive bytes and source commit. The publish job creates a new GitHub release with:
 
-- `@@EXTENSION_ID@@-VERSION.sonusext`: the installable package;
+- `@@EXTENSION_ID@@-VERSION.exaudio`: the installable package;
 - `index-entry.json`: the actual catalog extension/release record;
 - `build-Cargo.lock`: exact resolved Rust dependencies;
 - `build-source.json`: author source and SDK commit identities and component-tool version.

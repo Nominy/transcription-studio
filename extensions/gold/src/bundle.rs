@@ -114,7 +114,7 @@ impl GoldBuilds {
                 tokio::task::spawn_blocking(move || install_archive(&root, &pin, &archive))
                     .await
                     .map_err(|error| {
-                        InferenceError::other(format!("Installing Gold's runtime failed: {error}"))
+                        InferenceError::other(format!("Couldn't install the AI engine. ({error})"))
                     })
                     .and_then(|result| result)
             }
@@ -129,7 +129,7 @@ impl GoldBuilds {
     async fn download(&self, archive: &Path, progress: &ProgressSink) -> InferenceResult<()> {
         let failed = |detail: String| {
             InferenceError::other(format!(
-                "Could not download Gold's inference runtime {} from {}: {detail}",
+                "Couldn't download the AI engine. ({} from {}: {detail})",
                 self.pin.release(),
                 self.pin.url
             ))
@@ -211,7 +211,9 @@ fn install_archive(root: &Path, pin: &GoldBuildPin, archive: &Path) -> Inference
 
 fn extract(archive: &Path, destination: &Path) -> InferenceResult<()> {
     let invalid = |detail: String| {
-        InferenceError::other(format!("Gold's runtime archive is invalid: {detail}"))
+        InferenceError::other(format!(
+            "Couldn't install the AI engine. (archive is invalid: {detail})"
+        ))
     };
     let file = File::open(archive).map_err(|error| io_error("opening", archive, error))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|error| invalid(error.to_string()))?;
@@ -241,7 +243,9 @@ fn extract(archive: &Path, destination: &Path) -> InferenceResult<()> {
 /// The extracted build must be a Gold host build with the pinned extension identity.
 fn check_build(dir: &Path, pin: &GoldBuildPin) -> InferenceResult<()> {
     let invalid = |detail: String| {
-        InferenceError::other(format!("Gold's runtime archive is invalid: {detail}"))
+        InferenceError::other(format!(
+            "Couldn't install the AI engine. (archive is invalid: {detail})"
+        ))
     };
     if !dir.join("inference.html").is_file() {
         return Err(invalid("inference.html is missing".to_string()));
@@ -335,7 +339,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn io_error(action: &str, path: &Path, error: std::io::Error) -> InferenceError {
     InferenceError::other(format!(
-        "Installing Gold's runtime failed while {action} {}: {error}",
+        "Couldn't install the AI engine. ({action} {}: {error})",
         path.display()
     ))
 }
