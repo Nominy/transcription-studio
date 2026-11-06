@@ -569,10 +569,25 @@ impl TranscriptView {
         cx.notify();
     }
 
+    /// Leaves the row editor and commits its typed text. The textarea's own `Blur` event is
+    /// not relied on: focus moves initiated here do not always produce one.
     fn blur_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.text_input.focus_handle(cx).is_focused(window) {
             self.focus_handle.focus(window, cx);
         }
+        self.text_focused = self.text_input.focus_handle(cx).is_focused(window);
+        self.commit_text_row(cx);
+    }
+
+    /// Commits the mounted row's draft to the document (no-op when nothing changed).
+    fn commit_text_row(&mut self, cx: &mut Context<Self>) {
+        let Some(segment_id) = self.text_row.clone() else {
+            return;
+        };
+        self.model.update(cx, |model, cx| {
+            model.edit(cx, |doc| doc.blur_text(&segment_id));
+        });
+        cx.notify();
     }
 
     fn on_text_input_event(
@@ -630,14 +645,11 @@ impl TranscriptView {
                     return;
                 }
                 self.text_focused = false;
+                self.commit_text_row(cx);
                 self.text_row = None;
-                // Enter and clicks elsewhere land here: the row's typed text commits.
-                self.model.update(cx, |model, cx| {
-                    model.edit(cx, |doc| doc.blur_text(&segment_id));
-                });
-                cx.notify();
             }
-            InputEvent::PressEnter { .. } => {}
+            // Enter leaves the row; the blur that follows commits its text.
+            InputEvent::PressEnter { .. } => self.blur_text(window, cx),
         }
     }
 

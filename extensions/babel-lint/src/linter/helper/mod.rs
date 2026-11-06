@@ -202,8 +202,6 @@ mod tests {
 
     use super::{HelperEntry, LintSeverity, helper_issues};
 
-    const PARITY_FIXTURE: &str = crate::data::LINT_PARITY_JSON;
-
     #[derive(Deserialize)]
     struct Fixture {
         cases: Vec<Case>,
@@ -241,8 +239,12 @@ mod tests {
 
     #[test]
     fn matches_helper_custom_linter_on_parity_corpus() {
-        let fixture: Fixture =
-            serde_json::from_str(PARITY_FIXTURE).expect("parity fixture is valid");
+        let Some(json) =
+            crate::data::lint_parity_json("matches_helper_custom_linter_on_parity_corpus")
+        else {
+            return;
+        };
+        let fixture: Fixture = serde_json::from_str(&json).expect("parity fixture is valid");
         let mut failures = Vec::new();
         for case in &fixture.cases {
             let mut segments = case.segments.iter().collect::<Vec<_>>();

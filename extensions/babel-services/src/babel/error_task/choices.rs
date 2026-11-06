@@ -141,7 +141,7 @@ struct Localized {
 /// Babel's per-language bucket/category display names (captured web module `71840`).
 static LOCALIZED: LazyLock<BTreeMap<String, Localized>> = LazyLock::new(|| {
     serde_json::from_str(exaudio_babel_lint::data::ERROR_CATEGORY_NAMES_JSON)
-        .expect("bundled error-category names are valid JSON")
+        .expect("embedded error-category names are valid JSON")
 });
 
 /// Display name of `key` in the task language, else the key itself (`lW.lk`).

@@ -81,7 +81,7 @@ WASM-доступ к документам, аудио, хранилищу и с�
 Для разработки в Windows нужны Git, Rust из `rust-toolchain.toml`, инструменты MSVC C++ с Windows SDK и CMake. Внутренние крейты сохраняют префикс `studio-*`; название продукта и идентификаторы расширений — Exaudio.
 
 ```powershell
-# Общий набор с ИИ-инструментами, без пакета данных Babel
+# Общий набор с ИИ-инструментами, без Babel
 cargo run -p studio-app --no-default-features --features local,formats,basic-checks,gold --locked
 
 # Локальный редактор без Babel и ИИ
@@ -91,7 +91,7 @@ cargo run -p studio-app --no-default-features --features local,formats,basic-che
 cargo run -p studio-app --no-default-features --locked
 ```
 
-Обычная команда `cargo run -p studio-app --locked` включает весь стандартный набор, в том числе Babel. **Сейчас для неё нужен пакет данных Babel с закреплённым SHA, доступный через кеш автора/приватное хранилище артефактов, а не публичную загрузку.** Разработчики с доступом подготавливают его командой `powershell -File tools/update-babel-data.ps1 -Fetch`; файл фиксации — `extensions/babel-lint/babel-data.json`. Общая сборка выше не требует этого пакета. Helper, инструменты проверки/черновиков и интеграция Babel — собственные разработки автора Exaudio; доступность пакета данных — отдельное условие сборки, а не утверждение о правах на этот код. Сведения о кеше, проверках и SDK — в [руководстве разработчика](docs/development.md).
+Обычная команда `cargo run -p studio-app --locked` включает весь стандартный набор, в том числе Babel, и собирается из чистого клона: данные правил линтера Babel хранятся в репозитории (`extensions/babel-lint/assets`). Приватный пакет данных Babel с закреплённым SHA (`tools/babel-data.json`; разработчики с доступом получают его командой `powershell -File tools/update-babel-data.ps1 -Fetch`) нужен только инструментам сверки (`tools/lint-parity`, `tools/waveform-parity`) и тестам сверки линтера, которые без него пропускаются. Helper, инструменты проверки/черновиков и интеграция Babel — собственные разработки автора Exaudio. Сведения о пакете, проверках и SDK — в [руководстве разработчика](docs/development.md).
 
 Приветствуются воспроизводимые сообщения об ошибках, код, расширения, переводы и улучшения доступности. Для отчётов используйте синтетические записи; не прикладывайте ключи, приватные задания и чужое аудио. Крупные изменения сначала обсудите в [issue](https://github.com/Nominy/exaudio/issues).
 

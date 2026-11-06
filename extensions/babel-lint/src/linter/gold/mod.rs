@@ -1,6 +1,6 @@
 //! Babel's native linter configured for the `gold-non-bg` transcription variant ("Gold"), ported
 //! rule for rule from Babel's `lintAnnotations`. Per-language configuration and rule tables come
-//! from the Babel data bundle ([`crate::data::LINT_DATA_JSON`]), generated from Babel by
+//! from `assets/babel-lint-data.json` ([`crate::data::LINT_DATA_JSON`]), generated from Babel by
 //! `tools/lint-parity/generate.mjs`.
 //!
 //! Babel runs on JavaScript strings; the ports keep its semantics (JS whitespace, UTF-16 lengths
@@ -742,7 +742,10 @@ mod tests {
 
     #[test]
     fn matches_babel_on_every_parity_case() {
-        let fixture: Fixture = serde_json::from_str(crate::data::LINT_PARITY_JSON).unwrap();
+        let Some(json) = crate::data::lint_parity_json("matches_babel_on_every_parity_case") else {
+            return;
+        };
+        let fixture: Fixture = serde_json::from_str(&json).unwrap();
         let mut failures = Vec::new();
         for case in &fixture.cases {
             let language = gold_language(&case.language)

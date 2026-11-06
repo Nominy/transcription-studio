@@ -1,6 +1,6 @@
 # Waveform parity benchmark: Babel's browser waveform vs Studio's timeline waveform.
 #
-#   powershell -File tools/waveform-parity/run.ps1 -BabelDisplaySignal <file> [-Out <dir>] [-Fixtures] [-App]
+#   powershell -File tools/waveform-parity/run.ps1 [-BabelDisplaySignal <file>] [-Out <dir>] [-Fixtures] [-App]
 #
 # Steps (each logged to <Out>/events.jsonl, status in <Out>/status.json):
 #   audio     make_audio.py: case audio cut from the synthetic demo speakers (+ the Rust test
@@ -14,11 +14,12 @@
 #   -Fixtures also regenerates crates/studio-waveform/tests/fixtures/babel_line/*.json.
 #
 # Needs: python (numpy, Pillow), node, Playwright (NODE_PATH defaults to the node_modules of the
-# Babel monorepo beside this checkout), cargo, and -BabelDisplaySignal: a local copy of Babel's
-# proprietary display-signal downsampler (the editor-chunk excerpt defining
-# window.BabelDisplaySignal), which is never committed or published.
+# Babel monorepo beside this checkout), cargo, and Babel's proprietary display-signal downsampler
+# (the editor-chunk excerpt defining window.BabelDisplaySignal), which is never committed or
+# published: -BabelDisplaySignal names a local copy, defaulting to the one the Babel data bundle
+# unpacks into target/babel-data/waveform-parity (`tools/update-babel-data.ps1 -Fetch`).
 param(
-    [Parameter(Mandatory = $true)][string]$BabelDisplaySignal,
+    [string]$BabelDisplaySignal,
     [string]$Out,
     [string]$NodeModules,
     [switch]$Fixtures,
@@ -28,6 +29,10 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 if (-not $Out) { $Out = Join-Path $repo 'target/waveform-parity' }
 if (-not $NodeModules) { $NodeModules = Join-Path $repo '../babel/shared/babel-extension-platform/node_modules' }
+if (-not $BabelDisplaySignal) { $BabelDisplaySignal = Join-Path $repo 'target/babel-data/waveform-parity/display-signal.js' }
+if (-not (Test-Path -LiteralPath $BabelDisplaySignal)) {
+    throw "No Babel display-signal downsampler at $BabelDisplaySignal; pass -BabelDisplaySignal or fetch the bundle with tools/update-babel-data.ps1 -Fetch."
+}
 $env:BABEL_DISPLAY_SIGNAL = (Resolve-Path -LiteralPath $BabelDisplaySignal).Path
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $Out = (Resolve-Path $Out).Path

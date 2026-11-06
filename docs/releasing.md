@@ -9,6 +9,11 @@ first-party developments. Their ownership is distinct from that of any files cop
 from an upstream service. Review those external assets and runtime dependencies individually;
 do not classify the entire Babel integration as third-party proprietary code.
 
+Release and CI runners need no private build input: the Babel linter's rule data is tracked in
+`extensions/babel-lint/assets`, and the private Babel data bundle (`tools/babel-data.json`) only
+feeds the parity tooling and the self-skipping parity tests (see
+[development.md](development.md#babel-data-bundle-parity-tooling-only)).
+
 | Channel | Who gets it | Built by | Velopack channel | Feed |
 | --- | --- | --- | --- | --- |
 | Stable | everyone (default for release downloads) | `v*` tag → `release.yml` | `win` | GitHub Releases of `Nominy/exaudio` (pre-releases excluded) |

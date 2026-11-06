@@ -81,7 +81,7 @@ WASM document, audio, storage and network-host access require explicit grants. B
 Windows development needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools + Windows SDK, and CMake. Internal crate names keep the `studio-*` prefix; the product and its extension ids are Exaudio.
 
 ```powershell
-# General-purpose toolkit including AI tools, without the Babel data bundle
+# General-purpose toolkit including AI tools, without Babel
 cargo run -p studio-app --no-default-features --features local,formats,basic-checks,gold --locked
 
 # Local editor without the Babel/AI feature set
@@ -91,7 +91,7 @@ cargo run -p studio-app --no-default-features --features local,formats,basic-che
 cargo run -p studio-app --no-default-features --locked
 ```
 
-The full default `cargo run -p studio-app --locked` selects all bundled features, including Babel. **It currently requires a SHA-pinned Babel data bundle available through the author's cache/private artifact store, not a public download.** Authorized maintainers prepare it with `powershell -File tools/update-babel-data.ps1 -Fetch`; the pin is `extensions/babel-lint/babel-data.json`. The general-purpose command above does not need that bundle. Helper, reviewer/drafting and Babel integration code are first-party developments by the Exaudio author; bundle availability is a separate build-input concern, not a claim about ownership of that code. See [development prerequisites and checks](docs/development.md) for cache details, contributor workflow and the extension SDK.
+The full default `cargo run -p studio-app --locked` selects all bundled features, including Babel, and builds from a clean clone: the Babel linter's rule data is tracked in `extensions/babel-lint/assets`. Only the parity tooling (`tools/lint-parity`, `tools/waveform-parity`) and the linter parity tests need the private, SHA-pinned Babel data bundle (`tools/babel-data.json`, fetched by authorized maintainers with `powershell -File tools/update-babel-data.ps1 -Fetch`); those tests skip when it is absent. Helper, reviewer/drafting and Babel integration code are first-party developments by the Exaudio author. See [development prerequisites and checks](docs/development.md) for bundle details, contributor workflow and the extension SDK.
 
 Contributions are welcome: reproducible bug reports, code, extensions, translations and accessibility improvements. Use a synthetic recording in reports; never attach credentials, private tasks or someone else's audio. Discuss substantial changes in an [issue](https://github.com/Nominy/exaudio/issues) first.
 

@@ -6,9 +6,9 @@
 //   node tools/lint-parity/generate.mjs [babelDir]
 //
 // babelDir defaults to ../babel beside this checkout. Writes
-//   target/babel-data/babel-lint-data.json   gold-non-bg config per language + rule data
-//   target/babel-data/lint-parity.json       corpus with both linters' issues
-//   extensions/babel-lint/assets/helper-lint-data.json   Helper custom-linter rules + their data tables
+//   extensions/babel-lint/assets/babel-lint-data.json   gold-non-bg config per language + rule data
+//   extensions/babel-lint/assets/helper-lint-data.json  Helper custom-linter rules + their data tables
+//   target/babel-data/lint-parity.json                  corpus with both linters' issues (private)
 // Seed the stage with the other bundle files first (`tools/update-babel-data.ps1 -Fetch`), then
 // publish and pin the regenerated bundle with `tools/update-babel-data.ps1`.
 import fs from 'node:fs';
@@ -133,7 +133,7 @@ const fixture = {
 
 const stage = path.join(repo, 'target/babel-data');
 fs.mkdirSync(stage, { recursive: true });
-fs.writeFileSync(path.join(stage, 'babel-lint-data.json'), `${JSON.stringify(lintData, null, 1)}\n`);
+fs.writeFileSync(path.join(repo, 'extensions/babel-lint/assets/babel-lint-data.json'), `${JSON.stringify(lintData, null, 1)}\n`);
 fs.writeFileSync(path.join(repo, 'extensions/babel-lint/assets/helper-lint-data.json'), `${JSON.stringify(await helperLintData(helperDir, helper), null, 1)}\n`);
 fs.writeFileSync(path.join(stage, 'lint-parity.json'), `${JSON.stringify(fixture, null, 1)}\n`);
 const issueCount = fixture.cases.reduce((total, testCase) => total + testCase.expected.length, 0);
