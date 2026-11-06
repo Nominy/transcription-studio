@@ -5,397 +5,397 @@
         "json": {
           "annotations": [
             {
-              "id": "9c0ee61b-8786-46fc-b074-a59f77ff2f94",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "9f8ac7ec-87a4-569d-a71c-6c44f4462f94",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Верно.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 132.526,
-              "endTimeInSeconds": 133.1,
+              "content": "Логично.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 27.68,
+              "endTimeInSeconds": 28.45,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:48:40.608Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:48:40.608Z"
             },
             {
-              "id": "6a31b261-2c11-4783-83de-f1656c19a7e2",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "5a138ab9-36a2-57de-8492-72f34a386c09",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, конечно.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 188.65375,
-              "endTimeInSeconds": 189.48175,
+              "content": "Да, понял.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 43.17,
+              "endTimeInSeconds": 44.05,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:48:40.632Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:48:40.632Z"
             },
             {
-              "id": "55a85c97-e2bd-43c0-8ff8-2ab01f3dfbdf",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "ed43d33d-88c1-53ed-b8e5-e6c83ad16ee2",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 160.87,
-              "endTimeInSeconds": 161.20175,
+              "content": "Ага.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 35.7,
+              "endTimeInSeconds": 36.29,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:59:40.626Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:59:40.626Z"
             },
             {
-              "id": "77e544d6-e5b0-478c-8197-3e025bd425ae",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "9d2bcf23-cce2-50d0-b2f7-937293908ed6",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Да, хорошо.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 180.089875,
-              "endTimeInSeconds": 180.81625,
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 39.35,
+              "endTimeInSeconds": 40.35,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:00:40.552Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:00:40.552Z"
             },
             {
-              "id": "0c11f0e5-1016-4321-8584-761b7067a82f",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "41607cb2-db22-5c01-a153-58958c14e7b9",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, поняла.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 202.143125,
-              "endTimeInSeconds": 203.13275,
+              "content": "Угу.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 46.26,
+              "endTimeInSeconds": 46.81,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:01:40.482Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:01:40.482Z"
             },
             {
-              "id": "1f08713b-e074-4c52-a5a8-9d4aef3d4d36",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "1dd5ebd3-842c-5d89-8239-0b3971be001a",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Ясно.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 327.31875,
-              "endTimeInSeconds": 327.832375,
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 91.78,
+              "endTimeInSeconds": 92.34,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:48:40.722Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:48:40.722Z"
             },
             {
-              "id": "053de1e2-2a58-49b4-b80e-6f14dc23cefb",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "b1599101-e30a-5c26-88c3-ab4e47d56b16",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Точно.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 346.853125,
-              "endTimeInSeconds": 347.33774999999997,
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 96.84,
+              "endTimeInSeconds": 97.48,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:48:40.737Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:48:40.737Z"
             },
             {
-              "id": "152b01d3-e22f-420b-b3e9-7919950fa9ee",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "004e3d36-8571-5cad-a5ce-a2fb9bef33bf",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Понимаю, да.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 303.66812500000003,
-              "endTimeInSeconds": 304.515625,
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 84.8,
+              "endTimeInSeconds": 85.95,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:06:40.588Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:06:40.588Z"
             },
             {
-              "id": "b4a633d6-ee2b-40dd-9f27-97baf735011e",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "0456b5ef-576d-54ec-a886-14c81ad5cb43",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Ну, вот как.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 384.842625,
-              "endTimeInSeconds": 385.528375,
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 102.78,
+              "endTimeInSeconds": 103.59,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:09:40.535Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:09:40.535Z"
             },
             {
-              "id": "2ab6abaa-5670-40cf-bfa6-1bee1a79d71d",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "795f0527-e3dd-579b-a1e7-76e8daf701ad",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Понятно.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 426.939875,
-              "endTimeInSeconds": 427.540125,
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 109.53,
+              "endTimeInSeconds": 110.22,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T02:48:40.752Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T02:48:40.752Z"
             },
             {
-              "id": "39a1a9f6-82b7-4d89-8d77-ec57a14b5034",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "b4b9a91a-e91f-5dc8-b569-cb182260dc19",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Вот так.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 451.81625,
-              "endTimeInSeconds": 452.54087499999997,
+              "content": "Давай, спасибо.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 114.41,
+              "endTimeInSeconds": 115.4,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T03:11:40.496Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T03:11:40.496Z"
             },
             {
-              "id": "05733cd4-95f2-4b11-95dc-e80eb827f622",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "d1fc833f-4830-5eaf-a088-44e217f81112",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Поняла, да, хорошо.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 217.08925,
-              "endTimeInSeconds": 218.42,
+              "content": "Понял, да, хорошо.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 50.46,
+              "endTimeInSeconds": 51.76,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:02:22.566Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:02:22.566Z"
             },
             {
-              "id": "49ade1f3-7de8-4508-a9a3-7e8684b700a2",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "bbc0560a-0742-58e7-b733-f36335ab8b9d",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, поняла.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 268.010125,
-              "endTimeInSeconds": 268.83,
+              "content": "Да, понял.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 73.61,
+              "endTimeInSeconds": 74.54,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:04:40.590Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:04:40.590Z"
             },
             {
-              "id": "af3acad1-433a-45d5-8f25-c42a548f0df5",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "15aa9918-9ca0-5bfd-9e80-9383f404eb56",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, но ничего.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 273.39887500000003,
-              "endTimeInSeconds": 274.919375,
+              "content": "Да нет.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 77.07,
+              "endTimeInSeconds": 77.78,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:05:40.542Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:05:40.542Z"
             },
             {
-              "id": "4ccdb049-d1bf-4047-a87b-40a25eb9487a",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "e8f5ba0e-9ced-513f-9ff2-9d06553cc238",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
+              "type": "transcription",
+              "content": "Ага.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 80.46,
+              "endTimeInSeconds": 81.06,
+              "intensity": null,
+              "metadata": {
+                "lowConfidenceResolved": true
+              },
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:05:40.552Z"
+            },
+            {
+              "id": "2a513cbf-0085-5eab-a564-97e9e4803fd8",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Да.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 283.355125,
-              "endTimeInSeconds": 283.670375,
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 11.08,
+              "endTimeInSeconds": 11.59,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:05:40.552Z"
+              "createdAt": "2026-01-15T02:22:28.151Z",
+              "updatedAt": "2026-01-15T02:48:40.527Z"
             },
             {
-              "id": "c451a88d-edc2-431f-943c-9d69d525098b",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "6219876d-eba7-529f-b6c9-d949dbabfd12",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 55.079875,
-              "endTimeInSeconds": 55.410375,
+              "content": "Слушай, э, я тут давно хотел тебя спросить, а, по поводу похода. Мы с друзьями решили летом наконец-то сплавиться на байдарках, но никто из нас, ну, толком этого никогда не делал. И вот я сижу, смотрю маршруты, и как-то голова кругом идёт, честно говоря.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 0.78,
+              "endTimeInSeconds": 15.45,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T02:22:28.151Z",
-              "updatedAt": "2026-06-19T02:48:40.527Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T02:57:40.573Z"
             },
             {
-              "id": "eaa5afc3-3d59-4267-b073-d390d0b48060",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "ec2da091-82d5-5d7e-ade6-c1bfb624b9ea",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Ты знаешь, э, есть у меня такое беспокойство, а, по поводу вообще моего финансового положения. Немножко расскажу тебе. Мы переехали в новую страну чуть больше года назад. А, были какие-то сбережения. Но, как это часто бывает в эмиграции, очень много было растрат поначалу, а долго не могли нормальную работу найти, ни я, ни супруг, и как бы деньги вообще все утекли, а, наши сбережения, достаточно быстро, да. И, конечно, мы уже выбрались из вот этого стрессового состояния, когда ты прям не знаешь, чем платить в следующем месяце за квартиру. Но, ты знаешь, к сожалению, всё равно пока не получается никак, а, сформировать какую-то подушку безопасности, начать откладывать даже там на просто крупную покупку, да. А, и я понимаю, что ну как-то всегда была беспечна с деньгами, но я понимаю, что вот именно сейчас я просто себе этого не могу позволить, потому я в другой стране. Да, вот мы- мы, наша ячейка семейная, да, я и супруг, нам не на кого сейчас полагаться, да. А, у нас здесь даже, как вот в родной стране, нет возможности, там, не знаю, ф-- на кредитку жить, да, потому что у нас нет, да, там, м, просто такой возможности, нет там местного банка, к-- там, карты. И, м, н-- э, ты знаешь, я поняла, что это уже вызывает у меня такую тревогу. Ну и пора, видимо. Пришло время действительно как-то ответственно отнестись к своим финансам. И-- но, к сожалению, я не очень знаю, с чего начать. А, как-то, конечно, советов море везде: и откладывай 10 %, {СКАЗ: десять процентов} 20, {СКАЗ: двадцать} 50 %. {СКАЗ: пятьдесят} В общем, цифры разнятся, ничего непонятно. И я думаю, может быть, т-- обсудить с тобой, может, ты что-то посоветуешь мне, с чего вообще начать?",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 0.929,
-              "endTimeInSeconds": 99.286625,
+              "content": "Да, конечно, давай разберёмся. Это вообще отличная идея, особенно для первого раза. Смотри, я бы начал с чего-нибудь спокойного, а, без порогов, чтобы вы просто привыкли к лодке. Э, и сразу вопрос: вас сколько человек вообще собирается?",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 15.59,
+              "endTimeInSeconds": 32.17,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T02:57:40.573Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T02:58:40.517Z"
             },
             {
-              "id": "52ebb25e-1b55-4dfc-8968-4f7dc6333a52",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "8a3587fc-f01c-5758-936d-1a7dc4ab48b7",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, конечно, я с удовольствием с тобой тему обсужу и, надеюсь, что мы с тобой найдём какие-то способы начать откладывать деньги и накопить п-- эту подушку безопасности. А, вообще, очень здорово, что ты об этом думаешь, потому что не все об этом заботятся. Вот, но я вижу, что ты любишь свою семью, думаешь о будущем, и это очень здорово. И твои беспокойства абсолютно понятны и обоснованы. А, тем более, вы пережили такой стресс, переехали в другую страну и первое время здесь были совсем без поддержки. Да, это невероятно тяжело. Да, и знаешь, я тебе сразу задам такой вопрос. Вот скажи, а, ты хочешь откладывать свои именно деньги или деньги всей семьи? Ну, то есть твои и мужа, а, суммарно. Э, ну, то есть ты хочешь работать именно со своим доходом или семейным?",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 99.42775,
-              "endTimeInSeconds": 152.187125,
+              "content": "А, ну, нас пока 4 {СКАЗ: четыре} человека, но, может, ещё кто-то подтянется. По времени у нас есть 3 {СКАЗ: три} дня в конце июля, это прямо железно. И бюджет, а, где-то 15 {СКАЗ: пятнадцать} тысяч на человека, вместе с дорогой. Палатки у нас свои есть, а вот байдарок, конечно, нет. Ну и, э, хотелось бы, чтобы было красиво, а не просто грести целый день.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 32.31,
+              "endTimeInSeconds": 50.54,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T02:58:40.517Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T03:02:22.563Z"
             },
             {
-              "id": "a1a38418-cef1-421d-8629-213ce66ceadb",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "765940e5-12b9-5b29-97a2-5ace1d1261ef",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "А, ты знаешь, я, наверно, думаю щас про свой доход, потому что я тут считаю, хоть мы, в общем-то, а, да, мы там скидываемся на необходимые траты, а, мы, а, как бы вообще без проблем друг другу даём там деньги, когда они нужны и-- но мы не ведём вот так, знаешь, семейный бюджет. Вот это вот: все получили зарплату, скинули в 1 {СКАЗ: одну} копейку, и кто-то его распределяет. Нет, у нас такого нет. Мы вот обязательные платежи как бы скидываем. У нас есть общий кошелёк, да, в нашем банке, куда мы там вот-- а- а всё остальное, она под свою ответственность. Я считаю, что даже так лучше, потому что под свою ответственность, да, ты не размазываешь там, что прав, виноват. И я в этом смысле решила, да, что мне надо с собой разобраться. Поскольку я более беспечна отношусь к деньгам, [смешок] я, наверно, должна как-то сама, да, как бы, вот. Вот мои доходы, и мо- мо-- я должна откладывать. Вот как-то так. Супруг [неразборчиво] как бы делает то, что ему хочется. Я уверена, что он тоже как бы-- я знаю, что он тоже об этом думает, но у него немножко чуть другая ситуация по финансам. Вот, э, сейчас по стабильности, я имею в виду, дохода, ему чуть-чуть сложнее. Поэтому даже мне бы ста-- быть вот этим ведущим, я думаю, что в нашей семье.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 153.35579475086197,
-              "endTimeInSeconds": 221.72787499999998,
+              "content": "Так.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 57.39,
+              "endTimeInSeconds": 57.7,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T03:02:22.563Z"
+              "createdAt": "2026-01-15T00:11:28.731Z",
+              "updatedAt": "2026-01-15T03:03:40.574Z"
             },
             {
-              "id": "8437d43e-6b73-4892-ae1e-9360671875e3",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "c6645452-d2c7-5686-a1f0-053cb2e65673",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Спасибо.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 234.55,
-              "endTimeInSeconds": 235.06,
+              "content": "Слушай, ну, под ваши условия отлично подходит какая-нибудь спокойная река недалеко от города. Байдарки можно  взять в прокате, обычно это выходит 2 {СКАЗ: две} тысячи в сутки за лодку. За 3 {СКАЗ: три} дня спокойно пройдёте километров 40 {СКАЗ: сорок}, и ещё останется время на костёр.",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 51.94,
+              "endTimeInSeconds": 68.34,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:11:28.731Z",
-              "updatedAt": "2026-06-19T03:03:40.574Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T03:04:40.579Z"
             },
             {
-              "id": "f8fc433e-fa6a-428a-9364-b5f24eaa6a31",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "cd5e0948-45de-5551-80b4-9cc573e2ddfd",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, здорово, что ты к этому при- пришла. Это вообще такое взрослое решение начать откладывать. Да, и знаешь, никогда не поздно начать это делать. А, так что очень здорово, что ты об этом задумываешься. И хочу тебя спросить: да, вот, а, тот доход, который у тебя есть ще-- сейчас, а, скажи, какую часть этого дохода ты могла бы начать откладывать и не трогать? То есть понимаешь ли ты вообще, а, какой процент твоих трат, а, ну, уходит на семейные нужды там и каждый месяц, и сколько ты готова вложить во что-то.",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 221.899125,
-              "endTimeInSeconds": 256.013,
+              "content": "О, это звучит здорово. А, ты знаешь, я вот чего боюсь: мы же ни разу не собирали байдарку. Это, э, сложно вообще, или там за- за полчаса разберёмся? И ещё вопрос, а, что делать, если пойдёт дождь все 3 {СКАЗ: три} дня? Не хочется, чтобы первый поход закончился тем, что все промокли и поругались.",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 68.48,
+              "endTimeInSeconds": 84.88,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T03:04:40.579Z"
+              "createdAt": "2026-01-15T00:10:27.835Z",
+              "updatedAt": "2026-01-15T03:06:40.582Z"
             },
             {
-              "id": "f46ed57f-5958-4356-b2ed-e145ecd554c3",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
-              "type": "transcription",
-              "content": "Ты знаешь, я так даже ещё не анализировала. На самом деле у меня всего несколько месяцев, как прошло вот это вот стрессовое состояние, да, от того, что мы там не знали з-- как платить за квартиру. И я ещё ни разу вот ни- ни-- не садилась так, чтобы посчитать, куда уходят деньги, знаешь, в прямом смысле. Кроме обязательных трат, которые у меня есть - это вот там жильё, оплата там, аренда жилья, всякие коммуналка, интернет. Ну, вот всё, что я это всё считаю в одну, да, то, что каждый день одна и то-- ну, каждый месяц почти одна и та же сумма. Кроме вот этих трат и моей платы за учёбу, я там ежемесячно плачу, да, за своё образование, а у меня вот всё остальное, ну, знаешь, как придётся, как Бог пошлёт. Вот, как, э, какие будут траты, сколько будет свободно времени. Но я, конечно, грешу какими-то импульсивными небольшими покупками, да, там, что-то заказать чуть-чуть, что-то себя порадовать. А, ну, и я уверена, что это всё-таки набегает. Но, честно сказать, ещё ни разу не считала. Может быть, подскажешь, как лучше это начать делать?",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 257.4821427530787,
-              "endTimeInSeconds": 313.97362499999997,
-              "intensity": null,
-              "metadata": {
-                "lowConfidenceResolved": true
-              },
-              "createdAt": "2026-06-19T00:10:27.835Z",
-              "updatedAt": "2026-06-19T03:06:40.582Z"
-            },
-            {
-              "id": "32b5322a-3360-44d4-b7a0-da474c16f7d2",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "9586e448-8612-56ba-8bc1-503aab81f7af",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
               "content": "Давай.",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
-              "startTimeInSeconds": 110.63343999318623,
-              "endTimeInSeconds": 111.11431186203187,
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
+              "startTimeInSeconds": 21.36,
+              "endTimeInSeconds": 21.94,
               "intensity": null,
               "metadata": null,
-              "createdAt": "2026-06-19T03:11:54.792Z",
-              "updatedAt": "2026-06-19T03:11:54.792Z"
+              "createdAt": "2026-01-15T03:11:54.792Z",
+              "updatedAt": "2026-01-15T03:11:54.792Z"
             },
             {
-              "id": "ba8ba524-62c1-406a-84ef-7643689ed439",
-              "reviewActionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+              "id": "b4ad59ed-2d80-59e4-b2b8-05e8afbe2ccb",
+              "reviewActionId": "e823c3bb-2697-55fc-9272-c083a55874da",
               "type": "transcription",
-              "content": "Да, конечно. А, ну, во-первых, а, идеально, если ты будешь, а, пользоваться 1 {СКАЗ: одним} счётом, да, или какой-то 1 {СКАЗ: одной} картой, потому что, а, так гораздо легче отслеживать, э, приходящие деньги и те, которые ты тратишь. Да, и так, просто взглянув даже, а, в приложение, да, ты будешь видеть, э, сколько денег пришло, сколько ты потратила и на какие сферы. Потому что часто в приложениях, да, банк тебе сразу даже показывает, там что там энную сумму ты потратила на продукты, другую сумму там на покупки. И иногда человек видит, что он потратил там сумму на покупки, эту, например, там на каком-нибудь \"Амазон\". Да, и все эти покупки были импульсивными. И тогда уже потом очень, э, легко работать с тем, чтобы эти импульсивные покупки отсекать. Вот. Но надеюсь, что у тебя всё-таки есть какие-то остатки, да, которые можно начать откладывать. А, да, и вот надо понять, э, где их лучше хранить. Вот. И знаешь, в 1 {СКАЗ: первую} очередь, конечно, было бы хорошо обратиться к каким-то самым надёжным банкам в твоей стране, да, и может быть, даже связаться с ними напрямую, потому что не всегда там на сайтах есть какие-то выгодные предл- предложения и так далее. То есть номер 1 {СКАЗ: один} - а, да, это, конечно, а, положить деньги там под процент, но в зависимости от того, какие у тебя цели. То есть до этого нужно прописать именно финансовые цели, которые у тебя есть. Возможно, это деньги будут на покупку недвижимости, да, а, возможно, там на какую-то учёбу. Или это действительно будет просто подушка безопасности, да, м, ну, скажем так, неприкосновенная. Вот, но сразу отмечу, что если ты к-- там кладёшь их в банк, ам, и это по-- твоя подушка безопасности, то со временем деньги могут обесцениваться, вот. И как ты смотришь на такой вариант, а, чтобы вложить деньги, например, а, в золото? Да, потому что золото, оно всегда, а, растёт, а, в своей стоимости. Вот, как правило, то есть как долгосрочный вклад - это такая, м, неплохая идея. А, возможно, ещё вкладывать и в ценные бумаги, да, но тоже это очень рискованно, на самом деле, вот. И 3 {СКАЗ: третий} вариант - это недвижимость, на самом деле, чтобы твои деньги, да, не, м, теряли свои стоимости, свои ценности. Вот какой вариант, ты думаешь, тебе был бы самым близким?",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
-              "startTimeInSeconds": 313.292625,
-              "endTimeInSeconds": 464.805125,
+              "content": "Да, конечно. Ну, во-первых, собирать лодку несложно, в прокате обычно всё показывают. Во-вторых, гермомешки берите обязательно, а, это прямо главное правило. Ну и дождь, э, это не страшно, если тент натянуть заранее, ещё до того, как начнёт капать. А вообще, я бы на вашем месте выбрал реку, где по берегам есть стоянки, чтобы не искать место в темноте. Хочешь, я тебе вечером скину пару маршрутов, а вы уже сами выберете?",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
+              "startTimeInSeconds": 86.13,
+              "endTimeInSeconds": 114.49,
               "intensity": null,
               "metadata": {
                 "lowConfidenceResolved": true
               },
-              "createdAt": "2026-06-19T02:24:12.287Z",
-              "updatedAt": "2026-06-19T03:11:54.802Z"
+              "createdAt": "2026-01-15T02:24:12.287Z",
+              "updatedAt": "2026-01-15T03:11:54.802Z"
             }
           ],
           "lintErrors": [],
           "processedRecordingUriMap": {
-            "9c5b9a65-a226-4bcf-85b0-60682896267b": "s3://davidai-audio-recordings/transcription-chunks/prod/06d59594-7036-4e2b-98e3-8f369f041f26/62077784-367e-4709-85d7-1b2e403944df/ba31a7bd-1c89-4f77-a9df-06a1150793bd.wav",
-            "5ba48657-3264-4fc0-9ec2-d15ac659e125": "s3://davidai-audio-recordings/transcription-chunks/prod/06d59594-7036-4e2b-98e3-8f369f041f26/62077784-367e-4709-85d7-1b2e403944df/65e89852-4e36-411b-9e1a-6ad1ee3c12ad.wav"
+            "7a54b1cc-d57a-52b2-a2a6-d00ab89ab96b": "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav",
+            "cc369471-bbd7-543f-881e-c4738c76215d": "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/4833cfdc-8e84-5f58-b342-71cd7fab8d60.wav"
           },
           "transcriptionChunkProcessedRecordings": [
             {
-              "id": "39f470f1-c346-42e1-8c10-54d2c166ba1e",
-              "transcriptionChunkId": "62077784-367e-4709-85d7-1b2e403944df",
-              "chunkedProcessedRecordingId": "5ba48657-3264-4fc0-9ec2-d15ac659e125",
-              "processedRecordingId": "65e89852-4e36-411b-9e1a-6ad1ee3c12ad",
+              "id": "97ee1102-09ef-5714-8ed2-f1dfa2493bae",
+              "transcriptionChunkId": "f5b736b9-60ff-5355-ae5a-e909aa644e72",
+              "chunkedProcessedRecordingId": "cc369471-bbd7-543f-881e-c4738c76215d",
+              "processedRecordingId": "4833cfdc-8e84-5f58-b342-71cd7fab8d60",
               "speaker": 1,
               "startTimeInSeconds": 0,
-              "endTimeInSeconds": 465.325,
-              "createdAt": "2026-06-18T23:55:34.443Z",
-              "updatedAt": "2026-06-18T23:55:34.443Z"
+              "endTimeInSeconds": 116.4,
+              "createdAt": "2026-01-14T23:55:34.443Z",
+              "updatedAt": "2026-01-14T23:55:34.443Z"
             },
             {
-              "id": "412b42f0-18ab-470a-9eb8-44acbfe94a32",
-              "transcriptionChunkId": "62077784-367e-4709-85d7-1b2e403944df",
-              "chunkedProcessedRecordingId": "9c5b9a65-a226-4bcf-85b0-60682896267b",
-              "processedRecordingId": "ba31a7bd-1c89-4f77-a9df-06a1150793bd",
+              "id": "5cb0aef5-7c10-55ad-95bb-ae31d30dd693",
+              "transcriptionChunkId": "f5b736b9-60ff-5355-ae5a-e909aa644e72",
+              "chunkedProcessedRecordingId": "7a54b1cc-d57a-52b2-a2a6-d00ab89ab96b",
+              "processedRecordingId": "8aec034b-1486-546a-89de-47ee0ab3ee60",
               "speaker": 2,
               "startTimeInSeconds": 0,
-              "endTimeInSeconds": 465.325,
-              "createdAt": "2026-06-18T23:55:34.518Z",
-              "updatedAt": "2026-06-18T23:55:34.518Z"
+              "endTimeInSeconds": 116.4,
+              "createdAt": "2026-01-14T23:55:34.518Z",
+              "updatedAt": "2026-01-14T23:55:34.518Z"
             }
           ],
-          "actionId": "9edb22ab-0993-41f3-926e-90779da4c624",
+          "actionId": "e823c3bb-2697-55fc-9272-c083a55874da",
           "actionLevel": 1,
           "isWorkerResumingClaim": false,
-          "actionWorkerId": "113f6620-6ffd-4e46-bf4f-8e6e64105431",
+          "actionWorkerId": "6314b752-00b2-57bb-a1e3-1cd9140ecc44",
           "actionDecision": "in-progress",
           "success": true
         }

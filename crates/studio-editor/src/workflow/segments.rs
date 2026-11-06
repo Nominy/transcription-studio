@@ -6,7 +6,7 @@ use studio_core::{EditorCommand, Segment, SegmentUpdate};
 
 use super::{StudioWorkflow, compare_seconds};
 
-const BABEL_INSERT_DEFAULT_DURATION_SECONDS: f64 = 0.8;
+const INSERT_DEFAULT_DURATION_SECONDS: f64 = 0.8;
 
 impl StudioWorkflow {
     pub fn apply_segment_edit(
@@ -71,7 +71,7 @@ impl StudioWorkflow {
         } else {
             0.0
         };
-        let (left_text, right_text) = split_text_by_babel_word_ratio(&segment.text, ratio);
+        let (left_text, right_text) = split_text_by_word_ratio(&segment.text, ratio);
         self.split_segment_with_text(segment_id, at_seconds, left_text, right_text)
     }
 
@@ -186,8 +186,8 @@ impl StudioWorkflow {
             .min_by(|left, right| compare_seconds(left.start_seconds, right.start_seconds))
             .map(|segment| segment.start_seconds);
         let boundary = next_start_seconds
-            .filter(|start_seconds| babel_uses_table_boundary(*start_seconds))
-            .unwrap_or(anchor.end_seconds + BABEL_INSERT_DEFAULT_DURATION_SECONDS);
+            .filter(|start_seconds| uses_table_boundary(*start_seconds))
+            .unwrap_or(anchor.end_seconds + INSERT_DEFAULT_DURATION_SECONDS);
         let start_seconds = anchor.end_seconds.max(0.0);
         let end_seconds = (anchor.end_seconds + 0.01).max(boundary);
         let segment = Segment {
@@ -224,8 +224,8 @@ impl StudioWorkflow {
             .max_by(|left, right| compare_seconds(left.end_seconds, right.end_seconds))
             .map(|segment| segment.end_seconds);
         let boundary = previous_end_seconds
-            .filter(|end_seconds| babel_uses_table_boundary(*end_seconds))
-            .unwrap_or((anchor.start_seconds - BABEL_INSERT_DEFAULT_DURATION_SECONDS).max(0.0));
+            .filter(|end_seconds| uses_table_boundary(*end_seconds))
+            .unwrap_or((anchor.start_seconds - INSERT_DEFAULT_DURATION_SECONDS).max(0.0));
         let start_seconds = boundary.max(0.0);
         let end_seconds = (boundary + 0.01).max(anchor.start_seconds);
         let segment = Segment {
@@ -356,7 +356,7 @@ impl StudioWorkflow {
         self.create_segment_in_lane(
             lane_id,
             start_seconds,
-            start_seconds + BABEL_INSERT_DEFAULT_DURATION_SECONDS,
+            start_seconds + INSERT_DEFAULT_DURATION_SECONDS,
         )
     }
 
@@ -391,39 +391,13 @@ impl StudioWorkflow {
             lane_id: lane_id.to_string(),
         })
     }
-
-    pub fn set_segment_annotation_type(
-        &mut self,
-        segment_id: &str,
-        annotation_type: &str,
-    ) -> Result<()> {
-        self.apply(EditorCommand::SetSegmentAnnotationType {
-            segment_id: segment_id.to_string(),
-            annotation_type: annotation_type.to_string(),
-        })
-    }
-
-    pub fn update_annotation_metadata(
-        &mut self,
-        segment_id: &str,
-        text: impl Into<String>,
-        intensity: Option<u8>,
-        content: Value,
-    ) -> Result<()> {
-        self.apply(EditorCommand::UpdateAnnotationMetadata {
-            segment_id: segment_id.to_string(),
-            text: text.into(),
-            intensity,
-            content,
-        })
-    }
 }
 
-fn babel_uses_table_boundary(seconds: f64) -> bool {
+fn uses_table_boundary(seconds: f64) -> bool {
     seconds != 0.0 && !seconds.is_nan()
 }
 
-fn split_text_by_babel_word_ratio(text: &str, ratio: f64) -> (String, String) {
+fn split_text_by_word_ratio(text: &str, ratio: f64) -> (String, String) {
     let words = text.split_whitespace().collect::<Vec<_>>();
     if words.is_empty() {
         return (String::new(), String::new());

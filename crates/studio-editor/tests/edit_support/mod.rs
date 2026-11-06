@@ -5,10 +5,9 @@ use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::edit::{EditorDoc, Outcome};
 use studio_editor::editor_model::CutOverlay;
 use studio_editor::timeline_model::{LaneWaveform, TimeRange};
-use studio_editor::workflow::StudioWorkflow;
 use studio_waveform::{DecodedAudio, WaveformHit, WaveformHitTarget};
 
-pub const STABLE_WORKFLOW_TASK_JSON: &str = include_str!("../fixtures/stable-workflow-task.json");
+pub const STABLE_NATIVE_PROJECT_JSON: &str = include_str!("../fixtures/stable-native-project.json");
 
 /// Lanes `lane-1`/`lane-2` labelled "Speaker 1"/"Speaker 2" (speakers `speaker-1`/`speaker-2`).
 pub fn project(segments: Vec<Segment>) -> Project {
@@ -49,26 +48,31 @@ pub fn seg(id: &str, lane: &str, start: f64, end: f64, text: &str) -> Segment {
 }
 
 pub fn doc(segments: Vec<Segment>) -> EditorDoc {
-    EditorDoc::from_project(project(segments))
+    EditorDoc::from_project(
+        project(segments),
+        sonus_extension::document::DocumentEnvironment::local("test"),
+    )
 }
 
 pub fn read_only_doc(segments: Vec<Segment>) -> EditorDoc {
-    let mut project = project(segments);
-    project
-        .metadata
-        .insert("studio.babel.readOnly".to_string(), "true".to_string());
-    EditorDoc::from_project(project)
+    let project = project(segments);
+    let mut environment = sonus_extension::document::DocumentEnvironment::local(project.id.clone());
+    environment.policy.read_only = true;
+    EditorDoc::from_project(project, environment)
 }
 
 pub fn stable_sample_doc() -> EditorDoc {
-    EditorDoc::new(
-        StudioWorkflow::from_babel_json(STABLE_WORKFLOW_TASK_JSON)
-            .expect("stable workflow fixture should import"),
+    EditorDoc::from_project(
+        serde_json::from_str(STABLE_NATIVE_PROJECT_JSON).expect("native fixture should parse"),
+        sonus_extension::document::DocumentEnvironment::local("test"),
     )
 }
 
 pub fn sample_doc() -> EditorDoc {
-    EditorDoc::from_project(studio_editor::load_sample_project().expect("sample project"))
+    EditorDoc::from_project(
+        studio_editor::load_sample_project().expect("sample project"),
+        sonus_extension::document::DocumentEnvironment::local("test"),
+    )
 }
 
 /// Mono audio: amplitude 0.1 inside `ranges`, silence elsewhere.

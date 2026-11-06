@@ -1,5 +1,20 @@
 [workspace]
 members = [
+  "crates/sonus-extension",
+  "crates/sonus-marketplace",
+  "crates/sonus-wasm",
+  "crates/sonus-shell",
+  "extensions/babel-domain",
+  "extensions/babel-ui",
+  "extensions/gold-ui",
+  "extensions/local",
+  "extensions/formats",
+  "extensions/lint-basic",
+  "extensions/babel-services",
+  "extensions/babel-lint",
+  "extensions/babel-tags",
+  "extensions/gold",
+  "tools/extension-index",
   "crates/studio-core",
   "crates/studio-project",
   "crates/studio-babel",
@@ -11,7 +26,7 @@ members = [
   "crates/studio-inference",
   "crates/studio-relay"
 ]
-exclude = ["vendor/gpui-pre-windows"]
+exclude = ["vendor/gpui-pre-windows", "sdk/rust", "extensions/examples/hello-panel"]
 default-members = ["crates/studio-app"]
 resolver = "2"
 
@@ -39,6 +54,20 @@ time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync"] }
 url = "2.5"
 velopack = "1.2.0"
+sonus-extension = { path = "crates/sonus-extension" }
+sonus-marketplace = { path = "crates/sonus-marketplace" }
+sonus-shell = { path = "crates/sonus-shell" }
+sonus-wasm = { path = "crates/sonus-wasm" }
+sonus-local = { path = "extensions/local" }
+sonus-formats = { path = "extensions/formats" }
+sonus-lint-basic = { path = "extensions/lint-basic" }
+sonus-babel-ui = { path = "extensions/babel-ui" }
+sonus-gold-ui = { path = "extensions/gold-ui" }
+sonus-babel-domain = { path = "extensions/babel-domain" }
+sonus-babel-services = { path = "extensions/babel-services" }
+sonus-babel-lint = { path = "extensions/babel-lint" }
+sonus-babel-tags = { path = "extensions/babel-tags" }
+sonus-gold = { path = "extensions/gold" }
 studio-core = { path = "crates/studio-core" }
 studio-project = { path = "crates/studio-project" }
 studio-babel = { path = "crates/studio-babel" }
@@ -55,8 +84,7 @@ incremental = true
 [profile.test]
 debug = 0
 
-# Patched gpui Windows platform: prebuilt fxc shader bytecode so the Linux CI host can
-# cross-compile Windows release builds (vendor/gpui-pre-windows/build.rs), and shortcut
-# keys named by physical key position under any keyboard layout (src/events.rs).
+# Patched gpui Windows platform: shortcut keys use physical key positions under any
+# keyboard layout (src/events.rs). Release shaders compile with the Windows SDK's fxc.
 [patch.crates-io]
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

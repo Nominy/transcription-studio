@@ -1,0 +1,78 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'assets/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'README.ru.md'
+      - 'LICENSE'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'Nominy/sonus' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Assemble static site
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import shutil
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from xml.sax.saxutils import escape
+
+          base_url = os.environ['BASE_URL'].rstrip('/')
+          parsed = urlsplit(base_url)
+          if parsed.scheme != 'https' or not parsed.netloc or parsed.query or parsed.fragment:
+              raise SystemExit('configure-pages did not return a valid HTTPS base_url')
+          target = Path('_site')
+          shutil.copytree('site', target)
+          for name in ('header-light.svg', 'header-dark.svg', 'sonus-icon.svg'):
+              shutil.copyfile(Path('assets/brand') / name, target / 'assets' / name)
+          for name in ('index.html', 'sitemap.xml', 'robots.txt'):
+              path = target / name
+              value = base_url if name == 'robots.txt' else escape(base_url, {'"': '&quot;'})
+              text = path.read_text(encoding='utf-8')
+              if '__BASE_URL__' not in text:
+                  raise SystemExit(f'Missing base URL substitution point in {name}')
+              path.write_text(text.replace('__BASE_URL__', value), encoding='utf-8')
+          for path in target.rglob('*'):
+              if path.suffix in ('.html', '.xml', '.txt', '.css', '.js', '.svg'):
+                  if re.search(r'__[A-Z][A-Z0-9_]*__', path.read_text(encoding='utf-8')):
+                      raise SystemExit(f'Unresolved site placeholder: {path}')
+          (target / '.nojekyll').touch()
+          PY
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

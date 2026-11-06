@@ -3,7 +3,6 @@ use studio_babel::{
     BabelAnnotation, BabelAudioTrack, BabelImportError, BabelSpeaker, BabelTaskPackage,
     export_json, export_package, import_json, import_package,
 };
-use studio_core::{CommandHistory, EditorCommand};
 
 fn load_fixture() -> BabelTaskPackage {
     let source = include_str!("fixtures/sample-task.json");
@@ -11,16 +10,13 @@ fn load_fixture() -> BabelTaskPackage {
 }
 
 #[test]
-fn recovered_final_json_round_trips_review_action_payload() {
-    let fixture_dir =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recovered");
-    let final_json =
-        std::fs::read_to_string(fixture_dir.join("final.json")).expect("recovered final json");
+fn review_action_final_json_round_trips_payload() {
+    let final_json = include_str!("fixtures/review-action-final.json");
 
-    let project = import_json(&final_json).expect("recovered final json should import");
+    let project = import_json(final_json).expect("review action final json should import");
     assert_eq!(project.segments.len(), 24);
     assert_eq!(project.lanes.len(), 2);
-    let exported = export_json(&project).expect("recovered final json should export");
+    let exported = export_json(&project).expect("review action final json should export");
     assert_eq!(
         exported
             .pointer("/0/result/data/json/annotations")
@@ -36,12 +32,12 @@ fn recovered_final_json_round_trips_review_action_payload() {
 }
 
 #[test]
-fn import_json_accepts_recovered_babel_review_action_envelope() {
+fn import_json_accepts_babel_review_action_envelope() {
     let source = include_str!("fixtures/review-action-final.json");
 
-    let project = import_json(source).expect("recovered Babel review action should import");
+    let project = import_json(source).expect("Babel review action should import");
 
-    assert_eq!(project.id, "62077784-367e-4709-85d7-1b2e403944df");
+    assert_eq!(project.id, "f5b736b9-60ff-5355-ae5a-e909aa644e72");
     assert_eq!(project.speakers.len(), 2);
     assert_eq!(project.lanes.len(), 2);
     assert_eq!(project.segments.len(), 24);
@@ -51,19 +47,19 @@ fn import_json_accepts_recovered_babel_review_action_envelope() {
     );
 
     let first = project
-        .segment("eaa5afc3-3d59-4267-b073-d390d0b48060")
-        .expect("first recovered annotation should exist");
+        .segment("6219876d-eba7-529f-b6c9-d949dbabfd12")
+        .expect("first annotation should exist");
     assert_eq!(first.speaker_id, "speaker-2");
     assert_eq!(first.lane_id, "track-speaker-2");
-    assert_eq!(first.start_seconds, 0.929);
-    assert!(first.text.starts_with("Ты знаешь"));
+    assert_eq!(first.start_seconds, 0.78);
+    assert!(first.text.starts_with("Слушай"));
     assert_eq!(
         first.metadata.get("lowConfidenceResolved"),
         Some(&json!(true))
     );
     assert_eq!(
         first.metadata.get("reviewActionId"),
-        Some(&json!("9edb22ab-0993-41f3-926e-90779da4c624"))
+        Some(&json!("e823c3bb-2697-55fc-9272-c083a55874da"))
     );
 }
 
@@ -342,105 +338,12 @@ fn review_action_annotation_object_content_round_trips_through_metadata() {
 }
 
 #[test]
-fn review_action_annotation_metadata_edit_exports_low_confidence_resolution() {
-    let source = json!([
-        {
-            "result": {
-                "data": {
-                    "json": {
-                        "actionId": "action-annotation",
-                        "actionLevel": 1,
-                        "processedRecordingUriMap": {
-                            "chunked-recording-1": "audio/recording.wav"
-                        },
-                        "transcriptionChunkProcessedRecordings": [
-                            {
-                                "transcriptionChunkId": "chunk-1",
-                                "chunkedProcessedRecordingId": "chunked-recording-1",
-                                "processedRecordingId": "processed-recording-1",
-                                "speaker": 1
-                            }
-                        ],
-                        "annotations": [
-                            {
-                                "id": "annotation-object",
-                                "reviewActionId": "action-annotation",
-                                "type": "background_noise",
-                                "content": {
-                                    "primaryLabel": "background-noise",
-                                    "secondaryLabel": "rustle"
-                                },
-                                "processedRecordingId": "processed-recording-1",
-                                "startTimeInSeconds": 1.25,
-                                "endTimeInSeconds": 2.5,
-                                "intensity": 2,
-                                "metadata": {
-                                    "lowConfidenceResolved": false,
-                                    "marker": "kept"
-                                },
-                                "createdAt": "2026-06-21T12:00:00.000Z",
-                                "updatedAt": "2026-06-21T12:00:00.000Z"
-                            }
-                        ],
-                        "lintErrors": []
-                    }
-                }
-            }
-        }
-    ]);
-
-    let mut project = import_json(&source.to_string()).expect("review action should import");
-    let mut history = CommandHistory::default();
-    history
-        .apply_with_timestamp(
-            &mut project,
-            EditorCommand::UpdateAnnotationMetadata {
-                segment_id: "annotation-object".to_string(),
-                text: "background-noise / chair scrape".to_string(),
-                intensity: Some(4),
-                content: json!({
-                    "primaryLabel": "background-noise",
-                    "secondaryLabel": "chair scrape"
-                }),
-            },
-            Some("2026-06-21T12:34:56.000Z".to_string()),
-        )
-        .expect("native annotation metadata edit should apply");
-
-    let exported = export_json(&project).expect("review action should export");
-
-    assert_eq!(
-        exported.pointer("/0/result/data/json/annotations/0/content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "chair scrape"
-        }))
-    );
-    assert_eq!(
-        exported.pointer("/0/result/data/json/annotations/0/intensity"),
-        Some(&json!(4))
-    );
-    assert_eq!(
-        exported.pointer("/0/result/data/json/annotations/0/metadata/marker"),
-        Some(&json!("kept"))
-    );
-    assert_eq!(
-        exported.pointer("/0/result/data/json/annotations/0/metadata/lowConfidenceResolved"),
-        Some(&json!(true))
-    );
-    assert_eq!(
-        exported.pointer("/0/result/data/json/annotations/0/updatedAt"),
-        Some(&json!("2026-06-21T12:34:56.000Z"))
-    );
-}
-
-#[test]
-fn export_json_preserves_recovered_review_action_envelope_after_edits() {
+fn export_json_preserves_review_action_envelope_after_edits() {
     let source = include_str!("fixtures/review-action-final.json");
-    let mut project = import_json(source).expect("recovered Babel review action should import");
+    let mut project = import_json(source).expect("Babel review action should import");
     let segment = project
-        .segment_mut("eaa5afc3-3d59-4267-b073-d390d0b48060")
-        .expect("editable recovered annotation should exist");
+        .segment_mut("6219876d-eba7-529f-b6c9-d949dbabfd12")
+        .expect("editable annotation should exist");
     segment.text = "Edited native review text.".to_string();
     segment.start_seconds = 1.25;
     segment.end_seconds = 2.75;
@@ -450,7 +353,7 @@ fn export_json_preserves_recovered_review_action_envelope_after_edits() {
     assert!(exported.is_array());
     assert_eq!(
         exported.pointer("/0/result/data/json/actionId"),
-        Some(&json!("9edb22ab-0993-41f3-926e-90779da4c624"))
+        Some(&json!("e823c3bb-2697-55fc-9272-c083a55874da"))
     );
     assert_eq!(
         exported.pointer("/0/result/data/json/success"),
@@ -466,7 +369,7 @@ fn export_json_preserves_recovered_review_action_envelope_after_edits() {
     let edited = annotations
         .iter()
         .find(|annotation| {
-            annotation.get("id") == Some(&json!("eaa5afc3-3d59-4267-b073-d390d0b48060"))
+            annotation.get("id") == Some(&json!("6219876d-eba7-529f-b6c9-d949dbabfd12"))
         })
         .expect("edited annotation should export in review-action shape");
     assert_eq!(edited["content"], "Edited native review text.");
@@ -474,24 +377,24 @@ fn export_json_preserves_recovered_review_action_envelope_after_edits() {
     assert_eq!(edited["endTimeInSeconds"], 2.75);
     assert_eq!(
         edited["processedRecordingId"],
-        "ba31a7bd-1c89-4f77-a9df-06a1150793bd"
+        "8aec034b-1486-546a-89de-47ee0ab3ee60"
     );
     assert_eq!(
         exported
             .pointer(
-                "/0/result/data/json/processedRecordingUriMap/9c5b9a65-a226-4bcf-85b0-60682896267b"
+                "/0/result/data/json/processedRecordingUriMap/7a54b1cc-d57a-52b2-a2a6-d00ab89ab96b"
             )
             .and_then(serde_json::Value::as_str),
         Some(
-            "s3://davidai-audio-recordings/transcription-chunks/prod/06d59594-7036-4e2b-98e3-8f369f041f26/62077784-367e-4709-85d7-1b2e403944df/ba31a7bd-1c89-4f77-a9df-06a1150793bd.wav"
+            "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav"
         )
     );
 }
 
 #[test]
-fn export_json_updates_recovered_review_action_decision_from_project_metadata() {
+fn export_json_updates_review_action_decision_from_project_metadata() {
     let source = include_str!("fixtures/review-action-final.json");
-    let mut project = import_json(source).expect("recovered Babel review action should import");
+    let mut project = import_json(source).expect("Babel review action should import");
     project.metadata.insert(
         "babel.review_action.actionDecision".to_string(),
         "pass".to_string(),
@@ -506,7 +409,7 @@ fn export_json_updates_recovered_review_action_decision_from_project_metadata() 
 }
 
 #[test]
-fn import_json_normalizes_recovered_review_action_decision_metadata() {
+fn import_json_normalizes_review_action_decision_metadata() {
     let source = include_str!("fixtures/review-action-final.json");
     let project = import_json(source).expect("review action should import");
 
@@ -522,10 +425,10 @@ fn import_normalizes_babel_package_into_project() {
 
     let project = import_package(package).expect("package should import");
 
-    assert_eq!(project.id, "62077784-367e-4709-85d7-1b2e403944df");
+    assert_eq!(project.id, "f5b736b9-60ff-5355-ae5a-e909aa644e72");
     assert_eq!(
         project.name,
-        "Babel task 62077784-367e-4709-85d7-1b2e403944df"
+        "Babel task f5b736b9-60ff-5355-ae5a-e909aa644e72"
     );
     assert_eq!(project.speakers.len(), 2);
     assert_eq!(project.lanes.len(), 2);
@@ -539,20 +442,20 @@ fn import_normalizes_babel_package_into_project() {
     assert_eq!(first.source_annotation_id.as_deref(), Some("annotation-1"));
     assert_eq!(first.speaker_id, "speaker-2");
     assert_eq!(first.lane_id, "track-speaker-2");
-    assert_eq!(first.start_seconds, 0.929);
-    assert_eq!(first.end_seconds, 99.286625);
-    assert!(first.text.starts_with("Ты знаешь"));
+    assert_eq!(first.start_seconds, 0.78);
+    assert_eq!(first.end_seconds, 15.45);
+    assert!(first.text.starts_with("Слушай"));
     assert_eq!(
         first.metadata.get("studio.babel.original.text"),
         Some(&json!(first.text.as_str()))
     );
     assert_eq!(
         first.metadata.get("studio.babel.original.startSeconds"),
-        Some(&json!(0.929))
+        Some(&json!(0.78))
     );
     assert_eq!(
         first.metadata.get("studio.babel.original.endSeconds"),
-        Some(&json!(99.286625))
+        Some(&json!(15.45))
     );
     assert_eq!(
         first.metadata.get("studio.babel.original.speakerId"),
@@ -569,7 +472,7 @@ fn import_normalizes_babel_package_into_project() {
             .get("babel.extra.annotation.annotation-1")
             .map(|extra| {
                 extra.contains("reviewActionId")
-                    && extra.contains("eaa5afc3-3d59-4267-b073-d390d0b48060")
+                    && extra.contains("6219876d-eba7-529f-b6c9-d949dbabfd12")
             }),
         Some(true)
     );

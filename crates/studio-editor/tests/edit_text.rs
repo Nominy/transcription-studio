@@ -1,16 +1,11 @@
-//! Draft text, local/project undo, pending-draft commit, time cells, helper text moves/SKAZ,
-//! lint autofix and tag suggestions.
+//! Draft text, local/project undo, pending-draft commit, time cells, and cross-row text moves.
 #![allow(unused_must_use)]
 
 mod edit_support;
 
 use edit_support::*;
-use studio_core::Project;
 use studio_editor::edit::draft::{
     SegmentDraft, TEXT_HISTORY_MAX_ENTRIES, TEXT_HISTORY_MAX_RETAINED_BYTES,
-};
-use studio_editor::edit::tags::{
-    TagSuggestion, TagSuggestionKey, TagSuggestionKind, suggestions_for_text,
 };
 use studio_editor::edit::text::{
     CROSS_ROW_HISTORY_MAX_ENTRIES, CROSS_ROW_HISTORY_MAX_RETAINED_BYTES, CrossRowTextEdit,
@@ -21,9 +16,13 @@ use studio_editor::edit::time::{
     TimeRangeEdit, commit_time_cell_edit,
 };
 use studio_editor::edit::{EditError, EditorDoc, Effect, TextSelection};
-use studio_editor::project_lint_tag_config::{
-    BabelProjectLintTagConfig, META_BABEL_PROJECT_ID, resolve_babel_project_lint_tag_config,
-};
+
+#[test]
+fn an_empty_transcript_has_no_core_text_diagnostic() {
+    let doc = doc(vec![seg("empty", "lane-1", 0.0, 1.0, "")]);
+    let segment = doc.project().segment("empty").unwrap();
+    assert!(doc.drafts().draft_lint(segment).is_none());
+}
 
 // ---- helpers ------------------------------------------------------------------------------
 
@@ -38,14 +37,6 @@ fn set_text_with_caret(doc: &mut EditorDoc, segment_id: &str, text: &str, caret_
 
 fn set_text_with_caret_at_end(doc: &mut EditorDoc, segment_id: &str, text: &str) {
     set_text_with_caret(doc, segment_id, text, text.chars().count());
-}
-
-fn set_text_selected_all(doc: &mut EditorDoc, segment_id: &str, text: &str) {
-    ok(doc.edit_text(
-        segment_id,
-        text.to_string(),
-        TextSelection::new(0, text.chars().count()),
-    ));
 }
 
 fn is_dirty(doc: &EditorDoc) -> bool {
@@ -64,39 +55,6 @@ fn has_draft_changed(effects: &[Effect], segment_id: &str) -> bool {
     effects
         .iter()
         .any(|effect| matches!(effect, Effect::DraftChanged { segment_id: id } if id == segment_id))
-}
-
-fn default_config() -> BabelProjectLintTagConfig {
-    BabelProjectLintTagConfig::default()
-}
-
-fn find_suggestion(suggestions: Vec<TagSuggestion>, label: &str) -> TagSuggestion {
-    suggestions
-        .into_iter()
-        .find(|suggestion| suggestion.label == label)
-        .unwrap_or_else(|| panic!("suggestion `{label}` should be offered"))
-}
-
-fn doc_suggestion(doc: &EditorDoc, segment_id: &str, label: &str) -> TagSuggestion {
-    let list = doc
-        .tag_suggestions(segment_id)
-        .expect("tag suggestions should be open");
-    find_suggestion(list.items, label)
-}
-
-fn labels(suggestions: &[TagSuggestion]) -> Vec<&str> {
-    suggestions
-        .iter()
-        .map(|suggestion| suggestion.label.as_str())
-        .collect()
-}
-
-fn config_for_project_id(project_id: &str) -> BabelProjectLintTagConfig {
-    let mut project: Project = project(Vec::new());
-    project
-        .metadata
-        .insert(META_BABEL_PROJECT_ID.to_string(), project_id.to_string());
-    resolve_babel_project_lint_tag_config(&project)
 }
 
 fn draft_with_text(text: &str) -> SegmentDraft {
@@ -133,7 +91,7 @@ fn segment_drafts_use_babel_timestamp_format() {
 
     assert_eq!(first.time_value(TimeField::Start), "00:01.20");
     assert_eq!(first.time_value(TimeField::End), "00:03.40");
-    assert_eq!(long.time_value(TimeField::Start), "01:05.08");
+    assert_eq!(long.time_value(TimeField::Start), "00:21.08");
 }
 
 #[test]
@@ -333,227 +291,7 @@ fn cross_row_history_keeps_one_newest_oversized_move() {
     assert!(cross_row_bytes(&entries) > CROSS_ROW_HISTORY_MAX_RETAINED_BYTES);
 }
 
-// ---- tag suggestions ----------------------------------------------------------------------
-
-#[test]
-fn tag_suggestions_match_babel_square_bracket_trigger() {
-    let text = "это [не";
-    let suggestion = find_suggestion(
-        suggestions_for_text(text, text.len(), &default_config()),
-        "неразборчиво",
-    );
-
-    assert_eq!(suggestion.kind, TagSuggestionKind::Bracket);
-    assert_eq!(suggestion.insert_text, "[неразборчиво]");
-    assert_eq!(suggestion.replacement_start, "это ".len());
-    assert_eq!(suggestion.replacement_end, text.len());
-}
-
-#[test]
-fn tag_suggestions_match_babel_style_open_and_close_triggers() {
-    let open_text = "говорит <нара";
-    let open = find_suggestion(
-        suggestions_for_text(open_text, open_text.len(), &default_config()),
-        "<речь-нараспев>",
-    );
-    assert_eq!(open.kind, TagSuggestionKind::StyleOpen);
-    assert_eq!(open.insert_text, "<речь-нараспев></речь-нараспев>");
-    assert_eq!(open.cursor_back_count, "речь-нараспев>".chars().count() + 2);
-
-    let close_text = "говорит </смех";
-    let close = find_suggestion(
-        suggestions_for_text(close_text, close_text.len(), &default_config()),
-        "</смех-в-речи>",
-    );
-    assert_eq!(close.kind, TagSuggestionKind::StyleClose);
-    assert_eq!(close.insert_text, "</смех-в-речи>");
-    assert_eq!(close.cursor_back_count, 0);
-}
-
-#[test]
-fn tag_suggestions_match_babel_curly_mis_and_pro_triggers() {
-    let mis_text = "слово {M";
-    let mis = find_suggestion(
-        suggestions_for_text(mis_text, mis_text.len(), &default_config()),
-        "MIS:",
-    );
-    assert_eq!(mis.kind, TagSuggestionKind::Curly);
-    assert_eq!(mis.insert_text, "{MIS: }");
-    assert_eq!(mis.replacement_start, "слово ".len());
-    assert_eq!(mis.replacement_end, mis_text.len());
-    assert_eq!(mis.cursor_back_count, 1);
-
-    let pro_text = "слово {pro";
-    let pro = find_suggestion(
-        suggestions_for_text(pro_text, pro_text.len(), &default_config()),
-        "PRO:",
-    );
-    assert_eq!(pro.kind, TagSuggestionKind::Curly);
-    assert_eq!(pro.insert_text, "{PRO: }");
-}
-
-#[test]
-fn tag_suggestions_ignore_invalid_non_suffix_partial() {
-    let text = "hello [не word";
-    assert!(suggestions_for_text(text, text.len(), &default_config()).is_empty());
-}
-
-#[test]
-fn tag_suggestions_use_contains_matching_like_babel() {
-    let suggestions = suggestions_for_text("[раз", "[раз".len(), &default_config());
-    assert!(suggestions.iter().any(|suggestion| {
-        suggestion.kind == TagSuggestionKind::Bracket && suggestion.label == "неразборчиво"
-    }));
-}
-
-#[test]
-fn tag_suggestions_offer_gold_non_background_tags_for_any_russian_project() {
-    // ru-tx-gold: its background-noise tags are not offered, Gold's non-background ones are.
-    let config = config_for_project_id("0bf29f0c-371a-506a-8b77-5fffd14e5762");
-
-    let background = suggestions_for_text("[муз", "[муз".len(), &config);
-    let other_noise = suggestions_for_text("[друг", "[друг".len(), &config);
-    let style = suggestions_for_text("<под", "<под".len(), &config);
-
-    assert!(background.is_empty());
-    assert_eq!(labels(&other_noise), vec!["другой-звук"]);
-    assert_eq!(other_noise[0].kind, TagSuggestionKind::Bracket);
-    assert_eq!(labels(&style), vec!["<подражание>"]);
-    assert_eq!(style[0].kind, TagSuggestionKind::StyleOpen);
-}
-
-#[test]
-fn doc_tag_suggestions_follow_project_language() {
-    let mut project = project(vec![seg("a", "lane-1", 0.0, 2.0, "")]);
-    project
-        .metadata
-        .insert("language".to_string(), "EN".to_string());
-    let mut doc = EditorDoc::from_project(project);
-
-    set_text_with_caret_at_end(&mut doc, "a", "[lau");
-    let list = doc.tag_suggestions("a").expect("bracket suggestions");
-    assert_eq!(labels(&list.items), vec!["laugh"]);
-
-    set_text_with_caret_at_end(&mut doc, "a", "[сме");
-    assert!(doc.tag_suggestions("a").is_none());
-}
-
-#[test]
-fn applying_tag_suggestion_replaces_partial_trigger_and_marks_dirty() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "слово [не");
-    clear_dirty(&mut doc);
-    let suggestion = doc_suggestion(&doc, "annotation-1", "неразборчиво");
-
-    let outcome = ok(doc.apply_tag_suggestion("annotation-1", &suggestion));
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "слово [неразборчиво]");
-    assert!(has_draft_changed(&outcome.effects, "annotation-1"));
-    assert!(is_dirty(&doc));
-}
-
-#[test]
-fn applying_curly_tag_suggestion_places_cursor_before_closing_brace() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "слово {M");
-    clear_dirty(&mut doc);
-    let suggestion = doc_suggestion(&doc, "annotation-1", "MIS:");
-
-    ok(doc.apply_tag_suggestion("annotation-1", &suggestion));
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "слово {MIS: }");
-    assert_eq!(caret(&doc, "annotation-1"), "слово {MIS: ".chars().count());
-    assert!(is_dirty(&doc));
-}
-
-#[test]
-fn applying_tag_suggestion_stays_in_local_text_undo_history() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "слово [не");
-    let suggestion = doc_suggestion(&doc, "annotation-1", "неразборчиво");
-
-    ok(doc.apply_tag_suggestion("annotation-1", &suggestion));
-    assert_eq!(draft_text(&doc, "annotation-1"), "слово [неразборчиво]");
-
-    ok(doc.undo_text("annotation-1"));
-    assert_eq!(draft_text(&doc, "annotation-1"), "слово [не");
-
-    ok(doc.redo_text("annotation-1"));
-    assert_eq!(draft_text(&doc, "annotation-1"), "слово [неразборчиво]");
-}
-
-#[test]
-fn applying_style_open_suggestion_places_cursor_inside_babel_style_pair() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "слово <нара");
-    let suggestion = doc_suggestion(&doc, "annotation-1", "<речь-нараспев>");
-
-    ok(doc.apply_tag_suggestion("annotation-1", &suggestion));
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "слово <речь-нараспев></речь-нараспев>"
-    );
-    assert_eq!(
-        caret(&doc, "annotation-1"),
-        "слово <речь-нараспев>".chars().count()
-    );
-}
-
-#[test]
-fn applying_style_tag_suggestion_wraps_selected_text_and_marks_dirty() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "тихий голос");
-    doc.set_selection(
-        "annotation-1",
-        TextSelection::new(0, "тихий голос".chars().count()),
-    );
-    clear_dirty(&mut doc);
-    let suggestion = doc_suggestion(&doc, "annotation-1", "<речь-нараспев>");
-
-    ok(doc.apply_tag_suggestion("annotation-1", &suggestion));
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "<речь-нараспев>тихий голос</речь-нараспев>"
-    );
-    assert!(is_dirty(&doc));
-
-    ok(doc.undo_text("annotation-1"));
-    assert_eq!(draft_text(&doc, "annotation-1"), "тихий голос");
-}
-
-#[test]
-fn tag_suggestion_keyboard_accepts_highlighted_babel_suggestion() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "[сме");
-    clear_dirty(&mut doc);
-    assert_eq!(doc.tag_suggestions("annotation-1").unwrap().highlighted, 0);
-
-    ok(doc.tag_suggestion_key("annotation-1", TagSuggestionKey::Next));
-    assert_eq!(doc.tag_suggestions("annotation-1").unwrap().highlighted, 1);
-
-    ok(doc.tag_suggestion_key("annotation-1", TagSuggestionKey::Accept));
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "[смех]");
-    assert!(is_dirty(&doc));
-    assert!(doc.tag_suggestions("annotation-1").is_none());
-}
-
-#[test]
-fn tag_suggestion_escape_dismisses_current_trigger_until_text_changes() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "[сме");
-    assert!(doc.tag_suggestions("annotation-1").is_some());
-
-    ok(doc.tag_suggestion_key("annotation-1", TagSuggestionKey::Dismiss));
-    assert!(doc.tag_suggestions("annotation-1").is_none());
-
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "[смех");
-    assert!(doc.tag_suggestions("annotation-1").is_some());
-}
-
-// ---- helper text moves / SKAZ -------------------------------------------------------------
+// ---- cross-row text moves -----------------------------------------------------------------
 
 #[test]
 fn helper_text_move_before_caret_targets_previous_same_lane_segment() {
@@ -666,169 +404,6 @@ fn helper_text_move_undo_redo_restores_both_rows_atomically() {
     assert_eq!(draft_text(&doc, "annotation-1"), "previous move me");
     assert_eq!(draft_text(&doc, "annotation-3"), "stay");
     assert_eq!(caret(&doc, "annotation-3"), 0);
-}
-
-#[test]
-fn helper_selected_number_to_skaz_converts_selected_digits() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_selected_all(&mut doc, "annotation-1", "1234");
-    clear_dirty(&mut doc);
-
-    let outcome = ok(doc.convert_selection_to_skaz());
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "1 234 {СКАЗ: одна тысяча двести тридцать четыре}"
-    );
-    assert!(has_draft_changed(&outcome.effects, "annotation-1"));
-    assert!(is_dirty(&doc));
-}
-
-#[test]
-fn helper_selected_number_to_skaz_prefers_helper_focused_row() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-2");
-    set_text_selected_all(&mut doc, "annotation-1", "1234");
-    doc.set_text_focus(Some("annotation-1"));
-
-    ok(doc.convert_selection_to_skaz());
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "1 234 {СКАЗ: одна тысяча двести тридцать четыре}"
-    );
-}
-
-#[test]
-fn helper_digit_over_selection_preserves_babel_skaz_cursor_offset() {
-    let mut doc = stable_sample_doc();
-    set_text_selected_all(&mut doc, "annotation-1", "семь восемь");
-    clear_dirty(&mut doc);
-
-    ok(doc.convert_selection_with_digit("annotation-1", '5'));
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "5 {СКАЗ: семь восемь}");
-    assert_eq!(caret(&doc, "annotation-1"), 1);
-    assert!(is_dirty(&doc));
-}
-
-// ---- lint autofix -------------------------------------------------------------------------
-
-#[test]
-fn helper_lint_autofix_current_row_applies_common_babel_text_hygiene() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "  привет,мир  ");
-    clear_dirty(&mut doc);
-
-    let outcome = ok(doc.autofix_current_row());
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "Привет, мир.");
-    assert!(has_draft_changed(&outcome.effects, "annotation-1"));
-    assert!(is_dirty(&doc));
-}
-
-#[test]
-fn helper_lint_autofix_current_row_is_locally_undoable() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "  привет,мир  ");
-
-    ok(doc.autofix_current_row());
-    ok(doc.undo_text("annotation-1"));
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "  привет,мир  ");
-}
-
-#[test]
-fn helper_lint_autofix_all_rows_uses_same_lane_previous_context() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "первая  строка");
-    set_text_with_caret_at_end(&mut doc, "annotation-3", "следующая,строка");
-    clear_dirty(&mut doc);
-
-    ok(doc.autofix_all_rows());
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "Первая строка.");
-    assert_eq!(draft_text(&doc, "annotation-3"), "Следующая, строка.");
-    assert!(is_dirty(&doc));
-}
-
-#[test]
-fn helper_lint_autofix_preserves_lowercase_after_same_lane_continuation_marker() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "это --");
-    set_text_with_caret_at_end(&mut doc, "annotation-3", "продолжение");
-
-    ok(doc.autofix_all_rows());
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "Это --");
-    assert_eq!(draft_text(&doc, "annotation-3"), "продолжение.");
-}
-
-#[test]
-fn helper_lint_autofix_moves_tag_trailing_punctuation_like_babel_linter() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "привет {MIS: шум}?");
-
-    ok(doc.autofix_current_row());
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "Привет? {MIS: шум}.");
-}
-
-#[test]
-fn helper_lint_autofix_moves_square_tag_dash_and_normalizes_free_double_dash() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "ну, - вот [смех]- дальше -- тут");
-
-    ok(doc.autofix_current_row());
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "Ну - вот- [смех] дальше - тут."
-    );
-}
-
-#[test]
-fn helper_lint_autofix_normalizes_interjection_variants() {
-    let mut doc = stable_sample_doc();
-    doc.select_segment("annotation-1");
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "эээ уау чорт");
-
-    ok(doc.autofix_current_row());
-
-    assert_eq!(draft_text(&doc, "annotation-1"), "Э вау чёрт.");
-}
-
-#[test]
-fn helper_lint_autofix_lowercases_polite_pronouns_only_inside_sentence() {
-    let mut doc = stable_sample_doc();
-    set_text_with_caret_at_end(&mut doc, "annotation-1", "спасибо Вам за Ваш ответ");
-    set_text_with_caret_at_end(&mut doc, "annotation-2", "Вам спасибо");
-    set_text_with_caret_at_end(&mut doc, "annotation-3", "вопрос: Вам удобно");
-
-    ok(doc.autofix_all_rows());
-
-    assert_eq!(
-        draft_text(&doc, "annotation-1"),
-        "Спасибо вам за ваш ответ."
-    );
-    assert_eq!(draft_text(&doc, "annotation-2"), "Вам спасибо.");
-    assert_eq!(draft_text(&doc, "annotation-3"), "Вопрос: Вам удобно.");
-}
-
-#[test]
-fn helper_lint_autofix_current_row_requires_selection() {
-    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "привет,мир")]);
-    doc.session_mut().selected_segment_id = None;
-
-    let err = doc.autofix_current_row().unwrap_err();
-
-    assert!(matches!(err, EditError::NoSelection { .. }));
-    assert_eq!(draft_text(&doc, "a"), "привет,мир");
 }
 
 // ---- time cells ---------------------------------------------------------------------------

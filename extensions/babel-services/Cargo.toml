@@ -1,0 +1,39 @@
+[package]
+name = "sonus-babel-services"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bytes.workspace = true
+futures-util = { version = "0.3", default-features = false }
+httpdate.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+studio-babel.workspace = true
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-inference.workspace = true
+studio-services.workspace = true
+studio-waveform.workspace = true
+sonus-babel-domain.workspace = true
+sonus-babel-lint.workspace = true
+sonus-gold.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["parsing"] }
+tokio = { workspace = true, features = ["time"] }
+unicode-normalization = "0.1"
+url.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+async-trait = "0.1"
+axum = { workspace = true, features = ["multipart"] }
+tokio = { workspace = true, features = ["net"] }

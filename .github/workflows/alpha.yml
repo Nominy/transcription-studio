@@ -1,0 +1,144 @@
+# Every push to main packages a Windows alpha build (pack id Sonus, Velopack channel
+# `alpha`) and publishes it to the VPS alpha feed that installed alpha builds update from.
+name: Alpha
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_to_vps:
+        description: Publish to the VPS alpha feed (push builds always publish).
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-windows
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  FEED_URL: https://reviewgen.ovh/sonus/alpha/win-x64
+  REMOTE_PATH: /var/www/sonus/alpha/win-x64
+
+jobs:
+  package:
+    name: Package Windows alpha
+    if: github.repository == 'Nominy/sonus'
+    runs-on: windows-latest
+    env:
+      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Resolve the alpha version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath crates/studio-app/Cargo.toml
+          $package = [regex]::Match($manifest, '(?ms)^\[package\]\s*(?<body>.*?)(?=^\[|\z)')
+          $declared = [regex]::Match($package.Groups["body"].Value, '(?m)^\s*version\s*=\s*"(?<version>[^"]+)"')
+          $base = [regex]::Match(
+            $declared.Groups["version"].Value,
+            '^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)$'
+          )
+          if (-not $base.Success) {
+            throw "studio-app version must be numeric major.minor.patch; found '$($declared.Groups["version"].Value)'."
+          }
+          # The next patch's pre-release sorts above the current stable and below the next one.
+          $nextPatch = [System.Numerics.BigInteger]::Parse($base.Groups["patch"].Value) + 1
+          $version = "$($base.Groups["major"].Value).$($base.Groups["minor"].Value).$nextPatch-alpha.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Alpha version: $version"
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
+
+      - name: Prime the previous alpha for delta packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Join-Path $PWD "target/velopack/Releases"
+          if (Test-Path -LiteralPath $releaseDir) {
+            Remove-Item -LiteralPath $releaseDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          dotnet tool run vpk -- download http --url $env:FEED_URL --channel alpha --outputDir $releaseDir
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Could not download the latest alpha; packaging full artifacts only."
+            Get-ChildItem -LiteralPath $releaseDir | Remove-Item -Recurse -Force
+          }
+          exit 0
+
+      - name: Build and package
+        shell: pwsh
+        run: ./tools/package-windows.ps1 -UpdateChannel alpha -Version $env:VERSION
+
+      - name: Publish to the VPS alpha feed
+        if: ${{ github.event_name == 'push' || inputs.publish_to_vps }}
+        shell: pwsh
+        env:
+          ALPHA_SSH_HOST: ${{ secrets.ALPHA_SSH_HOST }}
+          ALPHA_SSH_USER: ${{ secrets.ALPHA_SSH_USER }}
+          ALPHA_SSH_PORT: ${{ secrets.ALPHA_SSH_PORT }}
+          ALPHA_SSH_PRIVATE_KEY: ${{ secrets.ALPHA_SSH_PRIVATE_KEY }}
+          ALPHA_SSH_KNOWN_HOSTS: ${{ secrets.ALPHA_SSH_KNOWN_HOSTS }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @("ALPHA_SSH_HOST", "ALPHA_SSH_USER", "ALPHA_SSH_PRIVATE_KEY", "ALPHA_SSH_KNOWN_HOSTS")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The $name secret is required to publish the alpha feed."
+            }
+          }
+          $port = if ([string]::IsNullOrWhiteSpace($env:ALPHA_SSH_PORT)) { 22 } else { [int]$env:ALPHA_SSH_PORT }
+
+          function Write-PrivateFile([string]$Path, [string]$Text) {
+            $normalized = ($Text -replace "`r`n?", "`n").TrimEnd() + "`n"
+            [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
+            # Windows OpenSSH rejects private keys other accounts can read.
+            icacls $Path /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls failed for $Path" }
+          }
+          $keyPath = Join-Path $env:RUNNER_TEMP "alpha_deploy_key"
+          $knownHostsPath = Join-Path $env:RUNNER_TEMP "alpha_known_hosts"
+          Write-PrivateFile $keyPath $env:ALPHA_SSH_PRIVATE_KEY
+          Write-PrivateFile $knownHostsPath $env:ALPHA_SSH_KNOWN_HOSTS
+          try {
+            ./tools/publish-alpha-windows.ps1 `
+              -SkipPackage `
+              -Version $env:VERSION `
+              -Remote "$($env:ALPHA_SSH_USER)@$($env:ALPHA_SSH_HOST)" `
+              -RemotePath $env:REMOTE_PATH `
+              -SshKeyPath $keyPath `
+              -KnownHostsPath $knownHostsPath `
+              -SshPort $port
+          } finally {
+            Remove-Item -LiteralPath $keyPath, $knownHostsPath -Force
+          }
+
+      - name: Upload the publish payload
+        uses: actions/upload-artifact@v5
+        with:
+          name: sonus-alpha-windows
+          path: target/velopack/Publish/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

@@ -26,9 +26,6 @@ pub const CUT_PREVIEW_DRAG_THRESHOLD_PX: f64 = 5.0;
 /// Minimum cut-preview overlay length (Helper's `CUT_PREVIEW_SAFETY_MIN_SECONDS`), so
 /// selections well under a second can be drawn, resized and looped.
 pub const CUT_PREVIEW_MIN_DURATION_SECONDS: f64 = 0.008;
-/// Shortest selection that can be cut: Babel requires same-speaker segments to be at least
-/// 1 second apart, so a shorter cut leaves an invalid gap. Shorter selections still loop.
-pub const CUT_PREVIEW_MIN_CUT_SECONDS: f64 = 1.0;
 /// Pointer travel that turns a held middle-click autoscroll into "drag" mode.
 pub const TIMELINE_AUTOSCROLL_HOLD_MOVE_THRESHOLD_FRACTION: f32 = 0.004;
 /// Autoscroll distance below which the viewport does not move.

@@ -1,0 +1,29 @@
+[package]
+name = "sonus-babel-ui"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel = "2.5"
+bytes.workspace = true
+gpui-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+studio-audio.workspace = true
+studio-babel.workspace = true
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-inference.workspace = true
+studio-services.workspace = true
+studio-waveform.workspace = true
+sonus-shell = { path = "../../crates/sonus-shell" }
+sonus-extension = { path = "../../crates/sonus-extension" }
+sonus-babel-domain = { path = "../babel-domain" }
+sonus-babel-lint = { path = "../babel-lint" }
+sonus-babel-tags = { path = "../babel-tags" }
+sonus-babel-services = { path = "../babel-services" }
+sonus-gold = { path = "../gold" }
+sonus-gold-ui = { path = "../gold-ui" }

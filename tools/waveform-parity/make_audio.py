@@ -1,4 +1,4 @@
-"""Builds the parity cases' audio from the demo speakers (deterministic, numpy only).
+"""Builds the parity cases' audio from the synthetic demo speakers (deterministic, numpy only).
 
 usage: python make_audio.py <out_dir>
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURE = REPO / "crates/studio-babel/tests/fixtures/recovered/babel-fixture"
+DEMO = REPO / "crates/studio-editor/assets/demo"
 
 
 def read(path):
@@ -43,10 +43,10 @@ def resample(samples, rate, target):
 def main():
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
-    rate, s1 = read(FIXTURE / "speaker_1.wav")
-    _, s2 = read(FIXTURE / "speaker_2.wav")
-    # 60 s of speaker 1 speech (99-159 s) and speaker 2 (1-61 s).
-    a = s1[99 * rate : 159 * rate]
+    rate, s1 = read(DEMO / "speaker_1.wav")
+    _, s2 = read(DEMO / "speaker_2.wav")
+    # 60 s of speaker 1 (16-76 s) and speaker 2 (1-61 s), each opening on speech.
+    a = s1[16 * rate : 76 * rate]
     b = s2[1 * rate : 61 * rate]
     write(out / "s1-full.wav", rate, s1)
     write(out / "s1-60.wav", rate, a)

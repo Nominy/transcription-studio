@@ -74,56 +74,7 @@ fn apply_text_edit_changes_only_target_segment() {
 
     assert_eq!(project.segment("segment-1").unwrap().text, "corrected text");
     assert_eq!(project.segment("segment-2").unwrap().text, "original two");
-    assert_eq!(
-        project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("lowConfidenceResolved"),
-        Some(&json!(true))
-    );
-}
-
-#[test]
-fn resolve_low_confidence_marks_segment_metadata_and_undo_restores_it() {
-    let mut project = sample_project();
-    project
-        .segment_mut("segment-1")
-        .unwrap()
-        .metadata
-        .insert("lowConfidenceResolved".to_string(), json!(false));
-    let mut history = CommandHistory::default();
-
-    history
-        .apply(
-            &mut project,
-            EditorCommand::ResolveLowConfidence {
-                segment_id: "segment-1".to_string(),
-            },
-        )
-        .expect("low-confidence resolve should apply");
-
-    assert_eq!(
-        project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("lowConfidenceResolved"),
-        Some(&json!(true))
-    );
-
-    history
-        .undo(&mut project)
-        .expect("undo should restore metadata");
-
-    assert_eq!(
-        project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("lowConfidenceResolved"),
-        Some(&json!(false))
-    );
+    assert!(project.segment("segment-1").unwrap().metadata.is_empty());
 }
 
 #[test]
@@ -185,10 +136,7 @@ fn update_segment_changes_text_and_timing_as_one_undo_step() {
     assert_eq!(edited.start_seconds, 1.5);
     assert_eq!(edited.end_seconds, 3.5);
     assert_eq!(edited.text, "combined edit");
-    assert_eq!(
-        edited.metadata.get("lowConfidenceResolved"),
-        Some(&json!(true))
-    );
+    assert!(edited.metadata.is_empty());
 
     history
         .undo(&mut project)
@@ -239,246 +187,6 @@ fn update_segment_rejects_missing_segment() {
 
     assert_eq!(result, Err(StudioCoreError::SegmentNotFound));
     assert_eq!(project.segment("segment-1").unwrap().text, "original one");
-}
-
-#[test]
-fn update_annotation_metadata_preserves_other_fields_and_undo_restores() {
-    let mut project = sample_project();
-    let segment = project.segment_mut("segment-1").unwrap();
-    segment
-        .metadata
-        .insert("type".to_string(), json!("background_noise"));
-    segment
-        .metadata
-        .insert("reviewActionId".to_string(), json!("review-1"));
-    segment.metadata.insert(
-        "content".to_string(),
-        json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "rustle"
-        }),
-    );
-    segment.metadata.insert("intensity".to_string(), json!(2));
-    let mut history = CommandHistory::default();
-
-    history
-        .apply_with_timestamp(
-            &mut project,
-            EditorCommand::UpdateAnnotationMetadata {
-                segment_id: "segment-1".to_string(),
-                text: "background-noise / chair scrape".to_string(),
-                intensity: Some(4),
-                content: json!({
-                    "primaryLabel": "background-noise",
-                    "secondaryLabel": "chair scrape"
-                }),
-            },
-            Some("2026-06-21T12:34:56.000Z".to_string()),
-        )
-        .expect("annotation metadata edit should apply");
-
-    let edited = project.segment("segment-1").unwrap();
-    assert_eq!(edited.text, "background-noise / chair scrape");
-    assert_eq!(
-        edited.metadata.get("type"),
-        Some(&json!("background_noise"))
-    );
-    assert_eq!(
-        edited.metadata.get("reviewActionId"),
-        Some(&json!("review-1"))
-    );
-    assert_eq!(edited.metadata.get("intensity"), Some(&json!(4)));
-    assert_eq!(
-        edited.metadata.get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "chair scrape"
-        }))
-    );
-    assert_eq!(
-        edited.metadata.get("lowConfidenceResolved"),
-        Some(&json!(true)),
-        "recovered Babel annotation edits resolve low-confidence metadata"
-    );
-    assert_eq!(
-        edited.metadata.get("updatedAt"),
-        Some(&json!("2026-06-21T12:34:56.000Z")),
-        "recovered Babel annotation edits store the mutation timestamp"
-    );
-
-    history
-        .undo(&mut project)
-        .expect("undo should restore annotation metadata");
-
-    let restored = project.segment("segment-1").unwrap();
-    assert_eq!(restored.text, "original one");
-    assert_eq!(restored.metadata.get("intensity"), Some(&json!(2)));
-    assert_eq!(
-        restored.metadata.get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "rustle"
-        }))
-    );
-}
-
-#[test]
-fn timestamped_annotation_commands_stamp_babel_updated_at_metadata() {
-    let timestamp = "2026-06-21T12:34:56.000Z";
-
-    let mut text_project = sample_project();
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut text_project,
-            EditorCommand::ApplyTextEdit {
-                segment_id: "segment-1".to_string(),
-                text: "edited text".to_string(),
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("text edit should apply");
-    assert_eq!(
-        text_project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("updatedAt"),
-        Some(&json!(timestamp))
-    );
-
-    let mut time_project = sample_project();
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut time_project,
-            EditorCommand::MoveSegmentBoundary {
-                segment_id: "segment-1".to_string(),
-                start_seconds: 1.25,
-                end_seconds: 3.25,
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("time edit should apply");
-    assert_eq!(
-        time_project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("updatedAt"),
-        Some(&json!(timestamp))
-    );
-
-    let mut track_project = sample_project();
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut track_project,
-            EditorCommand::ChangeSegmentSpeaker {
-                segment_id: "segment-1".to_string(),
-                speaker_id: "speaker-2".to_string(),
-                lane_id: "track-2".to_string(),
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("track edit should apply");
-    assert_eq!(
-        track_project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("updatedAt"),
-        Some(&json!(timestamp))
-    );
-
-    let mut create_project = sample_project();
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut create_project,
-            EditorCommand::CreateSegment {
-                segment: Segment {
-                    id: "created".to_string(),
-                    source_annotation_id: None,
-                    speaker_id: "speaker-1".to_string(),
-                    lane_id: "track-1".to_string(),
-                    start_seconds: 4.5,
-                    end_seconds: 5.0,
-                    text: String::new(),
-                    metadata: Default::default(),
-                },
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("create should apply");
-    let created = create_project.segment("created").unwrap();
-    assert_eq!(created.metadata.get("createdAt"), Some(&json!(timestamp)));
-    assert_eq!(created.metadata.get("updatedAt"), Some(&json!(timestamp)));
-
-    let mut split_project = sample_project();
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut split_project,
-            EditorCommand::SplitSegment {
-                segment_id: "segment-1".to_string(),
-                at_seconds: 2.0,
-                new_segment_id: "segment-1b".to_string(),
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("split should apply");
-    for segment_id in ["segment-1", "segment-1b"] {
-        let segment = split_project.segment(segment_id).unwrap();
-        assert_eq!(segment.metadata.get("createdAt"), Some(&json!(timestamp)));
-        assert_eq!(segment.metadata.get("updatedAt"), Some(&json!(timestamp)));
-    }
-
-    let mut merge_project = sample_project();
-    merge_project.segments[1].speaker_id = "speaker-1".to_string();
-    merge_project.segments[1].lane_id = "track-1".to_string();
-    merge_project.segments[1].start_seconds = 3.0;
-    CommandHistory::default()
-        .apply_with_timestamp(
-            &mut merge_project,
-            EditorCommand::MergeSegments {
-                left_segment_id: "segment-1".to_string(),
-                right_segment_id: "segment-2".to_string(),
-            },
-            Some(timestamp.to_string()),
-        )
-        .expect("merge should apply");
-    assert_eq!(
-        merge_project
-            .segment("segment-1")
-            .unwrap()
-            .metadata
-            .get("updatedAt"),
-        Some(&json!(timestamp))
-    );
-}
-
-#[test]
-fn split_segment_leaves_babel_gap_and_clones_recovered_content() {
-    let mut project = sample_project();
-    let mut history = CommandHistory::default();
-
-    history
-        .apply(
-            &mut project,
-            EditorCommand::SplitSegment {
-                segment_id: "segment-1".to_string(),
-                at_seconds: 2.2,
-                new_segment_id: "segment-1b".to_string(),
-            },
-        )
-        .expect("split should apply");
-
-    let left = project.segment("segment-1").unwrap();
-    let right = project.segment("segment-1b").unwrap();
-    assert_eq!(left.start_seconds, 1.0);
-    assert!((left.end_seconds - 2.15).abs() < f64::EPSILON * 4.0);
-    assert_eq!(left.text, "original one");
-    assert!((right.start_seconds - 2.25).abs() < f64::EPSILON * 4.0);
-    assert_eq!(right.end_seconds, 3.0);
-    assert_eq!(right.text, "original one");
-    assert_eq!(right.speaker_id, "speaker-1");
-    assert_eq!(right.lane_id, "track-1");
 }
 
 #[test]
@@ -1006,36 +714,6 @@ fn change_segment_speaker_updates_speaker_and_lane() {
 }
 
 #[test]
-fn set_segment_annotation_type_updates_metadata_and_undo_restores_it() {
-    let mut project = sample_project();
-    let mut history = CommandHistory::default();
-
-    history
-        .apply(
-            &mut project,
-            EditorCommand::SetSegmentAnnotationType {
-                segment_id: "segment-1".to_string(),
-                annotation_type: "non-transcription".to_string(),
-            },
-        )
-        .expect("annotation type change should apply");
-
-    assert_eq!(
-        project.segment("segment-1").unwrap().metadata.get("type"),
-        Some(&json!("non-transcription"))
-    );
-
-    history
-        .undo(&mut project)
-        .expect("undo should restore annotation metadata");
-
-    assert_eq!(
-        project.segment("segment-1").unwrap().metadata.get("type"),
-        None
-    );
-}
-
-#[test]
 fn change_segment_speaker_rejects_missing_segment() {
     let mut project = sample_project();
     let mut history = CommandHistory::default();
@@ -1431,4 +1109,105 @@ fn command_history_clear_empties_both_stacks() {
         .undo(&mut project)
         .expect("post-clear edit should undo");
     assert_eq!(project.segment("segment-1").unwrap().text, "first");
+}
+
+#[test]
+fn native_split_preserves_metadata_without_domain_gap_or_stamps() {
+    let mut project = sample_project();
+    project.segments[0]
+        .metadata
+        .insert("opaque".into(), json!({"source": 7}));
+    let original_metadata = project.segments[0].metadata.clone();
+    CommandHistory::default()
+        .apply(
+            &mut project,
+            EditorCommand::SplitSegment {
+                segment_id: "segment-1".into(),
+                at_seconds: 2.0,
+                new_segment_id: "split".into(),
+            },
+        )
+        .unwrap();
+    let left = project.segment("segment-1").unwrap();
+    let right = project.segment("split").unwrap();
+    assert_eq!(left.end_seconds, 2.0);
+    assert_eq!(right.start_seconds, 2.0);
+    assert_eq!(left.metadata, original_metadata);
+    assert_eq!(right.metadata, original_metadata);
+}
+
+#[test]
+fn project_transaction_rolls_back_failed_partial_mutation_and_preserves_redo() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+    history
+        .apply(
+            &mut project,
+            EditorCommand::ApplyTextEdit {
+                segment_id: "segment-1".into(),
+                text: "edited".into(),
+            },
+        )
+        .unwrap();
+    history.undo(&mut project).unwrap();
+    let previous = project.clone();
+    let result = history.apply_transaction(&mut project, |project| {
+        project.segments[0].text = "partial".into();
+        project.metadata.insert("opaque".into(), "partial".into());
+        Err::<(), _>("rejected")
+    });
+    assert_eq!(result, Err("rejected"));
+    assert_eq!(project, previous);
+    assert!(!history.can_undo());
+    assert!(history.can_redo());
+}
+
+#[test]
+fn metadata_transaction_commits_as_one_undo_unit() {
+    let mut project = sample_project();
+    let original = project.clone();
+    let mut history = CommandHistory::default();
+    history
+        .apply_transaction(&mut project, |project| {
+            project.segments[0].text = "first".into();
+            project.segments[1]
+                .metadata
+                .insert("opaque".into(), json!(17));
+            Ok::<(), StudioCoreError>(())
+        })
+        .unwrap();
+    let committed = project.clone();
+    history.undo(&mut project).unwrap();
+    assert_eq!(project, original);
+    assert!(!history.can_undo());
+    history.redo(&mut project).unwrap();
+    assert_eq!(project, committed);
+}
+
+#[test]
+fn opaque_segment_metadata_command_preserves_unmentioned_fields_and_is_undoable() {
+    let mut project = sample_project();
+    project.segments[0]
+        .metadata
+        .insert("preserved".into(), json!([1, 2]));
+    let original = project.clone();
+    let mut history = CommandHistory::default();
+    history
+        .apply(
+            &mut project,
+            EditorCommand::UpdateSegmentMetadata {
+                segment_id: "segment-1".into(),
+                text: Some("edited".into()),
+                entries: std::collections::BTreeMap::from([("opaque".into(), json!({"value": 3}))]),
+            },
+        )
+        .unwrap();
+    assert_eq!(project.segments[0].text, "edited");
+    assert_eq!(project.segments[0].metadata.len(), 2);
+    assert_eq!(
+        project.segments[0].metadata.get("preserved"),
+        Some(&json!([1, 2]))
+    );
+    history.undo(&mut project).unwrap();
+    assert_eq!(project, original);
 }

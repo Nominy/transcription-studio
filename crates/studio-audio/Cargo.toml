@@ -10,6 +10,8 @@ rodio.workspace = true
 sha2 = "0.10"
 studio-core.workspace = true
 studio-waveform.workspace = true
+symphonia = { version = "0.6.1", default-features = false, features = ["aac", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav", "all-meta", "opt-simd"] }
+symphonia-adapter-libopus = "0.3.0"
 thiserror.workspace = true
 
 [dev-dependencies]

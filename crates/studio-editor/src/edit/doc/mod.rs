@@ -9,6 +9,7 @@
 mod actions;
 mod dialogs;
 mod drafting;
+mod extensions;
 mod navigation;
 mod structure;
 mod text;
@@ -18,16 +19,15 @@ pub use drafting::{
     DraftedRow, RowSnapshot, SEGMENT_BOUNDARY_TOLERANCE_SECONDS, TranscriptionRefusal,
     TranscriptionTarget, capitalize_first_letter, remove_word_final_ellipsis,
 };
-pub use text::TagSuggestionList;
+pub use text::{CompletionKey, CompletionList};
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use studio_core::Project;
 use studio_waveform::WaveformHit;
 
-use super::annotation::{EditAnnotationDialog, EditAnnotationError};
 use super::create_region::{CreateRegionDialog, CreateRegionError};
 use super::draft::{DraftError, Drafts, SegmentDraft, TextSelection};
 use super::find::FindState;
@@ -39,10 +39,10 @@ use super::structure::{
 use super::text::TextMoveError;
 use super::time::TimeEditError;
 use crate::editor_model::{EditorSession, ProblemCounts};
-use crate::linter::LintSeverity;
 use crate::timing::WordTimings;
 use crate::transcript_model::{TranscriptRowView, speaker_label};
 use crate::workflow::StudioWorkflow;
+use sonus_extension::document::{DocumentEnvironment, Severity};
 
 /// Side effects the UI performs after an operation.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +70,11 @@ pub enum Effect {
     /// A row's draft text/selection changed programmatically: reload the row's input from
     /// [`EditorDoc::draft`].
     DraftChanged { segment_id: String },
+    /// Route a document-scoped contribution through the shell's command registry.
+    ExecuteCommand {
+        command: String,
+        arguments: serde_json::Value,
+    },
 }
 
 /// Successful operation result.
@@ -141,8 +146,6 @@ pub enum EditError {
     TextMove(#[from] TextMoveError),
     #[error("{0}")]
     CreateRegion(#[from] CreateRegionError),
-    #[error("{0}")]
-    Annotation(#[from] EditAnnotationError),
     #[error("{action} failed: {source}")]
     Workflow {
         action: &'static str,
@@ -236,10 +239,8 @@ pub struct EditorDoc {
     tag_ui: Option<TagSuggestionUi>,
     find: FindState,
     create_region: Option<CreateRegionDialog>,
-    edit_annotation: Option<EditAnnotationDialog>,
     helper: HelperFocus,
     pointer: PointerState,
-    low_confidence_acks: BTreeMap<String, BTreeSet<usize>>,
     playback_followed_segment_id: Option<String>,
     generation: u64,
     rows_cache: RefCell<Option<(RowsCacheKey, Rc<[TranscriptRowView]>)>>,
@@ -250,8 +251,15 @@ pub struct EditorDoc {
 impl EditorDoc {
     /// Opens a document, restoring timeline defaults (zoom, speed, filter, collapsed/muted
     /// lanes, lane heights) persisted in project metadata.
-    pub fn new(workflow: StudioWorkflow) -> Self {
-        let session = EditorSession::for_project(workflow.project());
+    pub fn new(mut workflow: StudioWorkflow, environment: DocumentEnvironment) -> Self {
+        workflow.set_mutation_policy(
+            environment
+                .providers
+                .mutation_policy
+                .clone()
+                .unwrap_or_else(|| std::sync::Arc::new(studio_core::NativeSegmentMutationPolicy)),
+        );
+        let session = EditorSession::for_project_with_environment(workflow.project(), environment);
         let drafts = Drafts::for_project(workflow.project());
         let mut doc = Self {
             workflow,
@@ -260,10 +268,8 @@ impl EditorDoc {
             tag_ui: None,
             find: FindState::default(),
             create_region: None,
-            edit_annotation: None,
             helper: HelperFocus::default(),
             pointer: PointerState::default(),
-            low_confidence_acks: BTreeMap::new(),
             playback_followed_segment_id: None,
             generation: 0,
             rows_cache: RefCell::new(None),
@@ -274,8 +280,12 @@ impl EditorDoc {
         doc
     }
 
-    pub fn from_project(project: Project) -> Self {
-        Self::new(StudioWorkflow::from_project(project))
+    pub fn from_project(project: Project, environment: DocumentEnvironment) -> Self {
+        Self::new(StudioWorkflow::from_project(project), environment)
+    }
+
+    pub fn environment(&self) -> &DocumentEnvironment {
+        self.session.environment()
     }
 
     pub fn project(&self) -> &Project {
@@ -308,6 +318,12 @@ impl EditorDoc {
         &mut self.session
     }
 
+    /// Borrows the immutable project and mutable view state together without cloning either.
+    pub fn with_session<R>(&mut self, update: impl FnOnce(&Project, &mut EditorSession) -> R) -> R {
+        self.touch();
+        update(self.workflow.project(), &mut self.session)
+    }
+
     pub fn drafts(&self) -> &Drafts {
         &self.drafts
     }
@@ -332,15 +348,6 @@ impl EditorDoc {
         self.create_region.as_ref()
     }
 
-    pub fn edit_annotation(&self) -> Option<&EditAnnotationDialog> {
-        self.edit_annotation.as_ref()
-    }
-
-    /// Acknowledged low-confidence word indices of a row.
-    pub fn low_confidence_acks(&self, segment_id: &str) -> Option<&BTreeSet<usize>> {
-        self.low_confidence_acks.get(segment_id)
-    }
-
     /// Word timings of this task (Gold timestamps), used by smart split, Alt+Click seek, the
     /// ghost cursor and auto-segmentation.
     pub fn word_timings(&self) -> &WordTimings {
@@ -358,7 +365,7 @@ impl EditorDoc {
 
     /// Whether the task is read-only (every edit is refused).
     pub fn is_read_only(&self) -> bool {
-        crate::babel_metadata::project_is_read_only(self.workflow.project())
+        self.environment().policy.read_only
     }
 
     /// Counter bumped by every change that can affect rendered rows.
@@ -408,14 +415,18 @@ impl EditorDoc {
 
     /// Lint shown for a row: the draft's validation state when pending/invalid, else the
     /// project lint of the row.
-    pub fn row_lint(&self, row: &TranscriptRowView) -> (LintSeverity, String) {
+    pub fn row_lint(&self, row: &TranscriptRowView) -> Option<(Severity, String)> {
         self.workflow
             .project()
             .segment(&row.segment_id)
             .and_then(|segment| self.drafts.draft_lint(segment))
             .map_or_else(
-                || (row.lint.severity, row.lint.message.clone()),
-                |lint| (lint.severity, lint.message),
+                || {
+                    row.lint
+                        .as_ref()
+                        .map(|lint| (lint.severity, lint.message.clone()))
+                },
+                |lint| Some((lint.severity, lint.message)),
             )
     }
 
@@ -471,13 +482,10 @@ impl EditorDoc {
         Ok(value)
     }
 
-    /// Records an edit: bumps the edit revision and drops a stale server lint snapshot.
+    /// Records an edit and refreshes registered providers for the new revision.
     fn mark_dirty(&mut self) {
-        let had_snapshot = self.session.server_lint_snapshot().is_some();
         self.session.mark_dirty();
-        if had_snapshot {
-            self.workflow.clear_babel_lint_snapshot_metadata();
-        }
+        self.session.refresh_diagnostics(self.workflow.project());
         self.touch();
     }
 

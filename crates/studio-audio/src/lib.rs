@@ -1,7 +1,7 @@
-//! UI-free playback engine for Transcription Studio.
+//! UI-free audio decoding and playback engine for Sonus.
 //!
-//! - Decoding ([`decode_audio_file`], [`load_lane_audio`], ...): PCM16 WAV and
-//!   project lane file lookup. Blocking; run off the UI thread.
+//! - Decoding ([`decode_audio_file`], [`load_lane_audio`], ...): common audio
+//!   containers and project lane file lookup. Blocking; run off the UI thread.
 //! - [`AudioEngine`]: decoded lane storage, transport (play / pause / seek /
 //!   speed / loop / audition), per-lane mute/solo/volume, per-lane enhanced
 //!   (denoised) PCM blended with the original at a live ratio, and rodio
@@ -25,11 +25,12 @@ mod transport;
 pub use blend::blend_lane_audio;
 pub use clock::ManualClock;
 pub use decode::{
-    LaneAudioFile, audio_source_candidates, decode_audio_bytes, decode_audio_file, load_lane_audio,
+    LaneAudioFile, decode_audio_bytes, decode_audio_file, load_lane_audio,
+    load_lane_audio_candidates,
 };
 pub use engine::{AudioEngine, LaneMix, MAX_LANE_VOLUME, OfflineOutput};
 pub use enhancement_cache::{EnhancedAudioCache, MAX_CACHED_ENHANCEMENT_TASKS, sha256_hex};
-pub use error::AudioError;
+pub use error::{AudioDecodeError, AudioError};
 pub use studio_waveform::DecodedAudio;
 pub use transport::{
     LoopRange, MIN_LOOP_DURATION_SECONDS, MIN_PLAYBACK_SPEED, PLAYBACK_SPEED_STEPS, PlaybackEvent,

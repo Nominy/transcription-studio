@@ -1,0 +1,12 @@
+{
+  "id": "example.hello-panel",
+  "name": "Hello Panel",
+  "version": "0.1.0",
+  "api": "^0.1.0",
+  "runtime": "wasm",
+  "description": "An offline panel and command that inserts a greeting as one undoable transaction, with empty-segment hints.",
+  "license": "MIT",
+  "dependencies": {},
+  "permissions": [{ "kind": "document-read" }, { "kind": "document-edit" }],
+  "modes": []
+}

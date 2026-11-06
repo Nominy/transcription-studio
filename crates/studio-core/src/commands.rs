@@ -1,12 +1,24 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
-use serde_json::json;
 use thiserror::Error;
 
 use crate::{Project, Segment};
 
-const BABEL_SPLIT_GAP_SECONDS: f64 = 0.1;
-const BABEL_SPLIT_HALF_GAP_SECONDS: f64 = BABEL_SPLIT_GAP_SECONDS / 2.0;
+/// Domain-owned side effects applied inside the same undo unit as a segment edit.
+pub trait SegmentMutationPolicy: std::fmt::Debug + Send + Sync {
+    fn updated(&self, _segment: &mut Segment) {}
+    fn created(&self, _segment: &mut Segment) {}
+    fn split(&self, segment: &mut Segment) {
+        self.updated(segment);
+    }
+    fn split_gap_seconds(&self) -> f64 {
+        0.0
+    }
+}
+
+#[derive(Debug)]
+pub struct NativeSegmentMutationPolicy;
+impl SegmentMutationPolicy for NativeSegmentMutationPolicy {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SegmentUpdate {
@@ -37,18 +49,10 @@ pub enum EditorCommand {
         speaker_id: String,
         lane_id: String,
     },
-    SetSegmentAnnotationType {
+    UpdateSegmentMetadata {
         segment_id: String,
-        annotation_type: String,
-    },
-    UpdateAnnotationMetadata {
-        segment_id: String,
-        text: String,
-        intensity: Option<u8>,
-        content: serde_json::Value,
-    },
-    ResolveLowConfidence {
-        segment_id: String,
+        text: Option<String>,
+        entries: BTreeMap<String, serde_json::Value>,
     },
     ApplyTextEdit {
         segment_id: String,
@@ -166,17 +170,27 @@ impl CommandHistory {
         project: &mut Project,
         command: EditorCommand,
     ) -> Result<(), StudioCoreError> {
-        self.apply_with_timestamp(project, command, None)
+        self.apply_with_policy(project, command, &NativeSegmentMutationPolicy)
     }
 
-    pub fn apply_with_timestamp(
+    pub fn apply_with_policy(
         &mut self,
         project: &mut Project,
         command: EditorCommand,
-        updated_at: Option<String>,
+        policy: &dyn SegmentMutationPolicy,
     ) -> Result<(), StudioCoreError> {
-        let previous = project.clone();
-        apply_command(project, command, updated_at.as_deref())?;
+        self.apply_transaction(project, |project| apply_command(project, command, policy))
+    }
+
+    /// Stages all changes, then commits one undo unit only when the update succeeds.
+    pub fn apply_transaction<E>(
+        &mut self,
+        project: &mut Project,
+        update: impl FnOnce(&mut Project) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut staged = project.clone();
+        update(&mut staged)?;
+        let previous = std::mem::replace(project, staged);
         Self::push_bounded(&mut self.undo_stack, &mut self.undo_stack_bytes, previous);
         self.redo_stack.clear();
         self.redo_stack_bytes = 0;
@@ -246,10 +260,10 @@ impl CommandHistory {
 fn apply_command(
     project: &mut Project,
     command: EditorCommand,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     match command {
-        EditorCommand::CreateSegment { segment } => create_segment(project, segment, updated_at),
+        EditorCommand::CreateSegment { segment } => create_segment(project, segment, policy),
         EditorCommand::DeleteSegment { segment_id } => delete_segment(project, &segment_id),
         EditorCommand::MergeSegments {
             left_segment_id,
@@ -259,7 +273,7 @@ fn apply_command(
             &left_segment_id,
             &right_segment_id,
             MergeKeep::Left,
-            updated_at,
+            policy,
         ),
         EditorCommand::MergeSegmentsKeepingRight {
             left_segment_id,
@@ -269,28 +283,26 @@ fn apply_command(
             &left_segment_id,
             &right_segment_id,
             MergeKeep::Right,
-            updated_at,
+            policy,
         ),
         EditorCommand::ChangeSegmentSpeaker {
             segment_id,
             speaker_id,
             lane_id,
-        } => change_segment_speaker(project, &segment_id, speaker_id, lane_id, updated_at),
-        EditorCommand::SetSegmentAnnotationType {
-            segment_id,
-            annotation_type,
-        } => set_segment_annotation_type(project, &segment_id, annotation_type, updated_at),
-        EditorCommand::UpdateAnnotationMetadata {
+        } => change_segment_speaker(project, &segment_id, speaker_id, lane_id, policy),
+        EditorCommand::UpdateSegmentMetadata {
             segment_id,
             text,
-            intensity,
-            content,
-        } => update_annotation_metadata(project, &segment_id, text, intensity, content, updated_at),
-        EditorCommand::ResolveLowConfidence { segment_id } => {
+            entries,
+        } => {
             let segment = project
                 .segment_mut(&segment_id)
                 .ok_or(StudioCoreError::SegmentNotFound)?;
-            mark_low_confidence_resolved(segment, updated_at);
+            if let Some(text) = text {
+                segment.text = text;
+            }
+            segment.metadata.extend(entries);
+            policy.updated(segment);
             Ok(())
         }
         EditorCommand::ApplyTextEdit { segment_id, text } => {
@@ -298,7 +310,7 @@ fn apply_command(
                 .segment_mut(&segment_id)
                 .ok_or(StudioCoreError::SegmentNotFound)?;
             segment.text = text;
-            mark_low_confidence_resolved(segment, updated_at);
+            policy.updated(segment);
             Ok(())
         }
         EditorCommand::UpdateSegment {
@@ -312,9 +324,9 @@ fn apply_command(
             start_seconds,
             end_seconds,
             text,
-            updated_at,
+            policy,
         ),
-        EditorCommand::UpdateSegments { updates } => update_segments(project, updates, updated_at),
+        EditorCommand::UpdateSegments { updates } => update_segments(project, updates, policy),
         EditorCommand::MoveSegmentBoundary {
             segment_id,
             start_seconds,
@@ -326,14 +338,14 @@ fn apply_command(
                 .ok_or(StudioCoreError::SegmentNotFound)?;
             segment.start_seconds = start_seconds;
             segment.end_seconds = end_seconds;
-            mark_low_confidence_resolved(segment, updated_at);
+            policy.updated(segment);
             Ok(())
         }
         EditorCommand::SplitSegment {
             segment_id,
             at_seconds,
             new_segment_id,
-        } => split_segment(project, &segment_id, at_seconds, new_segment_id, updated_at),
+        } => split_segment(project, &segment_id, at_seconds, new_segment_id, policy),
         EditorCommand::SplitSegmentWithText {
             segment_id,
             at_seconds,
@@ -347,7 +359,7 @@ fn apply_command(
             new_segment_id,
             left_text,
             right_text,
-            updated_at,
+            policy,
         ),
         EditorCommand::CutLaneRange {
             lane_id,
@@ -360,28 +372,26 @@ fn apply_command(
             start_seconds,
             end_seconds,
             split_texts,
-            updated_at,
+            policy,
         ),
         EditorCommand::ReplaceSegments {
             remove_segment_ids,
             segments,
-        } => replace_segments(project, &remove_segment_ids, segments, updated_at),
+        } => replace_segments(project, &remove_segment_ids, segments, policy),
     }
 }
 
 fn create_segment(
     project: &mut Project,
     mut segment: Segment,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     if project.has_segment(&segment.id) {
         return Err(StudioCoreError::DuplicateSegmentId);
     }
     validate_time_range(segment.start_seconds, segment.end_seconds)?;
     validate_track(project, &segment.speaker_id, &segment.lane_id)?;
-    if let Some(updated_at) = updated_at {
-        stamp_created_if_absent_and_updated(&mut segment, updated_at);
-    }
+    policy.created(&mut segment);
     project.segments.push(segment);
     Ok(())
 }
@@ -400,7 +410,7 @@ fn replace_segments(
     project: &mut Project,
     remove_segment_ids: &[String],
     segments: Vec<Segment>,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     if remove_segment_ids.iter().any(|id| !project.has_segment(id)) {
         return Err(StudioCoreError::SegmentNotFound);
@@ -417,9 +427,7 @@ fn replace_segments(
     }
     project.segments.retain(|segment| !removed(&segment.id));
     for mut segment in segments {
-        if let Some(updated_at) = updated_at {
-            stamp_created_if_absent_and_updated(&mut segment, updated_at);
-        }
+        policy.created(&mut segment);
         project.segments.push(segment);
     }
     Ok(())
@@ -431,7 +439,7 @@ fn update_segment(
     start_seconds: f64,
     end_seconds: f64,
     text: String,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     validate_time_range(start_seconds, end_seconds)?;
     let segment = project
@@ -440,14 +448,14 @@ fn update_segment(
     segment.start_seconds = start_seconds;
     segment.end_seconds = end_seconds;
     segment.text = text;
-    mark_low_confidence_resolved(segment, updated_at);
+    policy.updated(segment);
     Ok(())
 }
 
 fn update_segments(
     project: &mut Project,
     updates: Vec<SegmentUpdate>,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     for update in &updates {
         validate_time_range(update.start_seconds, update.end_seconds)?;
@@ -463,7 +471,7 @@ fn update_segments(
         segment.start_seconds = update.start_seconds;
         segment.end_seconds = update.end_seconds;
         segment.text = update.text;
-        mark_low_confidence_resolved(segment, updated_at);
+        policy.updated(segment);
     }
 
     Ok(())
@@ -480,7 +488,7 @@ fn merge_segments(
     left_segment_id: &str,
     right_segment_id: &str,
     keep: MergeKeep,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     let left_index = project
         .segments
@@ -516,7 +524,7 @@ fn merge_segments(
             left_segment.text = merged_text;
             left_segment.source_annotation_id =
                 left.source_annotation_id.or(right.source_annotation_id);
-            mark_low_confidence_resolved(left_segment, updated_at);
+            policy.updated(left_segment);
             project.segments.remove(right_index);
         }
         MergeKeep::Right => {
@@ -526,46 +534,10 @@ fn merge_segments(
             right_segment.text = merged_text;
             right_segment.source_annotation_id =
                 right.source_annotation_id.or(left.source_annotation_id);
-            mark_low_confidence_resolved(right_segment, updated_at);
+            policy.updated(right_segment);
             project.segments.remove(left_index);
         }
     }
-    Ok(())
-}
-
-fn set_segment_annotation_type(
-    project: &mut Project,
-    segment_id: &str,
-    annotation_type: String,
-    updated_at: Option<&str>,
-) -> Result<(), StudioCoreError> {
-    let segment = project
-        .segment_mut(segment_id)
-        .ok_or(StudioCoreError::SegmentNotFound)?;
-    segment
-        .metadata
-        .insert("type".to_string(), serde_json::json!(annotation_type));
-    mark_low_confidence_resolved(segment, updated_at);
-    Ok(())
-}
-
-fn update_annotation_metadata(
-    project: &mut Project,
-    segment_id: &str,
-    text: String,
-    intensity: Option<u8>,
-    content: serde_json::Value,
-    updated_at: Option<&str>,
-) -> Result<(), StudioCoreError> {
-    let segment = project
-        .segment_mut(segment_id)
-        .ok_or(StudioCoreError::SegmentNotFound)?;
-    segment.text = text;
-    segment
-        .metadata
-        .insert("intensity".to_string(), serde_json::json!(intensity));
-    segment.metadata.insert("content".to_string(), content);
-    mark_low_confidence_resolved(segment, updated_at);
     Ok(())
 }
 
@@ -574,7 +546,7 @@ fn change_segment_speaker(
     segment_id: &str,
     speaker_id: String,
     lane_id: String,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     project
         .segment(segment_id)
@@ -602,7 +574,7 @@ fn change_segment_speaker(
         .ok_or(StudioCoreError::SegmentNotFound)?;
     segment.speaker_id = speaker_id;
     segment.lane_id = lane_id;
-    mark_low_confidence_resolved(segment, updated_at);
+    policy.updated(segment);
     Ok(())
 }
 
@@ -611,7 +583,7 @@ fn split_segment(
     segment_id: &str,
     at_seconds: f64,
     new_segment_id: String,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     if project.has_segment(&new_segment_id) {
         return Err(StudioCoreError::DuplicateSegmentId);
@@ -624,13 +596,13 @@ fn split_segment(
         .ok_or(StudioCoreError::SegmentNotFound)?;
     let original_start = project.segments[index].start_seconds;
     let original_end = project.segments[index].end_seconds;
-    let left_end_seconds = at_seconds - BABEL_SPLIT_HALF_GAP_SECONDS;
-    let right_start_seconds = at_seconds + BABEL_SPLIT_HALF_GAP_SECONDS;
+    let left_end_seconds = at_seconds - (policy.split_gap_seconds() / 2.0);
+    let right_start_seconds = at_seconds + (policy.split_gap_seconds() / 2.0);
 
     validate_time_range(original_start, left_end_seconds)?;
     validate_time_range(right_start_seconds, original_end)?;
 
-    if at_seconds <= original_start || at_seconds >= original_end - BABEL_SPLIT_GAP_SECONDS {
+    if at_seconds <= original_start || at_seconds >= original_end - policy.split_gap_seconds() {
         return Err(StudioCoreError::SplitOutsideSegment);
     }
 
@@ -646,12 +618,8 @@ fn split_segment(
     };
 
     project.segments[index].end_seconds = left_end_seconds;
-    mark_low_confidence_resolved(&mut project.segments[index], updated_at);
-    mark_low_confidence_resolved(&mut right, updated_at);
-    if let Some(updated_at) = updated_at {
-        stamp_created_and_updated(&mut project.segments[index], updated_at);
-        stamp_created_and_updated(&mut right, updated_at);
-    }
+    policy.split(&mut project.segments[index]);
+    policy.split(&mut right);
     project.segments.insert(index + 1, right);
     Ok(())
 }
@@ -663,14 +631,14 @@ fn split_segment_with_text(
     new_segment_id: String,
     left_text: String,
     right_text: String,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     split_segment(
         project,
         segment_id,
         at_seconds,
         new_segment_id.clone(),
-        updated_at,
+        policy,
     )?;
     let left = project
         .segment_mut(segment_id)
@@ -697,7 +665,7 @@ fn cut_lane_range(
     start_seconds: f64,
     end_seconds: f64,
     split_texts: Option<(String, String)>,
-    updated_at: Option<&str>,
+    policy: &dyn SegmentMutationPolicy,
 ) -> Result<(), StudioCoreError> {
     validate_time_range(start_seconds, end_seconds)?;
     if !project.lanes.iter().any(|lane| lane.id == lane_id) {
@@ -739,7 +707,7 @@ fn cut_lane_range(
                 new_segment_id.clone(),
                 left_text,
                 right_text,
-                updated_at,
+                policy,
             )?;
             let left = project
                 .segment(&segment.id)
@@ -751,7 +719,7 @@ fn cut_lane_range(
                 left.start_seconds,
                 start_seconds,
                 left.text,
-                updated_at,
+                policy,
             )?;
             let right = project
                 .segment(&new_segment_id)
@@ -763,7 +731,7 @@ fn cut_lane_range(
                 end_seconds,
                 right.end_seconds,
                 right.text,
-                updated_at,
+                policy,
             )?;
         } else if fully_inside {
             delete_segment(project, &segment.id)?;
@@ -774,7 +742,7 @@ fn cut_lane_range(
                 segment.start_seconds,
                 start_seconds,
                 segment.text,
-                updated_at,
+                policy,
             )?;
         } else if covers_right {
             update_segment(
@@ -783,7 +751,7 @@ fn cut_lane_range(
                 end_seconds,
                 segment.end_seconds,
                 segment.text,
-                updated_at,
+                policy,
             )?;
         }
     }
@@ -800,36 +768,6 @@ fn next_derived_segment_id(project: &Project, base_segment_id: &str) -> String {
     }
 
     unreachable!("failed to allocate derived segment id")
-}
-
-fn mark_low_confidence_resolved(segment: &mut Segment, updated_at: Option<&str>) {
-    segment
-        .metadata
-        .insert("lowConfidenceResolved".to_string(), json!(true));
-    if let Some(updated_at) = updated_at {
-        stamp_updated(segment, updated_at);
-    }
-}
-
-fn stamp_updated(segment: &mut Segment, updated_at: &str) {
-    segment
-        .metadata
-        .insert("updatedAt".to_string(), json!(updated_at));
-}
-
-fn stamp_created_if_absent_and_updated(segment: &mut Segment, updated_at: &str) {
-    segment
-        .metadata
-        .entry("createdAt".to_string())
-        .or_insert_with(|| json!(updated_at));
-    stamp_updated(segment, updated_at);
-}
-
-fn stamp_created_and_updated(segment: &mut Segment, updated_at: &str) {
-    segment
-        .metadata
-        .insert("createdAt".to_string(), json!(updated_at));
-    stamp_updated(segment, updated_at);
 }
 
 fn merge_text(left: &str, right: &str) -> String {

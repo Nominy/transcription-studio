@@ -1,0 +1,102 @@
+name: Build and release Sonus extension
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SDK_REPOSITORY: '@@SDK_URL@@'
+  SDK_COMMIT: '@@SDK_COMMIT@@'
+  AUTHOR_REPOSITORY: '@@OWNER@@/@@REPOSITORY@@'
+  WASM_TOOLS_VERSION: '1.239.0'
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$AUTHOR_REPOSITORY"
+          test "$(jq -r '.id' manifest.json)" = '@@EXTENSION_ID@@'
+          test "$GITHUB_REF_NAME" = "v$(jq -r '.version' manifest.json)"
+          test "$(jq -r '.runtime' manifest.json)" = wasm
+      - name: Install pinned author tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup show
+          rustup target add wasm32-unknown-unknown
+          cargo install --locked --version "$WASM_TOOLS_VERSION" wasm-tools
+          cargo install --locked --git "$SDK_REPOSITORY" --rev "$SDK_COMMIT" sonus-extension-index
+      - name: Build the real WASM component
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test ! -f Cargo.lock; then cargo generate-lockfile; fi
+          cargo build --locked --release --target wasm32-unknown-unknown
+          mkdir -p dist
+          wasm-tools component new 'target/wasm32-unknown-unknown/release/@@CRATE_ARTIFACT@@.wasm' -o dist/module.wasm
+          wasm-tools validate dist/module.wasm
+      - name: Package and produce immutable index submission
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          id=$(jq -r '.id' manifest.json)
+          version=$(jq -r '.version' manifest.json)
+          asset="$id-$version.sonusext"
+          sonus-extension-index pack manifest.json dist/module.wasm "dist/$asset" LICENSE
+          sonus-extension-index release-entry '@@OWNER@@' '@@REPOSITORY@@' manifest.json "dist/$asset" "$RELEASE_TAG" "$(git rev-parse HEAD)" > dist/index-entry.json
+          cp Cargo.lock dist/build-Cargo.lock
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg commit "$(git rev-parse HEAD)" --arg sdkRepository "$SDK_REPOSITORY" --arg sdkCommit "$SDK_COMMIT" --arg wasmTools "$WASM_TOOLS_VERSION" '{repository:$repository,commit:$commit,sdkRepository:$sdkRepository,sdkCommit:$sdkCommit,wasmTools:$wasmTools}' > dist/build-source.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/*.sonusext
+            dist/index-entry.json
+            dist/build-Cargo.lock
+            dist/build-source.json
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-release
+          path: release-assets
+      - name: Publish a new immutable-version release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Refusing to replace an existing release or its assets.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" \
+            --notes 'Sonus WASM extension. Submit the attached index-entry.json in a reviewed index PR. Checksums are not publisher signatures.' \
+            release-assets/*.sonusext release-assets/index-entry.json release-assets/build-Cargo.lock release-assets/build-source.json
+          echo 'Release published. Index inclusion still requires a separate reviewed pull request.' >> "$GITHUB_STEP_SUMMARY"

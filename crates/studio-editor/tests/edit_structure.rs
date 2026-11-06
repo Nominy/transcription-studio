@@ -7,12 +7,8 @@
 mod edit_support;
 
 use edit_support::*;
-use serde_json::json;
-use studio_core::Project;
-use studio_editor::edit::annotation::EditAnnotationError;
 use studio_editor::edit::create_region::{
-    BACKGROUND_NOISE_ANNOTATION_PROJECT_ID, CreateRegionDialog, CreateRegionError,
-    CreateRegionMode, CreateRegionTimeField, secondary_category_options, track_options,
+    CreateRegionDialog, CreateRegionTimeField, track_options,
 };
 use studio_editor::edit::format::format_time;
 use studio_editor::edit::structure::{
@@ -86,44 +82,6 @@ fn open_create_region_from_waveform(
     let _ = ok(doc.press_waveform(lane_id));
     doc.hover_waveform(lane_id, hit(WaveformHitTarget::Waveform, None, end_seconds));
     let _ = ok(doc.release_waveform(lane_id));
-}
-
-/// Single-lane annotation project (`studio.babel.mode = annotation`).
-fn annotation_mode_project() -> Project {
-    let mut annotation_project = project(vec![seg("annotation-1", "lane-1", 0.0, 1.0, "")]);
-    annotation_project
-        .metadata
-        .insert("studio.babel.mode".to_string(), "annotation".to_string());
-    annotation_project
-}
-
-fn hierarchical_annotation_doc() -> EditorDoc {
-    let mut annotation_project = annotation_mode_project();
-    annotation_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
-    EditorDoc::from_project(annotation_project)
-}
-
-/// Stable sample project as a hierarchical background-noise task whose `annotation-2` is a
-/// `background-noise / {secondary_label}` annotation with intensity 3.
-fn annotation_edit_doc(secondary_label: &str) -> EditorDoc {
-    let mut stable_project = stable_sample_doc().project().clone();
-    stable_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
-    let segment = stable_project
-        .segment_mut("annotation-2")
-        .expect("annotation-2 exists");
-    segment.text = format!("background-noise / {secondary_label}");
-    segment
-        .metadata
-        .insert("type".to_string(), json!("background_noise"));
-    segment.metadata.insert("intensity".to_string(), json!(3));
-    segment.metadata.insert(
-        "content".to_string(),
-        json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": secondary_label,
-        }),
-    );
-    EditorDoc::from_project(stable_project)
 }
 
 // ---- read-only ------------------------------------------------------------------------
@@ -223,15 +181,15 @@ fn repeated_waveform_region_click_does_not_audition_region() {
 // ---- split ----------------------------------------------------------------------------
 
 #[test]
-fn split_at_time_leaves_babel_gap_around_split_point() {
+fn native_split_at_time_has_no_domain_gap() {
     let mut doc = stable_sample_doc();
 
     let _ = ok(doc.split_segment_at("annotation-1", 2.0));
 
     let left = doc.project().segment("annotation-1").unwrap();
     let right = doc.project().segment("annotation-1__studio_1").unwrap();
-    assert_eq!(left.end_seconds, 1.95);
-    assert_eq!(right.start_seconds, 2.05);
+    assert_eq!(left.end_seconds, 2.0);
+    assert_eq!(right.start_seconds, 2.0);
 }
 
 #[test]
@@ -244,8 +202,8 @@ fn split_uses_given_time_even_when_playhead_is_inside_the_segment() {
 
     let left = doc.project().segment("annotation-1").unwrap();
     let right = doc.project().segment("annotation-1__studio_1").unwrap();
-    assert_eq!(left.end_seconds, 1.95);
-    assert_eq!(right.start_seconds, 2.05);
+    assert_eq!(left.end_seconds, 2.0);
+    assert_eq!(right.start_seconds, 2.0);
 }
 
 #[test]
@@ -258,7 +216,10 @@ fn split_allocates_text_by_word_ratio_and_selects_right_row() {
     segment.start_seconds = 0.0;
     segment.end_seconds = 4.0;
     segment.text = "one two three four five".to_string();
-    let mut doc = EditorDoc::from_project(stable_project);
+    let mut doc = EditorDoc::from_project(
+        stable_project,
+        sonus_extension::document::DocumentEnvironment::local("test"),
+    );
 
     let outcome = ok(doc.split_segment_at("annotation-1", 2.0));
 
@@ -298,7 +259,7 @@ fn split_rejects_points_outside_the_segment() {
 }
 
 #[test]
-fn waveform_secondary_press_splits_at_hit_time() {
+fn waveform_secondary_press_splits_at_hit_time_without_a_platform_gap() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     doc.set_modifiers(SECONDARY);
@@ -311,8 +272,8 @@ fn waveform_secondary_press_splits_at_hit_time() {
 
     let left = doc.project().segment("annotation-1").unwrap();
     let right = doc.project().segment("annotation-1__studio_1").unwrap();
-    assert!((left.end_seconds - 2.8).abs() < f64::EPSILON * 8.0);
-    assert!((right.start_seconds - 2.9).abs() < f64::EPSILON * 8.0);
+    assert_eq!(left.end_seconds, 2.85);
+    assert_eq!(right.start_seconds, left.end_seconds);
     assert_eq!(selected(&doc).as_deref(), Some("annotation-1__studio_1"));
     assert!(doc.pointer().waveform_drag.is_none());
 }
@@ -979,7 +940,6 @@ fn empty_waveform_drag_creates_segment_and_opens_attached_add_region_card() {
     let dialog = doc
         .create_region()
         .expect("empty waveform drag opens Add Region");
-    assert_eq!(dialog.mode, CreateRegionMode::Transcription);
     let created_id = dialog
         .created_segment_id
         .clone()
@@ -1156,192 +1116,6 @@ fn create_region_transcription_enablement_rules() {
     dialog.end_error = None;
     dialog.start_seconds = 12.8;
     assert!(!dialog.is_create_enabled());
-}
-
-#[test]
-fn create_region_annotation_enablement_follows_category_rules() {
-    let mut dialog = CreateRegionDialog::new_annotation("lane-1".to_string(), 12.0, 12.8);
-    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
-    assert!(!dialog.is_create_enabled());
-
-    dialog.intensity = Some(3);
-    dialog.primary_selection = "background-noise".to_string();
-    assert!(!dialog.is_create_enabled());
-
-    dialog.secondary_selection = "rustle".to_string();
-    assert!(dialog.is_create_enabled());
-
-    dialog.secondary_selection = "other".to_string();
-    assert!(!dialog.is_create_enabled());
-
-    dialog.custom_description = "chair scrape".to_string();
-    assert!(dialog.is_create_enabled());
-}
-
-#[test]
-fn create_region_annotation_requires_explicit_secondary_choice() {
-    let mut dialog = CreateRegionDialog::new_annotation("lane-1".to_string(), 12.0, 12.8);
-    dialog.intensity = Some(3);
-    dialog.primary_selection = "background-speech".to_string();
-    assert_eq!(
-        secondary_category_options("background-speech"),
-        vec!["background speech", "other"]
-    );
-    assert!(!dialog.is_create_enabled());
-
-    let mut doc = hierarchical_annotation_doc();
-    let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, "lane-1", 12.0, 12.8);
-    let dialog = doc.create_region_mut().expect("annotation dialog opens");
-    dialog.set_primary_category("background-speech".to_string());
-    dialog.set_intensity_label("3");
-
-    let err = doc.submit_create_region().unwrap_err();
-
-    assert!(matches!(
-        err,
-        EditError::CreateRegion(CreateRegionError::IncompleteAnnotation)
-    ));
-    assert_eq!(segment_count(&doc), original_count);
-    assert!(doc.create_region().is_some());
-    assert!(!doc.session().is_dirty);
-}
-
-#[test]
-fn annotation_project_drag_opens_dialog_without_creating_segment() {
-    let mut doc = EditorDoc::from_project(annotation_mode_project());
-    let original_count = segment_count(&doc);
-
-    open_create_region_from_waveform(&mut doc, "lane-1", 12.0, 12.8);
-
-    let dialog = doc.create_region().expect("annotation dialog opens");
-    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
-    assert!(dialog.created_segment_id.is_none());
-    assert_eq!(dialog.start_seconds, 12.0);
-    assert_eq!(dialog.end_seconds, 12.8);
-    assert_eq!(segment_count(&doc), original_count);
-    assert!(!doc.session().is_dirty);
-}
-
-#[test]
-fn create_region_secondary_options_end_with_other() {
-    assert_eq!(
-        secondary_category_options("background-noise")
-            .last()
-            .copied(),
-        Some("other")
-    );
-}
-
-#[test]
-fn create_region_secondary_changes_preserve_description_except_other() {
-    let mut doc = hierarchical_annotation_doc();
-    doc.open_create_region("lane-1", 12.0, 12.8);
-    {
-        let dialog = doc.create_region_mut().unwrap();
-        dialog.set_primary_category("background-noise".to_string());
-        dialog.set_secondary_category("other".to_string());
-        dialog.set_custom_description("custom wind".to_string());
-    }
-
-    doc.create_region_mut()
-        .unwrap()
-        .set_secondary_category("wind".to_string());
-
-    let dialog = doc.create_region().unwrap();
-    assert_eq!(dialog.secondary_selection, "wind");
-    assert_eq!(dialog.custom_description, "custom wind");
-
-    doc.create_region_mut()
-        .unwrap()
-        .set_secondary_category("other".to_string());
-
-    let dialog = doc.create_region().unwrap();
-    assert_eq!(dialog.secondary_selection, "other");
-    assert_eq!(dialog.custom_description, "");
-}
-
-#[test]
-fn create_region_intensity_change_accepts_numeric_zero_and_clears_on_empty() {
-    let mut doc = hierarchical_annotation_doc();
-    doc.open_create_region("lane-1", 12.0, 12.8);
-
-    doc.create_region_mut().unwrap().set_intensity_label("0");
-    assert_eq!(doc.create_region().unwrap().intensity, Some(0));
-
-    doc.create_region_mut().unwrap().set_intensity_label("");
-    assert_eq!(doc.create_region().unwrap().intensity, None);
-}
-
-#[test]
-fn create_region_annotation_category_rules_are_project_id_gated() {
-    let mut fallback_project = annotation_mode_project();
-    fallback_project.id = "ordinary-project".to_string();
-    let mut fallback =
-        CreateRegionDialog::new_for_project(&fallback_project, "lane-1".to_string(), 12.0, 12.8);
-
-    assert_eq!(fallback.mode, CreateRegionMode::Annotation);
-    assert!(!fallback.uses_hierarchical_labels);
-    fallback.intensity = Some(2);
-    assert!(fallback.is_create_enabled());
-
-    let mut background_noise_project = fallback_project;
-    background_noise_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
-    let mut hierarchical = CreateRegionDialog::new_for_project(
-        &background_noise_project,
-        "lane-1".to_string(),
-        12.0,
-        12.8,
-    );
-
-    assert!(hierarchical.uses_hierarchical_labels);
-    hierarchical.intensity = Some(2);
-    hierarchical.primary_selection = "background-noise".to_string();
-    assert!(!hierarchical.is_create_enabled());
-    hierarchical.secondary_selection = "rustle".to_string();
-    assert!(hierarchical.is_create_enabled());
-}
-
-#[test]
-fn submitting_annotation_create_region_creates_annotation_metadata() {
-    let mut stable_project = stable_sample_doc().project().clone();
-    stable_project.id = BACKGROUND_NOISE_ANNOTATION_PROJECT_ID.to_string();
-    stable_project.segments[0]
-        .metadata
-        .insert("type".to_string(), json!("background_noise"));
-    let lane_id = stable_project.segments[0].lane_id.clone();
-    let mut doc = EditorDoc::from_project(stable_project);
-    let original_count = segment_count(&doc);
-
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let dialog = doc.create_region_mut().unwrap();
-    assert_eq!(dialog.mode, CreateRegionMode::Annotation);
-    dialog.set_primary_category("background-noise".to_string());
-    dialog.set_secondary_category("rustle".to_string());
-    dialog.set_intensity_label("3");
-
-    let _ = ok(doc.submit_create_region());
-
-    assert_eq!(segment_count(&doc), original_count + 1);
-    let created_id = selected(&doc).expect("created annotation is selected");
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.lane_id, lane_id);
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
-    assert_eq!(
-        created.metadata.get("type"),
-        Some(&json!("background_noise"))
-    );
-    assert_eq!(created.metadata.get("intensity"), Some(&json!(3)));
-    assert_eq!(
-        created.metadata.get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "rustle"
-        }))
-    );
-    assert!(doc.create_region().is_none());
-    assert!(doc.session().is_dirty);
 }
 
 #[test]
@@ -1606,153 +1380,4 @@ fn track_cell_separate_single_clicks_do_not_open_picker() {
     let _ = ok(doc.press_track_cell("a", 1));
 
     assert!(!doc.draft("a").unwrap().track_edit().is_editing);
-}
-
-// ---- annotation type ------------------------------------------------------------------
-
-#[test]
-fn annotation_type_change_updates_segment_metadata_and_dirties() {
-    let mut doc = stable_sample_doc();
-
-    let _ = ok(doc.set_segment_annotation_type("annotation-2", "non-transcription"));
-
-    let segment = doc.project().segment("annotation-2").unwrap();
-    assert_eq!(
-        segment.metadata.get("type"),
-        Some(&json!("non-transcription"))
-    );
-    assert!(doc.session().is_dirty);
-}
-
-// ---- edit-annotation dialog -----------------------------------------------------------
-
-#[test]
-fn edit_annotation_dialog_hydrates_metadata() {
-    let mut doc = annotation_edit_doc("rustle");
-
-    let _ = ok(doc.open_edit_annotation("annotation-2"));
-
-    let dialog = doc.edit_annotation().expect("edit annotation opens");
-    assert_eq!(dialog.segment_id, "annotation-2");
-    assert!(!dialog.is_new(), "a labelled segment is edited, not added");
-    assert_eq!(dialog.primary_selection, "background-noise");
-    assert_eq!(dialog.secondary_selection, "rustle");
-    assert_eq!(dialog.custom_description, "");
-    assert_eq!(dialog.intensity, Some(3));
-    assert!(dialog.error.is_none());
-    assert!(dialog.is_save_enabled());
-    assert_eq!(selected(&doc).as_deref(), Some("annotation-2"));
-}
-
-#[test]
-fn edit_annotation_dialog_hydrates_unknown_secondary_as_other_description() {
-    let mut doc = annotation_edit_doc("chair scrape");
-
-    let _ = ok(doc.open_edit_annotation("annotation-2"));
-
-    let dialog = doc.edit_annotation().unwrap();
-    assert_eq!(dialog.primary_selection, "background-noise");
-    assert_eq!(dialog.secondary_selection, "other");
-    assert_eq!(dialog.custom_description, "chair scrape");
-    assert!(dialog.is_save_enabled());
-}
-
-#[test]
-fn edit_annotation_other_secondary_requires_description() {
-    let mut doc = annotation_edit_doc("rustle");
-    let _ = ok(doc.open_edit_annotation("annotation-2"));
-    doc.edit_annotation_mut()
-        .unwrap()
-        .set_secondary_selection("other".to_string());
-
-    let err = doc.submit_edit_annotation().unwrap_err();
-
-    assert!(matches!(
-        err,
-        EditError::Annotation(EditAnnotationError::CategoryRequired)
-    ));
-    let dialog = doc.edit_annotation().expect("dialog stays open on error");
-    assert_eq!(dialog.error, Some(EditAnnotationError::CategoryRequired));
-    assert_eq!(
-        doc.project()
-            .segment("annotation-2")
-            .unwrap()
-            .metadata
-            .get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "rustle"
-        }))
-    );
-}
-
-#[test]
-fn edit_annotation_primary_change_requires_explicit_secondary_choice() {
-    let mut doc = annotation_edit_doc("rustle");
-    let _ = ok(doc.open_edit_annotation("annotation-2"));
-
-    doc.edit_annotation_mut()
-        .unwrap()
-        .set_primary_selection("background-speech".to_string());
-
-    let dialog = doc.edit_annotation().unwrap();
-    assert_eq!(dialog.primary_selection, "background-speech");
-    assert_eq!(dialog.secondary_selection, "");
-    assert!(!dialog.is_save_enabled());
-
-    let err = doc.submit_edit_annotation().unwrap_err();
-
-    assert!(matches!(
-        err,
-        EditError::Annotation(EditAnnotationError::CategoryRequired)
-    ));
-    assert_eq!(
-        doc.edit_annotation().unwrap().error,
-        Some(EditAnnotationError::CategoryRequired)
-    );
-    assert_eq!(
-        doc.project()
-            .segment("annotation-2")
-            .unwrap()
-            .metadata
-            .get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "rustle"
-        }))
-    );
-}
-
-#[test]
-fn saving_edit_annotation_dialog_updates_metadata_and_text() {
-    let mut doc = annotation_edit_doc("rustle");
-    let _ = ok(doc.open_edit_annotation("annotation-2"));
-    {
-        let dialog = doc.edit_annotation_mut().unwrap();
-        dialog.set_secondary_selection("other".to_string());
-        dialog.set_custom_description("chair scrape".to_string());
-        dialog.set_intensity_label("4");
-    }
-
-    let outcome = ok(doc.submit_edit_annotation());
-
-    assert!(doc.edit_annotation().is_none());
-    assert!(doc.session().is_dirty);
-    let segment = doc.project().segment("annotation-2").unwrap();
-    assert_eq!(segment.text, "background-noise / chair scrape");
-    assert_eq!(segment.metadata.get("intensity"), Some(&json!(4)));
-    assert_eq!(
-        segment.metadata.get("content"),
-        Some(&json!({
-            "primaryLabel": "background-noise",
-            "secondaryLabel": "chair scrape"
-        }))
-    );
-    assert_eq!(
-        draft_text(&doc, "annotation-2"),
-        "background-noise / chair scrape"
-    );
-    assert!(outcome.has_effect(&Effect::DraftChanged {
-        segment_id: "annotation-2".to_string(),
-    }));
 }

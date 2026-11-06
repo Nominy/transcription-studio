@@ -25,7 +25,7 @@ import numpy as np
 from PIL import Image
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURE = REPO / "crates/studio-babel/tests/fixtures/recovered/babel-fixture"
+DEMO = REPO / "crates/studio-editor/assets/demo"
 SAMPLE = REPO / "crates/studio-editor/assets/sample-task.json"
 WAVE = np.array([0x70, 0x70, 0x70], dtype=np.float64)
 LANES = [  # Studio lane order and colours (LaneColor::for_lane_index), Babel's speaker colours
@@ -90,7 +90,7 @@ def prepare(out):
     cases = []
     for state in states["states"]:
         zoom = float(state["zoom"])
-        bounds = max(wav_duration(FIXTURE / lane["audio"]) for lane in LANES)
+        bounds = max(wav_duration(DEMO / lane["audio"]) for lane in LANES)
         duration = min(width_css / (zoom * 200.0), bounds)
         for index, lane in enumerate(LANES):
             underlay = []

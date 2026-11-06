@@ -9,25 +9,6 @@ fn main() {
         #[cfg(not(debug_assertions))]
         compile_shaders();
     }
-    // Transcription Studio patch: fxc.exe only runs on Windows hosts, so a
-    // release build cross-compiled from Linux (cargo xwin) embeds the bytecode
-    // that fxc produced for this exact crate version on Windows.
-    #[cfg(not(target_os = "windows"))]
-    copy_prebuilt_shaders();
-}
-
-#[cfg(not(target_os = "windows"))]
-fn copy_prebuilt_shaders() {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let release = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_none();
-    if target_os != "windows" || !release {
-        return;
-    }
-    let prebuilt = "prebuilt/shaders_bytes.rs";
-    println!("cargo:rerun-if-changed={prebuilt}");
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set for build scripts");
-    std::fs::copy(prebuilt, format!("{out_dir}/shaders_bytes.rs"))
-        .expect("copy prebuilt shader bytecode");
 }
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]

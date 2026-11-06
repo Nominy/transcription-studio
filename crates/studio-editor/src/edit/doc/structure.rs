@@ -9,7 +9,7 @@ use crate::edit::silence::{
     visible_transcription_segments,
 };
 use crate::edit::structure::{
-    CUT_PREVIEW_MIN_CUT_SECONDS, SplitError, merge_neighbor_segment_id, split_ratio,
+    CUT_PREVIEW_MIN_DURATION_SECONDS, SplitError, merge_neighbor_segment_id, split_ratio,
     split_text_by_word_ratio,
 };
 use crate::edit::text::join_segment_text;
@@ -129,7 +129,6 @@ impl EditorDoc {
             merge_neighbor_segment_id(self.workflow.project(), segment_id, previous)
                 .map(|neighbor| self.pending_text_updates(&[segment_id, &neighbor]))
                 .unwrap_or_default();
-        self.low_confidence_acks.remove(segment_id);
         let label = self.segment_label(segment_id);
         self.apply("Merge", |workflow| {
             if !pending.is_empty() {
@@ -171,7 +170,6 @@ impl EditorDoc {
     pub fn delete_segment(&mut self, segment_id: &str) -> EditResult {
         self.session.open_actions_segment_id = None;
         self.guard("Delete")?;
-        self.low_confidence_acks.remove(segment_id);
         let label = self.segment_label(segment_id);
         self.apply("Delete", |workflow| workflow.delete_segment(segment_id))?;
         self.drafts.remove(segment_id);
@@ -217,24 +215,13 @@ impl EditorDoc {
         Ok(outcome.with_status(status))
     }
 
-    /// Changes a row's Babel annotation type (`"transcription"`, `"background_noise"`, ...).
-    pub fn set_segment_annotation_type(
-        &mut self,
-        segment_id: &str,
-        annotation_type: &str,
-    ) -> EditResult {
-        self.apply("Annotation type change", |workflow| {
-            workflow.set_segment_annotation_type(segment_id, annotation_type)
-        })?;
-        self.mark_dirty();
-        self.reconcile(false);
-        Ok(Outcome::status(format!(
-            "Set {} annotation type to `{annotation_type}`.",
-            self.segment_label(segment_id)
-        )))
-    }
-
     // ---- cut preview ------------------------------------------------------------------
+
+    /// Shared by cut validation and the selection's eligibility indicator.
+    pub fn minimum_cut_duration_seconds(&self) -> f64 {
+        (self.environment().policy.minimum_cut_milliseconds as f64 / 1_000.0)
+            .max(CUT_PREVIEW_MIN_DURATION_SECONDS)
+    }
 
     /// S / Shift+S: cuts the overlay range out of the lane the cut preview was drawn on; with
     /// `smart_split` a row covering the whole range gets its text split at the range midpoint
@@ -250,12 +237,11 @@ impl EditorDoc {
             .ok_or_else(|| {
                 EditError::Unavailable("Cut preview unavailable: no active overlay range.".into())
             })?;
-        if range.duration_seconds() < CUT_PREVIEW_MIN_CUT_SECONDS {
-            return Err(EditError::Unavailable(
-                "Cut needs a selection of at least 1 second (segments must be 1 second apart); \
-                 shorter selections can still loop (L)."
-                    .into(),
-            ));
+        let minimum = self.minimum_cut_duration_seconds();
+        if range.duration_seconds() < minimum {
+            return Err(EditError::Unavailable(format!(
+                "Cut needs a selection of at least {minimum} seconds; shorter selections can still loop."
+            )));
         }
         let project = self.workflow.project();
         let affected: Vec<String> = project
@@ -416,6 +402,7 @@ impl EditorDoc {
             &working,
             &self.session.track_filter,
             &self.session.collapsed_lane_ids,
+            self.environment(),
         )
         .into_iter()
         .map(|segment| segment.id.clone())
@@ -646,11 +633,16 @@ impl EditorDoc {
             return Ok(Vec::new());
         }
         let mut merged = Vec::new();
+        let environment = self.environment().clone();
         self.apply("Auto segmentation", |workflow| {
             let mut skipped: Vec<AutoSegmentMergePlan> = Vec::new();
             for _ in 0..AUTO_SEGMENT_MERGE_ATTEMPTS {
-                let rows =
-                    visible_transcription_segments(workflow.project(), &track_filter, &collapsed);
+                let rows = visible_transcription_segments(
+                    workflow.project(),
+                    &track_filter,
+                    &collapsed,
+                    &environment,
+                );
                 let Some(plan) = auto_segment_merge_plans(&rows)
                     .into_iter()
                     .find(|plan| !skipped.contains(plan))
@@ -670,9 +662,6 @@ impl EditorDoc {
             Ok(())
         })?;
         if !merged.is_empty() {
-            for id in &merged {
-                self.low_confidence_acks.remove(id);
-            }
             self.mark_dirty();
             self.reconcile(true);
         }
@@ -695,10 +684,15 @@ impl EditorDoc {
         }
         let track_filter = self.session.track_filter.clone();
         let collapsed = self.session.collapsed_lane_ids.clone();
+        let environment = self.environment().clone();
         self.apply("Remove silent segments", |workflow| {
             for id in silent.iter().rev() {
-                let rows =
-                    visible_transcription_segments(workflow.project(), &track_filter, &collapsed);
+                let rows = visible_transcription_segments(
+                    workflow.project(),
+                    &track_filter,
+                    &collapsed,
+                    &environment,
+                );
                 let Some(row) = rows.iter().copied().find(|row| row.id == *id) else {
                     continue;
                 };
@@ -748,9 +742,6 @@ impl EditorDoc {
             Ok(())
         })?;
         if cleanup.removed > 0 {
-            for id in &silent {
-                self.low_confidence_acks.remove(id);
-            }
             self.mark_dirty();
             self.reconcile(true);
         }
@@ -763,6 +754,7 @@ impl EditorDoc {
             self.workflow.project(),
             &self.session.track_filter,
             &self.session.collapsed_lane_ids,
+            self.environment(),
         )
     }
 }

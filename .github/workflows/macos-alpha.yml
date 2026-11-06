@@ -1,19 +1,10 @@
-name: macOS Alpha Package
+# Manual: builds Sonus natively on GitHub-hosted macOS runners, packs it with Velopack
+# (channel `alpha`) and optionally publishes it to the per-target VPS alpha feed.
+name: macOS Alpha
 
 on:
   workflow_dispatch:
     inputs:
-      channel:
-        description: Velopack channel
-        required: true
-        default: alpha
-        type: choice
-        options:
-          - alpha
-      version:
-        description: Optional version assertion. If set, it must match crates/studio-app/Cargo.toml.
-        required: false
-        type: string
       target:
         description: macOS build target
         required: true
@@ -29,18 +20,17 @@ on:
         required: true
         default: false
         type: boolean
-      remote_base_path:
-        description: Remote web-root base path for macOS Velopack feeds.
-        required: true
-        default: /var/www/transcription-studio/alpha
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: velopack-macos-${{ inputs.channel }}
+  group: alpha-macos
   cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: alpha
 
 jobs:
   select-targets:
@@ -54,75 +44,29 @@ jobs:
       - name: Build target matrix
         id: targets
         shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
-          latest_arm64='{"target":"latest-arm64","runner":"macos-26","runtime":"osx-arm64","rust_target":"aarch64-apple-darwin","feed_suffix":"mac-arm64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-arm64"}'
-          latest_amd64='{"target":"latest-amd64","runner":"macos-26-intel","runtime":"osx-x64","rust_target":"x86_64-apple-darwin","feed_suffix":"mac-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-x64"}'
-          sonoma_amd64='{"target":"sonoma-amd64","runner":"macos-14-large","runtime":"osx-x64","rust_target":"x86_64-apple-darwin","feed_suffix":"mac-sonoma-x64","feed_url":"https://reviewgen.ovh/transcription-studio/alpha/mac-sonoma-x64"}'
+          latest_arm64='{"target":"latest-arm64","runner":"macos-15","runtime":"osx-arm64","feed_suffix":"mac-arm64"}'
+          latest_amd64='{"target":"latest-amd64","runner":"macos-15-intel","runtime":"osx-x64","feed_suffix":"mac-x64"}'
+          sonoma_amd64='{"target":"sonoma-amd64","runner":"macos-14-large","runtime":"osx-x64","feed_suffix":"mac-sonoma-x64"}'
 
-          case "${{ inputs.target }}" in
-            all)
-              matrix="{\"include\":[$latest_arm64,$latest_amd64,$sonoma_amd64]}"
-              ;;
-            latest-arm64)
-              matrix="{\"include\":[$latest_arm64]}"
-              ;;
-            latest-amd64)
-              matrix="{\"include\":[$latest_amd64]}"
-              ;;
-            sonoma-amd64)
-              matrix="{\"include\":[$sonoma_amd64]}"
-              ;;
+          case "$TARGET" in
+            all) matrix="{\"include\":[$latest_arm64,$latest_amd64,$sonoma_amd64]}" ;;
+            latest-arm64) matrix="{\"include\":[$latest_arm64]}" ;;
+            latest-amd64) matrix="{\"include\":[$latest_amd64]}" ;;
+            sonoma-amd64) matrix="{\"include\":[$sonoma_amd64]}" ;;
             *)
-              echo "Unknown target: ${{ inputs.target }}" >&2
+              echo "Unknown target: $TARGET" >&2
               exit 1
               ;;
           esac
-
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-
-  compile:
-    name: Compile macOS alpha (${{ matrix.target }})
-    needs: select-targets
-    runs-on: [self-hosted, Linux, homeserver]
-
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
-
-    env:
-      RUNTIME: ${{ matrix.runtime }}
-      CARGO_TARGET_DIR: target/osxcross/${{ matrix.target }}
-      MACOSX_DEPLOYMENT_TARGET: "14.0"
-      STUDIO_DEFAULT_UPDATE_FEED_URL: ${{ matrix.feed_url }}
-      STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          clean: false
-
-      - name: Cross-compile macOS binaries
-        shell: bash
-        run: |
-          chmod +x ./tools/build-alpha-macos-osxcross.sh
-          ./tools/build-alpha-macos-osxcross.sh
-
-      - name: Upload cross-compiled binaries
-        uses: actions/upload-artifact@v5
-        with:
-          name: macos-binaries-${{ matrix.target }}
-          path: |
-            target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release/studio-app
-            target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release/studio-relay
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
 
   package:
     name: Package macOS alpha (${{ matrix.target }})
-    needs: [select-targets, compile]
+    needs: select-targets
     runs-on: ${{ matrix.runner }}
 
     strategy:
@@ -130,17 +74,13 @@ jobs:
       matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
 
     env:
-      CHANNEL: ${{ inputs.channel }}
-      VERSION: ${{ inputs.version }}
       RUNTIME: ${{ matrix.runtime }}
       MACOSX_DEPLOYMENT_TARGET: "14.0"
-      STUDIO_DEFAULT_UPDATE_FEED_URL: ${{ matrix.feed_url }}
-      REMOTE_PATH: ${{ inputs.remote_base_path }}/${{ matrix.feed_suffix }}
+      STUDIO_ALPHA_FEED_URL: https://reviewgen.ovh/sonus/alpha/${{ matrix.feed_suffix }}
+      REMOTE_PATH: /var/www/sonus/alpha/${{ matrix.feed_suffix }}
       FEED_SUFFIX: ${{ matrix.feed_suffix }}
       PUBLISH_DIR: ${{ github.workspace }}/target/velopack/Publish
       STUDIO_BUILD_GIT_COMMIT: ${{ github.sha }}
-      SOURCE_DIR: ${{ github.workspace }}/target/osxcross/${{ matrix.target }}/${{ matrix.rust_target }}/release
-      SKIP_BUILD: "1"
       HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 != '' }}
       APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
       APPLE_DEVELOPER_ID_INSTALLER: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER }}
@@ -150,16 +90,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Download cross-compiled binaries
-        uses: actions/download-artifact@v5
-        with:
-          name: macos-binaries-${{ matrix.target }}
-          path: ${{ env.SOURCE_DIR }}
-
-      - name: Restore executable permissions
+      - name: Resolve the alpha version
         shell: bash
-        run: chmod +x "$SOURCE_DIR/studio-app" "$SOURCE_DIR/studio-relay"
+        run: |
+          set -euo pipefail
+          base="$(awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' crates/studio-app/Cargo.toml)"
+          if [[ ! "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "studio-app version must be numeric major.minor.patch; found '$base'." >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Alpha version: $version"
 
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
 
       - name: Install .NET
         uses: actions/setup-dotnet@v5
@@ -181,7 +130,7 @@ jobs:
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
-          keychain="$RUNNER_TEMP/transcription-studio-signing.keychain-db"
+          keychain="$RUNNER_TEMP/sonus-signing.keychain-db"
           cert_path="$RUNNER_TEMP/developer-id.p12"
           keychain_password="${APPLE_KEYCHAIN_PASSWORD:-temporary-keychain-password}"
 
@@ -204,12 +153,11 @@ jobs:
 
           echo "APPLE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      - name: Build Velopack artifacts
+      - name: Build and package
         shell: bash
         run: |
           rm -rf target/velopack/Releases target/velopack/Publish
-          chmod +x ./tools/package-alpha-macos.sh
-          ./tools/package-alpha-macos.sh
+          bash ./tools/package-alpha-macos.sh
 
       - name: Publish artifacts to VPS
         if: ${{ inputs.publish_to_vps }}
@@ -219,18 +167,22 @@ jobs:
           ALPHA_SSH_USER: ${{ secrets.ALPHA_SSH_USER }}
           ALPHA_SSH_PRIVATE_KEY: ${{ secrets.ALPHA_SSH_PRIVATE_KEY }}
           ALPHA_SSH_PORT: ${{ secrets.ALPHA_SSH_PORT }}
+          ALPHA_SSH_KNOWN_HOSTS: ${{ secrets.ALPHA_SSH_KNOWN_HOSTS }}
         run: |
+          # Remote paths are validated here and expanded client-side on purpose.
+          # shellcheck disable=SC2029
           set -euo pipefail
           : "${ALPHA_SSH_HOST:?ALPHA_SSH_HOST secret is required when publish_to_vps is true.}"
           : "${ALPHA_SSH_USER:?ALPHA_SSH_USER secret is required when publish_to_vps is true.}"
           : "${ALPHA_SSH_PRIVATE_KEY:?ALPHA_SSH_PRIVATE_KEY secret is required when publish_to_vps is true.}"
+          : "${ALPHA_SSH_KNOWN_HOSTS:?ALPHA_SSH_KNOWN_HOSTS secret is required when publish_to_vps is true.}"
           if [[ ! "$REMOTE_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || \
              [[ "$REMOTE_PATH" == *"//"* ]] || \
              [[ "$REMOTE_PATH" =~ (^|/)\.\.(/|$) ]]; then
-            echo "remote_base_path produced an unsafe remote path: $REMOTE_PATH" >&2
+            echo "Unsafe remote path: $REMOTE_PATH" >&2
             exit 1
           fi
-          remote_platform_root="/var/tmp/transcription-studio-alpha-incoming/$FEED_SUFFIX"
+          remote_platform_root="/var/tmp/sonus-alpha-incoming/$FEED_SUFFIX"
           if [[ "$REMOTE_PATH" == "$remote_platform_root" ]] || \
              [[ "$REMOTE_PATH" == "$remote_platform_root/"* ]] || \
              [[ "$remote_platform_root" == "$REMOTE_PATH/"* ]]; then
@@ -239,9 +191,12 @@ jobs:
           fi
 
           port="${ALPHA_SSH_PORT:-22}"
-          key_path="$RUNNER_TEMP/transcription_studio_alpha_deploy_key"
+          key_path="$RUNNER_TEMP/alpha_deploy_key"
+          known_hosts="$RUNNER_TEMP/alpha_known_hosts"
+          trap 'rm -f "$key_path" "$known_hosts"' EXIT
           printf '%s\n' "$ALPHA_SSH_PRIVATE_KEY" > "$key_path"
-          chmod 600 "$key_path"
+          printf '%s\n' "$ALPHA_SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key_path" "$known_hosts"
 
           manifest="$PUBLISH_DIR/publish-manifest.json"
           version="$(python3 - "$manifest" <<'PY'
@@ -263,8 +218,9 @@ jobs:
           remote_lock="$remote_platform_root/publish.lock"
 
           target="${ALPHA_SSH_USER}@${ALPHA_SSH_HOST}"
-          ssh_args=(-i "$key_path" -p "$port" -o StrictHostKeyChecking=accept-new)
-          scp_args=(-i "$key_path" -P "$port" -o StrictHostKeyChecking=accept-new)
+          host_key_args=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts")
+          ssh_args=(-i "$key_path" -p "$port" "${host_key_args[@]}")
+          scp_args=(-i "$key_path" -P "$port" "${host_key_args[@]}")
 
           ssh "${ssh_args[@]}" "$target" \
             "rm -rf '$remote_deployment' && mkdir -p '$remote_deployment'"
@@ -394,7 +350,7 @@ jobs:
       - name: Upload Velopack publish payload
         uses: actions/upload-artifact@v5
         with:
-          name: transcription-studio-${{ inputs.channel }}-${{ matrix.target }}
+          name: sonus-alpha-${{ matrix.target }}
           path: target/velopack/Publish/
           if-no-files-found: error
           compression-level: 0

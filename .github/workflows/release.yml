@@ -1,0 +1,170 @@
+# Push a tag that matches crates/studio-app's version (e.g. v0.3.0) to build Sonus for
+# Windows, pack it with Velopack (channel `win`) and publish a GitHub release with the
+# installer, portable zip, update packages and SHA256SUMS. Installed stable builds update
+# from these releases; tags with a "-" become pre-releases, which stable builds ignore.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and release, e.g. v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+  REPO_URL: https://github.com/Nominy/sonus
+
+jobs:
+  release:
+    name: Windows release
+    # The app's stable updater reads Nominy/sonus; forks must not publish look-alike releases.
+    if: ${{ github.repository == 'Nominy/sonus' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath crates/studio-app/Cargo.toml
+          $package = [regex]::Match($manifest, '(?ms)^\[package\]\s*(?<body>.*?)(?=^\[|\z)')
+          $version = [regex]::Match($package.Groups["body"].Value, '(?m)^\s*version\s*=\s*"(?<version>[^"]+)"').Groups["version"].Value
+          if ($env:TAG -cne "v$version") {
+            throw "Tag $env:TAG does not match crates/studio-app version $version (expected v$version)."
+          }
+          $prerelease = if ($version.Contains("-")) { "true" } else { "false" }
+          @(
+            "VERSION=$version"
+            "PRERELEASE=$prerelease"
+            "STUDIO_BUILD_GIT_COMMIT=$(git rev-parse HEAD)"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Releasing Sonus $version (prerelease: $prerelease)"
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore pinned Velopack CLI
+        run: dotnet tool restore
+
+      - name: Generate release notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $notes = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f "tag_name=$env:TAG" --jq .body
+          if ($LASTEXITCODE -ne 0) { throw "Could not generate release notes." }
+          $download = "https://github.com/Nominy/sonus/releases/download/$env:TAG"
+          $body = @(
+            "**Download:** [Sonus-win-Setup.exe]($download/Sonus-win-Setup.exe) (installer) or [Sonus-win-Portable.zip]($download/Sonus-win-Portable.zip) (portable). Installed copies update themselves."
+            ""
+            "Sonus is not code-signed yet: Windows SmartScreen may warn on first launch (More info -> Run anyway). Verify downloads against SHA256SUMS."
+            ""
+            ($notes -join "`n")
+          ) -join "`n"
+          $path = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          [System.IO.File]::WriteAllText($path, $body, [System.Text.UTF8Encoding]::new($false))
+          "RELEASE_NOTES=$path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prime the previous release for delta packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseDir = Join-Path $PWD "target/velopack/Releases"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $arguments = @("download", "github", "--repoUrl", $env:REPO_URL, "--channel", "win", "--token", $env:GH_TOKEN, "--outputDir", $releaseDir)
+          if ($env:PRERELEASE -eq "true") { $arguments += "--pre" }
+          dotnet tool run vpk -- @arguments
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "No previous release to delta against; packaging full artifacts only."
+            Get-ChildItem -LiteralPath $releaseDir | Remove-Item -Recurse -Force
+          }
+          exit 0
+
+      - name: Build and package
+        shell: pwsh
+        run: ./tools/package-windows.ps1 -UpdateChannel stable -ReleaseNotes $env:RELEASE_NOTES
+
+      - name: Write SHA256SUMS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $publish = Join-Path $PWD "target/velopack/Publish"
+          $assets = (Get-Content -Raw -LiteralPath (Join-Path $publish "publish-manifest.json") | ConvertFrom-Json).Files |
+            Where-Object { $_.Kind -eq "asset" } |
+            Sort-Object RelativeFileName
+          $lines = foreach ($asset in $assets) {
+            "$($asset.SHA256.ToLowerInvariant())  $($asset.RelativeFileName)"
+          }
+          $sums = Join-Path $env:RUNNER_TEMP "SHA256SUMS"
+          [System.IO.File]::WriteAllText($sums, (($lines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+          Get-Content -LiteralPath $sums
+          "SHA256SUMS_PATH=$sums" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload the release (draft)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $arguments = @(
+            "upload", "github",
+            "--repoUrl", $env:REPO_URL,
+            "--channel", "win",
+            "--token", $env:GH_TOKEN,
+            "--outputDir", (Join-Path $PWD "target/velopack/Releases"),
+            "--tag", $env:TAG,
+            "--releaseName", "Sonus $env:VERSION"
+          )
+          if ($env:PRERELEASE -eq "true") { $arguments += "--pre" }
+          dotnet tool run vpk -- @arguments
+          if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed." }
+
+      - name: Attach SHA256SUMS and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          gh release upload $env:TAG $env:SHA256SUMS_PATH --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not attach SHA256SUMS." }
+          gh release edit $env:TAG --notes-file $env:RELEASE_NOTES --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the release." }
+          gh release view $env:TAG --json url,isPrerelease,assets --jq '{url, isPrerelease, assets: [.assets[].name]}'
+
+      - name: Upload the release payload
+        uses: actions/upload-artifact@v5
+        with:
+          name: sonus-${{ env.VERSION }}-windows
+          path: target/velopack/Publish/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

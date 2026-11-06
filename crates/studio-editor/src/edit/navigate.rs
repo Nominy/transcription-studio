@@ -5,7 +5,6 @@ use studio_core::{Project, Segment};
 
 use crate::editor_model::EditorSession;
 use crate::track_filter::TrackFilter;
-use crate::transcript_model::TranscriptAnnotationKind;
 
 /// Pending/last helper focus restore: which row gets the caret back, and where.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,8 +32,7 @@ pub struct GhostCursor {
 
 /// Whether `segment` is a transcription row visible under the filter/collapsed lanes.
 pub fn segment_is_visible(session: &EditorSession, segment: &Segment) -> bool {
-    lane_is_visible(session, &segment.lane_id)
-        && TranscriptAnnotationKind::from_segment(segment).is_transcription()
+    lane_is_visible(session, &segment.lane_id) && session.environment().is_text_segment(segment)
 }
 
 /// Whether a lane passes the track filter and is not collapsed.

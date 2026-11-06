@@ -1,11 +1,8 @@
-//! Gold Draft and segment-transcription edits: writing drafted rows over lanes, restoring the
-//! captured row texts, and the empty-row-only transcription target with its stale guards
-//! (Babel Helper `segment-transcription.ts`).
+//! Applying transcription-provider results and restoring captured text with stale-result guards.
 
 use studio_core::SegmentUpdate;
 
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome};
-use crate::transcript_model::TranscriptAnnotationKind;
 
 /// Row bounds compared within this tolerance when a transcription returns.
 pub const SEGMENT_BOUNDARY_TOLERANCE_SECONDS: f64 = 0.001;
@@ -75,7 +72,7 @@ impl EditorDoc {
             .project()
             .segments
             .iter()
-            .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
+            .filter(|segment| self.environment().is_text_segment(segment))
             .map(|segment| RowSnapshot {
                 segment_id: segment.id.clone(),
                 lane_id: segment.lane_id.clone(),
@@ -113,8 +110,7 @@ impl EditorDoc {
             .segments
             .iter()
             .filter(|segment| {
-                lane_ids.contains(&segment.lane_id)
-                    && TranscriptAnnotationKind::from_segment(segment).is_transcription()
+                lane_ids.contains(&segment.lane_id) && self.environment().is_text_segment(segment)
             })
             .map(|segment| segment.id.clone())
             .collect();
@@ -125,9 +121,6 @@ impl EditorDoc {
         let created = self.apply("Write draft", |workflow| {
             workflow.replace_segments_with_rows(removed, rows)
         })?;
-        for id in &created {
-            self.low_confidence_acks.remove(id);
-        }
         self.mark_dirty();
         self.reconcile(true);
         Ok(created)
@@ -195,7 +188,7 @@ impl EditorDoc {
         let segment = project
             .segment(segment_id)
             .ok_or(TranscriptionRefusal::NoSegment)?;
-        if !TranscriptAnnotationKind::from_segment(segment).is_transcription() {
+        if !self.environment().is_text_segment(segment) {
             return Err(TranscriptionRefusal::NotTranscription);
         }
         if !self.drafts.text_or(segment).trim().is_empty() || !segment.text.trim().is_empty() {

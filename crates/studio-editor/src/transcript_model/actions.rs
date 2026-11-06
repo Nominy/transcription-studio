@@ -24,7 +24,7 @@ pub enum TranscriptActionCommand {
     Delete,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptTrackOptionView {
     pub lane_id: String,
     pub label: String,
@@ -65,7 +65,7 @@ pub(crate) fn build_transcript_action_menu(
     items
 }
 
-pub(crate) fn build_transcript_track_options(project: &Project) -> Vec<TranscriptTrackOptionView> {
+pub fn build_transcript_track_options(project: &Project) -> Vec<TranscriptTrackOptionView> {
     project
         .lanes
         .iter()
@@ -76,7 +76,7 @@ pub(crate) fn build_transcript_track_options(project: &Project) -> Vec<Transcrip
         .collect()
 }
 
-pub(crate) fn selected_track_option(
+pub fn selected_track_option(
     track_options: &[TranscriptTrackOptionView],
     lane_id: &str,
 ) -> Option<TranscriptTrackOptionView> {

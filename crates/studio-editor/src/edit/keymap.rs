@@ -73,7 +73,6 @@ editor_actions! {
     OpenFind,
     FindNext,
     FindPrevious,
-    ToggleActiveWarningAssertion,
     DeleteSelectedSegment,
     BackToProjects,
     ToggleOverlay,
@@ -87,9 +86,6 @@ editor_actions! {
     RewindPlaybackOneSecond,
     MoveTextBeforeCaretToPreviousSegment,
     MoveTextAfterCaretToNextSegment,
-    ConvertSelectedNumberToSkaz,
-    AutofixCurrentLintRow,
-    AutofixAllLintRows,
     IncreasePlaybackSpeed,
     DecreasePlaybackSpeed,
     MergeSelectedSegmentAbove,
@@ -98,7 +94,6 @@ editor_actions! {
     TrimAllVisibleSegmentsToAudio,
     AutoInsertSegmentAtCaret,
     AutoSegmentVisibleSilences,
-    DraftTranscribeSelectedSegment,
     CommitCutPreviewSmartSplit,
     CommitCutPreviewPlainSplit,
     LoopCutPreviewOverlay,
@@ -107,10 +102,10 @@ editor_actions! {
     TextUndo,
     TextRedo,
     TranscriptEscape,
-    TagSuggestionPrevious,
-    TagSuggestionNext,
-    TagSuggestionAccept,
-    TagSuggestionDismiss,
+    CompletionPrevious,
+    CompletionNext,
+    CompletionAccept,
+    CompletionDismiss,
 }
 
 /// Static description of an action: hotkeys-dialog section/description, context and defaults.
@@ -213,13 +208,6 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         "Find previous match",
         Global,
         &["shift-f3", "secondary-shift-g"],
-    ),
-    def(
-        A::ToggleActiveWarningAssertion,
-        GLOBAL,
-        "Confirm/undo warning on active segment",
-        Global,
-        &["secondary-j"],
     ),
     def(
         A::DeleteSelectedSegment,
@@ -343,27 +331,6 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         &["alt-]"],
     ),
     def(
-        A::ConvertSelectedNumberToSkaz,
-        HELPER,
-        "Convert selected number to skaz",
-        Global,
-        &["alt-a"],
-    ),
-    def(
-        A::AutofixCurrentLintRow,
-        HELPER,
-        "Auto-fix lint issues in current row",
-        Global,
-        &["alt-f"],
-    ),
-    def(
-        A::AutofixAllLintRows,
-        HELPER,
-        "Auto-fix lint issues in all rows",
-        Global,
-        &["alt-shift-f"],
-    ),
-    def(
         A::IncreasePlaybackSpeed,
         TIMELINE_EDITING,
         "Increase playback speed",
@@ -419,14 +386,6 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         Timeline,
         &["alt-shift-s"],
     ),
-    // Helper Alt+Shift+G works from the row being edited as well as from the timeline.
-    def(
-        A::DraftTranscribeSelectedSegment,
-        TIMELINE_EDITING,
-        "Transcribe the current empty segment (Gold)",
-        Global,
-        &["alt-shift-g"],
-    ),
     def(
         A::CommitCutPreviewSmartSplit,
         CUT,
@@ -459,18 +418,10 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         "Leave the row and toggle playback",
         &["escape"],
     ),
-    fixed(A::TagSuggestionPrevious, "Previous tag suggestion", &["up"]),
-    fixed(A::TagSuggestionNext, "Next tag suggestion", &["down"]),
-    fixed(
-        A::TagSuggestionAccept,
-        "Accept tag suggestion",
-        &["enter", "tab"],
-    ),
-    fixed(
-        A::TagSuggestionDismiss,
-        "Dismiss tag suggestions",
-        &["escape"],
-    ),
+    fixed(A::CompletionPrevious, "Previous completion", &["up"]),
+    fixed(A::CompletionNext, "Next completion", &["down"]),
+    fixed(A::CompletionAccept, "Accept completion", &["enter", "tab"]),
+    fixed(A::CompletionDismiss, "Dismiss completions", &["escape"]),
 ];
 
 impl EditorAction {
@@ -493,14 +444,11 @@ impl EditorAction {
             .expect("every EditorAction has an ActionDef")
     }
 
-    /// Tag-suggestion keys only apply while the suggestion list is open.
-    pub fn requires_tag_suggestions(self) -> bool {
+    /// Completion keys only apply while the completion list is open.
+    pub fn requires_completions(self) -> bool {
         matches!(
             self,
-            A::TagSuggestionPrevious
-                | A::TagSuggestionNext
-                | A::TagSuggestionAccept
-                | A::TagSuggestionDismiss
+            A::CompletionPrevious | A::CompletionNext | A::CompletionAccept | A::CompletionDismiss
         )
     }
 }
@@ -648,8 +596,8 @@ pub struct KeyFocus {
     pub target: FocusTarget,
     /// A cut-preview overlay exists (enables [`KeyContext::CutPreview`] bindings).
     pub cut_preview_active: bool,
-    /// The tag suggestion list is open in the focused transcript row.
-    pub tag_suggestions_open: bool,
+    /// The completion list is open in the focused transcript row.
+    pub completions_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -786,7 +734,7 @@ impl Keymap {
             .filter(|other| {
                 *other != action
                     && context.overlaps(other.def().context)
-                    && other.requires_tag_suggestions() == action.requires_tag_suggestions()
+                    && other.requires_completions() == action.requires_completions()
             })
             .filter(|other| {
                 self.bindings(*other)
@@ -802,7 +750,7 @@ impl Keymap {
         for (index, first) in EditorAction::ALL.iter().copied().enumerate() {
             for second in EditorAction::ALL[index + 1..].iter().copied() {
                 if !first.def().context.overlaps(second.def().context)
-                    || (first.requires_tag_suggestions() != second.requires_tag_suggestions())
+                    || (first.requires_completions() != second.requires_completions())
                 {
                     continue;
                 }
@@ -855,10 +803,10 @@ impl Keymap {
                 .any(|binding| binding.resolved(mac) == chord)
         };
         if focus.target == FocusTarget::TranscriptText
-            && focus.tag_suggestions_open
+            && focus.completions_open
             && let Some(action) = EditorAction::ALL
                 .iter()
-                .filter(|a| a.requires_tag_suggestions())
+                .filter(|a| a.requires_completions())
                 .find(|a| matches(a))
         {
             return Some(*action);
@@ -866,7 +814,7 @@ impl Keymap {
         contexts.iter().find_map(|context| {
             EditorAction::ALL
                 .iter()
-                .filter(|a| !a.requires_tag_suggestions() && a.def().context == *context)
+                .filter(|a| !a.requires_completions() && a.def().context == *context)
                 .find(|a| matches(a))
                 .copied()
         })

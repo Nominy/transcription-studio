@@ -1,0 +1,12 @@
+{
+  "id": "sonus.babel-tags",
+  "name": "Babel tags and text tools",
+  "version": "0.1.0",
+  "api": "^0.1",
+  "runtime": "native",
+  "description": "Babel language-aware tag completions, transcript autofix and SKAZ number annotations.",
+  "license": "MIT",
+  "dependencies": {"sonus.babel-lint": "^0.1"},
+  "permissions": [{"kind": "document-read"}, {"kind": "document-edit"}, {"kind": "selection-control"}],
+  "modes": []
+}

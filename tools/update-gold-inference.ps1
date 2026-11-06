@@ -14,7 +14,7 @@ param(
 
 # Publishes Gold's unpacked host inference build (`npm run build:backend` output) for Studio:
 # zips it, uploads it to an immutable versioned URL, verifies the public download and rewrites
-# crates/studio-inference/gold-inference.json, the pin LocalBackend downloads, verifies and
+# extensions/gold/gold-inference.json, the pin LocalBackend downloads, verifies and
 # installs on first use.
 
 Set-StrictMode -Version Latest
@@ -152,9 +152,9 @@ $fields = foreach ($entry in $pin.GetEnumerator()) {
     '  "{0}": {1}' -f $entry.Key, (ConvertTo-Json -Compress -InputObject $entry.Value)
 }
 [System.IO.File]::WriteAllText(
-    (Join-Path $repoRoot "crates/studio-inference/gold-inference.json"),
+    (Join-Path $repoRoot "extensions/gold/gold-inference.json"),
     "{`n" + ($fields -join ",`n") + "`n}`n",
     [System.Text.UTF8Encoding]::new($false)
 )
 Remove-Item -LiteralPath $zip -Force
-Write-Host "Published Gold $release ($bytes bytes, sha256 $sha256, extension $($pin.extensionId)) at $url and pinned it in crates/studio-inference/gold-inference.json."
+Write-Host "Published Gold $release ($bytes bytes, sha256 $sha256, extension $($pin.extensionId)) at $url and pinned it in extensions/gold/gold-inference.json."

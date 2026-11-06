@@ -1,5 +1,5 @@
-// Renders one parity case in Babel's own wavesurfer build, the way Babel's editor sets a lane
-// up (options copied from the editor chunk's `WaveSurfer.create` call), and records the
+// Renders one parity case in wavesurfer (upstream 7.12.1, closest to the build Babel ships), the
+// way Babel's editor sets a lane up (options as in the editor's `WaveSurfer.create` call), and records the
 // outline every canvas draws. `renderCase(spec, studio)` with `studio` set draws Studio's
 // outline (from the Rust side) through the same wavesurfer DOM via `renderFunction`, so
 // pixel differences between the two renders are geometry only.

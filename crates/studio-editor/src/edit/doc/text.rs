@@ -2,22 +2,28 @@
 //! tag suggestions, find, low-confidence review and warning assertions.
 
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome, TagSuggestionUi};
-use crate::edit::autofix::{autofix_transcript_text, previous_same_lane_text};
 use crate::edit::draft::TextSelection;
 use crate::edit::find::{self, FindSummary};
 use crate::edit::format::format_time;
-use crate::edit::tags::{self, TagSuggestion, TagSuggestionKey};
-use crate::edit::text::{TextMoveDirection, skaz_for_selection, skaz_with_digit};
+use crate::edit::text::TextMoveDirection;
 use crate::edit::time::{
     CommitTimeCellEdit, CommitTimeCellResult, TimeEditState, TimeField, commit_time_cell_edit,
 };
-use crate::project_lint_tag_config::resolve_babel_project_lint_tag_config;
+use sonus_extension::document::{Completion, CompletionRequest, TextRange};
 
-/// Open tag-suggestion list of a row.
+/// Open provider completion list for a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagSuggestionList {
-    pub items: Vec<TagSuggestion>,
+pub struct CompletionList {
+    pub items: Vec<Completion>,
     pub highlighted: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionKey {
+    Previous,
+    Next,
+    Accept,
+    Dismiss,
 }
 
 impl EditorDoc {
@@ -147,6 +153,27 @@ impl EditorDoc {
     /// Whether any draft differs from the project (or is invalid).
     pub fn has_pending_drafts(&self) -> bool {
         self.drafts.has_pending(self.workflow.project())
+    }
+
+    /// Captures valid pending text/time drafts without changing history or saved revisions.
+    pub fn recovery_project(&self) -> Result<studio_core::Project, EditError> {
+        let updates = self
+            .drafts
+            .pending_updates(self.workflow.project())
+            .map_err(|source| EditError::Draft {
+                action: "Recovery snapshot",
+                source,
+            })?;
+        let mut project = self.workflow.project().clone();
+        for update in updates {
+            let segment = project
+                .segment_mut(&update.segment_id)
+                .ok_or_else(|| EditError::SegmentNotFound(update.segment_id.clone()))?;
+            segment.start_seconds = update.start_seconds;
+            segment.end_seconds = update.end_seconds;
+            segment.text = update.text;
+        }
+        Ok(project)
     }
 
     /// Commits every pending draft as a single undo step (before save/submit/export).
@@ -420,130 +447,11 @@ impl EditorDoc {
         }))
     }
 
-    /// Converts the selected number in the focused/selected row to SKAZ form (Alt+A).
-    pub fn convert_selection_to_skaz(&mut self) -> EditResult {
-        self.guard("SKAZ conversion")?;
-        let segment_id = self
-            .helper
-            .focused_segment_id
-            .clone()
-            .or_else(|| self.session.selected_segment_id.clone())
-            .ok_or(EditError::NoSelection {
-                action: "SKAZ conversion",
-            })?;
-        let selected = self
-            .drafts
-            .get(&segment_id)
-            .and_then(|draft| draft.selected_text())
-            .ok_or_else(|| {
-                EditError::Unavailable("Select numeric text before converting SKAZ.".into())
-            })?;
-        let replacement = skaz_for_selection(selected).ok_or_else(|| {
-            EditError::Unavailable(format!(
-                "Selected text `{selected}` is not a supported SKAZ number."
-            ))
-        })?;
-        self.replace_selection(&segment_id, &replacement, 0)
-    }
-
-    /// A digit typed over selected spoken-digit text: `"{digit} {СКАЗ: selection}"`, caret
-    /// right after the digit.
-    pub fn convert_selection_with_digit(&mut self, segment_id: &str, digit: char) -> EditResult {
-        self.guard("SKAZ conversion")?;
-        let unavailable = || {
-            EditError::Unavailable("Select spoken digit text before typing a SKAZ digit.".into())
-        };
-        let selected = self
-            .drafts
-            .get(segment_id)
-            .and_then(|draft| draft.selected_text())
-            .ok_or_else(unavailable)?;
-        let replacement = skaz_with_digit(digit, selected).ok_or_else(unavailable)?;
-        let back = replacement.chars().count().saturating_sub(1);
-        self.replace_selection(segment_id, &replacement, back)
-    }
-
-    fn replace_selection(
-        &mut self,
-        segment_id: &str,
-        replacement: &str,
-        caret_back: usize,
-    ) -> EditResult {
-        let draft = self
-            .drafts
-            .get_mut(segment_id)
-            .ok_or_else(|| EditError::NoDraft(segment_id.to_string()))?;
-        if !draft.replace_selection(replacement, caret_back) {
-            return Ok(Outcome::none());
-        }
-        self.mark_dirty();
-        self.clear_tag_ui_for(segment_id);
-        Ok(
-            Outcome::status("Converted selected text to SKAZ.").with(Effect::DraftChanged {
-                segment_id: segment_id.to_string(),
-            }),
-        )
-    }
-
-    /// Applies lint autofix to the selected row's draft (Alt+F).
-    pub fn autofix_current_row(&mut self) -> EditResult {
-        self.guard("Lint autofix")?;
-        let segment_id = self.selected_segment_id("Lint autofix")?;
-        if self.autofix_row(&segment_id) {
-            Ok(Outcome::status("Applied lint autofix to current row.")
-                .with(Effect::DraftChanged { segment_id }))
-        } else {
-            Ok(Outcome::status("No lint autofix changes for current row."))
-        }
-    }
-
-    /// Applies lint autofix to every row's draft in project order (Alt+Shift+F).
-    pub fn autofix_all_rows(&mut self) -> EditResult {
-        self.guard("Lint autofix")?;
-        let ids: Vec<String> = self
-            .workflow
-            .project()
-            .segments
-            .iter()
-            .map(|segment| segment.id.clone())
-            .collect();
-        let total = ids.len();
-        let mut outcome = Outcome::none();
-        for segment_id in ids {
-            if self.autofix_row(&segment_id) {
-                outcome.effects.push(Effect::DraftChanged { segment_id });
-            }
-        }
-        let fixed = outcome.effects.len();
-        Ok(outcome.with_status(if fixed == 0 {
-            format!("No lint autofix changes across {total} rows.")
-        } else {
-            format!("Applied lint autofix to {fixed} of {total} rows.")
-        }))
-    }
-
-    fn autofix_row(&mut self, segment_id: &str) -> bool {
-        let previous = previous_same_lane_text(self.workflow.project(), &self.drafts, segment_id);
-        let Some(draft) = self.drafts.get_mut(segment_id) else {
-            return false;
-        };
-        let fixed = autofix_transcript_text(draft.text(), &previous);
-        if fixed == draft.text() {
-            return false;
-        }
-        let caret = draft.selection().head.min(fixed.chars().count());
-        draft.replace_text_from_user_edit(fixed);
-        draft.set_selection(TextSelection::caret(caret));
-        self.clear_tag_ui_for(segment_id);
-        self.mark_dirty();
-        true
-    }
-
     // ---- tag suggestions --------------------------------------------------------------
 
     /// Suggestions for the row's caret/selection, or `None` when there are none or the list
     /// was dismissed for the current text and caret.
-    pub fn tag_suggestions(&self, segment_id: &str) -> Option<TagSuggestionList> {
+    pub fn completions(&self, segment_id: &str) -> Option<CompletionList> {
         let draft = self.drafts.get(segment_id)?;
         let ui = self
             .tag_ui
@@ -552,30 +460,46 @@ impl EditorDoc {
         if ui.is_some_and(|ui| ui.dismissed) {
             return None;
         }
-        let config = resolve_babel_project_lint_tag_config(self.workflow.project());
-        let items = tags::suggestions_for_draft(draft, &config);
+        let selection = draft.selection().range();
+        let request = CompletionRequest {
+            project: self.workflow.project(),
+            revision: self.session.current_edit_revision(),
+            segment_id,
+            text: draft.text(),
+            selection: TextRange {
+                start: crate::edit::draft::byte_offset(draft.text(), selection.start),
+                end: crate::edit::draft::byte_offset(draft.text(), selection.end),
+            },
+        };
+        let items: Vec<Completion> = self
+            .environment()
+            .providers
+            .completions
+            .iter()
+            .flat_map(|provider| provider.complete(&request))
+            .collect();
         if items.is_empty() {
             return None;
         }
         let highlighted = ui.map_or(0, |ui| ui.highlighted.min(items.len() - 1));
-        Some(TagSuggestionList { items, highlighted })
+        Some(CompletionList { items, highlighted })
     }
 
     /// Up/Down/Enter/Escape inside an open suggestion list.
-    pub fn tag_suggestion_key(&mut self, segment_id: &str, key: TagSuggestionKey) -> EditResult {
+    pub fn completion_key(&mut self, segment_id: &str, key: CompletionKey) -> EditResult {
         self.guard("Text edit")?;
-        let Some(list) = self.tag_suggestions(segment_id) else {
+        let Some(list) = self.completions(segment_id) else {
             self.clear_tag_ui_for(segment_id);
             return Ok(Outcome::none());
         };
         let last = list.items.len() - 1;
         let next = match key {
-            TagSuggestionKey::Previous => list.highlighted.saturating_sub(1),
-            TagSuggestionKey::Next => (list.highlighted + 1).min(last),
-            TagSuggestionKey::Accept | TagSuggestionKey::Dismiss => list.highlighted,
+            CompletionKey::Previous => list.highlighted.saturating_sub(1),
+            CompletionKey::Next => (list.highlighted + 1).min(last),
+            CompletionKey::Accept | CompletionKey::Dismiss => list.highlighted,
         };
-        if key == TagSuggestionKey::Accept {
-            return self.apply_tag_suggestion(segment_id, &list.items[next]);
+        if key == CompletionKey::Accept {
+            return self.apply_completion(segment_id, &list.items[next]);
         }
         let Some(draft) = self.drafts.get(segment_id) else {
             return Ok(Outcome::none());
@@ -585,23 +509,40 @@ impl EditorDoc {
             text: draft.text().to_string(),
             selection: draft.selection(),
             highlighted: next,
-            dismissed: key == TagSuggestionKey::Dismiss,
+            dismissed: key == CompletionKey::Dismiss,
         });
         Ok(Outcome::none())
     }
 
     /// Inserts a suggestion (click or Enter) as one local undo step.
-    pub fn apply_tag_suggestion(
-        &mut self,
-        segment_id: &str,
-        suggestion: &TagSuggestion,
-    ) -> EditResult {
+    pub fn apply_completion(&mut self, segment_id: &str, suggestion: &Completion) -> EditResult {
         self.guard("Text edit")?;
         let draft = self
             .drafts
             .get_mut(segment_id)
             .ok_or_else(|| EditError::NoDraft(segment_id.to_string()))?;
-        let changed = tags::apply_suggestion(draft, suggestion);
+        let range = suggestion.range;
+        if range.start > range.end
+            || range.end > draft.text().len()
+            || !draft.text().is_char_boundary(range.start)
+            || !draft.text().is_char_boundary(range.end)
+        {
+            return Err(EditError::Unavailable(
+                "Completion returned an invalid text range.".into(),
+            ));
+        }
+        let mut text = draft.text().to_string();
+        text.replace_range(range.start..range.end, &suggestion.insert_text);
+        let caret = suggestion
+            .caret_offset
+            .unwrap_or(range.start + suggestion.insert_text.len());
+        if caret > text.len() || !text.is_char_boundary(caret) {
+            return Err(EditError::Unavailable(
+                "Completion returned an invalid caret.".into(),
+            ));
+        }
+        let selection = TextSelection::caret(text[..caret].chars().count());
+        let changed = draft.edit(text, selection);
         self.clear_tag_ui_for(segment_id);
         if !changed {
             return Ok(Outcome::none());
@@ -692,74 +633,5 @@ impl EditorDoc {
             &self.find.query,
             self.session.selected_segment_id.as_deref(),
         )
-    }
-
-    // ---- review -----------------------------------------------------------------------
-
-    /// Marks one low-confidence word reviewed; when all words of the row are reviewed the
-    /// row's low-confidence flag is resolved in the project (one undo step).
-    pub fn acknowledge_low_confidence_word(
-        &mut self,
-        segment_id: &str,
-        word_index: usize,
-    ) -> EditResult {
-        self.guard("Low-confidence review")?;
-        let row = self
-            .session
-            .all_transcript_rows(self.workflow.project())
-            .into_iter()
-            .find(|row| row.segment_id == segment_id)
-            .ok_or_else(|| EditError::SegmentNotFound(segment_id.to_string()))?;
-        let reviewable: std::collections::BTreeSet<usize> = row
-            .word_views
-            .iter()
-            .filter(|word| word.is_low_confidence)
-            .map(|word| word.index)
-            .collect();
-        if !reviewable.contains(&word_index) {
-            return Err(EditError::Unavailable(
-                "That low-confidence word was not found.".into(),
-            ));
-        }
-        let acknowledged = self
-            .low_confidence_acks
-            .entry(segment_id.to_string())
-            .or_default();
-        acknowledged.insert(word_index);
-        let (reviewed, total) = (acknowledged.len(), reviewable.len());
-        let complete = reviewable.iter().all(|index| acknowledged.contains(index));
-        self.touch();
-        if !complete {
-            return Ok(Outcome::status(format!(
-                "Reviewed {reviewed} of {total} low-confidence words in {}.",
-                self.segment_label(segment_id)
-            )));
-        }
-        self.apply("Low-confidence review", |workflow| {
-            workflow.resolve_low_confidence(segment_id)
-        })?;
-        self.low_confidence_acks.remove(segment_id);
-        self.mark_dirty();
-        self.reconcile(false);
-        Ok(Outcome::status(format!(
-            "Marked low-confidence words reviewed for {}.",
-            self.segment_label(segment_id)
-        )))
-    }
-
-    /// Toggles the warning assertion of `segment_id` (selecting it) or of the selected row.
-    pub fn toggle_warning_assertion(&mut self, segment_id: Option<&str>) -> EditResult {
-        self.guard("Warning assertion")?;
-        let project = self.workflow.project();
-        if let Some(segment_id) = segment_id {
-            self.session.select_segment(project, segment_id);
-        }
-        let toggled = self.session.toggle_warning_assertion(project);
-        self.touch();
-        Ok(if toggled {
-            Outcome::status("Warning assertion updated.")
-        } else {
-            Outcome::none()
-        })
     }
 }

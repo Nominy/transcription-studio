@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::timeline_model::{LaneColor, TimeRange};
-use crate::transcript_model::TranscriptAnnotationKind;
+use sonus_extension::document::DocumentEnvironment;
 use studio_core::Segment;
 use studio_waveform::{
     DISPLAY_SAMPLE_RATE, DecodedAudio, DisplaySignal, LineWaveform, PeakCache, WaveViewport,
@@ -20,7 +20,7 @@ const OVERVIEW_RENDER_WIDTH_PX: f64 = 1_000.0;
 const SEGMENT_PEAK_CACHE_CAPACITY: usize = 512;
 const WAVEFORM_BLOCK_STATIC_CACHE_CAPACITY: usize = 512;
 
-/// A lane's audio as the editor draws it. The timeline paints Babel's display signal (see
+/// A lane's audio as the editor draws it. The timeline paints its display signal (see
 /// [`DisplaySignal`]); the overview and segment peaks read the same signal, so only
 /// analysis (silence, drafting) needs the full-rate PCM, kept unless built `display_only`.
 #[derive(Debug)]
@@ -149,6 +149,7 @@ impl LaneWaveform {
         segment: &Segment,
         static_source_segment: &Segment,
         viewport: TimeRange,
+        is_transcription: bool,
     ) -> WaveformBlock {
         let static_block = {
             let mut block_cache = self.block_static_cache.borrow_mut();
@@ -159,7 +160,7 @@ impl LaneWaveform {
                 static_source_segment,
             )
         };
-        WaveformBlock::from_static_block(segment, viewport, static_block)
+        WaveformBlock::from_static_block(segment, viewport, static_block, is_transcription)
     }
 
     pub fn prewarm_blocks_for_segments<'a>(
@@ -180,10 +181,18 @@ impl LaneWaveform {
         &self,
         segments: impl IntoIterator<Item = &'a Segment>,
         viewport: TimeRange,
+        environment: &DocumentEnvironment,
     ) -> Arc<[WaveformBlock]> {
         segments
             .into_iter()
-            .map(|segment| self.block_for_segment_with_static_source(segment, segment, viewport))
+            .map(|segment| {
+                self.block_for_segment_with_static_source(
+                    segment,
+                    segment,
+                    viewport,
+                    environment.is_text_segment(segment),
+                )
+            })
             .collect::<Vec<_>>()
             .into()
     }
@@ -538,12 +547,14 @@ impl WaveformBlock {
         static_source_segment: &Segment,
         viewport: TimeRange,
         lane_waveform: Option<&LaneWaveform>,
+        is_transcription: bool,
     ) -> Self {
         if let Some(lane_waveform) = lane_waveform {
             return lane_waveform.block_for_segment_with_static_source(
                 segment,
                 static_source_segment,
                 viewport,
+                is_transcription,
             );
         }
 
@@ -551,6 +562,7 @@ impl WaveformBlock {
             segment,
             viewport,
             WaveformBlockStatic::synthetic(static_source_segment),
+            is_transcription,
         )
     }
 
@@ -558,13 +570,14 @@ impl WaveformBlock {
         segment: &Segment,
         viewport: TimeRange,
         static_block: WaveformBlockStatic,
+        is_transcription: bool,
     ) -> Self {
         let (left_percent, width_percent) = waveform_block_geometry_percentages(segment, viewport);
 
         Self {
             segment_id: static_block.segment_id,
             tooltip: static_block.tooltip,
-            is_transcription: TranscriptAnnotationKind::from_segment(segment).is_transcription(),
+            is_transcription,
             start_seconds: segment.start_seconds.min(segment.end_seconds),
             end_seconds: segment.start_seconds.max(segment.end_seconds),
             left_percent,
@@ -666,6 +679,7 @@ mod tests {
                 end_seconds: 10.0,
             },
             None,
+            true,
         );
 
         assert_eq!(
@@ -699,8 +713,9 @@ mod tests {
                 end_seconds: viewport_end,
             };
 
-            let block =
-                WaveformBlock::for_segment_with_static_source(&segment, &segment, viewport, None);
+            let block = WaveformBlock::for_segment_with_static_source(
+                &segment, &segment, viewport, None, true,
+            );
             let region = studio_waveform::Region::new(
                 &segment.id,
                 segment.start_seconds - viewport.start_seconds,
@@ -759,7 +774,8 @@ mod tests {
                 .expect("edited segment should produce peaks");
             assert_eq!(peaks.len(), 32 + edit as usize);
 
-            let block = waveform.block_for_segment_with_static_source(&segment, &segment, viewport);
+            let block =
+                waveform.block_for_segment_with_static_source(&segment, &segment, viewport, true);
             assert_eq!(block.tooltip, segment.text);
             assert_eq!(block.start_seconds, segment.start_seconds);
             assert_eq!(block.end_seconds, segment.end_seconds);

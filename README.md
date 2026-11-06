@@ -1,73 +1,99 @@
-# Transcription Studio
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/header-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/header-light.svg">
+  <img alt="Sonus" src="assets/brand/header-light.svg" width="435">
+</picture>
 
-Native Rust desktop editor for Babel transcription correction, built with [gpui](https://gpui.rs) via `gpui-kit`.
+# Audio meets text.
 
-## Crates
+**A segment-based transcription editor with audio.** Listen, adjust timing, assign speakers and edit the words in one native desktop workspace. Start with your own recordings, without an account.
 
-| Crate | Role |
-|---|---|
-| `studio-app` | gpui application (`studio-app.exe`): auth, dashboard, settings, editor UI |
-| `studio-editor` | UI-free editor domain: workflow + undo, linter (see Lint), transcript/timeline models, `edit::EditorDoc` editing operations, keymap, startup routes |
-| `studio-services` | UI-free services on a shared tokio runtime: Babel client, native Clerk auth, review/drafting backend, feedback, sub-accounts, relay launcher, updater, preferences, recovery |
-| `studio-audio` | rodio playback engine (multi-lane mix, seek, loop, audition, per-lane enhanced PCM blended live with the original) and the enhanced-audio disk cache |
-| `studio-inference` | "This PC" AI: downloads the pinned Gold inference runtime (`gold-inference.json`), hosts its inference page in a hidden WebView2 with WebGPU and implements the shared `InferenceBackend` over it (timing, draft, enhance, align, model install/test) |
-| `studio-core`, `studio-project`, `studio-babel`, `studio-waveform` | core model, project folders, Babel package import/export, waveform peaks/geometry |
-| `studio-relay` | sub-account relay server |
+**English** · [Русский](README.ru.md)
 
-The toolchain is pinned in `rust-toolchain.toml` (gpui needs a current stable Rust).
+[Website](https://nominy.github.io/sonus/) · [Get started](docs/getting-started.md) · [Releases](https://github.com/Nominy/sonus/releases) · [Feedback](https://github.com/Nominy/sonus/issues)
 
-## Commands
+![Sonus editing an original synthetic two-speaker demo](site/assets/editor-synthetic.webp)
+
+## Download
+
+| Windows x64 | Download |
+| --- | --- |
+| Stable installer | [Sonus-win-Setup.exe](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Setup.exe) |
+| Stable portable archive | [Sonus-win-Portable.zip](https://github.com/Nominy/sonus/releases/latest/download/Sonus-win-Portable.zip) |
+| Experimental alpha installer | [Sonus-alpha-Setup.exe](https://reviewgen.ovh/sonus/alpha/win-x64/Sonus-alpha-Setup.exe) |
+
+Stable releases use `v*` tags and GitHub Releases; alpha uses a **separate VPS feed**, not the stable release channel. Back up projects before testing alpha. macOS packages are manual alpha only; no stable macOS or Linux binary is offered here. See [distribution and updates](docs/releasing.md).
+
+**Windows packages are unsigned.** SmartScreen may warn about an unknown publisher. Use the project's Releases for stable downloads and compare the published `SHA256SUMS`. Evaluate the source before running it; do not disable Windows protection.
+
+### Requirements
+
+- Windows 10/11, **x64**, an audio output, and writable space for projects and source audio.
+- No Rust toolchain or service account is needed for local editing with a packaged build.
+- Optional local AI on Windows uses **WebView2 and WebGPU**. Compatible GPU/drivers, RAM/VRAM and disk requirements depend on the selected models; there is no universal model-independent minimum.
+- The inference runtime and **model weights download separately**, under their own licenses. Internet access is needed for downloads, updates and online services, not for manual editing of local recordings.
+
+## A focused core, a complete toolkit
+
+The core is the **segment editor and audio**, not a mandatory linter, AI backend or service integration.
+
+- Edit transcript text and segment boundaries alongside audio waveforms and speaker lanes.
+- Seek between segments, change playback speed, find text, undo and redo edits.
+- Open local audio and native projects; save an editable project for later.
+- Import/export **SRT, WebVTT and plain text** through the Formats extension. With an audio project open, use **Commands → Import transcript…** or **Export…**.
+- Add basic checks, AI tools and task-service workflows through extensions.
+- Customize keyboard shortcuts; Windows defaults include `Space` for play/pause outside text inputs, `←` / `→` for segment navigation, `Ctrl+Z` for undo and `Ctrl+F` for find.
+
+The default build is **batteries included**: Local, Formats, basic checks, Gold AI tools and Babel integration are selected by Cargo features. Included code is not the same as configured service access or downloaded models. A minimal build can omit these features.
+
+## Choose your mode
+
+| Mode | Purpose | Access |
+| --- | --- | --- |
+| **Local** | Open your audio and projects without a task platform | No account |
+| **Babel** | Optional first-party Sonus integration with Babel tasks and workflows | Authorized service account |
+| **Relay** | Optional delegated task access through a configured relay | Access provided by your operator |
+
+Modes are extension contributions and declare the extensions they require. Keep dependencies enabled while the corresponding mode is open. **Sonus is not an official Babel product and does not claim Babel endorsement.** Babel and Relay are not prerequisites for Local mode.
+
+## Extensions and privacy
+
+Native Rust extensions supply bundled tools. Installable **WebAssembly components** use the [Rust SDK](sdk/rust/README.md) and the typed [WIT API](wit/sonus-extension.wit) to contribute commands, panels, diagnostics, formats and modes.
+
+The [GitHub marketplace index](https://github.com/Nominy/sonus-extensions) describes extension releases; extension authors host source and versioned packages in their own GitHub repositories. The index endpoint is [`index.json`](https://raw.githubusercontent.com/Nominy/sonus-extensions/main/index.json). Inspect the author, source, compatibility and requested permissions before installing: inclusion in an index is not a security endorsement.
+
+WASM document, audio, storage and network-host access require explicit grants. Bundled native code has the application's privileges, not an OS sandbox. Local editing does not require uploading your recording. Remote AI may send audio/text to a provider; Babel and Relay communicate with their services. Review permissions and provider terms before using sensitive material. Local processing does not make remote features offline.
+
+## First project
+
+1. Install Sonus, or extract the portable archive to a writable folder.
+2. Select **Local → Open audio**. Each chosen audio file becomes a lane; WAV, MP3 and FLAC are good starting points. You can also open a saved project.
+3. Listen, create or adjust segments, assign speakers and edit the text. AI is optional: configure its backend and install/test local models before requesting transcription.
+4. Save the native project. Export subtitles or text when needed, but keep the project and original audio as your editable source.
+
+[Step-by-step guide / Пошаговое руководство](docs/getting-started.md)
+
+## Build and contribute
+
+Windows development needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools + Windows SDK, and CMake. Package names retain `studio-*` where they identify existing model/audio crates; the product is Sonus.
 
 ```powershell
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace
-cargo run -p studio-app
+# General-purpose toolkit including AI tools, without the Babel data bundle
+cargo run -p studio-app --no-default-features --features local,formats,basic-checks,gold --locked
+
+# Local editor without the Babel/AI feature set
+cargo run -p studio-app --no-default-features --features local,formats,basic-checks --locked
+
+# Core shell without bundled modes or tools
+cargo run -p studio-app --no-default-features --locked
 ```
 
-Enable the local pre-push gate once per clone:
+The full default `cargo run -p studio-app --locked` selects all bundled features, including Babel. **It currently requires a SHA-pinned Babel data bundle available through the author's cache/private artifact store, not a public download.** Authorized maintainers prepare it with `powershell -File tools/update-babel-data.ps1 -Fetch`; the pin is `extensions/babel-lint/babel-data.json`. The general-purpose command above does not need that bundle. Helper, reviewer/drafting and Babel integration code are first-party developments by the Sonus author; bundle availability is a separate build-input concern, not a claim about ownership of that code. See [development prerequisites and checks](docs/development.md) for cache details, contributor workflow and the extension SDK.
 
-```powershell
-git config core.hooksPath .githooks
-```
+Contributions are welcome: reproducible bug reports, code, extensions, translations and accessibility improvements. Use a synthetic recording in reports; never attach credentials, private tasks or someone else's audio. Discuss substantial changes in an [issue](https://github.com/Nominy/sonus/issues) first.
 
-`STUDIO_OPEN_DEMO_ON_START=1` opens the bundled two-speaker sample task (no network); `STUDIO_AUDIO_SILENT=1` mutes output.
+## License and acknowledgements
 
-## Lint
+Sonus source is [MIT licensed](LICENSE), including its author's first-party extensions. External dependencies, model weights and independently authored extension packages retain their own licenses. Any assets copied verbatim from an upstream service require their own provenance review.
 
-Studio lints exactly like the two linters it replaces: Babel's native linter ("Gold") with its `gold-non-bg` configuration for the task's language, plus the Babel Helper extension's custom-linter rules, merged the way Helper merges them. A task's language comes from its Babel project/queue id (`crates/studio-editor/assets/project-languages.json`); rule data is generated from the recovered Babel bundle and Helper sources by `tools/lint-parity/generate.mjs`, which also writes the parity fixture `crates/studio-editor/tests/fixtures/lint-parity.json` that the Rust linter must reproduce:
-
-```powershell
-node tools/lint-parity/generate.mjs ..\babel
-```
-
-Gold's `foreign-tag-dictionary` and `foreign-tag-code` rules need word dictionaries Babel fetches from its server, so Studio does not run them.
-
-## Babel service
-
-Studio talks to Babel directly with its own Clerk session. Initialize the native auth store once with the phone-code flow (also available in the app's sign-in screen):
-
-```powershell
-cargo run -p studio-app -- --babel-auth-start-login "+15555550123" --babel-auth-reset
-cargo run -p studio-app -- --babel-auth-verify-login "123456"
-```
-
-The store lives at `%APPDATA%\TranscriptionStudio\babel-auth.json` (or next to the executable after "Make installation portable"); `STUDIO_BABEL_AUTH_STORE` overrides it. Startup routes open a task directly, e.g. `--review-action-id=<id>`, `--processed-transcription-id=<id> --stitched-queue-id=<id>`, `--chunked-queue-id=<id>`, `--task-lookup`.
-
-Developer overrides:
-
-- `STUDIO_BABEL_SERVICE_COMMAND`: route every Babel request through an external command (JSON envelope `{operation, payload}` on stdin; raw JSON, `{ "data": … }` or `{ "result": { "data": … } }` on stdout).
-- `STUDIO_BABEL_SERVICE_FIXTURE_JSON` / `STUDIO_BABEL_SERVICE_FIXTURE_PATH`: answer every request with a fixed payload.
-- `STUDIO_BABEL_SERVICE_BASE_URL`, `STUDIO_BABEL_CLERK_URL`, `STUDIO_BABEL_SERVICE_COOKIE`, `STUDIO_BABEL_SERVICE_AUTHORIZATION`, `STUDIO_BABEL_SERVICE_AUTH_COMMAND`, `STUDIO_BABEL_SERVICE_MODE=live`.
-- `STUDIO_REVIEW_BACKEND_BASE_URL`, `STUDIO_DRAFT_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` for the reviewer/drafting assistant.
-- `STUDIO_SUBACCOUNT_*` for sub-account sessions and the relay; `STUDIO_UPDATE_FEED_URL` for the update feed.
-
-## Memory
-
-Leaving the editor (back to projects, task switch, hide to tray) unloads the audio engine, decoded PCM and waveforms of the task.
-
-## Denoise
-
-The editor toolbar's **Denoise** button enhances both speaker tracks through the inference backend chosen by the denoise location setting (This PC or Remote GPU; remote uploads the original tracks). The status popover shows the stage, chunk progress and elapsed time and can cancel a run. The **Enhanced ← → Original** slider mixes the two in 10% steps (new tasks start at 90% enhanced); 100% enhanced asks for confirmation once per task per app session. Mixing happens live in the audio engine: playback, waveforms and timings keep the originals' clock, and word timing/drafting always receive the original audio.
-
-Results are cached under `%APPDATA%\Transcription Studio\enhanced-audio`, keyed by task, enhancer model and the SHA-256 of each original track (latest result per task, 24 most recent tasks). Opening a task installs its cached result without inference; with automatic denoise enabled, a miss starts generation once the audio has loaded.
+Built on Rust, GPUI / gpui-kit, Wasmtime and the wider open-source audio ecosystem. The Sonus wordmark uses outlined Outfit lettering (SIL OFL 1.1). See [acknowledgements and redistribution notes](docs/development.md#licenses-and-acknowledgements).

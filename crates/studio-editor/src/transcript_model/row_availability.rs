@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use studio_core::{Project, Segment};
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct RowAvailability {
+pub struct RowAvailability {
     pub can_insert_above: bool,
     pub can_insert_below: bool,
     pub can_merge_above: bool,
     pub can_merge_below: bool,
 }
 
-pub(super) fn compute_row_availability(project: &Project) -> BTreeMap<String, RowAvailability> {
+pub fn compute_row_availability(project: &Project) -> BTreeMap<String, RowAvailability> {
     let mut by_lane: BTreeMap<&str, Vec<&Segment>> = BTreeMap::new();
     for segment in &project.segments {
         by_lane.entry(&segment.lane_id).or_default().push(segment);

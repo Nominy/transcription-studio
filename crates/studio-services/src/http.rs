@@ -16,7 +16,7 @@ pub fn client() -> reqwest::Client {
 }
 
 /// Collapses whitespace and truncates a response body for error messages.
-pub(crate) fn body_snippet(body: &str) -> String {
+pub fn body_snippet(body: &str) -> String {
     let snippet: String = body
         .split_whitespace()
         .collect::<Vec<_>>()

@@ -6,20 +6,20 @@ use studio_waveform::{
 };
 
 #[test]
-fn recovered_babel_speaker_wavs_decode_and_export_waveform_peaks() {
-    let fixture_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../studio-babel/tests/fixtures/recovered/babel-fixture");
+fn demo_speaker_wavs_decode_and_export_waveform_peaks() {
+    let demo_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../studio-editor/assets/demo");
 
     for name in ["speaker_1.wav", "speaker_2.wav"] {
-        let bytes = std::fs::read(fixture_dir.join(name)).expect("recovered speaker wav");
-        let audio = decode_pcm16_wav(&bytes).expect("recovered speaker wav should decode");
+        let bytes = std::fs::read(demo_dir.join(name)).expect("demo speaker wav");
+        let audio = decode_pcm16_wav(&bytes).expect("demo speaker wav should decode");
 
         assert_eq!(audio.sample_rate(), 44_100);
         assert_eq!(audio.number_of_channels(), 1);
-        assert_eq!(audio.frame_count(), 20_520_833);
-        assert!((audio.duration() - 465.325_011).abs() < 0.000_01);
+        assert_eq!(audio.frame_count(), 5_133_240);
+        assert!((audio.duration() - 116.4).abs() < 0.000_01);
 
-        let peaks = export_peaks(&audio, 1, 128, 100.0).expect("recovered wav peaks");
+        let peaks = export_peaks(&audio, 1, 128, 100.0).expect("demo wav peaks");
         assert_eq!(peaks.len(), 1);
         assert_eq!(peaks[0].len(), 128);
         assert!(

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use studio_waveform::{WaveformHit, WaveformHitTarget};
 
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome, PointerModifiers, WaveformHover};
-use crate::edit::create_region::{CreateRegionDialog, CreateRegionMode};
+use crate::edit::create_region::CreateRegionDialog;
 use crate::edit::format::zoom_after_wheel_pixels;
 use crate::edit::structure::{
     AuditionKey, AutoscrollMode, CUT_PREVIEW_DRAG_THRESHOLD_PX, CUT_PREVIEW_HANDLE_HIT_PX,
@@ -210,7 +210,7 @@ impl EditorDoc {
             self.close_find();
             return Outcome::none();
         }
-        if self.edit_annotation.take().is_some() || self.create_region.take().is_some() {
+        if self.create_region.take().is_some() {
             return Outcome::none();
         }
         if let Some(overlay) = self.session.overlay.take() {
@@ -613,16 +613,15 @@ impl EditorDoc {
                 "Created region is too short.".into(),
             ));
         }
-        let dialog = CreateRegionDialog::new_for_project(
-            self.workflow.project(),
-            drag.lane_id.clone(),
-            start,
-            end,
-        );
-        if dialog.mode == CreateRegionMode::Annotation {
-            self.create_region = Some(dialog);
-            return Ok(Outcome::status("Add New Annotation opened."));
+        if let Some(command) = &self.environment().policy.region_creation_command {
+            return Ok(Outcome::none().with(Effect::ExecuteCommand {
+                command: command.clone(),
+                arguments: serde_json::json!({
+                    "lane_id": drag.lane_id, "start_seconds": start, "end_seconds": end
+                }),
+            }));
         }
+        let dialog = CreateRegionDialog::new(drag.lane_id.clone(), start, end);
         let lane_id = drag.lane_id.clone();
         let created = self.apply("Create", |workflow| {
             workflow.create_segment_in_lane(&lane_id, start, end)

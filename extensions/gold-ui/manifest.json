@@ -1,0 +1,18 @@
+{
+  "id": "sonus.gold",
+  "name": "Gold",
+  "version": "0.1.0",
+  "api": "^0.1",
+  "runtime": "native",
+  "description": "Local and remote word alignment, drafting, speech enhancement and model management.",
+  "license": "MIT",
+  "permissions": [
+    { "kind": "document-read" },
+    { "kind": "document-edit" },
+    { "kind": "audio-read" },
+    { "kind": "transport-control" },
+    { "kind": "storage" },
+    { "kind": "secrets" },
+    { "kind": "network", "scope": "reviewgen.ovh" }
+  ]
+}

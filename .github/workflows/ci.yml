@@ -2,8 +2,7 @@ name: CI
 
 on:
   push:
-    branches:
-      - "**"
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -14,24 +13,37 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  build-and-test:
-    name: Secret scan, lint, and test (self-hosted homeserver)
-    runs-on: [self-hosted, Linux, homeserver]
-
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-
+  secrets:
+    name: Secret scan
+    runs-on: windows-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          clean: false
 
-      - name: Scan git history
-        run: gitleaks detect --source . --redact --verbose
+      - name: Scan the tree and git history with gitleaks
+        shell: pwsh
+        run: ./tools/scan-secrets.ps1
+
+  check:
+    name: Format, lint and test
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
 
       - name: Check formatting
         run: cargo fmt --all --check

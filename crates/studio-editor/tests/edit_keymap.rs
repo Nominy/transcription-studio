@@ -16,27 +16,27 @@ use studio_editor::track_filter::TrackFilter;
 const WORKSPACE: KeyFocus = KeyFocus {
     target: FocusTarget::Workspace,
     cut_preview_active: false,
-    tag_suggestions_open: false,
+    completions_open: false,
 };
 const TRANSCRIPT_TEXT: KeyFocus = KeyFocus {
     target: FocusTarget::TranscriptText,
     cut_preview_active: false,
-    tag_suggestions_open: false,
+    completions_open: false,
 };
 const INPUT: KeyFocus = KeyFocus {
     target: FocusTarget::Input,
     cut_preview_active: false,
-    tag_suggestions_open: false,
+    completions_open: false,
 };
 const CUT_PREVIEW: KeyFocus = KeyFocus {
     target: FocusTarget::Workspace,
     cut_preview_active: true,
-    tag_suggestions_open: false,
+    completions_open: false,
 };
 const TAG_LIST_OPEN: KeyFocus = KeyFocus {
     target: FocusTarget::TranscriptText,
     cut_preview_active: false,
-    tag_suggestions_open: true,
+    completions_open: true,
 };
 
 fn resolve(keystroke: &str, focus: KeyFocus) -> Option<EditorAction> {
@@ -104,10 +104,10 @@ fn only_fixed_transcript_text_keys_are_not_configurable() {
             EditorAction::TextUndo,
             EditorAction::TextRedo,
             EditorAction::TranscriptEscape,
-            EditorAction::TagSuggestionPrevious,
-            EditorAction::TagSuggestionNext,
-            EditorAction::TagSuggestionAccept,
-            EditorAction::TagSuggestionDismiss,
+            EditorAction::CompletionPrevious,
+            EditorAction::CompletionNext,
+            EditorAction::CompletionAccept,
+            EditorAction::CompletionDismiss,
         ]
     );
     for action in fixed {
@@ -137,12 +137,12 @@ fn only_tag_suggestion_actions_require_open_suggestion_list() {
     for action in EditorAction::ALL.iter().copied() {
         let expected = matches!(
             action,
-            EditorAction::TagSuggestionPrevious
-                | EditorAction::TagSuggestionNext
-                | EditorAction::TagSuggestionAccept
-                | EditorAction::TagSuggestionDismiss
+            EditorAction::CompletionPrevious
+                | EditorAction::CompletionNext
+                | EditorAction::CompletionAccept
+                | EditorAction::CompletionDismiss
         );
-        assert_eq!(action.requires_tag_suggestions(), expected, "{action:?}");
+        assert_eq!(action.requires_completions(), expected, "{action:?}");
     }
 }
 
@@ -318,7 +318,7 @@ fn from_json_ignores_unknown_invalid_and_fixed_entries() {
     let keymap = Keymap::from_json(
         r#"{
             "textUndo": "alt-u",
-            "tagSuggestionAccept": "alt-y",
+            "completionAccept": "alt-y",
             "notAnAction": "alt-v",
             "deleteSelectedSegment": 42,
             "openFind": "hyper-q",
@@ -344,7 +344,7 @@ fn non_configurable_override_is_rejected() {
         Err(KeymapError::NotConfigurable)
     );
     assert_eq!(
-        keymap.set_override(EditorAction::TagSuggestionDismiss, "alt-u"),
+        keymap.set_override(EditorAction::CompletionDismiss, "alt-u"),
         Err(KeymapError::NotConfigurable)
     );
     assert!(!keymap.is_overridden(EditorAction::TextUndo));
@@ -540,10 +540,7 @@ fn hotkey_mapping_covers_transport_navigation_and_workflow_actions() {
     assert_eq!(resolve("secondary-y", WORKSPACE), Some(EditorAction::Redo));
     assert_eq!(resolve("l", WORKSPACE), None);
     assert_eq!(resolve("t", WORKSPACE), Some(EditorAction::ToggleOverlay));
-    assert_eq!(
-        resolve("secondary-j", WORKSPACE),
-        Some(EditorAction::ToggleActiveWarningAssertion)
-    );
+    assert_eq!(resolve("secondary-j", WORKSPACE), None);
     assert_eq!(
         resolve("escape", WORKSPACE),
         Some(EditorAction::EscapePressed)
@@ -659,32 +656,20 @@ fn hotkey_mapping_routes_find_navigation_shortcuts_everywhere() {
 }
 
 #[test]
-fn hotkey_mapping_allows_warning_assertion_inside_inputs() {
+fn local_keymap_has_no_implicit_warning_assertion_command() {
     for focus in [WORKSPACE, TRANSCRIPT_TEXT, INPUT] {
-        assert_eq!(
-            resolve("secondary-j", focus),
-            Some(EditorAction::ToggleActiveWarningAssertion)
-        );
+        assert_eq!(resolve("secondary-j", focus), None);
     }
 }
 
 // ---- routing: helper hotkeys ------------------------------------------------------------
 
 #[test]
-fn helper_hotkeys_route_inside_captured_transcript_inputs() {
+fn local_keymap_has_no_implicit_tag_or_lint_commands() {
     for focus in [TRANSCRIPT_TEXT, INPUT, WORKSPACE] {
-        assert_eq!(
-            resolve("alt-a", focus),
-            Some(EditorAction::ConvertSelectedNumberToSkaz)
-        );
-        assert_eq!(
-            resolve("alt-f", focus),
-            Some(EditorAction::AutofixCurrentLintRow)
-        );
-        assert_eq!(
-            resolve("alt-shift-f", focus),
-            Some(EditorAction::AutofixAllLintRows)
-        );
+        assert_eq!(resolve("alt-a", focus), None);
+        assert_eq!(resolve("alt-f", focus), None);
+        assert_eq!(resolve("alt-shift-f", focus), None);
     }
 }
 
@@ -769,10 +754,7 @@ fn helper_timeline_trim_hotkeys_route_outside_inputs() {
 #[test]
 fn helper_transcription_hotkey_routes_from_rows_and_the_workspace() {
     for focus in [WORKSPACE, TRANSCRIPT_TEXT] {
-        assert_eq!(
-            resolve("alt-shift-g", focus),
-            Some(EditorAction::DraftTranscribeSelectedSegment)
-        );
+        assert_eq!(resolve("alt-shift-g", focus), None);
     }
 }
 
@@ -827,7 +809,7 @@ fn helper_cut_preview_overlay_hotkeys_route_only_with_overlay() {
         let focus = KeyFocus {
             target,
             cut_preview_active: true,
-            tag_suggestions_open: false,
+            completions_open: false,
         };
         assert_eq!(
             resolve("s", focus),
@@ -939,23 +921,23 @@ fn captured_command_enter_submits_create_region_dialog() {
 fn tag_suggestion_keys_route_only_while_list_is_open() {
     assert_eq!(
         resolve("up", TAG_LIST_OPEN),
-        Some(EditorAction::TagSuggestionPrevious)
+        Some(EditorAction::CompletionPrevious)
     );
     assert_eq!(
         resolve("down", TAG_LIST_OPEN),
-        Some(EditorAction::TagSuggestionNext)
+        Some(EditorAction::CompletionNext)
     );
     assert_eq!(
         resolve("enter", TAG_LIST_OPEN),
-        Some(EditorAction::TagSuggestionAccept)
+        Some(EditorAction::CompletionAccept)
     );
     assert_eq!(
         resolve("tab", TAG_LIST_OPEN),
-        Some(EditorAction::TagSuggestionAccept)
+        Some(EditorAction::CompletionAccept)
     );
     assert_eq!(
         resolve("escape", TAG_LIST_OPEN),
-        Some(EditorAction::TagSuggestionDismiss),
+        Some(EditorAction::CompletionDismiss),
         "tag dismiss wins over transcript escape while the list is open"
     );
 
@@ -973,7 +955,7 @@ fn tag_suggestion_flag_is_ignored_outside_transcript_text() {
     let workspace_with_flag = KeyFocus {
         target: FocusTarget::Workspace,
         cut_preview_active: false,
-        tag_suggestions_open: true,
+        completions_open: true,
     };
     assert_eq!(resolve("up", workspace_with_flag), None);
     assert_eq!(
@@ -1081,10 +1063,6 @@ fn perform_returns_none_for_app_level_actions() {
     let mut doc = three_row_doc();
     assert!(doc.perform(EditorAction::BackToProjects, None).is_none());
     assert!(
-        doc.perform(EditorAction::DraftTranscribeSelectedSegment, None)
-            .is_none()
-    );
-    assert!(
         doc.perform(EditorAction::ActivateDefaultSurfaceAction, None)
             .is_none(),
         "no doc dialog or find bar open: the UI owns the default action"
@@ -1105,10 +1083,10 @@ fn perform_text_actions_without_focused_row_return_none() {
         EditorAction::TranscriptEscape,
         EditorAction::MoveTextBeforeCaretToPreviousSegment,
         EditorAction::MoveTextAfterCaretToNextSegment,
-        EditorAction::TagSuggestionPrevious,
-        EditorAction::TagSuggestionNext,
-        EditorAction::TagSuggestionAccept,
-        EditorAction::TagSuggestionDismiss,
+        EditorAction::CompletionPrevious,
+        EditorAction::CompletionNext,
+        EditorAction::CompletionAccept,
+        EditorAction::CompletionDismiss,
     ] {
         assert!(doc.perform(action, None).is_none(), "{action:?}");
     }

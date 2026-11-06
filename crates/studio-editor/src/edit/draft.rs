@@ -9,7 +9,7 @@ use studio_core::{Project, Segment, SegmentUpdate};
 use super::format::{format_time, parse_time};
 use super::text::CrossRowTextEdit;
 use super::time::{TimeEditState, TimeField, start_time_cell_edit};
-use crate::linter::LintSeverity;
+use sonus_extension::document::Severity;
 
 /// Each segment retains at most this many text snapshots in either direction.
 pub const TEXT_HISTORY_MAX_ENTRIES: usize = 100;
@@ -366,7 +366,7 @@ pub fn parse_draft_times(
 /// Lint shown for a row while its draft differs from the project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DraftLint {
-    pub severity: LintSeverity,
+    pub severity: Severity,
     pub message: String,
 }
 
@@ -515,7 +515,7 @@ impl Drafts {
         let draft = self.map.get(&segment.id)?;
         let error = |message: String| {
             Some(DraftLint {
-                severity: LintSeverity::Error,
+                severity: Severity::Error,
                 message,
             })
         };
@@ -526,14 +526,11 @@ impl Drafts {
         if start_seconds >= end_seconds {
             return error(DraftError::StartNotBeforeEnd.to_string());
         }
-        if draft.text.trim().is_empty() {
-            return error("text is empty".to_string());
-        }
         (segment.start_seconds != start_seconds
             || segment.end_seconds != end_seconds
             || segment.text != draft.text)
             .then(|| DraftLint {
-                severity: LintSeverity::Warning,
+                severity: Severity::Warning,
                 message: "Draft pending".to_string(),
             })
     }

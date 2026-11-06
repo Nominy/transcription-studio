@@ -1,0 +1,23 @@
+[package]
+name = "sonus-gold-ui"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel = "2.5"
+bytes.workspace = true
+gpui-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sonus-gold = { path = "../gold" }
+sonus-shell = { path = "../../crates/sonus-shell" }
+studio-audio.workspace = true
+sonus-extension = { path = "../../crates/sonus-extension" }
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-inference.workspace = true
+studio-services.workspace = true
+studio-waveform.workspace = true

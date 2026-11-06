@@ -84,6 +84,7 @@ pub(crate) const MIN_VERTICAL_ZOOM: f32 = 0.3;
 pub(crate) const MAX_VERTICAL_ZOOM: f32 = 1000.0;
 
 pub(crate) struct TimelineLaneBuildState<'a> {
+    pub(crate) environment: &'a sonus_extension::document::DocumentEnvironment,
     pub(crate) track_filter: &'a TrackFilter,
     pub(crate) collapsed_lane_ids: &'a BTreeSet<String>,
     pub(crate) muted_lane_ids: &'a BTreeSet<String>,
@@ -275,6 +276,7 @@ pub(crate) fn build_timeline_lanes_with_segment_index(
                         static_source_segment,
                         state.viewport,
                         lane_waveform,
+                        state.environment.is_text_segment(segment.as_ref()),
                     )
                 })
                 .collect::<Vec<_>>()

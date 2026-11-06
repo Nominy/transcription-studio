@@ -1,8 +1,8 @@
 //! Dispatch of keymap actions to document operations.
 
+use super::CompletionKey;
 use super::{EditResult, EditorDoc, Outcome};
 use crate::edit::keymap::EditorAction;
-use crate::edit::tags::TagSuggestionKey;
 use crate::workflow::StudioWorkflow;
 
 impl EditorDoc {
@@ -28,7 +28,6 @@ impl EditorDoc {
             A::OpenFind => ok(self.open_find()),
             A::FindNext => ok(self.find_next()),
             A::FindPrevious => ok(self.find_previous()),
-            A::ToggleActiveWarningAssertion => Some(self.toggle_warning_assertion(None)),
             A::DeleteSelectedSegment => Some(self.delete_selected()),
             A::ToggleOverlay => {
                 self.toggle_overlay();
@@ -57,9 +56,6 @@ impl EditorDoc {
             A::MoveTextAfterCaretToNextSegment => {
                 focused_segment.map(|id| self.move_text_to_next_row(id))
             }
-            A::ConvertSelectedNumberToSkaz => Some(self.convert_selection_to_skaz()),
-            A::AutofixCurrentLintRow => Some(self.autofix_current_row()),
-            A::AutofixAllLintRows => Some(self.autofix_all_rows()),
             A::IncreasePlaybackSpeed => ok(self.step_speed(1)),
             A::DecreasePlaybackSpeed => ok(self.step_speed(-1)),
             A::MergeSelectedSegmentAbove => Some(self.merge_selected_above()),
@@ -73,9 +69,7 @@ impl EditorDoc {
             A::LoopCutPreviewOverlay => Some(self.loop_cut_preview()),
             A::EscapePressed => ok(self.escape()),
             A::ActivateDefaultSurfaceAction => {
-                if self.edit_annotation.is_some() {
-                    Some(self.submit_edit_annotation())
-                } else if self.create_region.is_some() {
+                if self.create_region.is_some() {
                     Some(self.submit_create_region())
                 } else if self.find.open {
                     ok(self.find_next())
@@ -86,19 +80,19 @@ impl EditorDoc {
             A::TextUndo => focused_segment.map(|id| self.undo_text(id)),
             A::TextRedo => focused_segment.map(|id| self.redo_text(id)),
             A::TranscriptEscape => focused_segment.map(|id| self.transcript_escape(id)),
-            A::TagSuggestionPrevious => {
-                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Previous))
+            A::CompletionPrevious => {
+                focused_segment.map(|id| self.completion_key(id, CompletionKey::Previous))
             }
-            A::TagSuggestionNext => {
-                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Next))
+            A::CompletionNext => {
+                focused_segment.map(|id| self.completion_key(id, CompletionKey::Next))
             }
-            A::TagSuggestionAccept => {
-                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Accept))
+            A::CompletionAccept => {
+                focused_segment.map(|id| self.completion_key(id, CompletionKey::Accept))
             }
-            A::TagSuggestionDismiss => {
-                focused_segment.map(|id| self.tag_suggestion_key(id, TagSuggestionKey::Dismiss))
+            A::CompletionDismiss => {
+                focused_segment.map(|id| self.completion_key(id, CompletionKey::Dismiss))
             }
-            A::BackToProjects | A::DraftTranscribeSelectedSegment | A::SwapSplitPanes => None,
+            A::BackToProjects | A::SwapSplitPanes => None,
         }
     }
 

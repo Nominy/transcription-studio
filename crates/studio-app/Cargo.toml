@@ -1,6 +1,6 @@
 [package]
 name = "studio-app"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,25 +9,29 @@ repository.workspace = true
 name = "studio-app"
 path = "src/main.rs"
 
+[features]
+default = ["batteries-included"]
+batteries-included = ["local", "formats", "basic-checks", "gold", "babel"]
+local = ["dep:sonus-local"]
+formats = ["dep:sonus-formats"]
+basic-checks = ["dep:sonus-lint-basic"]
+gold = ["dep:sonus-gold-ui"]
+babel = ["dep:sonus-babel-ui", "dep:sonus-babel-services", "dep:sonus-babel-lint", "dep:sonus-babel-tags"]
+
 [dependencies]
 anyhow.workspace = true
-async-channel = "2.5"
-bytes.workspace = true
 gpui-kit.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-studio-audio.workspace = true
-studio-babel.workspace = true
-studio-core.workspace = true
-studio-editor.workspace = true
-studio-inference.workspace = true
+sonus-extension.workspace = true
+sonus-shell.workspace = true
 studio-services.workspace = true
-studio-waveform.workspace = true
-# Row-text wrapping matches gpui-component's multi-line input, which uses these.
-unicode-linebreak = "0.1.5"
-unicode-segmentation = "1.12"
+sonus-local = { workspace = true, optional = true }
+sonus-formats = { workspace = true, optional = true }
+sonus-lint-basic = { workspace = true, optional = true }
+sonus-gold-ui = { workspace = true, optional = true }
+sonus-babel-ui = { workspace = true, optional = true }
+sonus-babel-services = { workspace = true, optional = true }
+sonus-babel-lint = { workspace = true, optional = true }
+sonus-babel-tags = { workspace = true, optional = true }
 
-[target.'cfg(windows)'.dependencies]
-raw-window-handle = "0.6"
-tray-icon = "0.21.0"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+[build-dependencies]
+embed-resource = "3"

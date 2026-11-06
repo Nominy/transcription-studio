@@ -62,7 +62,6 @@ function Start-Studio($home_) {
     $env:STUDIO_BABEL_SERVICE_BASE_URL = 'http://127.0.0.1:9'
     $env:STUDIO_BABEL_CLERK_URL = 'http://127.0.0.1:9'
     $env:STUDIO_REVIEW_BACKEND_BASE_URL = 'http://127.0.0.1:9'
-    $env:STUDIO_UPDATE_FEED_URL = 'http://127.0.0.1:9/feed'
     $env:STUDIO_AUDIO_SILENT = '1'
     $env:STUDIO_OPEN_DEMO_ON_START = '1'
     $proc = Start-Process $Exe -PassThru -RedirectStandardError "$home_/stderr.log" -RedirectStandardOutput "$home_/stdout.log"

@@ -1,27 +1,34 @@
-# Waveform parity benchmark: Babel's browser wavesurfer vs Studio's timeline waveform.
+# Waveform parity benchmark: Babel's browser waveform vs Studio's timeline waveform.
 #
-#   powershell -File tools/waveform-parity/run.ps1 [-Out <dir>] [-Fixtures] [-App]
+#   powershell -File tools/waveform-parity/run.ps1 -BabelDisplaySignal <file> [-Out <dir>] [-Fixtures] [-App]
 #
 # Steps (each logged to <Out>/events.jsonl, status in <Out>/status.json):
-#   audio     make_audio.py: case audio cut from the demo speakers (+ the Rust test fixtures' WAVs)
-#   babel     render.cjs babel: Babel's own wavesurfer build + downsampler in headless Chromium
-#             (screenshots, canvas outlines, display signals)
+#   audio     make_audio.py: case audio cut from the synthetic demo speakers (+ the Rust test
+#             fixtures' WAVs)
+#   babel     render.cjs babel: wavesurfer (upstream 7.12.1) + Babel's downsampler in headless
+#             Chromium (screenshots, canvas outlines, display signals)
 #   studio    examples/line_parity.rs: the same cases through studio-waveform
 #   geometry  render.cjs studio: Studio's outlines drawn through the same wavesurfer page
 #   app       (-App) app.ps1: the running Studio's lanes (PrintWindow) vs Babel at the same view
 #   compare   compare.py: report.md / report.json / heatmaps
 #   -Fixtures also regenerates crates/studio-waveform/tests/fixtures/babel_line/*.json.
 #
-# Needs: python (numpy, Pillow), node, Playwright (NODE_PATH defaults to the Babel monorepo's
-# node_modules), cargo.
+# Needs: python (numpy, Pillow), node, Playwright (NODE_PATH defaults to the node_modules of the
+# Babel monorepo beside this checkout), cargo, and -BabelDisplaySignal: a local copy of Babel's
+# proprietary display-signal downsampler (the editor-chunk excerpt defining
+# window.BabelDisplaySignal), which is never committed or published.
 param(
-    [string]$Out = "$PSScriptRoot/../../target/waveform-parity",
-    [string]$NodeModules = 'C:/Users/User/Desktop/dev/babel/shared/babel-extension-platform/node_modules',
+    [Parameter(Mandatory = $true)][string]$BabelDisplaySignal,
+    [string]$Out,
+    [string]$NodeModules,
     [switch]$Fixtures,
     [switch]$App
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
+if (-not $Out) { $Out = Join-Path $repo 'target/waveform-parity' }
+if (-not $NodeModules) { $NodeModules = Join-Path $repo '../babel/shared/babel-extension-platform/node_modules' }
+$env:BABEL_DISPLAY_SIGNAL = (Resolve-Path -LiteralPath $BabelDisplaySignal).Path
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
 $env:NODE_PATH = $NodeModules
@@ -63,7 +70,7 @@ try {
     if ($App) {
         Step 'app-capture' { powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/app.ps1" -Out $Out -Mode shots }
         Step 'app-prepare' { python "$PSScriptRoot/app_compare.py" prepare $Out }
-        Step 'app-babel' { node "$PSScriptRoot/render.cjs" app $Out "$repo/crates/studio-babel/tests/fixtures/recovered/babel-fixture" }
+        Step 'app-babel' { node "$PSScriptRoot/render.cjs" app $Out "$repo/crates/studio-editor/assets/demo" }
         Step 'app-compare' { python "$PSScriptRoot/app_compare.py" compare $Out }
     }
     Step 'compare' { python "$PSScriptRoot/compare.py" $Out }

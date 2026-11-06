@@ -1,5 +1,8 @@
 // Headless Chromium side of the waveform parity benchmark (Playwright; resolve it with
-// NODE_PATH, see run.ps1).
+// NODE_PATH, see run.ps1). wavesurfer is upstream wavesurfer.js (babel/wavesurfer.js, BSD-3);
+// Babel's display-signal downsampler is proprietary and never part of this repository: point
+// BABEL_DISPLAY_SIGNAL at a local copy of that editor-chunk excerpt (it defines
+// window.BabelDisplaySignal).
 //
 //   node render.cjs babel    <cases.json> <audioDir> <outDir>   Babel's wavesurfer renders
 //   node render.cjs studio   <outDir>                            Studio geometry via wavesurfer
@@ -10,6 +13,10 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const BABEL_DIR = path.join(__dirname, 'babel');
+const DISPLAY_SIGNAL = process.env.BABEL_DISPLAY_SIGNAL;
+if (!DISPLAY_SIGNAL || !fs.existsSync(DISPLAY_SIGNAL)) {
+  throw new Error('BABEL_DISPLAY_SIGNAL must name a local copy of Babel\'s display-signal downsampler');
+}
 const ORIGIN = 'http://parity.local';
 
 function log(message) {
@@ -27,7 +34,7 @@ async function openPage(browser, dpr, files) {
     const name = decodeURIComponent(new URL(route.request().url()).pathname.slice(1));
     const file = name.startsWith('audio/')
       ? path.join(files.audioDir, name.slice('audio/'.length))
-      : path.join(BABEL_DIR, name);
+      : name === 'display-signal.js' ? DISPLAY_SIGNAL : path.join(BABEL_DIR, name);
     if (!fs.existsSync(file)) return route.fulfill({ status: 404 });
     route.fulfill({ status: 200, body: fs.readFileSync(file) });
   });

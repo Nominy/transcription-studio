@@ -1,0 +1,271 @@
+{
+  "id": "studio-native-stable-workflow-fixture",
+  "name": "Stable native editor fixture",
+  "speakers": [
+    {
+      "id": "speaker-1",
+      "label": "Speaker 1"
+    },
+    {
+      "id": "speaker-2",
+      "label": "Speaker 2"
+    }
+  ],
+  "lanes": [
+    {
+      "id": "track-speaker-1",
+      "speaker_id": "speaker-1",
+      "label": "Speaker 1",
+      "source_path": "audio/speaker_1.wav"
+    },
+    {
+      "id": "track-speaker-2",
+      "speaker_id": "speaker-2",
+      "label": "Speaker 2",
+      "source_path": "audio/speaker_2.wav"
+    }
+  ],
+  "segments": [
+    {
+      "id": "annotation-1",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 1.2,
+      "end_seconds": 3.4,
+      "text": "Здравствуйте.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-2",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 3.5,
+      "end_seconds": 5.1,
+      "text": "Да, слушаю.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-3",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 5.4,
+      "end_seconds": 7.2,
+      "text": "Уточните номер.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-4",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 10.78,
+      "end_seconds": 25.45,
+      "text": "Слушай, э, я тут давно хотел тебя спросить, а, по поводу похода. Мы с друзьями решили летом наконец-то сплавиться на байдарках, но никто из нас, ну, толком этого никогда не делал. И вот я сижу, смотрю маршруты, и как-то голова кругом идёт, честно говоря.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-5",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 21.08,
+      "end_seconds": 21.59,
+      "text": "Да.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-6",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 25.59,
+      "end_seconds": 42.17,
+      "text": "Да, конечно, давай разберёмся. Это вообще отличная идея, особенно для первого раза. Смотри, я бы начал с чего-нибудь спокойного, а, без порогов, чтобы вы просто привыкли к лодке. Э, и сразу вопрос: вас сколько человек вообще собирается?",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-7",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 31.36,
+      "end_seconds": 31.94,
+      "text": "Давай.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-8",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 37.68,
+      "end_seconds": 38.45,
+      "text": "Логично.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-9",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 42.31,
+      "end_seconds": 60.54,
+      "text": "А, ну, нас пока 4 {СКАЗ: четыре} человека, но, может, ещё кто-то подтянется. По времени у нас есть 3 {СКАЗ: три} дня в конце июля, это прямо железно. И бюджет, а, где-то 15 {СКАЗ: пятнадцать} тысяч на человека, вместе с дорогой. Палатки у нас свои есть, а вот байдарок, конечно, нет. Ну и, э, хотелось бы, чтобы было красиво, а не просто грести целый день.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-10",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 45.7,
+      "end_seconds": 46.29,
+      "text": "Ага.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-11",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 49.35,
+      "end_seconds": 50.35,
+      "text": "Да, хорошо.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-12",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 53.17,
+      "end_seconds": 54.05,
+      "text": "Да, понял.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-13",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 56.26,
+      "end_seconds": 56.81,
+      "text": "Угу.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-14",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 60.46,
+      "end_seconds": 61.76,
+      "text": "Понял, да, хорошо.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-15",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 61.94,
+      "end_seconds": 78.34,
+      "text": "Слушай, ну, под ваши условия отлично подходит какая-нибудь спокойная река недалеко от города. Байдарки можно  взять в прокате, обычно это выходит 2 {СКАЗ: две} тысячи в сутки за лодку. За 3 {СКАЗ: три} дня спокойно пройдёте километров 40 {СКАЗ: сорок}, и ещё останется время на костёр.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-16",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 67.39,
+      "end_seconds": 67.7,
+      "text": "Так.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-17",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 78.48,
+      "end_seconds": 94.88,
+      "text": "О, это звучит здорово. А, ты знаешь, я вот чего боюсь: мы же ни разу не собирали байдарку. Это, э, сложно вообще, или там за- за полчаса разберёмся? И ещё вопрос, а, что делать, если пойдёт дождь все 3 {СКАЗ: три} дня? Не хочется, чтобы первый поход закончился тем, что все промокли и поругались.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-18",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 83.61,
+      "end_seconds": 84.54,
+      "text": "Да, понял.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-19",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 87.07,
+      "end_seconds": 87.78,
+      "text": "Да нет.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-20",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 90.46,
+      "end_seconds": 91.06,
+      "text": "Ага.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-21",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 94.8,
+      "end_seconds": 95.95,
+      "text": "Понимаю, да.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-22",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-1",
+      "lane_id": "track-speaker-1",
+      "start_seconds": 96.13,
+      "end_seconds": 124.49,
+      "text": "Да, конечно. Ну, во-первых, собирать лодку несложно, в прокате обычно всё показывают. Во-вторых, гермомешки берите обязательно, а, это прямо главное правило. Ну и дождь, э, это не страшно, если тент натянуть заранее, ещё до того, как начнёт капать. А вообще, я бы на вашем месте выбрал реку, где по берегам есть стоянки, чтобы не искать место в темноте. Хочешь, я тебе вечером скину пару маршрутов, а вы уже сами выберете?",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-23",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 101.78,
+      "end_seconds": 102.34,
+      "text": "Ясно.",
+      "metadata": {}
+    },
+    {
+      "id": "annotation-24",
+      "source_annotation_id": null,
+      "speaker_id": "speaker-2",
+      "lane_id": "track-speaker-2",
+      "start_seconds": 106.84,
+      "end_seconds": 107.48,
+      "text": "Точно.",
+      "metadata": {}
+    }
+  ],
+  "metadata": {}
+}

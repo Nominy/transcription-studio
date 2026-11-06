@@ -1,22 +1,15 @@
 pub mod buffered_playback;
-pub mod context_panels;
-pub mod diff_toolbar;
-pub mod feedback_assessment;
-mod review;
-pub mod review_actions;
+mod diagnostics;
 mod selection;
-pub mod submit_control;
-pub mod task_lookup;
 mod transport;
 mod view_data;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::babel_metadata::server_lint_snapshot_from_project;
-use crate::linter::{LintSeverity, ServerLintSnapshot};
 use crate::timeline_model::{LaneWaveform, TimeRange, display_waveform};
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{TranscriptRowView, build_transcript_rows};
+use sonus_extension::document::{DiagnosticCollection, DocumentEnvironment, Severity};
 use studio_core::Project;
 
 pub use transport::PLAYBACK_SPEED_STEPS;
@@ -26,7 +19,7 @@ const DEFAULT_SPEED: f32 = 1.0;
 const DEFAULT_ZOOM: f32 = 1.0;
 /// Lane width assumed until the timeline reports its own (CSS px).
 const DEFAULT_TIMELINE_WIDTH_PX: f64 = 1_000.0;
-/// Babel's `minPxPerSec` at zoom 1: the viewport shows `lane width / (zoom × 200)` seconds.
+/// Minimum pixels per second at zoom 1: the viewport shows `lane width / (zoom × 200)` seconds.
 const DEFAULT_MIN_PX_PER_SEC: f64 = 200.0;
 const MIN_LOOP_DURATION_SECONDS: f64 = 0.01;
 
@@ -64,7 +57,9 @@ pub struct EditorSession {
     lane_display_waveforms: BTreeMap<String, LaneWaveform>,
     pub open_actions_segment_id: Option<String>,
     pub asserted_warning_keys: BTreeSet<String>,
-    server_lint_snapshot: Option<ServerLintSnapshot>,
+    pub environment: DocumentEnvironment,
+    diagnostics: Vec<DiagnosticCollection>,
+    raw_diagnostics: Vec<DiagnosticCollection>,
     pub problem_row_index: usize,
     pub is_dirty: bool,
     pub is_saving: bool,
@@ -74,12 +69,17 @@ pub struct EditorSession {
     edit_revision: u64,
     saved_revision: u64,
     saving_revision: Option<u64>,
-    pub review_state: ReviewState,
-    pub support_id: String,
 }
 
 impl EditorSession {
     pub fn for_project(project: &Project) -> Self {
+        Self::for_project_with_environment(project, DocumentEnvironment::local(project.id.clone()))
+    }
+
+    pub fn for_project_with_environment(
+        project: &Project,
+        environment: DocumentEnvironment,
+    ) -> Self {
         let bounds = TimeRange::for_project(project);
         let viewport = viewport_centered_on(
             bounds,
@@ -87,6 +87,17 @@ impl EditorSession {
             DEFAULT_ZOOM,
             DEFAULT_TIMELINE_WIDTH_PX,
         );
+        let raw_diagnostics: Vec<_> = environment
+            .providers
+            .diagnostics
+            .iter()
+            .map(|provider| provider.diagnose(project, 0))
+            .filter(|collection| collection.revision == 0)
+            .collect();
+        let mut diagnostics = raw_diagnostics.clone();
+        for postprocessor in &environment.providers.diagnostic_postprocessors {
+            postprocessor.process(project, 0, &mut diagnostics);
+        }
         Self {
             speed: DEFAULT_SPEED,
             zoom: DEFAULT_ZOOM,
@@ -105,7 +116,9 @@ impl EditorSession {
             lane_display_waveforms: BTreeMap::new(),
             open_actions_segment_id: None,
             asserted_warning_keys: BTreeSet::new(),
-            server_lint_snapshot: server_lint_snapshot_from_project(project, 0),
+            diagnostics,
+            raw_diagnostics,
+            environment,
             problem_row_index: 0,
             is_dirty: false,
             is_saving: false,
@@ -115,8 +128,6 @@ impl EditorSession {
             edit_revision: 0,
             saved_revision: 0,
             saving_revision: None,
-            review_state: ReviewState::from_project(project),
-            support_id: support_id_for_project(project),
         }
     }
 
@@ -136,11 +147,9 @@ impl EditorSession {
 
     pub fn mark_dirty(&mut self) {
         self.edit_revision = self.edit_revision.saturating_add(1);
-        self.invalidate_server_lint_snapshot();
+        self.diagnostics.clear();
+        self.raw_diagnostics.clear();
         self.is_dirty = true;
-        if self.review_state == ReviewState::Submitted {
-            self.review_state = ReviewState::Draft;
-        }
     }
 
     pub fn mark_saved(&mut self) {
@@ -172,22 +181,76 @@ impl EditorSession {
         self.edit_revision
     }
 
-    pub fn server_lint_snapshot(&self) -> Option<&ServerLintSnapshot> {
-        self.server_lint_snapshot
-            .as_ref()
-            .filter(|snapshot| snapshot.revision == self.edit_revision)
+    pub fn environment(&self) -> &DocumentEnvironment {
+        &self.environment
     }
 
-    pub fn set_server_lint_snapshot(&mut self, snapshot: ServerLintSnapshot) -> bool {
-        if snapshot.revision != self.edit_revision {
+    pub fn diagnostics(&self) -> &[DiagnosticCollection] {
+        &self.diagnostics
+    }
+
+    pub fn publish_diagnostics(
+        &mut self,
+        project: &Project,
+        collection: DiagnosticCollection,
+    ) -> bool {
+        if !self.replace_raw_diagnostics(collection) {
             return false;
         }
-        self.server_lint_snapshot = Some(snapshot);
+        self.compose_diagnostics(project);
         true
     }
 
-    pub fn invalidate_server_lint_snapshot(&mut self) {
-        self.server_lint_snapshot = None;
+    fn replace_raw_diagnostics(&mut self, collection: DiagnosticCollection) -> bool {
+        if collection.revision != self.edit_revision {
+            return false;
+        }
+        if let Some(existing) = self
+            .raw_diagnostics
+            .iter_mut()
+            .find(|existing| existing.source == collection.source)
+        {
+            *existing = collection;
+        } else {
+            self.raw_diagnostics.push(collection);
+        }
+        true
+    }
+
+    fn compose_diagnostics(&mut self, project: &Project) {
+        self.diagnostics.clone_from(&self.raw_diagnostics);
+        for postprocessor in &self.environment.providers.diagnostic_postprocessors {
+            postprocessor.process(project, self.edit_revision, &mut self.diagnostics);
+        }
+    }
+
+    pub fn remove_diagnostics(&mut self, project: &Project, source: &str) {
+        self.raw_diagnostics
+            .retain(|collection| collection.source != source);
+        self.compose_diagnostics(project);
+    }
+
+    pub fn refresh_diagnostics(&mut self, project: &Project) {
+        let collections: Vec<_> = self
+            .environment
+            .providers
+            .diagnostics
+            .iter()
+            .map(|provider| provider.diagnose(project, self.edit_revision))
+            .collect();
+        for collection in collections {
+            self.replace_raw_diagnostics(collection);
+        }
+        self.compose_diagnostics(project);
+    }
+
+    pub fn decorations(&self, project: &Project) -> Vec<sonus_extension::document::Decoration> {
+        self.environment
+            .providers
+            .decorations
+            .iter()
+            .flat_map(|provider| provider.decorate(project, self.edit_revision))
+            .collect()
     }
 
     pub fn saving_revision(&self) -> Option<u64> {
@@ -255,7 +318,7 @@ impl EditorSession {
         self.timeline_width_px
     }
 
-    /// The lane surface is `width_px` CSS px wide: like Babel's wavesurfer at `minPxPerSec`
+    /// The lane surface is `width_px` CSS px wide: at `minPxPerSec`
     /// = zoom × 200, the viewport keeps its start and shows `width_px / (zoom × 200)` seconds.
     pub fn set_timeline_width(&mut self, project: &Project, width_px: f64) {
         if !width_px.is_finite() || width_px <= 0.0 || width_px == self.timeline_width_px {
@@ -293,7 +356,11 @@ impl EditorSession {
             self.selected_segment_id.as_deref(),
             self.diff_view,
             &self.asserted_warning_keys,
-            self.server_lint_snapshot(),
+            crate::transcript_model::RowContributions {
+                diagnostics: self.diagnostics(),
+                decorations: self.decorations(project),
+            },
+            self.environment.policy.read_only,
         )
     }
 
@@ -301,10 +368,9 @@ impl EditorSession {
         self.transcript_rows(project)
             .into_iter()
             .filter(|row| {
-                matches!(
-                    row.lint.severity,
-                    LintSeverity::Error | LintSeverity::Warning
-                )
+                row.lint_issues
+                    .iter()
+                    .any(|issue| matches!(issue.severity, Severity::Error | Severity::Warning))
             })
             .collect()
     }
@@ -358,67 +424,10 @@ fn timeline_min_px_per_sec_for_zoom(zoom: f32) -> f64 {
     zoom as f64 * DEFAULT_MIN_PX_PER_SEC
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReviewState {
-    Draft,
-    InProgress,
-    Submitted,
-}
-
-impl ReviewState {
-    fn from_project(project: &Project) -> Self {
-        if project.metadata.get("babel.format").map(String::as_str) != Some("review-action") {
-            return Self::Draft;
-        }
-
-        match project
-            .metadata
-            .get("babel.review_action.actionDecision")
-            .map(String::as_str)
-        {
-            Some("pass") => Self::Submitted,
-            Some("in-progress") => Self::InProgress,
-            _ => Self::Draft,
-        }
-    }
-}
-
-/// Practice/assessment phase of an assessment task (from project metadata).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AssessmentPhase {
-    Practice,
-    Assessment,
-}
-
-impl AssessmentPhase {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "practice" => Some(Self::Practice),
-            "assessment" => Some(Self::Assessment),
-            _ => None,
-        }
-    }
-}
-
 fn first_segment_id(project: &Project) -> Option<String> {
     project
         .segments
         .iter()
         .min_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds))
         .map(|segment| segment.id.clone())
-}
-
-fn support_id_for_project(project: &Project) -> String {
-    project
-        .segments
-        .iter()
-        .find_map(|segment| {
-            segment
-                .metadata
-                .get("reviewActionId")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| project.metadata.get("action_id").cloned())
-        .unwrap_or_else(|| format!("{}:{}", project.id, project.segments.len()))
 }

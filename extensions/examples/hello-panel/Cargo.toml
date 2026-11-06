@@ -1,0 +1,23 @@
+[package]
+name = "sonus-example-hello-panel"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sonus-sdk = { path = "../../../sdk/rust" }
+
+[features]
+# Only the smoke harness enables deliberately trapping commands.
+runtime-probes = []
+
+[workspace]
+
+[profile.release]
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

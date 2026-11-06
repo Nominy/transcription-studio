@@ -1,0 +1,20 @@
+[package]
+name = "sonus-babel-lint"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true
+studio-core.workspace = true
+sonus-extension = { path = "../../crates/sonus-extension" }
+unicode-normalization = "0.1"
+unicode-segmentation = "1.12"
+
+[build-dependencies]
+serde_json.workspace = true
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }

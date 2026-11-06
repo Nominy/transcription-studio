@@ -1,42 +1,67 @@
 mod actions;
-mod annotation_kind;
-mod diff;
-mod reviewer;
 mod row_availability;
 mod time;
-mod visible_cells;
-mod words;
-
-use std::collections::BTreeSet;
-
-use crate::babel_metadata::project_is_read_only;
-use crate::linter::{
-    LintKind, LintStatus, ProjectLintAnalysis, ServerLintSnapshot, UNRESOLVED_LOW_CONFIDENCE_RULE,
-    combine_server_and_local_issues, server_lint_issues_for_segment, warning_key,
-};
 use crate::track_filter::TrackFilter;
-use diff::{
-    annotation_diff_state, annotation_removed_ghost_rows, diff_state, modified_segment_diff_rows,
-};
-use reviewer::ReviewerLookup;
-use row_availability::compute_row_availability;
-use studio_core::Project;
-use words::build_transcript_word_views;
-
 pub(crate) use actions::build_transcript_action_menu;
-pub use actions::{TranscriptActionCommand, TranscriptActionMenuEntry, TranscriptTrackOptionView};
-use actions::{build_transcript_track_options, selected_track_option};
-pub use annotation_kind::{
-    BABEL_NON_TRANSCRIPTION_TYPE, BABEL_TRANSCRIPTION_TYPE, TranscriptAnnotationKind,
+pub use actions::{
+    TranscriptActionCommand, TranscriptActionMenuEntry, TranscriptTrackOptionView,
+    build_transcript_track_options, selected_track_option,
 };
-pub use reviewer::TranscriptReviewerView;
+pub use row_availability::compute_row_availability;
+use sonus_extension::document::{Decoration, Diagnostic, DiagnosticCollection, Severity};
+use std::collections::BTreeSet;
+use studio_core::Project;
 pub use time::format_mm_ss;
-pub use visible_cells::TranscriptRowVisibleCells;
-pub(crate) use visible_cells::derive_transcription_row_visible_cells;
+/// Neutral, versioned display payload. Metadata interpretation belongs to its provider.
+pub const TRANSCRIPT_ROW_DECORATION: &str = "sonus.transcript.row.v1";
 
-const META_SELECTED_COMPARE_ACTION_ID: &str = "studio.babel.diff.selectedCompareActionId";
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TranscriptAnnotationKind {
+    Transcription,
+    NonTranscription(String),
+}
+impl TranscriptAnnotationKind {
+    pub fn is_transcription(&self) -> bool {
+        matches!(self, Self::Transcription)
+    }
+    pub fn label(&self) -> String {
+        match self {
+            Self::Transcription => "transcription".into(),
+            Self::NonTranscription(label) => label.clone(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptReviewerView {
+    pub label: String,
+    pub color_hue: Option<u16>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptRowVisibleCells {
+    pub id: bool,
+    pub track: bool,
+    pub start: bool,
+    pub end: bool,
+    pub reviewer: bool,
+    pub text: bool,
+    pub linter: bool,
+    pub actions: bool,
+}
+impl Default for TranscriptRowVisibleCells {
+    fn default() -> Self {
+        Self {
+            id: true,
+            track: true,
+            start: true,
+            end: true,
+            reviewer: false,
+            text: true,
+            linter: true,
+            actions: true,
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct TranscriptRowView {
     pub row_kind: TranscriptRowKind,
     pub sort_start_seconds: f64,
@@ -56,8 +81,8 @@ pub struct TranscriptRowView {
     pub reviewer: Option<TranscriptReviewerView>,
     pub text: String,
     pub is_selected: bool,
-    pub lint: LintStatus,
-    pub lint_issues: Vec<LintStatus>,
+    pub lint: Option<Diagnostic>,
+    pub lint_issues: Vec<Diagnostic>,
     pub diff_marker: Option<String>,
     pub diff_source_text: Option<String>,
     pub diff: Option<TranscriptDiffView>,
@@ -72,7 +97,7 @@ pub struct TranscriptRowView {
     pub can_merge_below: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptRowKind {
     Annotation,
     ModifiedAdded,
@@ -81,7 +106,7 @@ pub enum TranscriptRowKind {
 }
 
 /// Annotation (non-transcription) diff against the compare snapshot.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct TranscriptAnnotationDiffView {
     pub status: AnnotationDiffStatus,
     pub other_label: Option<String>,
@@ -91,7 +116,7 @@ pub struct TranscriptAnnotationDiffView {
     pub counterpart_end_seconds: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnnotationDiffStatus {
     Matched,
     LabelMismatch,
@@ -102,7 +127,7 @@ pub enum AnnotationDiffStatus {
 }
 
 /// Text-cell diff for diff mode.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TranscriptDiffView {
     pub kind: TranscriptDiffCellKind,
     /// Number of word-level changes (a removed+added pair counts once).
@@ -113,7 +138,7 @@ pub struct TranscriptDiffView {
     pub words: Vec<TranscriptWordDiff>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptDiffCellKind {
     Diff,
     New,
@@ -121,7 +146,7 @@ pub enum TranscriptDiffCellKind {
     ModifiedDeleted,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptWordDiffStatus {
     Unchanged,
     Added,
@@ -129,19 +154,28 @@ pub enum TranscriptWordDiffStatus {
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TranscriptWordDiff {
     pub status: TranscriptWordDiffStatus,
     pub value: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct TranscriptWordView {
     pub index: usize,
     pub text: String,
     pub start_seconds: Option<f64>,
     pub end_seconds: Option<f64>,
     pub is_low_confidence: bool,
+    pub is_acknowledged: bool,
+    pub command: Option<String>,
+    pub command_arguments: serde_json::Value,
+}
+
+/// Extension-produced presentation data for one document revision.
+pub(crate) struct RowContributions<'a> {
+    pub diagnostics: &'a [DiagnosticCollection],
+    pub decorations: Vec<Decoration>,
 }
 
 pub(crate) fn build_transcript_rows(
@@ -150,59 +184,20 @@ pub(crate) fn build_transcript_rows(
     selected_segment_id: Option<&str>,
     diff_view: bool,
     asserted_warning_keys: &BTreeSet<String>,
-    server_lint_snapshot: Option<&ServerLintSnapshot>,
+    contributions: RowContributions<'_>,
+    read_only: bool,
 ) -> Vec<TranscriptRowView> {
-    let mut segments: Vec<_> = project.segments.iter().collect();
-    segments.sort_by(|left, right| left.start_seconds.total_cmp(&right.start_seconds));
-    let row_availability = compute_row_availability(project);
-    let lint_analysis = ProjectLintAnalysis::new(project);
-    let selected_compare_action_id = selected_compare_action_id(project);
+    let RowContributions {
+        diagnostics,
+        decorations,
+    } = contributions;
+    let availability = compute_row_availability(project);
     let track_options = build_transcript_track_options(project);
-    let reviewer_lookup = ReviewerLookup::for_project(project);
-    let visible_cells = derive_transcription_row_visible_cells(project);
-    let is_read_only = project_is_read_only(project);
-
-    let mut rows: Vec<TranscriptRowView> = segments
-        .into_iter()
-        .filter(|segment| track_filter.matches_lane(&segment.lane_id))
-        .map(|segment| {
-            let annotation_kind = TranscriptAnnotationKind::from_segment(segment);
-            let annotation_type_label = annotation_kind.label();
-            let raw_lint_issues = combine_server_and_local_issues(
-                server_lint_issues_for_segment(server_lint_snapshot, segment),
-                lint_analysis.lint_segment_issues(segment),
-            );
-            let has_asserted_warning = raw_lint_issues.iter().any(|issue| {
-                warning_key(segment, issue).is_some_and(|key| asserted_warning_keys.contains(&key))
-            });
-            let lint_issues = raw_lint_issues
-                .into_iter()
-                .filter(|issue| {
-                    !warning_key(segment, issue)
-                        .is_some_and(|key| asserted_warning_keys.contains(&key))
-                })
-                .collect::<Vec<_>>();
-            let lint = if let Some(primary) = lint_issues.first() {
-                primary.clone()
-            } else if has_asserted_warning {
-                LintStatus::pass("Warning asserted")
-            } else {
-                LintStatus::pass("OK")
-            };
-            let has_unresolved_low_confidence = lint_issues
-                .iter()
-                .any(|issue| issue.kind == LintKind::Gold(UNRESOLVED_LOW_CONFIDENCE_RULE));
-            let availability = row_availability
-                .get(&segment.id)
-                .copied()
-                .unwrap_or_default();
-            let diff = diff_view.then(|| diff_state(segment, selected_compare_action_id));
-            let diff_cell = diff.as_ref().map(|diff| diff.cell.clone());
-            let annotation_diff = if diff_view {
-                annotation_diff_state(segment, selected_compare_action_id)
-            } else {
-                None
-            };
+    let mut rows = std::collections::BTreeMap::new();
+    for segment in &project.segments {
+        let available = availability.get(&segment.id).copied().unwrap_or_default();
+        rows.insert(
+            segment.id.clone(),
             TranscriptRowView {
                 row_kind: TranscriptRowKind::Annotation,
                 sort_start_seconds: segment.start_seconds,
@@ -213,168 +208,92 @@ pub(crate) fn build_transcript_rows(
                 selected_lane_id: segment.lane_id.clone(),
                 selected_track_option: selected_track_option(&track_options, &segment.lane_id),
                 track_options: track_options.clone(),
-                annotation_kind,
-                annotation_type_label,
+                annotation_kind: TranscriptAnnotationKind::Transcription,
+                annotation_type_label: "transcription".into(),
                 start_time: format_mm_ss(segment.start_seconds),
                 end_time: format_mm_ss(segment.end_seconds),
-                visible_cells,
-                show_reviewer: visible_cells.reviewer,
-                reviewer: reviewer_lookup.reviewer_at(segment.start_seconds),
+                visible_cells: TranscriptRowVisibleCells::default(),
+                show_reviewer: false,
+                reviewer: None,
                 text: segment.text.clone(),
-                is_selected: selected_segment_id == Some(segment.id.as_str()),
-                lint,
-                lint_issues,
-                diff_marker: diff.as_ref().map(|diff| diff.marker.clone()),
-                diff_source_text: diff.as_ref().and_then(|diff| diff.cell.source_text.clone()),
-                diff: diff_cell,
-                annotation_diff,
-                word_views: build_transcript_word_views(segment),
-                has_asserted_warning,
-                has_unresolved_low_confidence,
-                is_read_only,
-                can_insert_above: availability.can_insert_above,
-                can_insert_below: availability.can_insert_below,
-                can_merge_above: availability.can_merge_above,
-                can_merge_below: availability.can_merge_below,
-            }
-        })
-        .collect();
-
-    if diff_view {
-        rows.extend(
-            modified_segment_diff_rows(project)
-                .into_iter()
-                .filter(|row| {
-                    row.lane_id
-                        .as_deref()
-                        .is_none_or(|lane_id| track_filter.matches_lane(lane_id))
-                })
-                .map(|row| {
-                    let row_kind = if row.show_as_added {
-                        TranscriptRowKind::ModifiedAdded
-                    } else {
-                        TranscriptRowKind::ModifiedDeleted
-                    };
-                    let marker = if row.show_as_added {
-                        "Added"
-                    } else {
-                        "Deleted"
-                    };
-                    let lane_id = row.lane_id.clone().unwrap_or_default();
-                    TranscriptRowView {
-                        row_kind,
-                        sort_start_seconds: row.start_seconds.unwrap_or(0.0),
-                        segment_id: format!("modified-{}", row.annotation_id),
-                        display_id: String::new(),
-                        speaker_label: marker.to_string(),
-                        lane_id: lane_id.clone(),
-                        selected_lane_id: lane_id.clone(),
-                        selected_track_option: selected_track_option(&track_options, &lane_id),
-                        track_options: track_options.clone(),
-                        annotation_kind: TranscriptAnnotationKind::Transcription,
-                        annotation_type_label: "Transcription".to_string(),
-                        start_time: row
-                            .start_seconds
-                            .map(format_mm_ss)
-                            .unwrap_or_else(|| "--".to_string()),
-                        end_time: row
-                            .end_seconds
-                            .map(format_mm_ss)
-                            .unwrap_or_else(|| "--".to_string()),
-                        visible_cells,
-                        show_reviewer: visible_cells.reviewer,
-                        reviewer: row
-                            .start_seconds
-                            .and_then(|start_seconds| reviewer_lookup.reviewer_at(start_seconds)),
-                        text: String::new(),
-                        is_selected: false,
-                        lint: LintStatus::pass("OK"),
-                        lint_issues: Vec::new(),
-                        diff_marker: Some(marker.to_string()),
-                        diff_source_text: None,
-                        diff: Some(row.cell),
-                        annotation_diff: None,
-                        word_views: Vec::new(),
-                        has_asserted_warning: false,
-                        has_unresolved_low_confidence: false,
-                        is_read_only: true,
-                        can_insert_above: false,
-                        can_insert_below: false,
-                        can_merge_above: false,
-                        can_merge_below: false,
-                    }
-                }),
+                is_selected: false,
+                lint: None,
+                lint_issues: Vec::new(),
+                diff_marker: None,
+                diff_source_text: None,
+                diff: None,
+                annotation_diff: None,
+                word_views: Vec::new(),
+                has_asserted_warning: false,
+                has_unresolved_low_confidence: false,
+                is_read_only: read_only,
+                can_insert_above: available.can_insert_above,
+                can_insert_below: available.can_insert_below,
+                can_merge_above: available.can_merge_above,
+                can_merge_below: available.can_merge_below,
+            },
         );
-        rows.extend(
-            annotation_removed_ghost_rows(project)
-                .into_iter()
-                .map(|row| TranscriptRowView {
-                    row_kind: TranscriptRowKind::AnnotationRemovedGhost,
-                    sort_start_seconds: row.start_seconds.unwrap_or(0.0),
-                    segment_id: format!("annotation-ghost-{}", row.annotation_id),
-                    display_id: String::new(),
-                    speaker_label: row.comparison_label,
-                    lane_id: String::new(),
-                    selected_lane_id: String::new(),
-                    selected_track_option: None,
-                    track_options: track_options.clone(),
-                    annotation_kind: TranscriptAnnotationKind::NonTranscription(
-                        "removed".to_string(),
-                    ),
-                    annotation_type_label: "Removed".to_string(),
-                    start_time: row
-                        .start_seconds
-                        .map(format_mm_ss)
-                        .unwrap_or_else(|| "--:--".to_string()),
-                    end_time: row
-                        .end_seconds
-                        .map(format_mm_ss)
-                        .unwrap_or_else(|| "--:--".to_string()),
-                    visible_cells,
-                    show_reviewer: visible_cells.reviewer,
-                    reviewer: row
-                        .start_seconds
-                        .and_then(|start_seconds| reviewer_lookup.reviewer_at(start_seconds)),
-                    text: row.text,
-                    is_selected: false,
-                    lint: LintStatus::pass("OK"),
-                    lint_issues: Vec::new(),
-                    diff_marker: Some("Removed".to_string()),
-                    diff_source_text: None,
-                    diff: None,
-                    annotation_diff: Some(row.diff),
-                    word_views: Vec::new(),
-                    has_asserted_warning: false,
-                    has_unresolved_low_confidence: false,
-                    is_read_only: true,
-                    can_insert_above: false,
-                    can_insert_below: false,
-                    can_merge_above: false,
-                    can_merge_below: false,
-                }),
-        );
-        rows.sort_by(|left, right| left.sort_start_seconds.total_cmp(&right.sort_start_seconds));
     }
-
-    apply_visible_order_display_ids(&mut rows);
-
+    for decoration in decorations {
+        if decoration.kind != TRANSCRIPT_ROW_DECORATION {
+            continue;
+        }
+        let Ok(mut row) = serde_json::from_value::<TranscriptRowView>(decoration.data) else {
+            continue;
+        };
+        if row.segment_id != decoration.segment_id {
+            continue;
+        }
+        if row.row_kind != TranscriptRowKind::Annotation && !diff_view {
+            continue;
+        }
+        row.is_read_only |= read_only;
+        if !diff_view {
+            row.diff_marker = None;
+            row.diff_source_text = None;
+            row.diff = None;
+            row.annotation_diff = None;
+        }
+        rows.insert(row.segment_id.clone(), row);
+    }
+    let mut rows: Vec<_> = rows
+        .into_values()
+        .filter(|row| row.lane_id.is_empty() || track_filter.matches_lane(&row.lane_id))
+        .collect();
+    rows.sort_by(|a, b| a.sort_start_seconds.total_cmp(&b.sort_start_seconds));
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.display_id = (index + 1).to_string();
+        row.is_selected = selected_segment_id == Some(row.segment_id.as_str());
+        row.has_asserted_warning = false;
+        row.lint_issues = diagnostics
+            .iter()
+            .flat_map(|collection| &collection.diagnostics)
+            .filter(|issue| issue.segment_id == row.segment_id)
+            .filter(|issue| {
+                let asserted = issue.severity == Severity::Warning
+                    && asserted_warning_keys.contains(&diagnostic_key(issue));
+                row.has_asserted_warning |= asserted;
+                !asserted
+            })
+            .cloned()
+            .collect();
+        row.lint = row.lint_issues.first().cloned();
+        if row.is_read_only {
+            row.can_insert_above = false;
+            row.can_insert_below = false;
+            row.can_merge_above = false;
+            row.can_merge_below = false;
+        }
+    }
     rows
 }
 
-fn apply_visible_order_display_ids(rows: &mut [TranscriptRowView]) {
-    for (index, row) in rows.iter_mut().enumerate() {
-        row.display_id = (index + 1).to_string();
-    }
+pub fn diagnostic_key(issue: &Diagnostic) -> String {
+    format!(
+        "{}::{}::{}::{}",
+        issue.segment_id, issue.source, issue.rule, issue.message
+    )
 }
-
-fn selected_compare_action_id(project: &Project) -> Option<&str> {
-    project
-        .metadata
-        .get(META_SELECTED_COMPARE_ACTION_ID)
-        .map(String::as_str)
-        .filter(|value| !value.is_empty())
-}
-
 pub(crate) fn speaker_label(project: &Project, speaker_id: &str) -> String {
     project
         .speakers

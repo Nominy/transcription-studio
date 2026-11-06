@@ -1,9 +1,7 @@
 use anyhow::{Context, Result, bail};
-use serde_json::json;
-use studio_babel::META_REVIEW_ACTION_DECISION;
 use studio_core::EditorCommand;
 
-use super::{StudioWorkflow, current_babel_timestamp};
+use super::StudioWorkflow;
 
 impl StudioWorkflow {
     pub fn can_undo(&self) -> bool {
@@ -25,19 +23,13 @@ impl StudioWorkflow {
                 .segment_mut(segment_id)
                 .with_context(|| format!("segment `{segment_id}` was not found"))?;
             segment.text = text;
-            stamp_babel_mutation(segment);
+            self.mutation_policy.updated(segment);
             return Ok(());
         }
 
         self.apply(EditorCommand::ApplyTextEdit {
             segment_id: segment_id.to_string(),
             text,
-        })
-    }
-
-    pub fn resolve_low_confidence(&mut self, segment_id: &str) -> Result<()> {
-        self.apply(EditorCommand::ResolveLowConfidence {
-            segment_id: segment_id.to_string(),
         })
     }
 
@@ -62,7 +54,7 @@ impl StudioWorkflow {
                 .with_context(|| format!("segment `{segment_id}` was not found"))?;
             segment.start_seconds = start_seconds;
             segment.end_seconds = end_seconds;
-            stamp_babel_mutation(segment);
+            self.mutation_policy.updated(segment);
             return Ok(());
         }
 
@@ -103,31 +95,25 @@ impl StudioWorkflow {
         self.history.clear();
     }
 
-    pub fn mark_review_passed(&mut self) {
-        self.clear_pending_boundary_edit();
-        self.project
-            .metadata
-            .insert(META_REVIEW_ACTION_DECISION.to_string(), "pass".to_string());
-    }
-
-    pub(super) fn apply(&mut self, command: EditorCommand) -> Result<()> {
+    pub fn apply(&mut self, command: EditorCommand) -> Result<()> {
         self.pending_boundary_edit_segment_id.get_mut().take();
         self.history
-            .apply_with_timestamp(&mut self.project, command, Some(current_babel_timestamp()))
+            .apply_with_policy(&mut self.project, command, self.mutation_policy.as_ref())
             .context("failed to apply editor command")
     }
 
-    pub(super) fn clear_pending_boundary_edit(&self) {
+    /// Applies a validated domain transaction atomically as one undo snapshot.
+    pub fn apply_project_transaction(
+        &mut self,
+        _label: &str,
+        update: impl FnOnce(&mut studio_core::Project) -> Result<()>,
+    ) -> Result<()> {
+        self.history.apply_transaction(&mut self.project, update)?;
+        self.pending_boundary_edit_segment_id.get_mut().take();
+        Ok(())
+    }
+
+    pub fn clear_pending_boundary_edit(&self) {
         self.pending_boundary_edit_segment_id.borrow_mut().take();
     }
-}
-
-fn stamp_babel_mutation(segment: &mut studio_core::Segment) {
-    let updated_at = current_babel_timestamp();
-    segment
-        .metadata
-        .insert("lowConfidenceResolved".to_string(), json!(true));
-    segment
-        .metadata
-        .insert("updatedAt".to_string(), json!(updated_at));
 }

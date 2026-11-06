@@ -9,8 +9,8 @@ use crate::edit::text_placement::AUTO_SEGMENT_MERGE_GAP_SECONDS;
 use crate::editor_model::EditorSession;
 use crate::timeline_model::TimeRange;
 use crate::track_filter::TrackFilter;
-use crate::transcript_model::TranscriptAnnotationKind;
 use crate::workflow::StudioWorkflow;
+use sonus_extension::document::DocumentEnvironment;
 
 /// Absolute sample amplitude counted as speech (about -62 dBFS).
 pub const AUDIO_TRIM_THRESHOLD: f32 = 0.000_794_328_2;
@@ -191,6 +191,7 @@ fn auto_insert_plan_for_lane(
         .filter(|(start_seconds, end_seconds)| {
             !range_overlaps_existing_transcription_segment(
                 project,
+                editor.environment(),
                 lane_id,
                 *start_seconds,
                 *end_seconds,
@@ -202,8 +203,13 @@ fn auto_insert_plan_for_lane(
                 .then_with(|| left.0.total_cmp(&right.0))
         })?;
 
-    let (min_start, max_end) =
-        same_lane_open_range_limits(project, lane_id, speech_start, speech_end);
+    let (min_start, max_end) = same_lane_open_range_limits(
+        project,
+        editor.environment(),
+        lane_id,
+        speech_start,
+        speech_end,
+    );
     let start_seconds = (speech_start - AUTO_INSERT_SEGMENT_PROVISIONAL_PADDING_SECONDS)
         .max(0.0)
         .max(min_start);
@@ -225,10 +231,15 @@ pub fn auto_segment_split_plans(
     project: &Project,
     editor: &EditorSession,
 ) -> Vec<AutoSegmentSplitPlan> {
-    visible_transcription_segments(project, &editor.track_filter, &editor.collapsed_lane_ids)
-        .into_iter()
-        .flat_map(|segment| auto_segment_split_plans_for_segment(editor, segment))
-        .collect()
+    visible_transcription_segments(
+        project,
+        &editor.track_filter,
+        &editor.collapsed_lane_ids,
+        editor.environment(),
+    )
+    .into_iter()
+    .flat_map(|segment| auto_segment_split_plans_for_segment(editor, segment))
+    .collect()
 }
 
 pub fn auto_segment_split_plans_for_segment(
@@ -353,13 +364,14 @@ pub fn visible_transcription_segments<'a>(
     project: &'a Project,
     track_filter: &TrackFilter,
     collapsed_lane_ids: &std::collections::BTreeSet<String>,
+    environment: &DocumentEnvironment,
 ) -> Vec<&'a Segment> {
     let mut segments = project
         .segments
         .iter()
         .filter(|segment| track_filter_matches_lane(track_filter, &segment.lane_id))
         .filter(|segment| !collapsed_lane_ids.contains(&segment.lane_id))
-        .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
+        .filter(|segment| environment.is_text_segment(segment))
         .collect::<Vec<_>>();
     segments.sort_by(|left, right| {
         left.start_seconds
@@ -697,6 +709,7 @@ fn distance_to_range(point_seconds: f64, range: (f64, f64)) -> f64 {
 
 fn range_overlaps_existing_transcription_segment(
     project: &Project,
+    environment: &DocumentEnvironment,
     lane_id: &str,
     start_seconds: f64,
     end_seconds: f64,
@@ -705,12 +718,13 @@ fn range_overlaps_existing_transcription_segment(
         .segments
         .iter()
         .filter(|segment| segment.lane_id == lane_id)
-        .filter(|segment| TranscriptAnnotationKind::from_segment(segment).is_transcription())
+        .filter(|segment| environment.is_text_segment(segment))
         .any(|segment| segment.start_seconds < end_seconds && start_seconds < segment.end_seconds)
 }
 
 fn same_lane_open_range_limits(
     project: &Project,
+    environment: &DocumentEnvironment,
     lane_id: &str,
     start_seconds: f64,
     end_seconds: f64,
@@ -719,7 +733,7 @@ fn same_lane_open_range_limits(
         .segments
         .iter()
         .filter(|candidate| candidate.lane_id == lane_id)
-        .filter(|candidate| TranscriptAnnotationKind::from_segment(candidate).is_transcription())
+        .filter(|candidate| environment.is_text_segment(candidate))
         .filter(|candidate| candidate.end_seconds <= start_seconds)
         .map(|candidate| candidate.end_seconds)
         .max_by(f64::total_cmp)
@@ -728,7 +742,7 @@ fn same_lane_open_range_limits(
         .segments
         .iter()
         .filter(|candidate| candidate.lane_id == lane_id)
-        .filter(|candidate| TranscriptAnnotationKind::from_segment(candidate).is_transcription())
+        .filter(|candidate| environment.is_text_segment(candidate))
         .filter(|candidate| candidate.start_seconds >= end_seconds)
         .map(|candidate| candidate.start_seconds)
         .min_by(f64::total_cmp)

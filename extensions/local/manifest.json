@@ -1,0 +1,26 @@
+{
+  "id": "sonus.local",
+  "name": "Local workspace",
+  "version": "0.1.0",
+  "api": "^0.1",
+  "runtime": "native",
+  "description": "Open audio and edit native projects without an account.",
+  "license": "MIT",
+  "dependencies": {},
+  "permissions": [
+    { "kind": "document-read" },
+    { "kind": "document-edit" },
+    { "kind": "audio-read" },
+    { "kind": "file-picker" }
+  ],
+  "modes": [{
+    "id": "sonus.local",
+    "name": "Local workspace",
+    "requires": {},
+    "recommends": {
+      "sonus.formats": "^0.1",
+      "sonus.lint-basic": "^0.1",
+      "sonus.gold": "^0.1"
+    }
+  }]
+}

@@ -1,6 +1,5 @@
 use super::EditorSession;
 use crate::timeline_model::TimeRange;
-use crate::transcript_model::TranscriptAnnotationKind;
 use studio_core::{Project, Segment};
 
 impl EditorSession {
@@ -196,7 +195,7 @@ impl EditorSession {
     fn is_transcription_segment_visible(&self, segment: &Segment) -> bool {
         self.track_filter.matches_lane(&segment.lane_id)
             && !self.collapsed_lane_ids.contains(&segment.lane_id)
-            && TranscriptAnnotationKind::from_segment(segment).is_transcription()
+            && self.environment.is_text_segment(segment)
     }
 }
 

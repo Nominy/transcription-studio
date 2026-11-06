@@ -1,0 +1,24 @@
+{
+  "id": "sonus.babel",
+  "name": "Babel",
+  "version": "0.1.0",
+  "api": "^0.1",
+  "runtime": "native",
+  "description": "Babel tasks, review, feedback, project context and direct-account workflow.",
+  "license": "MIT",
+  "dependencies": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
+  "permissions": [
+    { "kind": "document-read" }, { "kind": "document-edit" },
+    { "kind": "audio-read" }, { "kind": "transport-control" },
+    { "kind": "selection-control" }, { "kind": "file-picker" },
+    { "kind": "storage" }, { "kind": "secrets" },
+    { "kind": "network", "scope": "dashboard.babel.audio" },
+    { "kind": "network", "scope": "clerk.babel.audio" },
+    { "kind": "network", "scope": "reviewgen.ovh" },
+    { "kind": "network", "scope": "openrouter.ai" }
+  ],
+  "modes": [
+    { "id": "sonus.babel", "name": "Babel", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
+    { "id": "sonus.babel-file", "name": "Babel JSON file", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } }
+  ]
+}

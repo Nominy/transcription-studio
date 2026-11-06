@@ -1,0 +1,74 @@
+# @@EXTENSION_ID@@
+
+This is a standalone Sonus extension repository owned by `@@OWNER@@/@@REPOSITORY@@`.
+It contains real starter functionality: a panel and command that insert a greeting in one
+undoable document transaction, plus empty-segment diagnostics. Customize that implementation
+and the manifest before publishing your extension.
+
+The SDK dependency is fetched from `@@SDK_URL@@`, pinned to full commit
+`@@SDK_COMMIT@@`. There are **no relative dependencies on a Sonus checkout**. Cargo checks
+out the complete SDK repository, so the SDK's internal WIT files remain available. The same
+commit supplies the release validator and packaging CLI in CI. The generator does not
+claim that a supplied repository/commit is already public: the maintainer must supply a
+real accessible published commit containing `sonus-sdk` and `sonus-extension-index`.
+
+## Build and test locally
+
+Install the pinned Rust toolchain from `rust-toolchain.toml`, then run:
+
+```text
+rustup target add wasm32-unknown-unknown
+cargo install --locked --version 1.239.0 wasm-tools
+cargo install --locked --git @@SDK_URL@@ --rev @@SDK_COMMIT@@ sonus-extension-index
+cargo build --release --target wasm32-unknown-unknown
+wasm-tools component new target/wasm32-unknown-unknown/release/@@CRATE_ARTIFACT@@.wasm -o module.wasm
+wasm-tools validate module.wasm
+sonus-extension-index pack manifest.json module.wasm @@EXTENSION_ID@@-@@VERSION@@.sonusext LICENSE
+sonus-extension-index preview-developer @@EXTENSION_ID@@-@@VERSION@@.sonusext
+```
+
+Commit the generated `Cargo.lock` before tagging a release so dependency resolution is
+reviewable and reproducible. If the first CI build has no lockfile, it generates one and
+attaches the exact resolved lockfile to the release as `build-Cargo.lock`; this records the
+actual build inputs but does not pretend those transitive dependencies were pinned in the
+source commit. Subsequent releases should use a committed lockfile.
+
+Load the archive as a developer source in Sonus, explicitly approve its SHA256 and requested
+permissions, and exercise its panel/command/diagnostics. The example requests document read
+and edit only. Declaring permissions does not grant them. Runtime/ABI validation and your
+functional tests remain necessary; archive validation alone is not an extension test.
+
+## Versioned GitHub releases
+
+The included `.github/workflows/release.yml` runs only when you push a `v*` tag to this
+repository. It checks the repository identity and exact `v<manifest version>` tag, builds
+the real WASM component, validates and packages it, and generates the index record from the
+actual archive bytes and source commit. The publish job creates a new GitHub release with:
+
+- `@@EXTENSION_ID@@-VERSION.sonusext`: the installable package;
+- `index-entry.json`: the actual catalog extension/release record;
+- `build-Cargo.lock`: exact resolved Rust dependencies;
+- `build-source.json`: author source and SDK commit identities and component-tool version.
+
+Only the publish job receives `contents: write`; the build job is read-only. The workflow
+refuses to replace an existing release. Use branch/tag protection and required reviews in
+GitHub repository settings. No repository, tag, release or workflow run was created by the
+local generator, and no review settings are silently provisioned.
+
+Before publishing, make the Rust package version in `Cargo.toml` and manifest version agree,
+commit your changes/lockfile, and create a new matching tag. Never overwrite an already
+indexed release: publish a new version for changed source, manifest or bytes.
+
+## Submit to a reviewed index
+
+After the GitHub release exists, submit the generated `index-entry.json` in a PR to your
+chosen Sonus index's `index.json`. Append its release to an existing entry when appropriate;
+do not duplicate the identity or overwrite an existing version. Maintainers independently
+review repository ownership, tag/source correspondence, license, permissions and actual
+release bytes. Index inclusion is **not automatic** and this workflow does not use a token
+to modify another repository.
+
+SHA256 binds bytes to an index record; it is not a publisher signature or proof that source
+and binary correspond. A developer source remains unreviewed until independently accepted
+into the index. The marketplace never executes this repository's source/build scripts:
+only your own local toolchain or authorized GitHub workflow builds it.

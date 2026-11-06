@@ -1,18 +1,29 @@
+<#
+.SYNOPSIS
+Publishes the Windows alpha payload (target/velopack/Publish) to the VPS alpha feed.
+
+.DESCRIPTION
+Uploads into an incoming directory, verifies every file against publish-manifest.json, then
+promotes packages before feed metadata under a remote lock, keeping the previous metadata
+for rollback. Packages first (tools/package-windows.ps1 -UpdateChannel alpha) unless
+-SkipPackage. -KnownHostsPath pins the server's host key (CI); without it, the user's own
+known_hosts applies with accept-new.
+#>
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$Channel = "alpha",
     [string]$Remote = "ethernetservers",
-    [string]$RemotePath = "/var/www/transcription-studio/alpha/win-x64",
-    [string]$RemoteIncomingRoot = "/var/tmp/transcription-studio-alpha-incoming",
+    [string]$RemotePath = "/var/www/sonus/alpha/win-x64",
+    [string]$RemoteIncomingRoot = "/var/tmp/sonus-alpha-incoming",
     [string]$OutputDir = "",
     [string]$PublishDir = "",
-    [string]$Target = "",
     [string]$SshKeyPath = "",
+    [string]$KnownHostsPath = "",
     [int]$SshPort = 22,
-    [switch]$SkipPackage,
-    [switch]$InstallVpk
+    [switch]$SkipPackage
 )
+
+$Channel = "alpha"
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -211,9 +222,6 @@ function Get-ValidatedPublishManifest {
     return $manifest
 }
 
-if ($Channel -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
-    throw "Channel is not safe for release metadata file names: $Channel"
-}
 if ($SshPort -lt 1 -or $SshPort -gt 65535) {
     throw "SshPort must be between 1 and 65535."
 }
@@ -240,20 +248,14 @@ Assert-RepoChildPath -RepoRoot $repoRootFull -Path $publishPath
 
 if (-not $SkipPackage) {
     $packageArgs = @{
-        Channel = $Channel
+        UpdateChannel = "alpha"
         OutputDir = $releaseDir
         PublishDir = $publishPath
-    }
-    if (-not [string]::IsNullOrWhiteSpace($Target)) {
-        $packageArgs.Target = $Target
     }
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
         $packageArgs.Version = $Version
     }
-    if ($InstallVpk) {
-        $packageArgs.InstallVpk = $true
-    }
-    & (Join-Path $PSScriptRoot "package-alpha-windows.ps1") @packageArgs
+    & (Join-Path $PSScriptRoot "package-windows.ps1") @packageArgs
 }
 
 $manifest = Get-ValidatedPublishManifest `
@@ -277,8 +279,14 @@ foreach ($path in @($remotePlatformRoot, $remoteDeployment, $remotePayload, $rem
     Assert-SafeRemotePath -Name "generated remote path" -Path $path
 }
 
-$sshArgs = @("-p", [string]$SshPort, "-o", "StrictHostKeyChecking=accept-new")
-$scpArgs = @("-P", [string]$SshPort, "-o", "StrictHostKeyChecking=accept-new")
+$hostKeyArgs = if ([string]::IsNullOrWhiteSpace($KnownHostsPath)) {
+    @("-o", "StrictHostKeyChecking=accept-new")
+} else {
+    $knownHostsFull = (Resolve-Path -LiteralPath $KnownHostsPath).Path
+    @("-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=$knownHostsFull")
+}
+$sshArgs = @("-p", [string]$SshPort) + $hostKeyArgs
+$scpArgs = @("-P", [string]$SshPort) + $hostKeyArgs
 if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) {
     $keyFull = (Resolve-Path -LiteralPath $SshKeyPath).Path
     $sshArgs = @("-i", $keyFull) + $sshArgs

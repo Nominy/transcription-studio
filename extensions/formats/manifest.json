@@ -1,0 +1,12 @@
+{
+  "id": "sonus.formats",
+  "name": "Subtitle and text formats",
+  "version": "0.1.0",
+  "api": "^0.1.0",
+  "runtime": "native",
+  "description": "Optional SRT, WebVTT and untimed UTF-8 text import and export.",
+  "license": "MIT",
+  "dependencies": {},
+  "permissions": [{"kind": "document-read"}, {"kind": "document-edit"}, {"kind": "file-picker"}],
+  "modes": []
+}

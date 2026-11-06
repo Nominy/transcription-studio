@@ -1,13 +1,16 @@
 // Generates Studio's linter data and its parity fixture from the two linters Studio replaces:
 // Babel's native linter (Gold) configured for the gold-non-bg transcription variant, and the
-// Babel Helper extension's custom linter.
+// Babel Helper extension's custom linter. Babel's code is only read from the Babel checkout;
+// what it produces goes into the Babel data bundle's stage, not into this repository.
 //
 //   node tools/lint-parity/generate.mjs [babelDir]
 //
 // babelDir defaults to ../babel beside this checkout. Writes
-//   crates/studio-editor/assets/babel-lint-data.json   gold-non-bg config per language + rule data
-//   crates/studio-editor/assets/helper-lint-data.json   Helper custom-linter rules + their data tables
-//   crates/studio-editor/tests/fixtures/lint-parity.json   corpus with both linters' issues
+//   target/babel-data/babel-lint-data.json   gold-non-bg config per language + rule data
+//   target/babel-data/lint-parity.json       corpus with both linters' issues
+//   extensions/babel-lint/assets/helper-lint-data.json   Helper custom-linter rules + their data tables
+// Seed the stage with the other bundle files first (`tools/update-babel-data.ps1 -Fetch`), then
+// publish and pin the regenerated bundle with `tools/update-babel-data.ps1`.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -128,8 +131,10 @@ const fixture = {
   }),
 };
 
-fs.writeFileSync(path.join(repo, 'crates/studio-editor/assets/babel-lint-data.json'), `${JSON.stringify(lintData, null, 1)}\n`);
-fs.writeFileSync(path.join(repo, 'crates/studio-editor/assets/helper-lint-data.json'), `${JSON.stringify(await helperLintData(helperDir, helper), null, 1)}\n`);
-fs.writeFileSync(path.join(repo, 'crates/studio-editor/tests/fixtures/lint-parity.json'), `${JSON.stringify(fixture, null, 1)}\n`);
+const stage = path.join(repo, 'target/babel-data');
+fs.mkdirSync(stage, { recursive: true });
+fs.writeFileSync(path.join(stage, 'babel-lint-data.json'), `${JSON.stringify(lintData, null, 1)}\n`);
+fs.writeFileSync(path.join(repo, 'extensions/babel-lint/assets/helper-lint-data.json'), `${JSON.stringify(await helperLintData(helperDir, helper), null, 1)}\n`);
+fs.writeFileSync(path.join(stage, 'lint-parity.json'), `${JSON.stringify(fixture, null, 1)}\n`);
 const issueCount = fixture.cases.reduce((total, testCase) => total + testCase.expected.length, 0);
 console.log(`languages ${lintData.languages.length}, cases ${fixture.cases.length}, issues ${issueCount}`);

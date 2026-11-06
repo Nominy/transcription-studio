@@ -1,46 +1,40 @@
 #!/usr/bin/env bash
+# Builds Sonus natively on macOS and packs it with Velopack (channel `alpha`) for the VPS
+# alpha feed. Env: VERSION (default: crates/studio-app version; baked into the binary as
+# STUDIO_BUILD_VERSION), RUNTIME (osx-arm64 | osx-x64, default: host), STUDIO_ALPHA_FEED_URL
+# (alpha feed the build updates from, default: the platform feed), MACOSX_DEPLOYMENT_TARGET
+# (default 14.0), optional APPLE_* signing inputs below.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 version="${VERSION:-}"
-channel="${CHANNEL:-alpha}"
-pack_id="${PACK_ID:-TranscriptionStudio}"
-pack_title="${PACK_TITLE:-Transcription Studio}"
-pack_authors="${PACK_AUTHORS:-Nominy}"
-bundle_id="${BUNDLE_ID:-ovh.reviewgen.transcription-studio}"
+channel="alpha"
+pack_id="Sonus"
+pack_title="Sonus"
+pack_authors="Nominy"
+main_exe="Sonus"
+bundle_id="io.github.nominy.sonus"
 stage_dir="${STAGE_DIR:-$repo_root/target/velopack/macos-stage}"
 output_dir="${OUTPUT_DIR:-$repo_root/target/velopack/Releases}"
 publish_dir="${PUBLISH_DIR:-$repo_root/target/velopack/Publish}"
-skip_build="${SKIP_BUILD:-0}"
-source_dir="${SOURCE_DIR:-$repo_root/target/release}"
-install_vpk="${INSTALL_VPK:-0}"
-vpk_command="${VPK_COMMAND:-}"
+source_dir="$repo_root/target/release"
 runtime="${RUNTIME:-}"
 deployment_target="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
-default_update_feed_url="${STUDIO_DEFAULT_UPDATE_FEED_URL:-}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "package-alpha-macos.sh must run on macOS." >&2
   exit 1
 fi
 
-cargo_version="$({
-  awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' \
-    "$repo_root/crates/studio-app/Cargo.toml"
-})"
-if [[ -z "$cargo_version" ]]; then
-  echo "Could not read studio-app package version." >&2
-  exit 1
-fi
 if [[ -z "$version" ]]; then
-  version="$cargo_version"
-elif [[ "$version" != "$cargo_version" ]]; then
-  echo "VERSION override '$version' does not match studio-app Cargo version '$cargo_version'." >&2
-  exit 1
+  version="$({
+    awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' \
+      "$repo_root/crates/studio-app/Cargo.toml"
+  })"
 fi
-if [[ ! "$channel" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-  echo "CHANNEL is not safe for release metadata file names: $channel" >&2
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "VERSION must be SemVer (major.minor.patch[-prerelease]): '$version'" >&2
   exit 1
 fi
 
@@ -65,25 +59,13 @@ if [[ -n "$host_runtime" && "$runtime" != "$host_runtime" ]]; then
   exit 1
 fi
 
-if [[ -z "$vpk_command" ]]; then
-  if ! command -v dotnet >/dev/null 2>&1; then
-    echo "The repo-local vpk tool requires .NET SDK 8. Run: dotnet tool restore" >&2
-    exit 1
-  fi
-  if [[ "$install_vpk" == "1" || "$install_vpk" == "true" ]]; then
-    (cd "$repo_root" && dotnet tool restore)
-  fi
-elif [[ ! -x "$vpk_command" ]]; then
-  echo "VPK_COMMAND is not executable: $vpk_command" >&2
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "The repo-local vpk tool requires .NET SDK 8. Run: dotnet tool restore" >&2
   exit 1
 fi
 
 run_vpk() {
-  if [[ -n "$vpk_command" ]]; then
-    "$vpk_command" "$@"
-  else
-    (cd "$repo_root" && dotnet tool run vpk -- "$@")
-  fi
+  (cd "$repo_root" && dotnet tool run vpk -- "$@")
 }
 
 python3 - "$repo_root" "$stage_dir" "$output_dir" "$publish_dir" <<'PY'
@@ -111,27 +93,30 @@ for left_index, left in enumerate(paths):
 PY
 
 export MACOSX_DEPLOYMENT_TARGET="$deployment_target"
-if [[ -n "$default_update_feed_url" ]]; then
-  export STUDIO_DEFAULT_UPDATE_FEED_URL="$default_update_feed_url"
-fi
+# Baked into the binary: the version it reports and the update channel it follows.
+export STUDIO_BUILD_VERSION="$version"
+export STUDIO_UPDATE_CHANNEL="alpha"
 
-echo "Packaging Transcription Studio $version for $runtime."
+echo "Packaging Sonus $version for $runtime."
 echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
-if [[ -n "${STUDIO_DEFAULT_UPDATE_FEED_URL:-}" ]]; then
-  echo "STUDIO_DEFAULT_UPDATE_FEED_URL=$STUDIO_DEFAULT_UPDATE_FEED_URL"
+if [[ -n "${STUDIO_ALPHA_FEED_URL:-}" ]]; then
+  echo "STUDIO_ALPHA_FEED_URL=$STUDIO_ALPHA_FEED_URL"
 fi
 
-if [[ "$skip_build" != "1" && "$skip_build" != "true" ]]; then
-  cargo build -p studio-app -p studio-relay --release --locked
-fi
+# Build the app, relay and isolated compiler together so shared dependency features stay unified.
+cargo build -p studio-app -p studio-relay -p sonus-wasm --release --locked
 
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir" "$output_dir"
-cp "$source_dir/studio-app" "$stage_dir/TranscriptionStudio"
+cp "$source_dir/studio-app" "$stage_dir/$main_exe"
 cp "$source_dir/studio-relay" "$stage_dir/studio-relay"
-chmod +x "$stage_dir/TranscriptionStudio" "$stage_dir/studio-relay"
+cp "$source_dir/sonus-wasm-worker" "$stage_dir/sonus-wasm-worker"
+chmod +x "$stage_dir/$main_exe" "$stage_dir/studio-relay" "$stage_dir/sonus-wasm-worker"
+mkdir -p "$stage_dir/assets/demo"
+cp "$repo_root/crates/studio-editor/assets/demo/speaker_1.wav" "$stage_dir/assets/demo/"
+cp "$repo_root/crates/studio-editor/assets/demo/speaker_2.wav" "$stage_dir/assets/demo/"
 
-for file in README.md Cargo.lock; do
+for file in README.md LICENSE; do
   if [[ -f "$repo_root/$file" ]]; then
     cp "$repo_root/$file" "$stage_dir/"
   fi
@@ -141,7 +126,7 @@ pack_args=(
   --packId "$pack_id"
   --packVersion "$version"
   --packDir "$stage_dir"
-  --mainExe "TranscriptionStudio"
+  --mainExe "$main_exe"
   --channel "$channel"
   --runtime "$runtime"
   --packTitle "$pack_title"

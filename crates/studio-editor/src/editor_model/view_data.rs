@@ -11,7 +11,7 @@ use crate::timeline_model::{
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{
     TranscriptActionMenuEntry, TranscriptRowView, TranscriptRowVisibleCells,
-    build_transcript_action_menu, build_transcript_rows, derive_transcription_row_visible_cells,
+    build_transcript_action_menu, build_transcript_rows,
 };
 use studio_core::Project;
 
@@ -62,8 +62,7 @@ impl EditorSession {
     pub fn problem_counts(&self, project: &Project) -> ProblemCounts {
         ProblemCounts {
             errors: self.blocking_lint_count(project),
-            warnings: self.unacknowledged_warning_count(project)
-                + self.unresolved_low_confidence_count(project),
+            warnings: self.unacknowledged_warning_count(project),
         }
     }
 
@@ -131,6 +130,7 @@ impl EditorSession {
         segment_preview: Option<&'a TimelineSegmentPreview>,
     ) -> TimelineLaneBuildState<'a> {
         TimelineLaneBuildState {
+            environment: &self.environment,
             track_filter: &self.track_filter,
             collapsed_lane_ids: &self.collapsed_lane_ids,
             muted_lane_ids: &self.muted_lane_ids,
@@ -196,7 +196,11 @@ impl EditorSession {
             None,
             self.diff_view,
             &self.asserted_warning_keys,
-            self.server_lint_snapshot(),
+            crate::transcript_model::RowContributions {
+                diagnostics: self.diagnostics(),
+                decorations: self.decorations(project),
+            },
+            self.environment.policy.read_only,
         )
     }
 
@@ -205,7 +209,10 @@ impl EditorSession {
     }
 
     pub fn transcript_visible_cells(&self, project: &Project) -> TranscriptRowVisibleCells {
-        derive_transcription_row_visible_cells(project)
+        self.transcript_rows(project)
+            .first()
+            .map(|row| row.visible_cells)
+            .unwrap_or_default()
     }
 
     pub fn transcript_action_menu(row: &TranscriptRowView) -> Vec<TranscriptActionMenuEntry> {

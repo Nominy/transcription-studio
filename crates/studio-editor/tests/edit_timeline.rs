@@ -196,8 +196,12 @@ fn cut_preview_commit_without_overlay_is_unavailable() {
 }
 
 #[test]
-fn a_selection_shorter_than_a_second_loops_but_refuses_to_cut() {
+fn document_minimum_cut_policy_does_not_prevent_looping() {
     let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "one two")]);
+    doc.session_mut()
+        .environment
+        .policy
+        .minimum_cut_milliseconds = 1000;
     let _ = doc.select_segment("annotation-1");
     set_overlay(&mut doc, "lane-1", 2.0, 2.3);
     let before = doc.project().segments.clone();
@@ -214,6 +218,14 @@ fn a_selection_shorter_than_a_second_loops_but_refuses_to_cut() {
             .as_ref()
             .is_some_and(|overlay| overlay.looping)
     );
+}
+
+#[test]
+fn local_document_can_cut_less_than_one_second() {
+    let mut doc = doc(vec![seg("annotation-1", "lane-1", 1.0, 6.0, "one two")]);
+    set_overlay(&mut doc, "lane-1", 2.0, 2.3);
+    ok(doc.commit_cut_preview(false));
+    assert_eq!(doc.project().segments.len(), 2);
 }
 
 #[test]
@@ -1364,54 +1376,6 @@ fn helper_playhead_row_deduction_only_considers_visible_lanes() {
     );
 }
 
-// ---- warnings / problems --------------------------------------------------------------
-
-#[test]
-fn active_warning_hotkey_toggles_selected_warning_assertion() {
-    let mut doc = stable_sample_doc();
-    let warning_segment_id = doc
-        .transcript_rows()
-        .iter()
-        .find(|row| row.lint.is_assertable_warning())
-        .expect("sample should include an assertable warning")
-        .segment_id
-        .clone();
-    let _ = doc.select_segment(&warning_segment_id);
-
-    let _ = perform(&mut doc, EditorAction::ToggleActiveWarningAssertion);
-
-    let asserted = doc
-        .transcript_rows()
-        .iter()
-        .find(|row| row.segment_id == warning_segment_id)
-        .map(|row| row.has_asserted_warning)
-        .expect("selected warning row still exists");
-    assert!(asserted);
-}
-
-#[test]
-fn navigate_problem_rows_delegates_to_session_problem_navigation() {
-    let mut doc = stable_sample_doc();
-    let mut expected = doc.session().clone();
-    expected.navigate_problem_rows(doc.project(), 1);
-
-    let outcome = doc.navigate_problem_rows(1);
-
-    assert_eq!(
-        doc.session().selected_segment_id,
-        expected.selected_segment_id
-    );
-    if let Some(selected_id) = expected.selected_segment_id {
-        assert_eq!(
-            outcome.effects.first(),
-            Some(&Effect::RevealSegment {
-                segment_id: selected_id,
-                center: false,
-            })
-        );
-    }
-}
-
 // ---- find -----------------------------------------------------------------------------
 
 #[test]
@@ -1608,7 +1572,10 @@ fn timeline_defaults_persist_in_project_metadata_and_hydrate_on_reload() {
         .get("track-speaker-2")
         .expect("vertical zoom is set before reload");
 
-    let reloaded = EditorDoc::from_project(doc.project().clone());
+    let reloaded = EditorDoc::from_project(
+        doc.project().clone(),
+        sonus_extension::document::DocumentEnvironment::local("test"),
+    );
 
     let session = reloaded.session();
     assert!((session.zoom - 2.0).abs() < f32::EPSILON);
@@ -1648,25 +1615,6 @@ fn escape_closes_create_region_dialog_before_cancelling_looping_selection() {
     let _ = perform(&mut doc, EditorAction::EscapePressed);
 
     assert!(doc.session().overlay.is_none());
-    assert!(doc.session().loop_range().is_none());
-}
-
-#[test]
-fn escape_dismisses_edit_annotation_then_create_region_then_selection() {
-    let mut doc = stable_doc_with_looping_selection();
-    doc.open_create_region("track-speaker-1", 12.0, 12.8);
-    ok(doc.open_edit_annotation("annotation-1"));
-
-    let _ = doc.escape();
-    assert!(doc.edit_annotation().is_none());
-    assert!(doc.create_region().is_some());
-    assert!(doc.session().loop_range().is_some());
-
-    let _ = doc.escape();
-    assert!(doc.create_region().is_none());
-    assert!(doc.session().loop_range().is_some());
-
-    let _ = doc.escape();
     assert!(doc.session().loop_range().is_none());
 }
 
