@@ -45,8 +45,8 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     })
 }
 
-/// Display name of a native project folder or recovery root.
-fn project_name(path: &Path) -> String {
+/// Folder name of a native project folder or recovery root, when nothing better is known.
+fn folder_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
@@ -57,8 +57,10 @@ struct LocalHome {
     busy: bool,
     progress: Option<(usize, usize, String)>,
     cancellation: Arc<AtomicBool>,
-    /// Recovery snapshot roots with their project names, loaded off the UI thread.
-    unsaved: Vec<(PathBuf, String)>,
+    /// Recent project folders with their project names, loaded off the UI thread.
+    recent: Vec<(PathBuf, String)>,
+    /// Recovery snapshots to offer, loaded and pruned off the UI thread.
+    unsaved: Vec<recovery::Unsaved>,
 }
 
 impl Drop for LocalHome {
@@ -78,24 +80,27 @@ enum ImportEvent {
 
 impl LocalHome {
     fn new(shell: ShellHandle, cx: &mut Context<Self>) -> Self {
+        let recent = local_files::recent(cx);
         let roots = recovery::entries(cx);
-        if !roots.is_empty() {
+        if !recent.is_empty() || !roots.is_empty() {
             cx.spawn(async move |view, cx| {
-                let unsaved = cx
+                let (recent, collected) = cx
                     .background_spawn(async move {
-                        roots
+                        let recent = recent
                             .into_iter()
-                            .map(|root| {
-                                let name = studio_project::load_recovery(&root)
-                                    .map(|project| project.name)
-                                    .unwrap_or_else(|_| project_name(&root));
-                                (root, name)
+                            .map(|path| {
+                                let name = studio_project::read_project_name(&path)
+                                    .unwrap_or_else(|_| folder_name(&path));
+                                (path, name)
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>();
+                        (recent, recovery::collect(roots))
                     })
                     .await;
                 view.update(cx, |this, cx| {
-                    this.unsaved = unsaved;
+                    this.recent = recent;
+                    this.unsaved = collected.unsaved;
+                    recovery::forget(&collected.removed, cx);
                     cx.notify();
                 })
                 .ok();
@@ -107,6 +112,7 @@ impl LocalHome {
             busy: false,
             progress: None,
             cancellation: Arc::new(AtomicBool::new(false)),
+            recent: Vec::new(),
             unsaved: Vec::new(),
         }
     }
@@ -231,7 +237,7 @@ impl Render for LocalHome {
         let open_project = self.shell.clone();
         let demo = self.shell.clone();
         let cancel = self.cancellation.clone();
-        let recent = local_files::recent(cx);
+        let recent = self.recent.clone();
         v_flex()
             .size_full()
             .id("exaudio-local")
@@ -313,11 +319,11 @@ impl Render for LocalHome {
             )
             .children((!recent.is_empty()).then(|| {
                 ui::card(localized(cx, "Recent", "Недавние"), None, cx).children(
-                    recent.into_iter().enumerate().map(|(i, path)| {
+                    recent.into_iter().enumerate().map(|(i, (path, name))| {
                         let shell = self.shell.clone();
                         let target = path.clone();
                         Button::new(("recent", i))
-                            .label(project_name(&path))
+                            .label(name)
                             .tooltip(path.display().to_string())
                             .on_click(move |_, window, cx| {
                                 local_files::open_path(shell.clone(), target.clone(), window, cx)
@@ -331,26 +337,36 @@ impl Render for LocalHome {
                     None,
                     cx,
                 )
-                .children(self.unsaved.iter().enumerate().map(
-                    |(i, (root, name))| {
-                        let shell = self.shell.clone();
-                        let target = root.clone();
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .justify_between()
-                            .child(div().min_w_0().text_sm().child(name.clone()))
-                            .child(
-                                Button::new(("restore", i))
-                                    .small()
-                                    .label(localized(cx, "Restore", "Восстановить"))
-                                    .tooltip(root.display().to_string())
-                                    .on_click(move |_, window, cx| {
-                                        recovery::open(shell.clone(), target.clone(), window, cx)
-                                    }),
-                            )
-                    },
-                ))
+                .children(self.unsaved.iter().enumerate().map(|(i, unsaved)| {
+                    let shell = self.shell.clone();
+                    let target = unsaved.root.clone();
+                    let label = match unsaved.saved_at {
+                        Some(saved_at) => {
+                            format!("{} · {}", unsaved.name, recovery::saved_label(saved_at, cx))
+                        }
+                        None => unsaved.name.clone(),
+                    };
+                    let location = unsaved
+                        .native_path
+                        .as_ref()
+                        .unwrap_or(&unsaved.root)
+                        .display()
+                        .to_string();
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .justify_between()
+                        .child(div().min_w_0().text_sm().child(label))
+                        .child(
+                            Button::new(("restore", i))
+                                .small()
+                                .label(localized(cx, "Restore", "Восстановить"))
+                                .tooltip(location)
+                                .on_click(move |_, window, cx| {
+                                    recovery::open(shell.clone(), target.clone(), window, cx)
+                                }),
+                        )
+                }))
             }))
     }
 }

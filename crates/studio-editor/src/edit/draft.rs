@@ -84,39 +84,6 @@ pub fn byte_offset(text: &str, char_offset: usize) -> usize {
         .map_or(text.len(), |(index, _)| index)
 }
 
-/// Track-cell (speaker lane picker) edit state for one row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrackCellEditState {
-    pub is_editing: bool,
-    pub draft_lane_id: String,
-}
-
-impl TrackCellEditState {
-    fn from_lane(lane_id: &str) -> Self {
-        Self {
-            is_editing: false,
-            draft_lane_id: lane_id.to_string(),
-        }
-    }
-
-    pub fn begin(&mut self, current_lane_id: &str) {
-        self.is_editing = true;
-        self.draft_lane_id = current_lane_id.to_string();
-    }
-
-    pub fn set_open(&mut self, is_open: bool, current_lane_id: &str) {
-        self.is_editing = is_open;
-        if !is_open {
-            self.draft_lane_id = current_lane_id.to_string();
-        }
-    }
-
-    pub fn select(&mut self, lane_id: &str) {
-        self.is_editing = false;
-        self.draft_lane_id = lane_id.to_string();
-    }
-}
-
 /// Editable draft of one transcript row.
 #[derive(Clone, Debug)]
 pub struct SegmentDraft {
@@ -127,7 +94,6 @@ pub struct SegmentDraft {
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
     time_edit: TimeEditState,
-    track_edit: TrackCellEditState,
 }
 
 impl SegmentDraft {
@@ -140,7 +106,6 @@ impl SegmentDraft {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             time_edit: TimeEditState::default(),
-            track_edit: TrackCellEditState::from_lane(&segment.lane_id),
         }
     }
 
@@ -304,14 +269,6 @@ impl SegmentDraft {
         } else {
             None
         }
-    }
-
-    pub fn track_edit(&self) -> &TrackCellEditState {
-        &self.track_edit
-    }
-
-    pub(crate) fn track_edit_mut(&mut self) -> &mut TrackCellEditState {
-        &mut self.track_edit
     }
 
     fn push_history(&mut self, snapshot: String, undo: bool) {

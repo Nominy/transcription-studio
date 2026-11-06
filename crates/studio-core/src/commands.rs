@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use thiserror::Error;
 
-use crate::{Project, Segment};
+use crate::{Project, Segment, Speaker};
 
 /// Domain-owned side effects applied inside the same undo unit as a segment edit.
 pub trait SegmentMutationPolicy: std::fmt::Debug + Send + Sync {
@@ -44,10 +44,19 @@ pub enum EditorCommand {
         left_segment_id: String,
         right_segment_id: String,
     },
+    /// Assigns a speaker to a segment and places it on `lane_id`. A lane's own `speaker_id`
+    /// is only the default for new segments: any existing speaker may be assigned on any lane.
     ChangeSegmentSpeaker {
         segment_id: String,
         speaker_id: String,
         lane_id: String,
+    },
+    AddSpeaker {
+        speaker: Speaker,
+    },
+    RenameSpeaker {
+        speaker_id: String,
+        label: String,
     },
     UpdateSegmentMetadata {
         segment_id: String,
@@ -117,10 +126,10 @@ pub enum StudioCoreError {
     SegmentOrderInvalid,
     #[error("speaker was not found")]
     SpeakerNotFound,
+    #[error("speaker id already exists")]
+    DuplicateSpeakerId,
     #[error("lane was not found")]
     LaneNotFound,
-    #[error("lane does not belong to the speaker")]
-    LaneSpeakerMismatch,
     #[error("there is no command to undo")]
     NothingToUndo,
     #[error("there is no command to redo")]
@@ -180,6 +189,21 @@ impl CommandHistory {
         policy: &dyn SegmentMutationPolicy,
     ) -> Result<(), StudioCoreError> {
         self.apply_transaction(project, |project| apply_command(project, command, policy))
+    }
+
+    /// Applies `commands` in order as one undo unit; a failing command leaves the project
+    /// untouched.
+    pub fn apply_batch_with_policy(
+        &mut self,
+        project: &mut Project,
+        commands: Vec<EditorCommand>,
+        policy: &dyn SegmentMutationPolicy,
+    ) -> Result<(), StudioCoreError> {
+        self.apply_transaction(project, |project| {
+            commands
+                .into_iter()
+                .try_for_each(|command| apply_command(project, command, policy))
+        })
     }
 
     /// Stages all changes, then commits one undo unit only when the update succeeds.
@@ -290,6 +314,20 @@ fn apply_command(
             speaker_id,
             lane_id,
         } => change_segment_speaker(project, &segment_id, speaker_id, lane_id, policy),
+        EditorCommand::AddSpeaker { speaker } => {
+            if project.speaker(&speaker.id).is_some() {
+                return Err(StudioCoreError::DuplicateSpeakerId);
+            }
+            project.speakers.push(speaker);
+            Ok(())
+        }
+        EditorCommand::RenameSpeaker { speaker_id, label } => {
+            let speaker = project
+                .speaker_mut(&speaker_id)
+                .ok_or(StudioCoreError::SpeakerNotFound)?;
+            speaker.label = label;
+            Ok(())
+        }
         EditorCommand::UpdateSegmentMetadata {
             segment_id,
             text,
@@ -551,23 +589,7 @@ fn change_segment_speaker(
     project
         .segment(segment_id)
         .ok_or(StudioCoreError::SegmentNotFound)?;
-
-    if !project
-        .speakers
-        .iter()
-        .any(|speaker| speaker.id == speaker_id)
-    {
-        return Err(StudioCoreError::SpeakerNotFound);
-    }
-
-    let lane = project
-        .lanes
-        .iter()
-        .find(|lane| lane.id == lane_id)
-        .ok_or(StudioCoreError::LaneNotFound)?;
-    if lane.speaker_id != speaker_id {
-        return Err(StudioCoreError::LaneSpeakerMismatch);
-    }
+    validate_track(project, &speaker_id, &lane_id)?;
 
     let segment = project
         .segment_mut(segment_id)
@@ -787,27 +809,17 @@ fn validate_time_range(start_seconds: f64, end_seconds: f64) -> Result<(), Studi
     }
 }
 
+/// The speaker and lane both exist; a lane's `speaker_id` is only its default speaker.
 fn validate_track(
     project: &Project,
     speaker_id: &str,
     lane_id: &str,
 ) -> Result<(), StudioCoreError> {
-    if !project
-        .speakers
-        .iter()
-        .any(|speaker| speaker.id == speaker_id)
-    {
+    if project.speaker(speaker_id).is_none() {
         return Err(StudioCoreError::SpeakerNotFound);
     }
-
-    let lane = project
-        .lanes
-        .iter()
-        .find(|lane| lane.id == lane_id)
-        .ok_or(StudioCoreError::LaneNotFound)?;
-    if lane.speaker_id != speaker_id {
-        return Err(StudioCoreError::LaneSpeakerMismatch);
+    if !project.lanes.iter().any(|lane| lane.id == lane_id) {
+        return Err(StudioCoreError::LaneNotFound);
     }
-
     Ok(())
 }

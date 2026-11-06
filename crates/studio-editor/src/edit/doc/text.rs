@@ -9,7 +9,9 @@ use crate::edit::text::TextMoveDirection;
 use crate::edit::time::{
     CommitTimeCellEdit, CommitTimeCellResult, TimeEditState, TimeField, commit_time_cell_edit,
 };
+use crate::transcript_model::speaker_label;
 use exaudio_extension::document::{Completion, CompletionRequest, TextRange};
+use studio_core::{EditorCommand, Speaker};
 
 /// Open provider completion list for a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,54 +356,14 @@ impl EditorDoc {
         }
     }
 
-    // ---- track cell -------------------------------------------------------------------
-
-    /// Click on a row's track cell: selects the row; a double click opens the lane picker.
-    pub fn press_track_cell(&mut self, segment_id: &str, click_count: usize) -> EditResult {
-        self.guard("Track edit")?;
-        let outcome = self.select_segment(segment_id);
-        if click_count >= 2 {
-            self.begin_track_edit(segment_id);
-        }
-        Ok(outcome)
-    }
-
-    /// Opens the lane picker of a row.
-    pub fn begin_track_edit(&mut self, segment_id: &str) {
-        let lane_id = self
-            .workflow
-            .project()
-            .segment(segment_id)
-            .map(|segment| segment.lane_id.clone());
-        if let (Some(lane_id), Some(draft)) = (lane_id, self.drafts.get_mut(segment_id)) {
-            draft.track_edit_mut().begin(&lane_id);
-        }
-    }
-
-    /// Lane picker opened/closed without choosing (closing resets the choice).
-    pub fn set_track_select_open(&mut self, segment_id: &str, open: bool) {
-        let lane_id = self
-            .workflow
-            .project()
-            .segment(segment_id)
-            .map(|segment| segment.lane_id.clone());
-        if let (Some(lane_id), Some(draft)) = (lane_id, self.drafts.get_mut(segment_id)) {
-            draft.track_edit_mut().set_open(open, &lane_id);
-        }
-    }
+    // ---- track / speakers ---------------------------------------------------------------
 
     /// Moves a row to another lane (speaker track), as one undo step.
     pub fn change_segment_track(&mut self, segment_id: &str, lane_id: &str) -> EditResult {
         self.guard("Track change")?;
-        if let Some(draft) = self.drafts.get_mut(segment_id) {
-            draft.track_edit_mut().select(lane_id);
-        }
         self.apply("Track change", |workflow| {
             workflow.change_segment_track(segment_id, lane_id)
         })?;
-        if let Some(draft) = self.drafts.get_mut(segment_id) {
-            draft.track_edit_mut().select(lane_id);
-        }
         self.mark_dirty();
         self.reconcile_selection_to_visible();
         Ok(Outcome::status(format!(
@@ -409,6 +371,102 @@ impl EditorDoc {
             self.segment_label(segment_id),
             self.lane_label(lane_id)
         )))
+    }
+
+    /// Assigns a row to a speaker, as one undo step. Where speakers are bound to lanes
+    /// (policy), this is a move to the speaker's lane.
+    pub fn set_segment_speaker(&mut self, segment_id: &str, speaker_id: &str) -> EditResult {
+        self.guard("Speaker change")?;
+        if self.environment().policy.speakers_bound_to_lanes {
+            let lane_id = self
+                .workflow
+                .project()
+                .lanes
+                .iter()
+                .find(|lane| lane.speaker_id == speaker_id)
+                .map(|lane| lane.id.clone())
+                .ok_or_else(|| {
+                    EditError::Unavailable(
+                        "Speaker change unavailable: that speaker has no audio track.".into(),
+                    )
+                })?;
+            return self.change_segment_track(segment_id, &lane_id);
+        }
+        let lane_id = self.segment(segment_id)?.lane_id;
+        self.apply("Speaker change", |workflow| {
+            workflow.apply(EditorCommand::ChangeSegmentSpeaker {
+                segment_id: segment_id.to_string(),
+                speaker_id: speaker_id.to_string(),
+                lane_id,
+            })
+        })?;
+        self.mark_dirty();
+        Ok(Outcome::status(format!(
+            "Set {} to {}.",
+            self.segment_label(segment_id),
+            speaker_label(self.workflow.project(), speaker_id)
+        )))
+    }
+
+    /// Creates a speaker (`label_template` contains `{n}`) and assigns the row to it, as one
+    /// undo step; returns the new speaker id. Refused where speakers are the audio tracks.
+    pub fn add_speaker_for_segment(
+        &mut self,
+        segment_id: &str,
+        label_template: &str,
+    ) -> Result<String, EditError> {
+        self.guard("Add speaker")?;
+        if self.environment().policy.speakers_bound_to_lanes {
+            return Err(EditError::Unavailable(
+                "This project's speakers are its audio tracks.".into(),
+            ));
+        }
+        let lane_id = self.segment(segment_id)?.lane_id;
+        let project = self.workflow.project();
+        let speaker = Speaker {
+            id: project.next_speaker_id(),
+            label: project.next_speaker_label(label_template),
+        };
+        let speaker_id = speaker.id.clone();
+        self.apply("Add speaker", |workflow| {
+            workflow.apply_batch(vec![
+                EditorCommand::AddSpeaker { speaker },
+                EditorCommand::ChangeSegmentSpeaker {
+                    segment_id: segment_id.to_string(),
+                    speaker_id: speaker_id.clone(),
+                    lane_id,
+                },
+            ])
+        })?;
+        self.mark_dirty();
+        Ok(speaker_id)
+    }
+
+    /// Renames a speaker (trimmed; empty names are refused), as one undo step.
+    pub fn rename_speaker(&mut self, speaker_id: &str, label: &str) -> EditResult {
+        self.guard("Rename speaker")?;
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(EditError::Unavailable(
+                "Rename speaker: the name cannot be empty.".into(),
+            ));
+        }
+        if self
+            .workflow
+            .project()
+            .speaker(speaker_id)
+            .is_some_and(|speaker| speaker.label == label)
+        {
+            return Ok(Outcome::none());
+        }
+        self.apply("Rename speaker", |workflow| {
+            workflow.apply(EditorCommand::RenameSpeaker {
+                speaker_id: speaker_id.to_string(),
+                label: label.to_string(),
+            })
+        })?;
+        self.mark_dirty();
+        Ok(Outcome::status(format!("Renamed speaker to {label}.")))
     }
 
     // ---- helper text tools ------------------------------------------------------------

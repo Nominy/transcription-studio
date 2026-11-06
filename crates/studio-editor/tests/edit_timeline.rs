@@ -1038,6 +1038,47 @@ fn space_toggles_helper_playback_and_ghost_cursor_like_escape() {
 }
 
 #[test]
+fn space_plays_the_selected_segment_from_its_start_when_the_playhead_is_outside_it() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 2.0, 4.0, "one"),
+        seg("b", "lane-1", 10.5, 15.4, "two"),
+    ]);
+    let _ = doc.select_segment_without_seek("b");
+    set_playhead(&mut doc, 0.0);
+
+    let outcome = perform(&mut doc, EditorAction::PlayPause);
+
+    assert!(doc.session().is_playing);
+    assert!(outcome.has_effect(&Effect::StartPlayback));
+    assert_eq!(doc.session().playhead_seconds, 10.5);
+    assert_eq!(selected(&doc), Some("b"));
+    assert_eq!(pending_segment(&doc), Some("b"));
+
+    // After playing the row to its end the playhead sits on the boundary: Space replays it.
+    let _ = perform(&mut doc, EditorAction::PlayPause);
+    assert!(!doc.session().is_playing);
+    let _ = doc.select_segment_without_seek("b");
+    set_playhead(&mut doc, 15.4);
+    let _ = perform(&mut doc, EditorAction::PlayPause);
+    assert!(doc.session().is_playing);
+    assert_eq!(doc.session().playhead_seconds, 10.5);
+    assert_eq!(pending_segment(&doc), Some("b"));
+}
+
+#[test]
+fn space_keeps_the_playhead_when_it_is_inside_the_selected_segment() {
+    let mut doc = doc(vec![seg("b", "lane-1", 10.5, 15.4, "two")]);
+    let _ = doc.select_segment_without_seek("b");
+    set_playhead(&mut doc, 12.0);
+
+    let _ = perform(&mut doc, EditorAction::PlayPause);
+
+    assert!(doc.session().is_playing);
+    assert_eq!(doc.session().playhead_seconds, 12.0);
+    assert_eq!(pending_segment(&doc), Some("b"));
+}
+
+#[test]
 fn helper_ghost_cursor_renders_only_on_pending_row_at_restore_offset_while_paused() {
     let mut doc = stable_sample_doc();
     set_draft_with_caret_at_end(&mut doc, "annotation-2", "abcdefghij");

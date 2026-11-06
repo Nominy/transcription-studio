@@ -2,11 +2,12 @@
 
 use std::{
     io::{Read, Write},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use exaudio_extension::document::{DocumentEdit, DocumentTransaction};
-use exaudio_extension::format::{ExportOptions, FormatProvider, ImportContent};
+use exaudio_extension::format::{ExportOptions, FormatDescriptor, FormatProvider, ImportContent};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt as _, v_flex};
@@ -17,23 +18,8 @@ use crate::screens::ui::localized;
 use crate::{ContributionRegistry, ShellHandle};
 
 pub fn export_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
-    choose_format(shell, false, window, cx);
-}
-
-pub fn import_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
-    choose_format(shell, true, window, cx);
-}
-
-fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &mut App) {
     if shell.editor_model(cx).is_none() {
-        window.push_notification(
-            Notification::info(localized(
-                cx,
-                "Open a project first.",
-                "Сначала откройте проект.",
-            )),
-            cx,
-        );
+        window.push_notification(open_project_first(cx), cx);
         return;
     }
     let formats: Vec<_> = cx
@@ -41,41 +27,22 @@ fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &
         .formats
         .entries()
         .into_iter()
-        .filter(|format| {
-            if importing {
-                format.can_import
-            } else {
-                format.can_export
-            }
-        })
+        .filter(|format| format.can_export)
         .collect();
     if formats.is_empty() {
         window.push_notification(
-            Notification::info(if importing {
-                localized(
-                    cx,
-                    "No import formats are enabled. Turn one on in Extensions.",
-                    "Форматы импорта отключены. Включите их в Расширениях.",
-                )
-            } else {
-                localized(
-                    cx,
-                    "No export formats are enabled. Turn one on in Extensions.",
-                    "Форматы экспорта отключены. Включите их в Расширениях.",
-                )
-            }),
+            Notification::info(localized(
+                cx,
+                "No export formats are enabled. Turn one on in Extensions.",
+                "Форматы экспорта отключены. Включите их в Расширениях.",
+            )),
             cx,
         );
         return;
     }
     window.open_dialog(cx, move |dialog, _, cx| {
-        let title = if importing {
-            localized(cx, "Import from…", "Импортировать из…")
-        } else {
-            localized(cx, "Export as…", "Экспортировать как…")
-        };
         dialog
-            .title(title)
+            .title(localized(cx, "Export as…", "Экспортировать как…"))
             .child(v_flex().gap_2().children(formats.iter().map(|format| {
                 let id = format.id.clone();
                 let shell = shell.clone();
@@ -83,30 +50,163 @@ fn choose_format(shell: ShellHandle, importing: bool, window: &mut Window, cx: &
                     .label(format.name.clone())
                     .on_click(move |_, window, cx| {
                         window.close_dialog(cx);
-                        let provider = cx
-                            .global::<ContributionRegistry>()
-                            .formats
-                            .get(&id)
-                            .cloned();
-                        let Some(provider) = provider else {
-                            window.push_notification(
-                                Notification::warning(localized(
-                                    cx,
-                                    "That format was just turned off.",
-                                    "Этот формат только что отключили.",
-                                )),
-                                cx,
-                            );
+                        let Some(provider) = enabled_provider(&id, cx) else {
+                            window.push_notification(format_turned_off(cx), cx);
                             return;
                         };
-                        if importing {
-                            pick_import(shell.clone(), id.clone(), provider, window, cx);
-                        } else {
-                            pick_export(shell.clone(), id.clone(), provider, window, cx);
-                        }
+                        pick_export(shell.clone(), id.clone(), provider, window, cx);
                     })
             })))
     });
+}
+
+/// One file picker for every enabled import format; the format is inferred from the chosen
+/// file's extension (gpui's picker cannot filter by extension itself).
+pub fn import_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
+    if shell.editor_model(cx).is_none() {
+        window.push_notification(open_project_first(cx), cx);
+        return;
+    }
+    let formats: Vec<_> = cx
+        .global::<ContributionRegistry>()
+        .formats
+        .entries()
+        .into_iter()
+        .filter(|format| format.can_import)
+        .collect();
+    if formats.is_empty() {
+        window.push_notification(
+            Notification::info(localized(
+                cx,
+                "No import formats are enabled. Turn one on in Extensions.",
+                "Форматы импорта отключены. Включите их в Расширениях.",
+            )),
+            cx,
+        );
+        return;
+    }
+    let Some((project, revision, selected)) = snapshot(&shell, "Import", cx) else {
+        return;
+    };
+    let lane = selected
+        .as_deref()
+        .and_then(|id| project.segment(id))
+        .map(|segment| segment.lane_id.clone())
+        .or_else(|| (project.lanes.len() == 1).then(|| project.lanes[0].id.clone()));
+    let Some(lane_id) = lane else {
+        window.push_notification(
+            Notification::info(localized(
+                cx,
+                "Select a segment on the target track first.",
+                "Сначала выберите сегмент на нужной дорожке.",
+            )),
+            cx,
+        );
+        return;
+    };
+    let supported = supported_extensions(&formats);
+    let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: false,
+        prompt: Some(
+            localized(
+                cx,
+                "Import transcript ({types})",
+                "Импортировать текст ({types})",
+            )
+            .replace("{types}", &supported)
+            .into(),
+        ),
+    });
+    let unsupported = localized(
+        cx,
+        "{file} isn't a supported transcript. Supported: {types}.",
+        "{file} — неподдерживаемый формат. Поддерживаются: {types}.",
+    )
+    .replace("{types}", &supported);
+    window
+        .spawn(cx, async move |cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            cx.update(|window, cx| {
+                let Some(id) = format_for_path(&formats, &path) else {
+                    window.push_notification(
+                        Notification::warning(unsupported.replace("{file}", &file_name(&path))),
+                        cx,
+                    );
+                    return;
+                };
+                let Some(provider) = enabled_provider(id, cx) else {
+                    window.push_notification(format_turned_off(cx), cx);
+                    return;
+                };
+                let target = ImportTarget {
+                    shell,
+                    format: id.to_owned(),
+                    project,
+                    revision,
+                    selected,
+                    lane_id,
+                };
+                read_import(target, provider, path, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+}
+
+fn open_project_first(cx: &App) -> Notification {
+    Notification::info(localized(
+        cx,
+        "Open a project first.",
+        "Сначала откройте проект.",
+    ))
+}
+
+fn format_turned_off(cx: &App) -> Notification {
+    Notification::warning(localized(
+        cx,
+        "That format was just turned off.",
+        "Этот формат только что отключили.",
+    ))
+}
+
+fn enabled_provider(id: &str, cx: &App) -> Option<Arc<dyn FormatProvider>> {
+    cx.global::<ContributionRegistry>().formats.get(id).cloned()
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// `.srt, .vtt, …` over every import format, deduplicated in registration order.
+fn supported_extensions(formats: &[FormatDescriptor]) -> String {
+    let mut seen = Vec::new();
+    for extension in formats.iter().flat_map(|format| &format.extensions) {
+        if !seen.contains(&extension) {
+            seen.push(extension);
+        }
+    }
+    seen.iter()
+        .map(|extension| format!(".{extension}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// First import format whose extensions include the file's (case-insensitively).
+fn format_for_path<'a>(formats: &'a [FormatDescriptor], path: &Path) -> Option<&'a str> {
+    let extension = path.extension()?.to_str()?.to_lowercase();
+    formats
+        .iter()
+        .find(|format| format.extensions.contains(&extension))
+        .map(|format| format.id.as_str())
 }
 
 fn snapshot(
@@ -243,38 +343,15 @@ fn pick_export(
         .detach();
 }
 
-fn pick_import(
-    shell: ShellHandle,
-    id: String,
+/// Reads and parses the chosen file off the UI thread, then hands over to the confirmation.
+fn read_import(
+    target: ImportTarget,
     provider: Arc<dyn FormatProvider>,
+    path: PathBuf,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some((project, revision, selected)) = snapshot(&shell, "Import", cx) else {
-        return;
-    };
-    let lane = selected
-        .as_deref()
-        .and_then(|id| project.segment(id))
-        .map(|segment| segment.lane_id.clone())
-        .or_else(|| (project.lanes.len() == 1).then(|| project.lanes[0].id.clone()));
-    let Some(lane_id) = lane else {
-        window.push_notification(
-            Notification::info(localized(
-                cx,
-                "Select a segment on the target track first.",
-                "Сначала выберите сегмент на нужной дорожке.",
-            )),
-            cx,
-        );
-        return;
-    };
-    let picked = cx.prompt_for_paths(PathPromptOptions {
-        files: true,
-        directories: false,
-        multiple: false,
-        prompt: Some(localized(cx, "Import from…", "Импортировать из…").into()),
-    });
+    let name = file_name(&path);
     let too_large = localized(
         cx,
         "This file is too large to import (over 32 MB).",
@@ -283,16 +360,6 @@ fn pick_import(
     let unreadable = localized(cx, "Couldn't read {file}.", "Не удалось прочитать {file}.");
     window
         .spawn(cx, async move |cx| {
-            let Ok(Ok(Some(paths))) = picked.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
             let parsed = cx
                 .background_spawn(async move {
                     const MAX_BYTES: u64 = 32 * 1024 * 1024;
@@ -308,19 +375,7 @@ fn pick_import(
                 })
                 .await;
             cx.update(|window, cx| match parsed {
-                Ok(content) => confirm_import(
-                    ImportPreview {
-                        shell,
-                        format: id,
-                        project,
-                        revision,
-                        selected,
-                        lane_id,
-                        content,
-                    },
-                    window,
-                    cx,
-                ),
+                Ok(content) => confirm_import(target, content, window, cx),
                 Err(error) => window.push_notification(
                     if error == too_large {
                         Notification::error(error)
@@ -338,26 +393,25 @@ fn pick_import(
         .detach();
 }
 
-struct ImportPreview {
+/// Where an import lands, captured before the picker opens.
+struct ImportTarget {
     shell: ShellHandle,
     format: String,
     project: Project,
     revision: u64,
     selected: Option<String>,
     lane_id: String,
-    content: ImportContent,
 }
 
-fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
-    let ImportPreview {
+fn confirm_import(target: ImportTarget, content: ImportContent, window: &mut Window, cx: &mut App) {
+    let ImportTarget {
         shell,
         format,
         project,
         revision,
         selected,
         lane_id,
-        content,
-    } = preview;
+    } = target;
     let Some(lane) = project.lanes.iter().find(|lane| lane.id == lane_id) else {
         return;
     };
@@ -487,4 +541,34 @@ fn confirm_import(preview: ImportPreview, window: &mut Window, cx: &mut App) {
                 ),
         )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FormatDescriptor, format_for_path, supported_extensions};
+    use std::path::Path;
+
+    fn format(id: &str, extensions: &[&str]) -> FormatDescriptor {
+        FormatDescriptor {
+            id: id.into(),
+            name: id.into(),
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            media_type: "text/plain".into(),
+            can_import: true,
+            can_export: false,
+        }
+    }
+
+    #[test]
+    fn format_is_inferred_from_the_extension() {
+        let formats = [format("srt", &["srt"]), format("vtt", &["vtt", "webvtt"])];
+        assert_eq!(format_for_path(&formats, Path::new("a/b.SRT")), Some("srt"));
+        assert_eq!(
+            format_for_path(&formats, Path::new("b.webvtt")),
+            Some("vtt")
+        );
+        assert_eq!(format_for_path(&formats, Path::new("c.docx")), None);
+        assert_eq!(format_for_path(&formats, Path::new("noext")), None);
+        assert_eq!(supported_extensions(&formats), ".srt, .vtt, .webvtt");
+    }
 }

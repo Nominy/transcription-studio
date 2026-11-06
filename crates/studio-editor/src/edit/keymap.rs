@@ -95,6 +95,7 @@ editor_actions! {
     TrimAllVisibleSegmentsToAudio,
     AutoInsertSegmentAtCaret,
     AutoSegmentVisibleSilences,
+    SplitAtPlayhead,
     CommitCutPreviewSmartSplit,
     CommitCutPreviewPlainSplit,
     LoopCutPreviewOverlay,
@@ -448,6 +449,17 @@ pub const ACTION_DEFS: &[ActionDef] = &[
         ),
         Timeline,
         &["alt-shift-s"],
+    ),
+    // Timeline-context `s` yields to the cut-preview `s` while a cut selection exists.
+    def(
+        A::SplitAtPlayhead,
+        TIMELINE_EDITING,
+        t(
+            "Split the selected segment at the playhead",
+            "Разделить выбранный сегмент по курсору воспроизведения",
+        ),
+        Timeline,
+        &["s"],
     ),
     def(
         A::CommitCutPreviewSmartSplit,

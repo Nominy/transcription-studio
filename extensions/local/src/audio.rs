@@ -1,5 +1,6 @@
 //! Construct a native document from user-selected local audio. No account or platform
-//! metadata participates. The returned decoded lanes can be installed directly in the editor.
+//! metadata participates: one speaker and lane per file, no segments (the user draws or
+//! drafts them). The returned decoded lanes can be installed directly in the editor.
 
 use std::{
     collections::HashSet,
@@ -8,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use studio_audio::{LaneAudioFile, decode_audio_file};
-use studio_core::{AudioLane, Project, Segment, Speaker};
+use studio_core::{AudioLane, Project, Speaker};
 use uuid::Uuid;
 
 pub struct ImportedAudioProject {
@@ -109,7 +110,7 @@ pub fn import_audio(
         name,
         speakers: Vec::with_capacity(resolved.len()),
         lanes: Vec::with_capacity(resolved.len()),
-        segments: Vec::with_capacity(resolved.len()),
+        segments: Vec::new(),
         metadata: Default::default(),
     };
     let mut audio = Vec::with_capacity(resolved.len());
@@ -131,7 +132,7 @@ pub fn import_audio(
         });
         project.lanes.push(AudioLane {
             id: lane_id.clone(),
-            speaker_id: speaker_id.clone(),
+            speaker_id,
             label: path
                 .file_stem()
                 .and_then(|name| name.to_str())
@@ -141,16 +142,6 @@ pub fn import_audio(
                 .to_str()
                 .context("Audio path cannot be represented as UTF-8")?
                 .to_owned(),
-        });
-        project.segments.push(Segment {
-            id: Uuid::new_v4().to_string(),
-            source_annotation_id: None,
-            speaker_id,
-            lane_id: lane_id.clone(),
-            start_seconds: 0.0,
-            end_seconds: duration,
-            text: String::new(),
-            metadata: Default::default(),
         });
         audio.push((
             lane_id,

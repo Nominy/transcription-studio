@@ -64,6 +64,7 @@ impl EditorDoc {
             A::TrimAllVisibleSegmentsToAudio => Some(self.trim_visible_segments_to_audio()),
             A::AutoInsertSegmentAtCaret => Some(self.auto_insert_segment_at_playhead()),
             A::AutoSegmentVisibleSilences => Some(self.auto_segment_visible_silences()),
+            A::SplitAtPlayhead => Some(self.split_selected_at_playhead()),
             A::CommitCutPreviewSmartSplit => Some(self.commit_cut_preview(true)),
             A::CommitCutPreviewPlainSplit => Some(self.commit_cut_preview(false)),
             A::LoopCutPreviewOverlay => Some(self.loop_cut_preview()),

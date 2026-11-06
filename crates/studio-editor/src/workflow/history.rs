@@ -102,6 +102,14 @@ impl StudioWorkflow {
             .context("failed to apply editor command")
     }
 
+    /// Applies several commands as one undo snapshot.
+    pub fn apply_batch(&mut self, commands: Vec<EditorCommand>) -> Result<()> {
+        self.pending_boundary_edit_segment_id.get_mut().take();
+        self.history
+            .apply_batch_with_policy(&mut self.project, commands, self.mutation_policy.as_ref())
+            .context("failed to apply editor commands")
+    }
+
     /// Applies a validated domain transaction atomically as one undo snapshot.
     pub fn apply_project_transaction(
         &mut self,

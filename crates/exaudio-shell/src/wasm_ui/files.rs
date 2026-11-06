@@ -50,6 +50,7 @@ pub(super) fn register(owner: &str, registration: &w::Registration, cx: &mut App
                 label: title,
                 shortcut: None,
                 toolbar: false,
+                menu: true,
                 run: Rc::new(move |shell, window, cx| {
                     if !crate::wasm_host::has_permission(
                         &owner,

@@ -46,6 +46,14 @@ impl EditorDoc {
         self.split_with_texts("Split", segment_id, at_seconds, left, right, "")
     }
 
+    /// `S` outside a cut selection: splits the selected row at the playhead (rejected when the
+    /// playhead is outside it, as [`Self::split_segment_at`] does).
+    pub fn split_selected_at_playhead(&mut self) -> EditResult {
+        let segment_id = self.selected_segment_id("Split")?;
+        let at_seconds = self.session.playhead_seconds;
+        self.split_segment_at(&segment_id, at_seconds)
+    }
+
     /// Shift+Ctrl+Click: splits a row and allocates its (draft) text with the lane's word
     /// timings — the exact completed-word boundary, else the interpolated timing offset, else
     /// the word ratio (Helper smart split).

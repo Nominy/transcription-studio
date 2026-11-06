@@ -13,9 +13,6 @@ pub enum CreateRegionTimeField {
 /// The open "add region" dialog.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateRegionDialog {
-    /// Set when the waveform drag already created the (transcription) segment; the dialog then
-    /// only edits that segment's text.
-    pub created_segment_id: Option<String>,
     pub selected_lane_id: String,
     pub start_seconds: f64,
     pub end_seconds: f64,
@@ -49,7 +46,6 @@ impl CreateRegionDialog {
     /// Transcription-mode dialog.
     pub fn new(selected_lane_id: String, start_seconds: f64, end_seconds: f64) -> Self {
         Self {
-            created_segment_id: None,
             selected_lane_id,
             start_seconds,
             end_seconds,
@@ -60,11 +56,6 @@ impl CreateRegionDialog {
             start_error: None,
             end_error: None,
         }
-    }
-
-    pub fn with_created_segment_id(mut self, segment_id: String) -> Self {
-        self.created_segment_id = Some(segment_id);
-        self
     }
 
     pub fn set_start_draft(&mut self, value: String) {

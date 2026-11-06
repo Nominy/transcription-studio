@@ -154,16 +154,54 @@ pub fn save(model: &Entity<EditorModel>, window: &mut Window, cx: &mut App, done
         ),
     });
     let model = model.clone();
+    let name = model.read(cx).doc().project().name.clone();
     window
         .spawn(cx, async move |cx| {
             if let Ok(Ok(Some(paths))) = picked.await
                 && let Some(path) = paths.into_iter().next()
             {
-                cx.update(|window, cx| save_to(&model, path, window, cx, done))
+                let target = cx
+                    .background_spawn(async move { save_destination(path, &name) })
+                    .await;
+                cx.update(|window, cx| save_to(&model, target, window, cx, done))
                     .ok();
             }
         })
         .detach();
+}
+/// A folder that already holds unrelated files gets a `<project name>` subfolder, so a save
+/// never scatters `project.json` and `audio/` among them. Empty folders and existing
+/// project folders are used as chosen.
+fn save_destination(folder: PathBuf, project_name: &str) -> PathBuf {
+    let is_project = folder.join("project.json").is_file();
+    let is_empty = std::fs::read_dir(&folder)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    if is_project || is_empty {
+        folder
+    } else {
+        folder.join(folder_name(project_name))
+    }
+}
+/// Project name as a single path component (no separators or reserved characters).
+fn folder_name(project_name: &str) -> String {
+    let name: String = project_name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = name.trim_matches(|c: char| c == '.' || c == ' ' || c == '-');
+    if name.is_empty() {
+        "project".to_string()
+    } else {
+        name.to_string()
+    }
 }
 fn save_to(
     model: &Entity<EditorModel>,
@@ -192,14 +230,29 @@ fn save_to(
         return;
     };
     let name = project.name.clone();
+    let project_id = project.id.clone();
+    let first_save = model.read(cx).origin().native_path.is_none();
+    let open_files: Vec<PathBuf> = model
+        .read(cx)
+        .inference_lane_sources()
+        .into_iter()
+        .map(|source| source.path)
+        .collect();
     let target = path.clone();
     let model = model.downgrade();
     window
         .spawn(cx, async move |cx| {
-            let result = cx
-                .background_spawn(
-                    async move { studio_project::save_project(&project, &target, &base) },
-                )
+            let (result, discarded) = cx
+                .background_spawn(async move {
+                    let result = studio_project::save_project(&project, &target, &base);
+                    // The saved manifest now holds everything the snapshots did.
+                    let discarded = if result.is_ok() {
+                        super::recovery::discard_after_save(&project_id, &target, &open_files)
+                    } else {
+                        Vec::new()
+                    };
+                    (result, discarded)
+                })
                 .await;
             cx.update(|window, cx| {
                 let succeeded = result.is_ok();
@@ -207,7 +260,16 @@ fn save_to(
                     Ok(()) => clock_now(),
                     Err(error) => error.to_string(),
                 };
-                let saved = ui::localized(cx, "Saved", "Сохранено");
+                let saved = if first_save {
+                    let folder = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    ui::localized(cx, "Saved to {folder}", "Сохранено в {folder}")
+                        .replace("{folder}", &folder)
+                } else {
+                    ui::localized(cx, "Saved", "Сохранено").to_string()
+                };
                 let current = model
                     .update(cx, |model, cx| {
                         model.update_doc(cx, |doc| {
@@ -219,13 +281,14 @@ fn save_to(
                         });
                         if succeeded {
                             model.set_native_path(path.clone());
-                            model.set_status(saved.to_string(), cx);
+                            model.set_status(saved.clone(), cx);
                         }
                         model.revision() == revision && !model.doc().has_pending_drafts()
                     })
                     .unwrap_or(false);
                 if succeeded {
                     remember(&path, cx);
+                    super::recovery::forget(&discarded, cx);
                     if current && let Some(done) = done {
                         done(window, cx);
                     }
@@ -353,4 +416,42 @@ pub fn export_project_folder(model: &Entity<EditorModel>, window: &mut Window, c
             .ok();
         })
         .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder_name, save_destination};
+
+    #[test]
+    fn empty_and_project_folders_are_used_as_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(save_destination(empty.clone(), "Interview"), empty);
+
+        let project = dir.path().join("existing");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(project.join("project.json"), "{}").unwrap();
+        std::fs::create_dir(project.join("audio")).unwrap();
+        assert_eq!(save_destination(project.clone(), "Interview"), project);
+    }
+
+    #[test]
+    fn folder_in_use_gets_a_project_subfolder() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = dir.path().join("Documents");
+        std::fs::create_dir(&documents).unwrap();
+        std::fs::write(documents.join("notes.txt"), "").unwrap();
+        assert_eq!(
+            save_destination(documents.clone(), "Interview: day 1"),
+            documents.join("Interview- day 1")
+        );
+    }
+
+    #[test]
+    fn folder_name_is_one_safe_component() {
+        assert_eq!(folder_name("  a/b\\c  "), "a-b-c");
+        assert_eq!(folder_name("..."), "project");
+        assert_eq!(folder_name(""), "project");
+    }
 }

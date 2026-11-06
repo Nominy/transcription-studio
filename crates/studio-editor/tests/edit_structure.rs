@@ -15,7 +15,9 @@ use studio_editor::edit::structure::{
     AuditionKey, CREATE_PREVIEW_SEGMENT_ID, OverlayDragTarget, SplitError,
 };
 use studio_editor::edit::time::{TimeEditError, TimeField};
-use studio_editor::edit::{EditError, EditorDoc, Effect, PointerModifiers, TextSelection};
+use studio_editor::edit::{
+    EditError, EditorAction, EditorDoc, Effect, Outcome, PointerModifiers, TextSelection,
+};
 use studio_editor::timeline_model::TimeRange;
 use studio_waveform::WaveformHitTarget;
 
@@ -62,26 +64,6 @@ fn has_play_range(effects: &[Effect]) -> bool {
     effects
         .iter()
         .any(|effect| matches!(effect, Effect::PlayRange { .. }))
-}
-
-/// Drags across empty waveform on `lane_id` from `start_seconds` to `end_seconds` (viewport
-/// framed 1s around the range), i.e. the old `open_create_region_dialog_from_waveform` helper.
-fn open_create_region_from_waveform(
-    doc: &mut EditorDoc,
-    lane_id: &str,
-    start_seconds: f64,
-    end_seconds: f64,
-) {
-    let viewport_start = start_seconds.min(end_seconds) - 1.0;
-    let viewport_end = (start_seconds.max(end_seconds) + 1.0).max(viewport_start + 0.001);
-    set_viewport(doc, viewport_start, viewport_end);
-    doc.hover_waveform(
-        lane_id,
-        hit(WaveformHitTarget::Waveform, None, start_seconds),
-    );
-    let _ = ok(doc.press_waveform(lane_id));
-    doc.hover_waveform(lane_id, hit(WaveformHitTarget::Waveform, None, end_seconds));
-    let _ = ok(doc.release_waveform(lane_id));
 }
 
 // ---- read-only ------------------------------------------------------------------------
@@ -254,6 +236,53 @@ fn split_rejects_points_outside_the_segment() {
 
     let err = doc.split_segment_at("annotation-1", 0.5).unwrap_err();
 
+    assert!(matches!(err, EditError::Split(SplitError::OutsideSegment)));
+    assert_eq!(doc.project(), &before);
+}
+
+#[test]
+fn split_at_playhead_action_splits_the_selected_row_with_status_and_undo() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 4.0, "one two three four")]);
+    doc.select_segment_without_seek("a");
+    doc.session_mut().playhead_seconds = 2.0;
+
+    let outcome = ok(doc
+        .perform(EditorAction::SplitAtPlayhead, None)
+        .expect("doc action"));
+
+    assert_eq!(text_of(&doc, "a"), "one two");
+    assert_eq!(text_of(&doc, "a__studio_1"), "three four");
+    assert_eq!(doc.project().segment("a").unwrap().end_seconds, 2.0);
+    assert_eq!(selected(&doc).as_deref(), Some("a__studio_1"));
+    assert!(outcome.status.is_some(), "split reports what it did");
+    assert!(doc.session().is_dirty);
+
+    ok(doc.undo());
+    assert_eq!(ids(&doc), vec!["a"]);
+    assert_eq!(text_of(&doc, "a"), "one two three four");
+}
+
+#[test]
+fn split_at_playhead_action_needs_the_playhead_inside_the_selected_row() {
+    let mut doc = doc(vec![
+        seg("a", "lane-1", 0.0, 2.0, "one"),
+        seg("b", "lane-1", 3.0, 5.0, "two"),
+    ]);
+    let before = doc.project().clone();
+    doc.session_mut().selected_segment_id = None;
+
+    let err = doc
+        .perform(EditorAction::SplitAtPlayhead, None)
+        .expect("doc action")
+        .unwrap_err();
+    assert!(matches!(err, EditError::NoSelection { .. }));
+
+    doc.select_segment_without_seek("b");
+    doc.session_mut().playhead_seconds = 1.0;
+    let err = doc
+        .perform(EditorAction::SplitAtPlayhead, None)
+        .expect("doc action")
+        .unwrap_err();
     assert!(matches!(err, EditError::Split(SplitError::OutsideSegment)));
     assert_eq!(doc.project(), &before);
 }
@@ -923,7 +952,7 @@ fn escape_cancels_the_cut_preview_before_toggling_playback() {
 // ---- create by drag -------------------------------------------------------------------
 
 #[test]
-fn empty_waveform_drag_creates_segment_and_opens_attached_add_region_card() {
+fn empty_waveform_drag_creates_segment_and_focuses_its_text() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     let original_count = segment_count(&doc);
@@ -934,22 +963,14 @@ fn empty_waveform_drag_creates_segment_and_opens_attached_add_region_card() {
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.0));
     let _ = ok(doc.press_waveform(&lane_id));
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 12.8));
-    let _ = ok(doc.release_waveform(&lane_id));
+    let outcome = ok(doc.release_waveform(&lane_id));
 
     assert_eq!(segment_count(&doc), original_count + 1);
-    let dialog = doc
-        .create_region()
-        .expect("empty waveform drag opens Add Region");
-    let created_id = dialog
-        .created_segment_id
-        .clone()
-        .expect("the blank segment is created before the card opens");
-    assert_eq!(dialog.selected_lane_id, lane_id);
-    assert_eq!(dialog.start_seconds, 12.0);
-    assert_eq!(dialog.end_seconds, 12.8);
-    assert_eq!(dialog.start_draft, "00:12.00");
-    assert_eq!(dialog.end_draft, "00:12.80");
-    assert!(dialog.text.is_empty());
+    assert!(
+        doc.create_region().is_none(),
+        "no dialog after a drag create"
+    );
+    let created_id = selected(&doc).expect("created segment is selected");
     let created = doc
         .project()
         .segment(&created_id)
@@ -958,31 +979,14 @@ fn empty_waveform_drag_creates_segment_and_opens_attached_add_region_card() {
     assert_eq!(created.start_seconds, 12.0);
     assert_eq!(created.end_seconds, 12.8);
     assert!(created.text.is_empty());
+    assert!(outcome.has_effect(&Effect::FocusText {
+        segment_id: created_id.clone(),
+        caret: 0,
+    }));
     assert!(doc.pointer().create_drag.is_none());
     assert!(doc.session().is_dirty);
     assert_eq!(doc.session().playhead_seconds, 80.0);
     assert_eq!(doc.session().viewport, before_viewport);
-    assert_eq!(selected(&doc), Some(created_id));
-}
-
-#[test]
-fn attached_create_region_text_populates_created_row_draft_immediately() {
-    let mut doc = stable_sample_doc();
-    let lane_id = lane_of(&doc, "annotation-1");
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let created_id = doc
-        .create_region()
-        .and_then(|dialog| dialog.created_segment_id.clone())
-        .expect("attached card tracks the created segment");
-
-    let outcome = doc.set_create_region_text("new segment text".to_string());
-
-    let dialog = doc.create_region().expect("card stays open while typing");
-    assert_eq!(dialog.text, "new segment text");
-    assert_eq!(draft_text(&doc, &created_id), "new segment text");
-    assert!(outcome.has_effect(&Effect::DraftChanged {
-        segment_id: created_id,
-    }));
 }
 
 #[test]
@@ -1063,7 +1067,7 @@ fn empty_waveform_tiny_pointer_jitter_stays_click_not_create_drag() {
 }
 
 #[test]
-fn empty_waveform_reverse_drag_normalizes_create_region_range() {
+fn empty_waveform_reverse_drag_normalizes_created_segment_range() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     set_viewport(&mut doc, 13.0, 15.0);
@@ -1073,11 +1077,11 @@ fn empty_waveform_reverse_drag_normalizes_create_region_range() {
     doc.hover_waveform(&lane_id, hit(WaveformHitTarget::Waveform, None, 13.2));
     let _ = ok(doc.release_waveform(&lane_id));
 
-    let dialog = doc.create_region().unwrap();
-    assert_eq!(dialog.start_seconds, 13.2);
-    assert_eq!(dialog.end_seconds, 14.0);
-    assert_eq!(dialog.start_draft, "00:13.20");
-    assert_eq!(dialog.end_draft, "00:14.00");
+    let created_id = selected(&doc).expect("created segment is selected");
+    let created = doc.project().segment(&created_id).unwrap();
+    assert_eq!(created.start_seconds, 13.2);
+    assert_eq!(created.end_seconds, 14.0);
+    assert!(doc.create_region().is_none());
 }
 
 // ---- add-region dialog ----------------------------------------------------------------
@@ -1119,7 +1123,7 @@ fn create_region_transcription_enablement_rules() {
 }
 
 #[test]
-fn submitting_attached_create_region_saves_text_on_created_segment_and_closes() {
+fn submitting_create_region_creates_segment_with_text_and_closes() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     let speaker_id = doc
@@ -1129,7 +1133,7 @@ fn submitting_attached_create_region_saves_text_on_created_segment_and_closes() 
         .speaker_id
         .clone();
     let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    doc.open_create_region(&lane_id, 12.0, 12.8);
 
     let _ = doc.set_create_region_text("hello new region".to_string());
     let _ = ok(doc.submit_create_region());
@@ -1148,67 +1152,32 @@ fn submitting_attached_create_region_saves_text_on_created_segment_and_closes() 
 }
 
 #[test]
-fn attached_create_region_keeps_drag_created_segment_lane() {
-    let mut doc = stable_sample_doc();
-    let lane_id = lane_of(&doc, "annotation-1");
-    let other_lane_id = lane_of(&doc, "annotation-2");
-    assert_ne!(lane_id, other_lane_id);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-
-    doc.create_region_mut().unwrap().selected_lane_id = other_lane_id;
-    let _ = ok(doc.submit_create_region());
-
-    let created_id = selected(&doc).unwrap();
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.lane_id, lane_id);
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
-}
-
-#[test]
-fn create_region_start_enter_updates_attached_dialog_without_creating_another_segment() {
+fn create_region_start_enter_updates_dialog_without_creating_a_segment() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let created_id = doc
-        .create_region()
-        .unwrap()
-        .created_segment_id
-        .clone()
-        .unwrap();
-    assert_eq!(segment_count(&doc), original_count + 1);
+    doc.open_create_region(&lane_id, 12.0, 12.8);
 
     doc.create_region_mut()
         .unwrap()
         .set_start_draft("00:12.20".to_string());
     let _ = ok(doc.commit_create_region_time(CreateRegionTimeField::Start));
 
-    assert_eq!(segment_count(&doc), original_count + 1);
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
+    assert_eq!(segment_count(&doc), original_count);
     let dialog = doc.create_region().unwrap();
     assert!((dialog.start_seconds - 12.2).abs() < 1e-9);
     assert_eq!(dialog.end_seconds, 12.8);
     assert_eq!(dialog.start_draft, "00:12.20");
     assert_eq!(dialog.end_draft, "00:12.80");
     assert_eq!(dialog.start_error, None);
-    assert!(doc.session().is_dirty);
 }
 
 #[test]
-fn create_region_end_enter_reports_invalid_range_without_creating_another_segment() {
+fn create_region_end_enter_reports_invalid_range_without_creating_a_segment() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let created_id = doc
-        .create_region()
-        .unwrap()
-        .created_segment_id
-        .clone()
-        .unwrap();
+    doc.open_create_region(&lane_id, 12.0, 12.8);
 
     doc.create_region_mut()
         .unwrap()
@@ -1221,16 +1190,12 @@ fn create_region_end_enter_reports_invalid_range_without_creating_another_segmen
         err,
         EditError::Time(TimeEditError::EndNotAfterStart)
     ));
-    assert_eq!(segment_count(&doc), original_count + 1);
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
+    assert_eq!(segment_count(&doc), original_count);
     let dialog = doc.create_region().unwrap();
     assert_eq!(dialog.start_seconds, 12.0);
     assert_eq!(dialog.end_seconds, 12.8);
     assert_eq!(dialog.end_draft, "00:11.90");
     assert_eq!(dialog.end_error, Some(TimeEditError::EndNotAfterStart));
-    assert!(doc.session().is_dirty);
 }
 
 #[test]
@@ -1238,36 +1203,26 @@ fn create_region_start_blur_resets_invalid_draft_and_keeps_error() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
     let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let created_id = doc
-        .create_region()
-        .unwrap()
-        .created_segment_id
-        .clone()
-        .unwrap();
+    doc.open_create_region(&lane_id, 12.0, 12.8);
 
     let dialog = doc.create_region_mut().unwrap();
     dialog.set_start_draft("00:12.90".to_string());
     let committed = dialog.blur_time_field(CreateRegionTimeField::Start);
 
     assert!(!committed);
-    assert_eq!(segment_count(&doc), original_count + 1);
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
+    assert_eq!(segment_count(&doc), original_count);
     let dialog = doc.create_region().unwrap();
     assert_eq!(dialog.start_seconds, 12.0);
     assert_eq!(dialog.end_seconds, 12.8);
     assert_eq!(dialog.start_draft, "00:12.00");
     assert_eq!(dialog.start_error, Some(TimeEditError::StartNotBeforeEnd));
-    assert!(doc.session().is_dirty);
 }
 
 #[test]
 fn create_region_escape_resets_active_time_draft_without_closing_dialog() {
     let mut doc = stable_sample_doc();
     let lane_id = lane_of(&doc, "annotation-1");
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
+    doc.open_create_region(&lane_id, 12.0, 12.8);
 
     doc.create_region_mut()
         .unwrap()
@@ -1286,33 +1241,6 @@ fn create_region_escape_resets_active_time_draft_without_closing_dialog() {
     assert_eq!(dialog.start_error, None);
 }
 
-#[test]
-fn attached_add_region_submit_ignores_hidden_time_drafts() {
-    let mut doc = stable_sample_doc();
-    let lane_id = lane_of(&doc, "annotation-1");
-    let original_count = segment_count(&doc);
-    open_create_region_from_waveform(&mut doc, &lane_id, 12.0, 12.8);
-    let created_id = doc
-        .create_region()
-        .unwrap()
-        .created_segment_id
-        .clone()
-        .unwrap();
-
-    doc.create_region_mut()
-        .unwrap()
-        .set_start_draft("00:12.90".to_string());
-    let _ = ok(doc.submit_create_region());
-
-    assert_eq!(segment_count(&doc), original_count + 1);
-    let created = doc.project().segment(&created_id).unwrap();
-    assert_eq!(created.start_seconds, 12.0);
-    assert_eq!(created.end_seconds, 12.8);
-    assert!(doc.create_region().is_none());
-    assert_eq!(selected(&doc), Some(created_id));
-    assert!(doc.session().is_dirty);
-}
-
 // ---- track cell -----------------------------------------------------------------------
 
 #[test]
@@ -1329,55 +1257,79 @@ fn track_change_updates_segment_lane_and_speaker() {
 }
 
 #[test]
-fn track_cell_edit_state_opens_closes_and_selects() {
+fn set_segment_speaker_keeps_the_lane_when_speakers_are_free() {
     let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
 
-    doc.begin_track_edit("a");
-    let track = doc.draft("a").unwrap().track_edit();
-    assert!(track.is_editing);
-    assert_eq!(track.draft_lane_id, "lane-1");
+    let outcome = ok(doc.set_segment_speaker("a", "speaker-2"));
 
-    doc.set_track_select_open("a", false);
-    let track = doc.draft("a").unwrap().track_edit();
-    assert!(!track.is_editing);
-    assert_eq!(track.draft_lane_id, "lane-1");
+    let segment = doc.project().segment("a").unwrap();
+    assert_eq!(segment.lane_id, "lane-1");
+    assert_eq!(segment.speaker_id, "speaker-2");
+    assert!(outcome.status.is_some());
+    assert!(doc.session().is_dirty);
+    ok(doc.undo());
+    assert_eq!(doc.project().segment("a").unwrap().speaker_id, "speaker-1");
+}
 
-    doc.begin_track_edit("a");
-    let _ = ok(doc.change_segment_track("a", "lane-2"));
+#[test]
+fn set_segment_speaker_moves_the_row_to_the_speaker_lane_when_bound() {
+    let project = project(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
+    let mut environment =
+        exaudio_extension::document::DocumentEnvironment::local(project.id.clone());
+    environment.policy.speakers_bound_to_lanes = true;
+    let mut doc = EditorDoc::from_project(project, environment);
+
+    let _ = ok(doc.set_segment_speaker("a", "speaker-2"));
 
     let segment = doc.project().segment("a").unwrap();
     assert_eq!(segment.lane_id, "lane-2");
     assert_eq!(segment.speaker_id, "speaker-2");
-    let track = doc.draft("a").unwrap().track_edit();
-    assert!(!track.is_editing);
-    assert_eq!(track.draft_lane_id, "lane-2");
+    assert!(matches!(
+        doc.add_speaker_for_segment("a", "Speaker {n}"),
+        Err(EditError::Unavailable(_))
+    ));
+    assert_eq!(doc.project().speakers.len(), 2);
 }
 
 #[test]
-fn track_cell_double_click_opens_picker_but_single_click_only_selects() {
-    let mut doc = doc(vec![
-        seg("a", "lane-1", 0.0, 1.0, "one"),
-        seg("b", "lane-2", 1.5, 2.5, "two"),
-    ]);
-
-    let _ = ok(doc.press_track_cell("b", 1));
-
-    assert_eq!(selected(&doc).as_deref(), Some("b"));
-    assert!(!doc.draft("b").unwrap().track_edit().is_editing);
-
-    let _ = ok(doc.press_track_cell("b", 2));
-
-    let track = doc.draft("b").unwrap().track_edit();
-    assert!(track.is_editing);
-    assert_eq!(track.draft_lane_id, "lane-2");
-}
-
-#[test]
-fn track_cell_separate_single_clicks_do_not_open_picker() {
+fn add_speaker_for_segment_creates_and_assigns_in_one_undo_step() {
     let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
 
-    let _ = ok(doc.press_track_cell("a", 1));
-    let _ = ok(doc.press_track_cell("a", 1));
+    let speaker_id = doc
+        .add_speaker_for_segment("a", "Speaker {n}")
+        .expect("free speakers");
 
-    assert!(!doc.draft("a").unwrap().track_edit().is_editing);
+    let speaker = doc.project().speaker(&speaker_id).expect("new speaker");
+    assert_eq!(speaker.label, "Speaker 3");
+    assert_eq!(doc.project().segment("a").unwrap().speaker_id, speaker_id);
+    assert_eq!(doc.project().segment("a").unwrap().lane_id, "lane-1");
+    assert!(doc.session().is_dirty);
+
+    ok(doc.undo());
+    assert!(doc.project().speaker(&speaker_id).is_none());
+    assert_eq!(doc.project().segment("a").unwrap().speaker_id, "speaker-1");
+}
+
+#[test]
+fn rename_speaker_trims_and_refuses_empty_names() {
+    let mut doc = doc(vec![seg("a", "lane-1", 0.0, 1.0, "one")]);
+
+    assert!(matches!(
+        doc.rename_speaker("speaker-1", "   "),
+        Err(EditError::Unavailable(_))
+    ));
+    let unchanged = ok(doc.rename_speaker("speaker-1", " Speaker 1 "));
+    assert_eq!(unchanged, Outcome::none());
+    assert!(!doc.session().is_dirty);
+
+    let outcome = ok(doc.rename_speaker("speaker-1", "  Alice "));
+
+    assert_eq!(doc.project().speaker("speaker-1").unwrap().label, "Alice");
+    assert!(outcome.status.is_some());
+    assert!(doc.session().is_dirty);
+    ok(doc.undo());
+    assert_eq!(
+        doc.project().speaker("speaker-1").unwrap().label,
+        "Speaker 1"
+    );
 }

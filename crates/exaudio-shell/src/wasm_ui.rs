@@ -254,6 +254,7 @@ pub(crate) fn register(
                         label: title,
                         shortcut: None,
                         toolbar: true,
+                        menu: true,
                         run: Rc::new(move |shell, _, cx| {
                             let document_id = active_document(&shell, cx);
                             crate::wasm_host::invoke(

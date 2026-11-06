@@ -106,6 +106,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 label: label.into(),
                 shortcut: None,
                 toolbar: true,
+                menu: true,
                 run: Rc::new(move |shell: ShellHandle, window, cx| {
                     if let Some(model) = shell.editor_model(cx) {
                         draft_view(model, &views, cx)
@@ -122,6 +123,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: fill_label.into(),
             shortcut: Some("alt-shift-g".into()),
             toolbar: false,
+            menu: true,
             run: Rc::new(move |shell, window, cx| {
                 let focused = shell.focused_segment(cx);
                 if let Some(model) = shell.editor_model(cx) {
@@ -139,6 +141,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: settings_label.into(),
             shortcut: None,
             toolbar: false,
+            menu: true,
             run: Rc::new(|_, window, cx| open_ai_settings(window, cx)),
         },
     )?;

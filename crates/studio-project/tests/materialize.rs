@@ -2,13 +2,44 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::{Value, json};
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_project::{
-    ProjectIoError, import_legacy_project, load_project, load_recovery, save_project, save_recovery,
+    ProjectIoError, RecoveryEntry, RecoverySnapshot, import_legacy_project, load_project,
+    load_recovery, newest_per_project, read_project_name, save_project, save_recovery,
+    superseded_by_save,
 };
+
+fn snapshot(
+    project: Project,
+    native_path: Option<&Path>,
+    saved_at: SystemTime,
+) -> RecoverySnapshot {
+    RecoverySnapshot {
+        project,
+        native_path: native_path.map(Path::to_path_buf),
+        saved_at,
+    }
+}
+
+fn entry(root: &str, snapshot: RecoverySnapshot) -> RecoveryEntry {
+    RecoveryEntry {
+        root: PathBuf::from(root),
+        snapshot,
+    }
+}
+
+fn set_modified(path: &Path, time: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+}
 
 fn sample_project() -> Project {
     Project {
@@ -243,19 +274,58 @@ fn recovery_uses_native_contract_without_changing_manual_save() {
     save_project(&project, &root, temp.path()).unwrap();
     let before = fs::read(root.join("project.json")).unwrap();
     project.segments[0].text = "Recovered edit".into();
-    save_recovery(&project, &root, temp.path()).unwrap();
+    let taken = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
+    save_recovery(
+        &snapshot(project.clone(), Some(&root), taken),
+        &root,
+        temp.path(),
+    )
+    .unwrap();
     assert_eq!(fs::read(root.join("project.json")).unwrap(), before);
-    let snapshot: Value =
+    let manifest: Value =
         serde_json::from_slice(&fs::read(root.join("autosave/recovery.json")).unwrap()).unwrap();
-    assert_eq!(snapshot["format"], "exaudio-project");
-    assert_eq!(snapshot["version"], 1);
-    assert_eq!(snapshot["project"]["segments"][0]["text"], "Recovered edit");
+    assert_eq!(manifest["format"], "exaudio-project");
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["project"]["segments"][0]["text"], "Recovered edit");
     fs::rename(&root, &moved).unwrap();
     let recovered = load_recovery(&moved).unwrap();
-    assert_eq!(recovered.segments, project.segments);
-    assert_eq!(recovered.metadata, project.metadata);
-    assert!(Path::new(&recovered.lanes[0].source_path).is_file());
+    assert_eq!(recovered.project.segments, project.segments);
+    assert_eq!(recovered.project.metadata, project.metadata);
+    assert_eq!(recovered.native_path.as_deref(), Some(root.as_path()));
+    assert_eq!(recovered.saved_at, taken);
+    assert!(Path::new(&recovered.project.lanes[0].source_path).is_file());
     assert_eq!(load_project(&moved).unwrap().segments[0].text, "Hello.");
+}
+
+#[test]
+fn saved_project_manifest_never_carries_snapshot_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    sources(temp.path());
+    let root = temp.path().join("project");
+    save_project(&sample_project(), &root, temp.path()).unwrap();
+    let manifest = manifest(&root);
+    assert!(manifest.get("native_path").is_none());
+    assert!(manifest.get("saved_at_unix_ms").is_none());
+    assert_eq!(read_project_name(&root).unwrap(), "Two speakers");
+}
+
+#[test]
+fn snapshot_without_recorded_time_or_folder_uses_file_time() {
+    let temp = tempfile::tempdir().unwrap();
+    sources(temp.path());
+    let root = temp.path().join("project");
+    let taken = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    save_recovery(&snapshot(sample_project(), None, taken), &root, temp.path()).unwrap();
+    let path = root.join("autosave/recovery.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(manifest.get("native_path").is_none());
+    manifest.as_object_mut().unwrap().remove("saved_at_unix_ms");
+    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let file_time = UNIX_EPOCH + Duration::from_secs(1_650_000_000);
+    set_modified(&path, file_time);
+    let recovered = load_recovery(&root).unwrap();
+    assert_eq!(recovered.native_path, None);
+    assert_eq!(recovered.saved_at, file_time);
 }
 
 #[test]
@@ -264,12 +334,69 @@ fn failed_recovery_keeps_previous_snapshot_and_recovery_can_precede_manual_save(
     sources(temp.path());
     let root = temp.path().join("project");
     let mut project = sample_project();
-    save_recovery(&project, &root, temp.path()).unwrap();
+    let taken = SystemTime::now();
+    save_recovery(&snapshot(project.clone(), None, taken), &root, temp.path()).unwrap();
     assert!(!root.join("project.json").exists());
     let before = load_recovery(&root).unwrap();
     project.lanes[0].source_path = "missing.wav".into();
-    assert!(save_recovery(&project, &root, temp.path()).is_err());
+    assert!(save_recovery(&snapshot(project, None, taken), &root, temp.path()).is_err());
     assert_eq!(load_recovery(&root).unwrap(), before);
+}
+
+#[test]
+fn snapshot_is_superseded_only_by_a_later_save_to_its_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    sources(temp.path());
+    let root = temp.path().join("project");
+    save_project(&sample_project(), &root, temp.path()).unwrap();
+    let saved = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    set_modified(&root.join("project.json"), saved);
+    let before_save = snapshot(
+        sample_project(),
+        Some(&root),
+        saved - Duration::from_secs(60),
+    );
+    let after_save = snapshot(
+        sample_project(),
+        Some(&root),
+        saved + Duration::from_secs(60),
+    );
+    let never_saved = snapshot(sample_project(), None, saved - Duration::from_secs(60));
+    let folder_gone = snapshot(
+        sample_project(),
+        Some(&temp.path().join("deleted")),
+        saved - Duration::from_secs(60),
+    );
+    assert!(superseded_by_save(&before_save));
+    assert!(!superseded_by_save(&after_save));
+    assert!(!superseded_by_save(&never_saved));
+    assert!(!superseded_by_save(&folder_gone));
+}
+
+#[test]
+fn newest_snapshot_per_project_wins_and_pre_save_snapshots_are_absorbed() {
+    let t = |seconds: u64| UNIX_EPOCH + Duration::from_secs(seconds);
+    let folder = Path::new("/projects/interview");
+    let other_folder = Path::new("/projects/interview-copy");
+    let mut other = sample_project();
+    other.id = "other-project".into();
+    let entries = vec![
+        entry("a", snapshot(sample_project(), None, t(100))),
+        entry("b", snapshot(sample_project(), Some(folder), t(300))),
+        entry("c", snapshot(sample_project(), Some(folder), t(200))),
+        entry("d", snapshot(sample_project(), Some(other_folder), t(250))),
+        entry("e", snapshot(other.clone(), None, t(50))),
+        entry("f", snapshot(other, None, t(400))),
+    ];
+    let (kept, superseded) = newest_per_project(entries);
+    let roots = |entries: &[RecoveryEntry]| {
+        entries
+            .iter()
+            .map(|entry| entry.root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(roots(&kept), ["f", "b", "d"]);
+    assert_eq!(roots(&superseded), ["c", "a", "e"]);
 }
 
 #[test]
@@ -442,7 +569,8 @@ fn symlinked_manifest_or_recovery_directory_is_rejected() {
     assert_eq!(fs::read(&outside).unwrap(), bytes);
     fs::remove_dir(root.join("autosave")).unwrap();
     symlink(temp.path(), root.join("autosave")).unwrap();
-    assert!(save_recovery(&sample_project(), &root, temp.path()).is_err());
+    let snapshot = snapshot(sample_project(), None, SystemTime::now());
+    assert!(save_recovery(&snapshot, &root, temp.path()).is_err());
     assert!(load_recovery(&root).is_err());
 }
 

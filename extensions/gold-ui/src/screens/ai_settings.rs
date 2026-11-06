@@ -754,13 +754,31 @@ impl AiSettingsView {
         let local = &self.local;
         let busy = local.op.is_some();
         let theme = cx.theme().clone();
+        // One size for the card and the status line: the backend's download total.
+        let download_size = match &local.status {
+            Some(Ok(status)) => {
+                let bytes = status.download_bytes.unwrap_or(status.models.total_bytes);
+                (bytes > 0).then(|| byte_count(bytes, cx))
+            }
+            _ => None,
+        };
+        let description = match &download_size {
+            Some(size) => localized(
+                cx,
+                "About {size}, downloaded once. Needs a graphics card that supports WebGPU.",
+                "Около {size}, загружаются один раз. Нужна видеокарта с поддержкой WebGPU.",
+            )
+            .replace("{size}", size),
+            None => localized(
+                cx,
+                "Downloaded once. Needs a graphics card that supports WebGPU.",
+                "Загружаются один раз. Нужна видеокарта с поддержкой WebGPU.",
+            )
+            .to_string(),
+        };
         let mut card = ui::card(
             localized(cx, "Models on this computer", "Модели на этом компьютере"),
-            Some(localized(
-                cx,
-                "About 2.6 GB, downloaded once. Needs a graphics card that supports WebGPU.",
-                "Около 2,6 ГБ, загружаются один раз. Нужна видеокарта с поддержкой WebGPU.",
-            )),
+            Some(&description),
             cx,
         );
         // Summary line, tone, and technical text (model error, graphics reason) for "Details".
@@ -772,7 +790,6 @@ impl AiSettingsView {
             ),
             Some(Err(error)) => (error.clone(), Tone::Danger, None),
             Some(Ok(status)) => {
-                const GB: f64 = 1024.0 * 1024.0 * 1024.0;
                 let models = &status.models;
                 let state = match models.state {
                     ModelsState::Ready if models.outdated => {
@@ -790,15 +807,13 @@ impl AiSettingsView {
                     ModelsState::Downloading => {
                         localized(cx, "Downloading…", "Загрузка…").to_string()
                     }
-                    ModelsState::NotInstalled => {
-                        localized(cx, "Not installed ({x} GB)", "Не установлено ({x} ГБ)").replace(
-                            "{x}",
-                            &format!(
-                                "{:.1}",
-                                status.download_bytes.unwrap_or(models.total_bytes) as f64 / GB
-                            ),
-                        )
-                    }
+                    ModelsState::NotInstalled => match &download_size {
+                        Some(size) => {
+                            localized(cx, "Not installed ({size})", "Не установлено ({size})")
+                                .replace("{size}", size)
+                        }
+                        None => localized(cx, "Not installed", "Не установлено").to_string(),
+                    },
                     ModelsState::Stopped => {
                         localized(cx, "Download paused", "Загрузка остановлена").to_string()
                     }

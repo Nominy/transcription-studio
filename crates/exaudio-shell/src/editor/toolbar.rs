@@ -99,6 +99,18 @@ impl Toolbar {
         );
     }
 
+    /// A native document that has never been saved: no folder to write to, no provider that
+    /// saves it elsewhere.
+    fn has_no_save_location(&self, cx: &App) -> bool {
+        let origin = self.model.read(cx).origin();
+        origin.native_path.is_none()
+            && origin.instance.is_none()
+            && cx
+                .global::<crate::ContributionRegistry>()
+                .save_handler(&origin.mode_id)
+                .is_none()
+    }
+
     fn state_badge(&self, cx: &App) -> AnyElement {
         let doc = self.model.read(cx).doc();
         if doc.is_read_only() {
@@ -116,10 +128,14 @@ impl Toolbar {
             localized(cx, "Not saved", "Не сохранено"),
             localized(cx, "Unsaved changes", "Есть изменения"),
             localized(cx, "Saved", "Сохранено"),
+            localized(cx, "Unsaved", "Не сохранён"),
         ];
         let (tag, label) = match doc.session().save_status() {
             SaveStatus::Saving => (Tag::info(), labels[0]),
             SaveStatus::Failed { .. } => (Tag::danger(), labels[1]),
+            SaveStatus::Dirty | SaveStatus::Saved if self.has_no_save_location(cx) => {
+                (Tag::warning(), labels[4])
+            }
             SaveStatus::Dirty => (Tag::warning(), labels[2]),
             SaveStatus::Saved => (Tag::success(), labels[3]),
         };
@@ -272,7 +288,12 @@ impl Render for Toolbar {
             ))
             .on_click(cx.listener(|this, _, _, cx| this.step_zoom(ZOOM_STEP, cx)));
 
-        let commands = cx.global::<crate::ContributionRegistry>().commands();
+        let commands: Vec<_> = cx
+            .global::<crate::ContributionRegistry>()
+            .commands()
+            .into_iter()
+            .filter(|command| command.menu)
+            .collect();
         let toolbar = cx.entity().downgrade();
         let menu = Button::new("extension-commands")
             .small()

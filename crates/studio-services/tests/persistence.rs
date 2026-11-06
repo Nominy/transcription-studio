@@ -1,4 +1,6 @@
+use std::time::{Duration, UNIX_EPOCH};
 use studio_core::Project;
+use studio_project::RecoverySnapshot;
 use studio_services::{
     prefs::{EditorLayout, Preferences, UiStorage},
     recovery,
@@ -8,17 +10,21 @@ use studio_services::{
 fn native_recovery_round_trips_without_a_platform_session() {
     let root = tempfile::tempdir().expect("root");
     let source = tempfile::tempdir().expect("audio source base");
-    let project = Project {
-        id: "local-draft".into(),
-        name: "Untitled".into(),
-        speakers: Vec::new(),
-        lanes: Vec::new(),
-        segments: Vec::new(),
-        metadata: Default::default(),
+    let snapshot = RecoverySnapshot {
+        project: Project {
+            id: "local-draft".into(),
+            name: "Untitled".into(),
+            speakers: Vec::new(),
+            lanes: Vec::new(),
+            segments: Vec::new(),
+            metadata: Default::default(),
+        },
+        native_path: None,
+        saved_at: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
     };
-    recovery::write_snapshot(&project, root.path(), source.path()).expect("native snapshot");
+    recovery::write_snapshot(&snapshot, root.path(), source.path()).expect("native snapshot");
     let recovered = recovery::load_snapshot(root.path()).expect("native recovery");
-    assert_eq!(recovered, project);
+    assert_eq!(recovered, snapshot);
     assert!(!root.path().join("project.json").exists());
 }
 #[test]

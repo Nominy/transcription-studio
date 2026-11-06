@@ -17,6 +17,7 @@ use studio_editor::edit::draft::byte_offset;
 use studio_editor::edit::time::TimeField;
 use studio_editor::editor_model::EditorSession;
 use studio_editor::i18n::localized;
+use studio_editor::timeline_model::LaneColor;
 use studio_editor::transcript_model::{
     AnnotationDiffStatus, TranscriptActionCommand, TranscriptActionMenuEntry,
     TranscriptDiffCellKind, TranscriptDiffView, TranscriptRowKind, TranscriptRowView,
@@ -121,7 +122,7 @@ impl TranscriptView {
             })
             .when(cells.id, |el| el.child(id_cell(row, metrics, theme)))
             .when(cells.track, |el| {
-                el.child(self.track_cell(row, doc, metrics, lane_color, cx))
+                el.child(self.speaker_cell(row, doc, metrics, lane_color, cx))
             })
             .when(cells.start, |el| {
                 el.child(self.time_cell(row, doc, TimeField::Start, time_editing, metrics, cx))
@@ -144,7 +145,10 @@ impl TranscriptView {
             .into_any_element()
     }
 
-    fn track_cell(
+    /// Speaker cell: a dot in the speaker's colour and the speaker label (lane-coloured). The
+    /// press selects the row like a click on its body; the click opens the speaker menu, and
+    /// `Rename…` mounts the pooled name editor here.
+    fn speaker_cell(
         &self,
         row: &TranscriptRowView,
         doc: &EditorDoc,
@@ -153,41 +157,82 @@ impl TranscriptView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let segment_id: SharedString = row.segment_id.clone().into();
-        let picker_open = !row.is_read_only
-            && doc
-                .draft(&row.segment_id)
-                .is_some_and(|draft| draft.track_edit().is_editing);
+        let project = doc.project();
+        let menu_open = self.speaker_menu.as_deref() == Some(row.segment_id.as_str());
+        let renaming = self
+            .speaker_rename
+            .as_ref()
+            .is_some_and(|(id, _)| id.as_ref() == row.segment_id);
+        let speaker_id = project
+            .segment(&row.segment_id)
+            .map(|segment| segment.speaker_id.as_str());
+        let speaker_index =
+            speaker_id.and_then(|id| project.speakers.iter().position(|speaker| speaker.id == id));
+        let dot_color =
+            speaker_index.map_or(theme.muted_foreground, |index| speaker_color(index, theme));
 
-        let label = div()
-            .id(SharedString::from(format!(
-                "transcript-track:{}",
-                row.segment_id
-            )))
-            .text_sm()
-            .line_height(metrics.line_height)
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(lane_color)
-            .truncate()
-            .child(row.speaker_label.clone())
-            .when(!row.is_read_only, |label| {
-                label.cursor_pointer().on_mouse_down(MouseButton::Left, {
-                    let segment_id = segment_id.clone();
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.press_track_cell(&segment_id, event.click_count, window, cx);
-                    })
+        let content = if renaming {
+            div()
+                .w_full()
+                .h(metrics.line_height)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Input::new(&self.speaker_input)
+                        .xsmall()
+                        .h(metrics.line_height),
+                )
+                .into_any_element()
+        } else {
+            let segment_id: SharedString = row.segment_id.clone().into();
+            h_flex()
+                .id(SharedString::from(format!(
+                    "transcript-speaker:{}",
+                    row.segment_id
+                )))
+                .w_full()
+                .h(metrics.line_height)
+                .gap_1p5()
+                .items_center()
+                .px_1()
+                .rounded(theme.radius)
+                .child(
+                    div()
+                        .flex_none()
+                        .size(rems(0.5))
+                        .rounded_full()
+                        .bg(dot_color),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_sm()
+                        .line_height(metrics.line_height)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(lane_color)
+                        .truncate()
+                        .child(row.speaker_label.clone()),
+                )
+                .when(!row.is_read_only, |label| {
+                    label
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.secondary))
+                        .when(menu_open, |label| label.bg(theme.secondary))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.open_speaker_menu(&segment_id, window, cx);
+                        }))
                 })
-            });
+                .into_any_element()
+        };
 
         v_flex()
             .w(TRACK_W)
             .flex_none()
-            .px(CELL_PX)
-            .child(label)
+            .px(rems(CELL_PX.0 - 0.25))
+            .child(content)
             .when(!row.annotation_kind.is_transcription(), |cell| {
                 cell.child(
                     div()
+                        .px_1()
                         .text_xs()
                         .line_height(SMALL_LINE_H)
                         .text_color(theme.muted_foreground)
@@ -199,53 +244,116 @@ impl TranscriptView {
                 let (label, color) = annotation_diff_status(diff.status, theme);
                 cell.child(
                     div()
+                        .px_1()
                         .text_xs()
                         .line_height(SMALL_LINE_H)
                         .text_color(color)
                         .child(label),
                 )
             })
-            .when(picker_open, |cell| cell.child(self.track_picker(row, cx)))
+            .when(menu_open && !row.is_read_only, |cell| {
+                cell.child(self.speaker_menu(row, doc, speaker_id, cx))
+            })
             .into_any_element()
     }
 
-    fn track_picker(&self, row: &TranscriptRowView, cx: &Context<Self>) -> impl IntoElement {
+    /// Menu under the speaker cell: every project speaker (check on the row's), `Rename…` for
+    /// the row's speaker and, unless speakers are the audio tracks, `New speaker`.
+    fn speaker_menu(
+        &self,
+        row: &TranscriptRowView,
+        doc: &EditorDoc,
+        current_speaker_id: Option<&str>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let segment_id: SharedString = row.segment_id.clone().into();
-        let options = row.track_options.iter().map(|option| {
-            let is_current = option.lane_id == row.lane_id;
-            let lane_id: SharedString = option.lane_id.clone().into();
+        let can_add = !doc.environment().policy.speakers_bound_to_lanes;
+        let item = |id: SharedString| {
             div()
-                .id(SharedString::from(format!(
-                    "transcript-track-option:{}:{}",
-                    row.segment_id, option.lane_id
-                )))
+                .id(id)
                 .px_2()
                 .py_1()
                 .rounded(theme.radius)
                 .text_sm()
-                .when(is_current, |item| item.bg(theme.list_active))
                 .hover(|style| style.bg(theme.accent))
                 .cursor_pointer()
-                .child(option.label.clone())
-                .on_click({
-                    let segment_id = segment_id.clone();
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.change_track(&segment_id, &lane_id, window, cx);
-                    })
-                })
+        };
+
+        let speakers = doc
+            .project()
+            .speakers
+            .iter()
+            .enumerate()
+            .map(|(index, speaker)| {
+                let is_current = current_speaker_id == Some(speaker.id.as_str());
+                let speaker_id: SharedString = speaker.id.clone().into();
+                let segment_id = segment_id.clone();
+                item(SharedString::from(format!(
+                    "transcript-speaker-option:{}:{}",
+                    row.segment_id, speaker.id
+                )))
+                .flex()
+                .items_center()
+                .gap_2()
+                .when(is_current, |item| item.bg(theme.list_active))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(rems(0.5))
+                        .rounded_full()
+                        .bg(speaker_color(index, theme)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(speaker.label.clone()),
+                )
+                .child(div().flex_none().w(rems(1.)).when(is_current, |slot| {
+                    slot.child(Icon::new(IconName::Check).xsmall())
+                }))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.choose_speaker(&segment_id, &speaker_id, cx);
+                }))
+            })
+            .collect::<Vec<_>>();
+
+        let rename = current_speaker_id.map(|speaker_id| {
+            let speaker_id = speaker_id.to_string();
+            let segment_id = segment_id.clone();
+            item(SharedString::from(format!(
+                "transcript-speaker-rename:{}",
+                row.segment_id
+            )))
+            .child(localized("Rename…", "Переименовать…"))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.begin_speaker_rename(&segment_id, &speaker_id, window, cx);
+            }))
+        });
+        let add = can_add.then(|| {
+            let segment_id = segment_id.clone();
+            item(SharedString::from(format!(
+                "transcript-speaker-add:{}",
+                row.segment_id
+            )))
+            .child(localized("New speaker", "Новый спикер"))
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.add_speaker(&segment_id, window, cx);
+            }))
         });
 
         deferred(
             anchored().snap_to_window_with_margin(px(8.)).child(
                 v_flex()
                     .id(SharedString::from(format!(
-                        "transcript-track-picker:{}",
+                        "transcript-speaker-menu:{}",
                         row.segment_id
                     )))
                     .occlude()
                     .mt_1()
-                    .min_w(rems(10.))
+                    .min_w(rems(11.))
                     .p_1()
                     .gap_0p5()
                     .bg(theme.popover)
@@ -254,9 +362,12 @@ impl TranscriptView {
                     .border_color(theme.border)
                     .rounded(theme.radius)
                     .shadow_md()
-                    .children(options)
-                    .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
-                        this.close_track_picker(&segment_id, window, cx);
+                    .children(speakers)
+                    .child(div().my_1().h(px(1.)).bg(theme.border))
+                    .children(rename)
+                    .children(add)
+                    .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                        this.close_speaker_menu(cx);
                     })),
             ),
         )
@@ -721,8 +832,41 @@ impl TranscriptView {
                 .icon(IconName::EllipsisVertical)
                 .ghost()
                 .xsmall()
-                .dropdown_menu(move |mut menu, _, _| {
+                .dropdown_menu(move |mut menu, _, cx| {
                     for entry in &entries {
+                        if matches!(
+                            *entry,
+                            TranscriptActionMenuEntry::Item {
+                                command: TranscriptActionCommand::MergeAbove,
+                                ..
+                            }
+                        ) {
+                            // Enabled when the playhead is inside the row, read when the menu
+                            // opens (the row does not re-render per playback frame).
+                            let doc = model.read(cx).doc();
+                            let playhead = doc.session().playhead_seconds;
+                            let inside =
+                                doc.project().segment(&segment_id).is_some_and(|segment| {
+                                    segment.start_seconds <= playhead
+                                        && playhead < segment.end_seconds
+                                });
+                            let view = view.clone();
+                            let segment_id = segment_id.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(localized(
+                                    "Split at playhead",
+                                    "Разделить по курсору",
+                                ))
+                                .icon(Icon::from(gpui_kit::assets::IconName::Scissors))
+                                .disabled(!inside)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.split_row_at_playhead(&segment_id, window, cx);
+                                    })
+                                    .ok();
+                                }),
+                            );
+                        }
                         menu = match *entry {
                             TranscriptActionMenuEntry::Separator => menu.separator(),
                             TranscriptActionMenuEntry::Item { command, enabled } => {
@@ -1027,6 +1171,21 @@ fn annotation_diff_status(status: AnnotationDiffStatus, theme: &Theme) -> (&'sta
             theme.warning,
         ),
         AnnotationDiffStatus::UnmatchedReference => (localized("Removed", "Удалено"), theme.danger),
+    }
+}
+
+/// Colour of the speaker at `index` in the project's speaker list: the first two match the
+/// lane palette (so a one-lane project's first speaker shares its lane colour), later ones
+/// spread round the hue circle.
+fn speaker_color(index: usize, theme: &Theme) -> Hsla {
+    match index {
+        0 => Hsla::from(rgb(LaneColor::Blue.rgb())),
+        1 => Hsla::from(rgb(LaneColor::Purple.rgb())),
+        _ => {
+            let hue = ((207 + 137 * index) % 360) as f32 / 360.;
+            let lightness = if theme.is_dark() { 0.70 } else { 0.42 };
+            hsla(hue, 0.70, lightness, 1.)
+        }
     }
 }
 

@@ -344,7 +344,8 @@ impl EditorDoc {
 
     /// Space outside text inputs: pausing restores the caret into the row under the playhead
     /// (focus effect); starting plays and leaves a ghost cursor in the row at the playhead or
-    /// the selected row. Falls back to a plain toggle when there is no row.
+    /// the selected row. A selected row the playhead is outside of plays from its start.
+    /// Falls back to a plain toggle when there is no row.
     pub fn helper_toggle_playback(&mut self) -> Outcome {
         self.try_helper_unfocused_toggle()
             .unwrap_or_else(|| self.toggle_playback())
@@ -437,8 +438,18 @@ impl EditorDoc {
                 Err(status) => outcome.with_status(status),
             });
         }
-        let segment_id = segment_id_at_playhead(self.workflow.project(), &self.session)
-            .or_else(|| self.session.selected_segment_id.clone())?;
+        let segment_id = match segment_id_at_playhead(self.workflow.project(), &self.session) {
+            Some(segment_id) => segment_id,
+            // The playhead is in no row: the selected row plays from its start.
+            None => {
+                let segment_id = self.session.selected_segment_id.clone()?;
+                let start_seconds = self.workflow.project().segment(&segment_id)?.start_seconds;
+                self.session
+                    .seek_to_time(self.workflow.project(), start_seconds);
+                self.touch();
+                segment_id
+            }
+        };
         self.helper.pending = self.restore_for_segment(&segment_id, true, None);
         self.helper.focused_segment_id = None;
         Some(self.set_paused(false))

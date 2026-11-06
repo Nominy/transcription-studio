@@ -96,7 +96,10 @@ pub struct CommandContribution {
     pub id: String,
     pub label: String,
     pub shortcut: Option<String>,
+    /// Shown as a button above the editor body.
     pub toolbar: bool,
+    /// Listed in the toolbar's ⋯ menu; `false` for commands reachable only by keyboard.
+    pub menu: bool,
     pub run: CommandHandler,
 }
 #[derive(Clone)]
@@ -943,6 +946,7 @@ mod tests {
                     label: "Test".into(),
                     shortcut: None,
                     toolbar: false,
+                    menu: true,
                     run: Rc::new(|_, _, _| panic!("disabled command")),
                 },
             )
@@ -950,6 +954,62 @@ mod tests {
         assert!(registry.commands().is_empty());
         assert!(!registry.is_enabled("exaudio.test"));
         assert!(registry.providers("exaudio.local").diagnostics.is_empty());
+    }
+    #[test]
+    fn command_contexts_follow_the_active_mode() {
+        let mut registry = ContributionRegistry::default();
+        let mut owner = manifest("exaudio.test");
+        owner.modes = serde_json::from_value(serde_json::json!([
+            {"id":"exaudio.test.a","name":"A"},
+            {"id":"exaudio.test.b","name":"B"}
+        ]))
+        .unwrap();
+        registry.register_manifest(owner, Vec::new(), true).unwrap();
+        for id in ["exaudio.test.a", "exaudio.test.b"] {
+            registry
+                .register_mode(
+                    "exaudio.test",
+                    ModeContribution {
+                        id: id.into(),
+                        label: id.into(),
+                        description: String::new(),
+                        launch: Rc::new(|_, _, _, _| {
+                            panic!("launch is not part of context resolution")
+                        }),
+                    },
+                )
+                .unwrap();
+        }
+        registry
+            .register_command(
+                "exaudio.test",
+                CommandContribution {
+                    id: "exaudio.test.only-a".into(),
+                    label: "Only in A".into(),
+                    shortcut: None,
+                    toolbar: false,
+                    menu: true,
+                    run: Rc::new(|_, _, _| {}),
+                },
+            )
+            .unwrap();
+        registry.set_command_contexts("exaudio.test.only-a", vec!["exaudio.test.a".into()]);
+        let ids = |registry: &ContributionRegistry| {
+            registry
+                .commands()
+                .into_iter()
+                .map(|command| command.id)
+                .collect::<Vec<_>>()
+        };
+
+        registry.enter_mode("exaudio.test.b").unwrap();
+        assert!(ids(&registry).is_empty());
+        assert!(registry.command("exaudio.test.only-a").is_none());
+        registry.leave_mode();
+
+        registry.enter_mode("exaudio.test.a").unwrap();
+        assert_eq!(ids(&registry), vec!["exaudio.test.only-a".to_string()]);
+        assert!(registry.command("exaudio.test.only-a").is_some());
     }
     #[test]
     fn mode_reservations_are_atomic_and_owner_scoped() {

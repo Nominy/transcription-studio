@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use studio_waveform::{WaveformHit, WaveformHitTarget};
 
 use super::{EditError, EditResult, EditorDoc, Effect, Outcome, PointerModifiers, WaveformHover};
-use crate::edit::create_region::CreateRegionDialog;
 use crate::edit::format::zoom_after_wheel_pixels;
 use crate::edit::structure::{
     AuditionKey, AutoscrollMode, CUT_PREVIEW_DRAG_THRESHOLD_PX, CUT_PREVIEW_HANDLE_HIT_PX,
@@ -621,16 +620,14 @@ impl EditorDoc {
                 }),
             }));
         }
-        let dialog = CreateRegionDialog::new(drag.lane_id.clone(), start, end);
         let lane_id = drag.lane_id.clone();
         let created = self.apply("Create", |workflow| {
             workflow.create_segment_in_lane(&lane_id, start, end)
         })?;
-        self.create_region = Some(dialog.with_created_segment_id(created.clone()));
         self.mark_dirty();
         self.reconcile(true);
         self.drafts.refresh(self.workflow.project(), &created);
-        let outcome = self.select_segment_without_seek(&created);
+        let outcome = self.edit_segment_text(&created)?;
         let status = format!(
             "Created {} at {start:.3}s-{end:.3}s.",
             self.segment_label(&created)

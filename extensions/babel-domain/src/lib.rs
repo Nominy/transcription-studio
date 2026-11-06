@@ -65,6 +65,8 @@ pub fn document_environment(
             minimum_cut_milliseconds: 1000,
             region_creation_command: edit::create_region::project_uses_annotation_mode(project)
                 .then(|| "exaudio.babel.open-create-region".into()),
+            number_markup: true,
+            speakers_bound_to_lanes: true,
         },
         providers: DocumentProviders::default(),
     })

@@ -35,7 +35,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use studio_editor::edit::keymap::{FocusTarget, KeyFocus};
 use studio_editor::edit::time::TimeField;
-use studio_editor::edit::{EditorDoc, TextSelection};
+use studio_editor::edit::{EditorDoc, Outcome, TextSelection};
 use studio_editor::timeline_model::LaneColor;
 use studio_editor::transcript_model::{TranscriptActionCommand, TranscriptRowView};
 
@@ -67,6 +67,13 @@ pub struct TranscriptView {
     /// Pooled time-cell editor, mounted in `time_cell`.
     time_input: Entity<InputState>,
     time_cell: Option<(SharedString, TimeField)>,
+
+    /// Row whose speaker menu is open.
+    speaker_menu: Option<SharedString>,
+    /// Pooled speaker-name editor, mounted in the speaker cell of `speaker_rename.0` and
+    /// renaming speaker `speaker_rename.1`.
+    speaker_input: Entity<InputState>,
+    speaker_rename: Option<(SharedString, String)>,
 
     /// Tag list scroll; follows the highlighted item when it changes.
     tag_scroll: ScrollHandle,
@@ -171,6 +178,9 @@ impl TranscriptView {
         let time_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(localized(cx, "mm:ss.cc", "мм:сс.сс"))
         });
+        let speaker_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(localized(cx, "Speaker name", "Имя спикера"))
+        });
 
         let view = cx.entity().downgrade();
         let subscriptions = vec![
@@ -181,6 +191,7 @@ impl TranscriptView {
             cx.subscribe_in(&text_input, window, Self::on_text_input_event),
             cx.observe(&text_input, |this, _, cx| this.sync_text_selection(cx)),
             cx.subscribe_in(&time_input, window, Self::on_time_input_event),
+            cx.subscribe_in(&speaker_input, window, Self::on_speaker_input_event),
             cx.intercept_keystrokes(move |event, window, cx| {
                 view.update(cx, |this, cx| this.intercept_keystroke(event, window, cx))
                     .ok();
@@ -200,6 +211,9 @@ impl TranscriptView {
             synced_text: String::new(),
             time_input,
             time_cell: None,
+            speaker_menu: None,
+            speaker_input,
+            speaker_rename: None,
             tag_scroll: ScrollHandle::new(),
             tag_highlight: Cell::new(None),
             metrics: RowMetrics::default(),
@@ -256,6 +270,14 @@ impl TranscriptView {
             .time_cell
             .as_ref()
             .is_some_and(|(row, _)| doc.draft(row).is_none());
+        let speaker_row_gone = self
+            .speaker_rename
+            .as_ref()
+            .is_some_and(|(row, _)| doc.draft(row).is_none());
+        let speaker_menu_gone = self
+            .speaker_menu
+            .as_ref()
+            .is_some_and(|row| doc.draft(row).is_none());
 
         match text_draft {
             Some(None) => self.unmount_text_editor(window, cx),
@@ -266,6 +288,12 @@ impl TranscriptView {
         }
         if time_row_gone {
             self.time_cell = None;
+        }
+        if speaker_row_gone {
+            self.speaker_rename = None;
+        }
+        if speaker_menu_gone {
+            self.speaker_menu = None;
         }
 
         self.refresh_render_key(cx);
@@ -651,12 +679,20 @@ impl TranscriptView {
         {
             return;
         }
-        // Escape in a time cell cancels its draft, never an editor shortcut.
+        // Escape in a time or speaker cell cancels its draft, never an editor shortcut.
         if self.time_cell.is_some()
             && self.time_input.focus_handle(cx).is_focused(window)
             && keystroke_string(&event.keystroke) == "escape"
         {
             self.cancel_time_cell(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.speaker_rename.is_some()
+            && self.speaker_input.focus_handle(cx).is_focused(window)
+            && keystroke_string(&event.keystroke) == "escape"
+        {
+            self.cancel_speaker_rename(window, cx);
             cx.stop_propagation();
             return;
         }
@@ -858,43 +894,171 @@ impl TranscriptView {
         });
     }
 
-    pub(super) fn press_track_cell(
+    // ---- speaker cell -------------------------------------------------------------------
+
+    /// Click on a row's speaker cell (the press already selected the row): opens the menu of
+    /// project speakers.
+    pub(super) fn open_speaker_menu(
         &mut self,
         segment_id: &str,
-        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_speaker_rename(true, window, cx);
+        self.speaker_menu = Some(SharedString::from(segment_id.to_string()));
+        cx.notify();
+    }
+
+    pub(super) fn close_speaker_menu(&mut self, cx: &mut Context<Self>) {
+        if self.speaker_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn choose_speaker(
+        &mut self,
+        segment_id: &str,
+        speaker_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.speaker_menu = None;
+        self.model.update(cx, |model, cx| {
+            model.edit(cx, |doc| doc.set_segment_speaker(segment_id, speaker_id));
+        });
+        cx.notify();
+    }
+
+    /// `New speaker`: adds the next free `Speaker {n}`, assigns it to the row (one undo step)
+    /// and opens its name for editing.
+    pub(super) fn add_speaker(
+        &mut self,
+        segment_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.speaker_menu = None;
+        let template = localized(cx, "Speaker {n}", "Спикер {n}");
+        let added_status = localized(cx, "Added {speaker}.", "Добавлен {speaker}.");
+        let added = self.model.update(cx, |model, cx| {
+            let mut added = None;
+            model.edit(cx, |doc| {
+                let speaker_id = doc.add_speaker_for_segment(segment_id, template)?;
+                let status = added_status.replace(
+                    "{speaker}",
+                    &doc.project()
+                        .speaker(&speaker_id)
+                        .map(|speaker| speaker.label.clone())
+                        .unwrap_or_default(),
+                );
+                added = Some(speaker_id);
+                Ok(Outcome::status(status))
+            });
+            added
+        });
+        match added {
+            Some(speaker_id) => self.begin_speaker_rename(segment_id, &speaker_id, window, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// `Rename…`: mounts the name editor in the row's speaker cell.
+    pub(super) fn begin_speaker_rename(
+        &mut self,
+        segment_id: &str,
+        speaker_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.speaker_menu = None;
+        self.commit_speaker_rename(true, window, cx);
+        let Some(label) = self
+            .model
+            .read(cx)
+            .doc()
+            .project()
+            .speaker(speaker_id)
+            .map(|speaker| speaker.label.clone())
+        else {
+            cx.notify();
+            return;
+        };
+        self.speaker_rename = Some((
+            SharedString::from(segment_id.to_string()),
+            speaker_id.to_string(),
+        ));
+        self.speaker_input.update(cx, |input, cx| {
+            input.set_value(label, window, cx);
+            input.select_all(window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Enter (`from_blur = false`) or leaving the cell (`true`): applies the typed name to the
+    /// speaker (every row of that speaker follows).
+    fn commit_speaker_rename(
+        &mut self,
+        from_blur: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_, speaker_id)) = self.speaker_rename.take() else {
+            return;
+        };
+        let label = self.speaker_input.read(cx).value().to_string();
+        self.model.update(cx, |model, cx| {
+            model.edit(cx, |doc| doc.rename_speaker(&speaker_id, &label));
+        });
+        if !from_blur {
+            self.focus_handle.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Escape: leaves the cell without renaming.
+    fn cancel_speaker_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.speaker_rename.take().is_none() {
+            return;
+        }
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn on_speaker_input_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.speaker_rename.is_none() {
+            return;
+        }
+        match event {
+            InputEvent::PressEnter { .. } => self.commit_speaker_rename(false, window, cx),
+            InputEvent::Blur => {
+                if !input.focus_handle(cx).is_focused(window) {
+                    self.commit_speaker_rename(true, window, cx);
+                }
+            }
+            InputEvent::Change | InputEvent::Focus => {}
+        }
+    }
+
+    /// Row menu `Split at playhead`: splits the row where the playhead is (rejected outside it).
+    pub(super) fn split_row_at_playhead(
+        &mut self,
+        segment_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.blur_text(window, cx);
         self.model.update(cx, |model, cx| {
-            model.edit(cx, |doc| doc.press_track_cell(segment_id, click_count));
+            model.edit(cx, |doc| {
+                let at_seconds = doc.session().playhead_seconds;
+                doc.split_segment_at(segment_id, at_seconds)
+            });
         });
-        cx.notify();
-    }
-
-    pub(super) fn change_track(
-        &mut self,
-        segment_id: &str,
-        lane_id: &str,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.model.update(cx, |model, cx| {
-            model.edit(cx, |doc| doc.change_segment_track(segment_id, lane_id));
-        });
-        cx.notify();
-    }
-
-    pub(super) fn close_track_picker(
-        &mut self,
-        segment_id: &str,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.model.update(cx, |model, cx| {
-            model.update_doc(cx, |doc| doc.set_track_select_open(segment_id, false));
-        });
-        cx.notify();
     }
 
     pub(super) fn run_row_command(

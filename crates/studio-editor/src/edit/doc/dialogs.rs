@@ -1,6 +1,6 @@
 //! Plain-text add-region dialog lifecycle.
 
-use super::{EditError, EditResult, EditorDoc, Effect, Outcome};
+use super::{EditError, EditResult, EditorDoc, Outcome};
 use crate::edit::create_region::{CreateRegionDialog, CreateRegionTimeField};
 
 impl EditorDoc {
@@ -21,24 +21,12 @@ impl EditorDoc {
         self.create_region.as_mut()
     }
 
-    /// Text of the region; for a drag-created row the row draft follows immediately.
+    /// Text of the region.
     pub fn set_create_region_text(&mut self, value: String) -> Outcome {
-        let Some(dialog) = self.create_region.as_mut() else {
-            return Outcome::none();
-        };
-        dialog.set_text(value.clone());
-        let Some(segment_id) = dialog.created_segment_id.clone() else {
-            return Outcome::none();
-        };
-        let changed = self
-            .drafts
-            .get_mut(&segment_id)
-            .is_some_and(|draft| draft.replace_text_from_user_edit(value));
-        if !changed {
-            return Outcome::none();
+        if let Some(dialog) = self.create_region.as_mut() {
+            dialog.set_text(value);
         }
-        self.touch();
-        Outcome::none().with(Effect::DraftChanged { segment_id })
+        Outcome::none()
     }
 
     /// Enter in a start/end field.
@@ -69,41 +57,13 @@ impl EditorDoc {
         self.create_region = None;
     }
 
-    /// Create (Ctrl/Cmd+Enter): a drag-created transcription row saves its text; otherwise the
-    /// dialog is validated and a new row is created (one undo step) and selected. The dialog
-    /// stays open with errors when invalid.
+    /// Create (Ctrl/Cmd+Enter): the dialog is validated and a new row is created (one undo
+    /// step) and selected. The dialog stays open with errors when invalid.
     pub fn submit_create_region(&mut self) -> EditResult {
         self.guard("Create")?;
         let mut dialog = self.create_region.take().ok_or_else(|| {
             EditError::Unavailable("Create unavailable: no region draft is open.".into())
         })?;
-
-        if let Some(segment_id) = dialog.created_segment_id.clone() {
-            let segment = match self.segment(&segment_id) {
-                Ok(segment) => segment,
-                Err(error) => {
-                    self.create_region = Some(dialog);
-                    return Err(error);
-                }
-            };
-            if segment.text != dialog.text {
-                let text = dialog.text.clone();
-                if let Err(error) = self.apply("Create", |workflow| {
-                    workflow.apply_text_edit(&segment_id, text)
-                }) {
-                    self.create_region = Some(dialog);
-                    return Err(error);
-                }
-            }
-            self.mark_dirty();
-            self.drafts.refresh(self.workflow.project(), &segment_id);
-            self.reconcile(true);
-            let outcome = self.select_segment_without_seek(&segment_id);
-            let status = format!("Saved text for {}.", self.segment_label(&segment_id));
-            return Ok(outcome
-                .with_status(status)
-                .with(Effect::DraftChanged { segment_id }));
-        }
 
         let payload = match dialog.validate_for_submit(self.workflow.project()) {
             Ok(payload) => payload,

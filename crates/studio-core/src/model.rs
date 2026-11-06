@@ -29,6 +29,39 @@ impl Project {
         self.segment(segment_id).is_some()
     }
 
+    pub fn speaker(&self, speaker_id: &str) -> Option<&Speaker> {
+        self.speakers
+            .iter()
+            .find(|speaker| speaker.id == speaker_id)
+    }
+
+    pub fn speaker_mut(&mut self, speaker_id: &str) -> Option<&mut Speaker> {
+        self.speakers
+            .iter_mut()
+            .find(|speaker| speaker.id == speaker_id)
+    }
+
+    /// First unused `speaker-{n}` id, `n` counting from 1.
+    pub fn next_speaker_id(&self) -> String {
+        (1..)
+            .map(|index| format!("speaker-{index}"))
+            .find(|candidate| self.speaker(candidate).is_none())
+            .expect("unbounded speaker id search")
+    }
+
+    /// `template` with `{n}` replaced by the smallest `n >= 1` that no speaker is labelled
+    /// with (`Speaker {n}` → `Speaker 3` when speakers 1 and 2 exist).
+    pub fn next_speaker_label(&self, template: &str) -> String {
+        (1..)
+            .map(|index| template.replace("{n}", &index.to_string()))
+            .find(|candidate| {
+                self.speakers
+                    .iter()
+                    .all(|speaker| speaker.label != *candidate)
+            })
+            .expect("unbounded speaker label search")
+    }
+
     /// Rough estimate of the heap memory this project retains, in bytes.
     ///
     /// Used by [`crate::CommandHistory`] to cap the undo/redo stacks by

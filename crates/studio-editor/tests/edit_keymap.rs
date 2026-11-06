@@ -792,9 +792,11 @@ fn helper_timeline_auto_segmentation_hotkey_routes_outside_inputs() {
 fn helper_cut_preview_overlay_hotkeys_route_only_with_overlay() {
     assert_eq!(
         resolve("s", WORKSPACE),
-        None,
-        "plain S must not fire unless a cut preview overlay is active"
+        Some(EditorAction::SplitAtPlayhead),
+        "plain S splits at the playhead unless a cut preview overlay is active"
     );
+    assert_eq!(resolve("s", TRANSCRIPT_TEXT), None);
+    assert_eq!(resolve("s", INPUT), None);
     assert_eq!(
         resolve("s", CUT_PREVIEW),
         Some(EditorAction::CommitCutPreviewSmartSplit)

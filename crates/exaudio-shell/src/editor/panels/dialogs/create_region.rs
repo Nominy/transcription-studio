@@ -4,7 +4,7 @@ use crate::screens::ui::localized;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Disableable, Sizable, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
 struct RegionDialog {
     model: Entity<EditorModel>,
@@ -86,9 +86,6 @@ impl RegionDialog {
 impl Render for RegionDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.model.read(cx).doc().create_region().cloned();
-        let created = state
-            .as_ref()
-            .is_some_and(|d| d.created_segment_id.is_some());
         let selected = state
             .as_ref()
             .map(|d| d.selected_lane_id.clone())
@@ -102,7 +99,6 @@ impl Render for RegionDialog {
         let model = self.model.clone();
         let tracks = Button::new("region-track")
             .label(selected_label)
-            .disabled(created)
             .dropdown_menu(move |mut menu, _, _| {
                 for lane in &lanes {
                     let model = model.clone();
@@ -132,8 +128,8 @@ impl Render for RegionDialog {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(Input::new(&self.start).disabled(created))
-                    .child(Input::new(&self.end).disabled(created)),
+                    .child(Input::new(&self.start))
+                    .child(Input::new(&self.end)),
             )
             .child(Input::new(&self.text))
             .children(

@@ -241,6 +241,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 label: label.into(),
                 shortcut: shortcut.map(str::to_owned),
                 toolbar: false,
+                menu: true,
                 run: Rc::new(move |shell, window, cx| with_panels(shell, window, cx, action)),
             },
         )?;
@@ -252,6 +253,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: t("Feedback", "Отзыв").into(),
             shortcut: None,
             toolbar: false,
+            menu: true,
             run: Rc::new(|shell, window, cx| {
                 with_panels(shell, window, cx, |panels, _, cx| {
                     panels.toggle_drawer(Drawer::Feedback, cx)
@@ -266,6 +268,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: t("Grade", "Оценить").into(),
             shortcut: None,
             toolbar: false,
+            menu: true,
             run: Rc::new(|shell, window, cx| {
                 with_panels(shell, window, cx, |panels, _, cx| panels.open_grader(cx))
             }),
@@ -278,6 +281,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: t("Edit annotation", "Изменить аннотацию").into(),
             shortcut: None,
             toolbar: false,
+            menu: true,
             run: Rc::new(|shell, window, cx| {
                 shell.dispatch_document_command(
                     "exaudio.babel.edit-annotation",
@@ -395,6 +399,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 label: label.into(),
                 shortcut: None,
                 toolbar: false,
+                menu: true,
                 run: Rc::new(move |shell, _, cx| {
                     if let Some(model) = shell.editor_model(cx) {
                         model.update(cx, |model, cx| {
@@ -419,6 +424,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 ),
                 shortcut: None,
                 toolbar: false,
+                menu: false,
                 run: Rc::new(move |shell, _, cx| {
                     if let Some(model) = shell.editor_model(cx) {
                         let arguments = serde_json::json!({ "digit": digit.to_string() });
@@ -447,6 +453,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             label: t("Dismiss warning", "Скрыть предупреждение").into(),
             shortcut: None,
             toolbar: false,
+            menu: true,
             run: Rc::new(|shell, _, cx| {
                 if let Some(model) = shell.editor_model(cx) {
                     let state = services::document_state(&model, cx);
@@ -484,6 +491,21 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     ] {
         registry.set_command_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
+    // Document commands backed by babel-lint/babel-tags providers exist in every Babel mode,
+    // including local Babel files, and nowhere else.
+    let babel_modes = || vec![ID.to_string(), ERRORS_ID.to_string(), FILE_ID.to_string()];
+    for id in [
+        "exaudio.babel.edit-annotation",
+        "exaudio.babel.autofix-row",
+        "exaudio.babel.autofix-all",
+        "exaudio.babel.skaz-selection",
+        "exaudio.babel.acknowledge-warning",
+    ] {
+        registry.set_command_contexts(id, babel_modes());
+    }
+    for digit in '0'..='9' {
+        registry.set_command_contexts(&format!("exaudio.babel.skaz-digit-{digit}"), babel_modes());
+    }
     for (id, label, start) in [
         (
             "exaudio.babel.relay-start",
@@ -503,6 +525,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 label: label.into(),
                 shortcut: None,
                 toolbar: false,
+                menu: true,
                 run: Rc::new(move |_, _, cx| {
                     let relay = screens::ShellModels::relay(cx);
                     relay.update(cx, |relay, cx| {
@@ -515,7 +538,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 }),
             },
         )?;
-        registry.set_command_contexts(id, Vec::new());
+        registry.set_command_contexts(id, babel_modes());
     }
     registry.on_unload(
         ID,

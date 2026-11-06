@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use exaudio_extension::document::{DocumentEdit, DocumentTransaction};
+use exaudio_gold::number_markup::strip_number_markup;
 use exaudio_gold::polish::{
     AudioTrack, DraftAudioCueStatus, DraftAudioGuard, DraftAudioMode, DraftResult, DraftRow,
     DraftRowPreview, DraftStreamEvent, DraftSummary, DraftingConfig, broker_audio_tracks,
@@ -324,6 +325,11 @@ impl GoldDraftPanel {
 
     fn task_id(&self, cx: &App) -> String {
         self.model.read(cx).doc().project().id.clone()
+    }
+
+    /// Whether this document keeps Babel's `N {СКАЗ: words}` number markup.
+    fn number_markup(&self, cx: &App) -> bool {
+        self.model.read(cx).doc().environment().policy.number_markup
     }
 
     fn status(&self, message: impl Into<SharedString>, cx: &mut App) {
@@ -644,6 +650,7 @@ impl GoldDraftPanel {
         // LLM rows stay verbatim (the A/B that chose the LLM judged its raw output); CTC rows
         // drop word-final ellipses (Gold overlay `runL0Replacement`).
         let llm_text = draft.models["e2e"]["llm"].as_bool() == Some(true);
+        let number_markup = self.number_markup(cx);
         let unknown_track = localized(
             cx,
             "The draft doesn't match the tracks in this project.",
@@ -670,10 +677,13 @@ impl GoldDraftPanel {
                     lane_id: lane.lane_id.clone(),
                     start_seconds: row.start_seconds,
                     end_seconds: row.end_seconds,
-                    text: if llm_text {
-                        row.text
-                    } else {
-                        remove_word_final_ellipsis(&row.text)
+                    text: {
+                        let text = if llm_text {
+                            row.text
+                        } else {
+                            remove_word_final_ellipsis(&row.text)
+                        };
+                        spoken_text(text, number_markup)
                     },
                 })
             })
@@ -812,6 +822,7 @@ impl GoldDraftPanel {
             DraftStreamEvent::Row { row, .. } => project_text(&row.row_id, cx),
             _ => String::new(),
         };
+        let number_markup = self.number_markup(cx);
         let Some(run) = self.run.as_mut() else {
             return;
         };
@@ -827,11 +838,12 @@ impl GoldDraftPanel {
                     .replace("{n}", &total_rows.to_string())
             }
             DraftStreamEvent::Row {
-                row,
+                mut row,
                 completed_rows,
                 total_rows,
                 summary,
             } => {
+                row.rewritten_text = spoken_text(row.rewritten_text, number_markup);
                 let preview = DraftRowPreview {
                     row,
                     original_text: original,
@@ -880,11 +892,14 @@ impl GoldDraftPanel {
             Err(_) => Vec::new(),
         };
         // Refined text drops word-final ellipses (Gold overlay `generateDraftFromCapture`).
+        let number_markup = self.number_markup(cx);
         let rows: Vec<DraftRowPreview> = rows
             .into_iter()
             .map(|mut preview| {
-                preview.row.rewritten_text =
-                    remove_word_final_ellipsis(&preview.row.rewritten_text);
+                preview.row.rewritten_text = spoken_text(
+                    remove_word_final_ellipsis(&preview.row.rewritten_text),
+                    number_markup,
+                );
                 preview
             })
             .collect();
@@ -1166,6 +1181,8 @@ impl GoldDraftPanel {
                 }
                 let outcome = match result {
                     Ok(text) => this.model.update(cx, |model, cx| {
+                        let text =
+                            spoken_text(text, model.doc().environment().policy.number_markup);
                         let result = model.update_doc(cx, |doc| {
                             doc.apply_segment_transcription(&target, None, &text)
                         });
@@ -1324,18 +1341,48 @@ impl GoldDraftPanel {
             .child(h_flex().gap_1().flex_wrap().children(pills))
     }
 
-    fn render_changes(&self, run: &Run, cx: &App) -> Div {
+    /// The Changes list, matching the summary pills: the written rows until a refinement
+    /// result replaces them, then the rewritten/failed rows. `None` when the summary says 0.
+    fn render_changes(&self, run: &Run, cx: &App) -> Option<Div> {
         let theme = cx.theme();
-        let empty_state = |text: &'static str| muted(text, cx);
-        let waiting = localized(
-            cx,
-            "Waiting for the first segment…",
-            "Ожидание первого сегмента…",
-        );
-        let no_changes = localized(cx, "No changes", "Без изменений");
-        let body: AnyElement = match (&run.snapshot, &run.polish) {
-            (None, _) => empty_state(waiting).into_any_element(),
-            (Some(_), None) => empty_state(no_changes).into_any_element(),
+        let snapshot = run.snapshot.as_ref();
+        let polish = run.polish.as_ref().filter(|polish| polish.error.is_none());
+        let changed_status = (localized(cx, "changed", "изменён"), theme.success);
+        let waiting = || {
+            muted(
+                localized(
+                    cx,
+                    "Waiting for the first segment…",
+                    "Ожидание первого сегмента…",
+                ),
+                cx,
+            )
+            .into_any_element()
+        };
+        let body: AnyElement = match (snapshot, polish) {
+            (None, _) => waiting(),
+            // The written draft: every row is new text.
+            (Some(snapshot), None) => {
+                if snapshot.is_empty() {
+                    return None;
+                }
+                v_flex()
+                    .gap_2()
+                    .children(snapshot.iter().take(CHANGES_LIMIT).enumerate().map(
+                        |(index, row)| {
+                            change_card(
+                                (index + 1).to_string(),
+                                changed_status,
+                                false,
+                                None,
+                                &row.text,
+                                &[],
+                                cx,
+                            )
+                        },
+                    ))
+                    .into_any_element()
+            }
             (Some(snapshot), Some(polish)) => {
                 let changed: Vec<&DraftRowPreview> = polish
                     .rows
@@ -1344,14 +1391,15 @@ impl GoldDraftPanel {
                     .take(CHANGES_LIMIT)
                     .collect();
                 if changed.is_empty() {
-                    empty_state(if polish.done || polish.error.is_some() {
-                        no_changes
-                    } else if polish.rows.is_empty() {
-                        waiting
+                    if polish.done {
+                        return None;
+                    }
+                    if polish.rows.is_empty() {
+                        waiting()
                     } else {
-                        localized(cx, "No changes yet", "Пока без изменений")
-                    })
-                    .into_any_element()
+                        muted(localized(cx, "No changes yet", "Пока без изменений"), cx)
+                            .into_any_element()
+                    }
                 } else {
                     v_flex()
                         .gap_2()
@@ -1360,87 +1408,31 @@ impl GoldDraftPanel {
                                 .iter()
                                 .position(|row| row.segment_id == preview.row.row_id)
                                 .map_or_else(|| "?".to_string(), |index| (index + 1).to_string());
-                            let (status_text, status_color) = match preview.row.status.as_str() {
-                                "rewritten" => (localized(cx, "changed", "изменён"), theme.success),
+                            let status = match preview.row.status.as_str() {
+                                "rewritten" => changed_status,
                                 "failed" => (localized(cx, "failed", "не удалось"), theme.danger),
-                                "unchanged" => (
-                                    localized(cx, "unchanged", "без изменений"),
-                                    theme.muted_foreground,
-                                ),
                                 _ => (localized(cx, "pending", "ожидает"), theme.muted_foreground),
                             };
-                            let pane = |label: &'static str, text: &str| {
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_0p5()
-                                    .p_2()
-                                    .rounded(theme.radius)
-                                    .bg(theme.secondary)
-                                    .child(caption(label, cx))
-                                    .child(div().text_sm().child(if text.trim().is_empty() {
-                                        localized(cx, "(empty)", "(пусто)").to_string()
-                                    } else {
-                                        text.to_string()
-                                    }))
-                            };
-                            v_flex()
-                                .gap_1()
-                                .p_2()
-                                .rounded(theme.radius)
-                                .border_1()
-                                .border_color(theme.border)
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(
-                                                    localized(cx, "Segment {i}", "Сегмент {i}")
-                                                        .replace("{i}", &index),
-                                                ),
-                                        )
-                                        .child(badge(status_text, status_color, cx))
-                                        .when(preview.applied, |row| {
-                                            row.child(badge(
-                                                localized(cx, "applied", "применён"),
-                                                theme.success,
-                                                cx,
-                                            ))
-                                        }),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .items_start()
-                                        .child(pane(
-                                            localized(cx, "Before", "До"),
-                                            &preview.original_text,
-                                        ))
-                                        .child(pane(
-                                            localized(cx, "After", "После"),
-                                            &preview.row.rewritten_text,
-                                        )),
-                                )
-                                .when(!preview.row.warnings.is_empty(), |row| {
-                                    row.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.warning)
-                                            .child(preview.row.warnings.join(" · ")),
-                                    )
-                                })
+                            change_card(
+                                index,
+                                status,
+                                preview.applied,
+                                Some(&preview.original_text),
+                                &preview.row.rewritten_text,
+                                &preview.row.warnings,
+                                cx,
+                            )
                         }))
                         .into_any_element()
                 }
             }
         };
-        v_flex()
-            .gap_1()
-            .child(caption(localized(cx, "Changes", "Изменения"), cx))
-            .child(body)
+        Some(
+            v_flex()
+                .gap_1()
+                .child(caption(localized(cx, "Changes", "Изменения"), cx))
+                .child(body),
+        )
     }
 
     fn render_problem(&self, run: &Run, cx: &mut Context<Self>) -> Option<Div> {
@@ -1448,6 +1440,14 @@ impl GoldDraftPanel {
         match &run.phase {
             Phase::Failed(error) if error.kind != InferenceErrorKind::Cancelled => {
                 let setup = error.needs_setup();
+                // The status line above is the title. A known kind's backend message restates
+                // it, so only "Drafting failed" shows the message; otherwise it is a detail.
+                let message = (!error.message.is_empty()).then(|| error.message.clone());
+                let (message, detail) = if error.kind == InferenceErrorKind::Other {
+                    (message, error.detail.clone())
+                } else {
+                    (None, error.detail.clone().or(message))
+                };
                 Some(
                     v_flex()
                         .gap_2()
@@ -1455,17 +1455,10 @@ impl GoldDraftPanel {
                         .rounded(theme.radius)
                         .border_1()
                         .border_color(theme.danger)
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.danger)
-                                .child(error.title(cx)),
-                        )
-                        .when(!error.message.is_empty(), |this| {
-                            this.child(div().text_sm().child(error.message.clone()))
+                        .when_some(message, |this, message| {
+                            this.child(div().text_sm().child(message))
                         })
-                        .when_some(error.detail.clone(), |this, detail| {
+                        .when_some(detail, |this, detail| {
                             this.child(details(detail.into(), cx))
                         })
                         .child(
@@ -1601,8 +1594,11 @@ impl Render for GoldDraftPanel {
             _ => None,
         };
         let problem = self.render_problem(run, cx);
-        let summary = (run.mode == DraftMode::Draft).then(|| self.render_summary(run, cx));
-        let changes = (run.mode == DraftMode::Draft).then(|| self.render_changes(run, cx));
+        // A run that failed before writing anything is the problem card alone.
+        let show_result = run.mode == DraftMode::Draft
+            && (run.snapshot.is_some() || !matches!(run.phase, Phase::Failed(_)));
+        let summary = show_result.then(|| self.render_summary(run, cx));
+        let changes = show_result.then(|| self.render_changes(run, cx)).flatten();
         let notice = run.notice.clone();
         let has_snapshot = run.snapshot.is_some();
         let polish = run.polish.as_ref();
@@ -1835,6 +1831,85 @@ fn same_structure(now: &[RowSnapshot], then: &[RowSnapshot]) -> bool {
                 && now.lane_id == then.lane_id
                 && now.start_seconds == then.start_seconds
                 && now.end_seconds == then.end_seconds
+        })
+}
+
+/// Segment text as the document stores it: Babel keeps `N {СКАЗ: words}`, other documents
+/// get the spoken words.
+fn spoken_text(text: String, number_markup: bool) -> String {
+    if number_markup {
+        text
+    } else {
+        strip_number_markup(&text).into_owned()
+    }
+}
+
+/// One row of the Changes list: `Segment i`, its status, the text (Before/After once a
+/// refinement result exists) and the model's warnings.
+fn change_card(
+    index: String,
+    (status_text, status_color): (&'static str, Hsla),
+    applied: bool,
+    before: Option<&str>,
+    after: &str,
+    warnings: &[String],
+    cx: &App,
+) -> Div {
+    let theme = cx.theme();
+    let pane = |label: &'static str, text: &str| {
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_0p5()
+            .p_2()
+            .rounded(theme.radius)
+            .bg(theme.secondary)
+            .child(caption(label, cx))
+            .child(div().text_sm().child(if text.trim().is_empty() {
+                localized(cx, "(empty)", "(пусто)").to_string()
+            } else {
+                text.to_string()
+            }))
+    };
+    v_flex()
+        .gap_1()
+        .p_2()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            h_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(localized(cx, "Segment {i}", "Сегмент {i}").replace("{i}", &index)),
+                )
+                .child(badge(status_text, status_color, cx))
+                .when(applied, |row| {
+                    row.child(badge(
+                        localized(cx, "applied", "применён"),
+                        theme.success,
+                        cx,
+                    ))
+                }),
+        )
+        .child(match before {
+            Some(before) => h_flex()
+                .gap_2()
+                .items_start()
+                .child(pane(localized(cx, "Before", "До"), before))
+                .child(pane(localized(cx, "After", "После"), after)),
+            None => h_flex().child(pane(localized(cx, "Text", "Текст"), after)),
+        })
+        .when(!warnings.is_empty(), |row| {
+            row.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(warnings.join(" · ")),
+            )
         })
 }
 

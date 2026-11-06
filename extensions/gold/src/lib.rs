@@ -7,6 +7,7 @@
 
 mod backend;
 pub mod bundle;
+pub mod number_markup;
 pub mod polish;
 pub mod prefs;
 pub mod protocol;

@@ -489,28 +489,31 @@ fn create_segment_rejects_unknown_lane() {
 }
 
 #[test]
-fn create_segment_rejects_lane_for_another_speaker() {
+fn create_segment_accepts_any_speaker_on_a_lane() {
     let mut project = sample_project();
     let mut history = CommandHistory::default();
 
-    let result = history.apply(
-        &mut project,
-        EditorCommand::CreateSegment {
-            segment: Segment {
-                id: "segment-3".to_string(),
-                source_annotation_id: None,
-                speaker_id: "speaker-1".to_string(),
-                lane_id: "track-2".to_string(),
-                start_seconds: 4.5,
-                end_seconds: 5.0,
-                text: "wrong lane".to_string(),
-                metadata: Default::default(),
+    history
+        .apply(
+            &mut project,
+            EditorCommand::CreateSegment {
+                segment: Segment {
+                    id: "segment-3".to_string(),
+                    source_annotation_id: None,
+                    speaker_id: "speaker-1".to_string(),
+                    lane_id: "track-2".to_string(),
+                    start_seconds: 4.5,
+                    end_seconds: 5.0,
+                    text: "guest on track two".to_string(),
+                    metadata: Default::default(),
+                },
             },
-        },
-    );
+        )
+        .expect("a speaker may be placed on any lane");
 
-    assert_eq!(result, Err(StudioCoreError::LaneSpeakerMismatch));
-    assert!(!project.has_segment("segment-3"));
+    let segment = project.segment("segment-3").unwrap();
+    assert_eq!(segment.speaker_id, "speaker-1");
+    assert_eq!(segment.lane_id, "track-2");
 }
 
 #[test]
@@ -775,25 +778,156 @@ fn change_segment_speaker_rejects_unknown_lane() {
 }
 
 #[test]
-fn change_segment_speaker_rejects_lane_for_another_speaker() {
+fn change_segment_speaker_keeps_lane_when_speaker_has_another_lane() {
     let mut project = sample_project();
     let mut history = CommandHistory::default();
 
+    history
+        .apply(
+            &mut project,
+            EditorCommand::ChangeSegmentSpeaker {
+                segment_id: "segment-1".to_string(),
+                speaker_id: "speaker-2".to_string(),
+                lane_id: "track-1".to_string(),
+            },
+        )
+        .expect("speaker change should apply on the segment's own lane");
+
+    let segment = project.segment("segment-1").unwrap();
+    assert_eq!(segment.speaker_id, "speaker-2");
+    assert_eq!(segment.lane_id, "track-1");
+}
+
+#[test]
+fn add_speaker_appends_and_rejects_duplicate_id() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::AddSpeaker {
+                speaker: Speaker {
+                    id: "speaker-3".to_string(),
+                    label: "Speaker 3".to_string(),
+                },
+            },
+        )
+        .expect("new speaker should be added");
+    assert_eq!(project.speaker("speaker-3").unwrap().label, "Speaker 3");
+
     let result = history.apply(
         &mut project,
-        EditorCommand::ChangeSegmentSpeaker {
-            segment_id: "segment-1".to_string(),
-            speaker_id: "speaker-2".to_string(),
-            lane_id: "track-1".to_string(),
+        EditorCommand::AddSpeaker {
+            speaker: Speaker {
+                id: "speaker-3".to_string(),
+                label: "Again".to_string(),
+            },
         },
     );
+    assert_eq!(result, Err(StudioCoreError::DuplicateSpeakerId));
+    assert_eq!(project.speakers.len(), 3);
 
-    assert_eq!(result, Err(StudioCoreError::LaneSpeakerMismatch));
+    history.undo(&mut project).expect("undo add");
+    assert!(project.speaker("speaker-3").is_none());
+}
+
+#[test]
+fn rename_speaker_updates_label_for_every_segment_label_lookup() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+
+    history
+        .apply(
+            &mut project,
+            EditorCommand::RenameSpeaker {
+                speaker_id: "speaker-1".to_string(),
+                label: "Alice".to_string(),
+            },
+        )
+        .expect("rename should apply");
+    assert_eq!(project.speaker("speaker-1").unwrap().label, "Alice");
+
+    let result = history.apply(
+        &mut project,
+        EditorCommand::RenameSpeaker {
+            speaker_id: "speaker-missing".to_string(),
+            label: "Nobody".to_string(),
+        },
+    );
+    assert_eq!(result, Err(StudioCoreError::SpeakerNotFound));
+
+    history.undo(&mut project).expect("undo rename");
+    assert_eq!(project.speaker("speaker-1").unwrap().label, "Speaker 1");
+}
+
+#[test]
+fn apply_batch_is_one_undo_step_and_atomic() {
+    let mut project = sample_project();
+    let mut history = CommandHistory::default();
+    let speaker = Speaker {
+        id: project.next_speaker_id(),
+        label: project.next_speaker_label("Speaker {n}"),
+    };
+
+    history
+        .apply_batch_with_policy(
+            &mut project,
+            vec![
+                EditorCommand::AddSpeaker { speaker },
+                EditorCommand::ChangeSegmentSpeaker {
+                    segment_id: "segment-1".to_string(),
+                    speaker_id: "speaker-3".to_string(),
+                    lane_id: "track-1".to_string(),
+                },
+            ],
+            &studio_core::NativeSegmentMutationPolicy,
+        )
+        .expect("batch should apply");
+    assert_eq!(project.speaker("speaker-3").unwrap().label, "Speaker 3");
+    assert_eq!(
+        project.segment("segment-1").unwrap().speaker_id,
+        "speaker-3"
+    );
+
+    history.undo(&mut project).expect("one undo reverts both");
+    assert!(project.speaker("speaker-3").is_none());
     assert_eq!(
         project.segment("segment-1").unwrap().speaker_id,
         "speaker-1"
     );
-    assert_eq!(project.segment("segment-1").unwrap().lane_id, "track-1");
+    assert!(!history.can_undo());
+
+    let result = history.apply_batch_with_policy(
+        &mut project,
+        vec![
+            EditorCommand::AddSpeaker {
+                speaker: Speaker {
+                    id: "speaker-3".to_string(),
+                    label: "Speaker 3".to_string(),
+                },
+            },
+            EditorCommand::ChangeSegmentSpeaker {
+                segment_id: "missing".to_string(),
+                speaker_id: "speaker-3".to_string(),
+                lane_id: "track-1".to_string(),
+            },
+        ],
+        &studio_core::NativeSegmentMutationPolicy,
+    );
+    assert_eq!(result, Err(StudioCoreError::SegmentNotFound));
+    assert!(project.speaker("speaker-3").is_none());
+    assert!(!history.can_undo());
+}
+
+#[test]
+fn next_speaker_label_skips_taken_indexes() {
+    let mut project = sample_project();
+    assert_eq!(project.next_speaker_label("Speaker {n}"), "Speaker 3");
+    assert_eq!(project.next_speaker_label("Спикер {n}"), "Спикер 1");
+    project.speakers.remove(0);
+    assert_eq!(project.next_speaker_label("Speaker {n}"), "Speaker 1");
+    assert_eq!(project.next_speaker_id(), "speaker-1");
 }
 
 #[test]

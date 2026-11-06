@@ -19,6 +19,14 @@ pub struct DocumentPolicy {
     pub region_creation_command: Option<String>,
     /// Registered editor for non-text segments; text segments use the built-in editor.
     pub segment_edit_command: Option<String>,
+    /// Segment text may carry Babel's number markup (`4 {СКАЗ: четыре}`); other documents get
+    /// the spoken words only.
+    #[serde(default)]
+    pub number_markup: bool,
+    /// Each speaker owns one audio lane (Babel speaker tracks): assigning a speaker moves the
+    /// segment to that speaker's lane and speakers cannot be added.
+    #[serde(default)]
+    pub speakers_bound_to_lanes: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

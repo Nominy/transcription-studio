@@ -36,6 +36,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,30 @@ struct ProjectManifest {
     format: String,
     version: u32,
     project: Project,
+    /// Recovery snapshots only: the folder the project was saved to when it was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_path: Option<String>,
+    /// Recovery snapshots only: when the snapshot was written (Unix milliseconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    saved_at_unix_ms: Option<u64>,
+}
+
+/// A recovery snapshot together with where and when it was taken.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoverySnapshot {
+    pub project: Project,
+    /// Folder the project had been saved to when the snapshot was taken, if any.
+    pub native_path: Option<PathBuf>,
+    /// When the snapshot was written. Snapshots without a recorded time use the file's
+    /// modification time.
+    pub saved_at: SystemTime,
+}
+
+/// A recovery snapshot and the recovery root it was read from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoveryEntry {
+    pub root: PathBuf,
+    pub snapshot: RecoverySnapshot,
 }
 
 #[derive(Deserialize)]
@@ -111,29 +136,106 @@ pub fn save_project(
     root: impl AsRef<Path>,
     source_base: impl AsRef<Path>,
 ) -> Result<(), ProjectIoError> {
-    save_document(project, root.as_ref(), source_base.as_ref(), PROJECT_FILE)
+    save_document(
+        project,
+        root.as_ref(),
+        source_base.as_ref(),
+        PROJECT_FILE,
+        None,
+    )
 }
 
 /// Reopen a native project, resolving its checked audio references to absolute paths.
 pub fn load_project(root: impl AsRef<Path>) -> Result<Project, ProjectIoError> {
-    load_document(root.as_ref(), PROJECT_FILE)
+    load_document(root.as_ref(), PROJECT_FILE).map(|manifest| manifest.project)
+}
+
+/// The project name stored in a native folder's manifest, without resolving audio.
+pub fn read_project_name(root: impl AsRef<Path>) -> Result<String, ProjectIoError> {
+    #[derive(Deserialize)]
+    struct NameOnly {
+        project: ProjectName,
+    }
+    #[derive(Deserialize)]
+    struct ProjectName {
+        name: String,
+    }
+    let path = root.as_ref().join(PROJECT_FILE);
+    check_regular_file(&path)?;
+    read_json::<NameOnly>(&path).map(|manifest| manifest.project.name)
 }
 
 /// Atomically replace a recovery snapshot without changing the saved project manifest.
 /// It uses exactly the native project format and shared project-owned audio, not a
-/// platform envelope. A recovery-only folder can be created before the first manual save.
+/// platform envelope, plus the snapshot's save location and time. A recovery-only
+/// folder can be created before the first manual save.
 pub fn save_recovery(
-    project: &Project,
+    snapshot: &RecoverySnapshot,
     root: impl AsRef<Path>,
     source_base: impl AsRef<Path>,
 ) -> Result<(), ProjectIoError> {
-    save_document(project, root.as_ref(), source_base.as_ref(), RECOVERY_FILE)
+    save_document(
+        &snapshot.project,
+        root.as_ref(),
+        source_base.as_ref(),
+        RECOVERY_FILE,
+        Some(snapshot),
+    )
 }
 
 /// Read the neutral recovery snapshot. Missing snapshots return an I/O error; callers
 /// decide whether and when to offer recovery. Reading never changes the saved project.
-pub fn load_recovery(root: impl AsRef<Path>) -> Result<Project, ProjectIoError> {
-    load_document(root.as_ref(), RECOVERY_FILE)
+pub fn load_recovery(root: impl AsRef<Path>) -> Result<RecoverySnapshot, ProjectIoError> {
+    let root = root.as_ref();
+    let manifest = load_document(root, RECOVERY_FILE)?;
+    let saved_at = match manifest.saved_at_unix_ms {
+        Some(ms) => UNIX_EPOCH + Duration::from_millis(ms),
+        None => fs::metadata(root.join(RECOVERY_FILE))
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH),
+    };
+    Ok(RecoverySnapshot {
+        project: manifest.project,
+        native_path: manifest.native_path.map(PathBuf::from),
+        saved_at,
+    })
+}
+
+/// True when the project was saved to its folder after the snapshot was taken: the
+/// manifest already holds everything the snapshot does. Snapshots of never-saved
+/// projects, or whose folder is gone, are never superseded.
+pub fn superseded_by_save(snapshot: &RecoverySnapshot) -> bool {
+    let Some(path) = &snapshot.native_path else {
+        return false;
+    };
+    fs::metadata(path.join(PROJECT_FILE))
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|saved| saved > snapshot.saved_at)
+}
+
+/// Keeps the newest snapshot of each project, newest first, and returns the older
+/// duplicates it supersedes. Snapshots belong to the same project when their IDs match
+/// and they were saved to the same folder; a snapshot taken before the first save
+/// (no folder) is superseded by any newer snapshot of that project.
+pub fn newest_per_project(
+    mut entries: Vec<RecoveryEntry>,
+) -> (Vec<RecoveryEntry>, Vec<RecoveryEntry>) {
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.snapshot.saved_at));
+    let mut kept: Vec<RecoveryEntry> = Vec::new();
+    let mut superseded = Vec::new();
+    for entry in entries {
+        let same_project = |newer: &RecoveryEntry| {
+            newer.snapshot.project.id == entry.snapshot.project.id
+                && (entry.snapshot.native_path.is_none()
+                    || newer.snapshot.native_path == entry.snapshot.native_path)
+        };
+        if kept.iter().any(same_project) {
+            superseded.push(entry);
+        } else {
+            kept.push(entry);
+        }
+    }
+    (kept, superseded)
 }
 
 /// Explicitly import the old unversioned `project.json` + `segments.json` format.
@@ -171,6 +273,7 @@ fn save_document(
     root: &Path,
     source_base: &Path,
     manifest_name: &str,
+    snapshot: Option<&RecoverySnapshot>,
 ) -> Result<(), ProjectIoError> {
     if project
         .segments
@@ -214,10 +317,25 @@ fn save_document(
     sync_directory(&audio_dir).map_err(|e| io_error("sync audio directory", &audio_dir, e))?;
     sync_directory(&root).map_err(|e| io_error("sync project directory", &root, e))?;
 
+    let native_path = match snapshot.and_then(|snapshot| snapshot.native_path.as_deref()) {
+        Some(path) => Some(path_string(path)?),
+        None => None,
+    };
     let manifest = ProjectManifest {
         format: FORMAT.to_string(),
         version: VERSION,
         project: stored,
+        native_path,
+        saved_at_unix_ms: snapshot.map(|snapshot| {
+            u64::try_from(
+                snapshot
+                    .saved_at
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX)
+        }),
     };
     let bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|source| ProjectIoError::EncodeJson { source })?;
@@ -243,7 +361,7 @@ fn save_document(
     Ok(())
 }
 
-fn load_document(root: &Path, manifest_name: &str) -> Result<Project, ProjectIoError> {
+fn load_document(root: &Path, manifest_name: &str) -> Result<ProjectManifest, ProjectIoError> {
     let root = canonical_directory(root)?;
     check_directory(&root.join("audio"))?;
     if manifest_name == RECOVERY_FILE {
@@ -265,7 +383,7 @@ fn load_document(root: &Path, manifest_name: &str) -> Result<Project, ProjectIoE
         check_regular_file(&path)?;
         lane.source_path = path_string(&path)?;
     }
-    Ok(manifest.project)
+    Ok(manifest)
 }
 
 fn read_manifest(path: &Path) -> Result<ProjectManifest, ProjectIoError> {

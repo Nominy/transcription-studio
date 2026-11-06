@@ -12,7 +12,7 @@ fn source(root: &std::path::Path, name: &str) -> PathBuf {
 }
 
 #[test]
-fn same_basename_sources_become_distinct_lanes_with_usable_initial_segments() {
+fn same_basename_sources_become_distinct_lanes_without_segments() {
     let temp = tempfile::tempdir().unwrap();
     let paths = [
         source(temp.path(), "first/voice.wav"),
@@ -24,6 +24,12 @@ fn same_basename_sources_become_distinct_lanes_with_usable_initial_segments() {
         imported.project.lanes[0].source_path,
         imported.project.lanes[1].source_path
     );
+    assert_eq!(imported.project.lanes.len(), 2);
+    assert_eq!(imported.project.speakers.len(), 2);
+    assert!(
+        imported.project.segments.is_empty(),
+        "opening audio starts with an empty transcript; the user draws or drafts segments"
+    );
     for (lane_id, decoded) in &imported.audio {
         let lane = imported
             .project
@@ -31,17 +37,15 @@ fn same_basename_sources_become_distinct_lanes_with_usable_initial_segments() {
             .iter()
             .find(|lane| &lane.id == lane_id)
             .unwrap();
-        let segment = imported
-            .project
-            .segments
-            .iter()
-            .find(|segment| &segment.lane_id == lane_id)
-            .unwrap();
-        assert_eq!(segment.speaker_id, lane.speaker_id);
-        assert_eq!(segment.start_seconds, 0.0);
-        assert_eq!(segment.end_seconds, decoded.audio.duration());
+        assert!(
+            imported
+                .project
+                .speakers
+                .iter()
+                .any(|speaker| speaker.id == lane.speaker_id)
+        );
+        assert!(decoded.audio.duration() > 0.0);
         assert_eq!(decoded.path, PathBuf::from(&lane.source_path));
-        assert!(segment.text.is_empty());
         assert_eq!(fs::read(&decoded.path).unwrap(), TONE);
     }
     assert!(
@@ -51,7 +55,7 @@ fn same_basename_sources_become_distinct_lanes_with_usable_initial_segments() {
 }
 
 #[test]
-fn duplicate_selected_file_does_not_create_duplicate_speech() {
+fn duplicate_selected_file_does_not_create_duplicate_lane() {
     let temp = tempfile::tempdir().unwrap();
     let path = source(temp.path(), "voice.wav");
     let mut completed = Vec::new();
@@ -66,10 +70,8 @@ fn duplicate_selected_file_does_not_create_duplicate_speech() {
     .unwrap();
     assert_eq!(completed, [(0, 1), (1, 1)]);
     assert_eq!(imported.project.lanes.len(), 1);
-    assert_eq!(
-        imported.project.segments[0].lane_id,
-        imported.project.lanes[0].id
-    );
+    assert_eq!(imported.audio.len(), 1);
+    assert_eq!(imported.audio[0].0, imported.project.lanes[0].id);
 }
 
 #[test]
