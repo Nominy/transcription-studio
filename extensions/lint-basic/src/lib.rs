@@ -6,7 +6,7 @@
 //! repeated expressive marks and stutters are deliberately not checked.
 //! Timing and empty-text findings never offer destructive or speculative fixes.
 
-use sonus_extension::{
+use exaudio_extension::{
     document::{
         Diagnostic, DiagnosticCollection, DiagnosticProvider, DocumentEdit, DocumentProviders,
         QuickFix, Severity, TextRange,
@@ -19,7 +19,7 @@ use std::{
 };
 use studio_core::{Project, Segment};
 
-pub const ID: &str = "sonus.lint-basic";
+pub const ID: &str = "exaudio.lint-basic";
 pub const MANIFEST_JSON: &str = include_str!("../manifest.json");
 
 pub fn manifest() -> Result<ExtensionManifest, serde_json::Error> {

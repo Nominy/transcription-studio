@@ -22,7 +22,7 @@ impl BabelAnnotationDialogs {
         ));
     }
 
-    /// Target of the shell's `sonus.babel.open-create-region` range command.
+    /// Target of the shell's `exaudio.babel.open-create-region` range command.
     pub fn open_create_region_command(
         &mut self,
         doc: &EditorDoc,

@@ -7,13 +7,13 @@ pub use actions::{
     TranscriptActionCommand, TranscriptActionMenuEntry, TranscriptTrackOptionView,
     build_transcript_track_options, selected_track_option,
 };
+use exaudio_extension::document::{Decoration, Diagnostic, DiagnosticCollection, Severity};
 pub use row_availability::compute_row_availability;
-use sonus_extension::document::{Decoration, Diagnostic, DiagnosticCollection, Severity};
 use std::collections::BTreeSet;
 use studio_core::Project;
 pub use time::format_mm_ss;
 /// Neutral, versioned display payload. Metadata interpretation belongs to its provider.
-pub const TRANSCRIPT_ROW_DECORATION: &str = "sonus.transcript.row.v1";
+pub const TRANSCRIPT_ROW_DECORATION: &str = "exaudio.transcript.row.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptAnnotationKind {

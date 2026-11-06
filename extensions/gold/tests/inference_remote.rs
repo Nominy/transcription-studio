@@ -15,11 +15,11 @@ use axum::{
     routing::{get, post},
 };
 use bytes::Bytes;
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use sonus_gold::remote::{
+use exaudio_gold::remote::{
     GOLD_E2E_RELEASE, GOLD_ENHANCEMENT_MODEL, RemoteBackend, RemoteConfig, TimingTokenStore,
 };
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use studio_inference::{
     AlignRequest, BackendStatus, InferenceBackend, InferenceErrorKind, InferenceProgress,
     LaneAudio, PreservedRow, ProgressSink,
@@ -763,7 +763,7 @@ async fn align_uploads_one_clip_with_a_fresh_owner() {
 async fn live_coordinator_negotiates_the_pinned_release() {
     let tokens = tempfile::tempdir().unwrap();
     let backend = |release: &str| {
-        let mut config = RemoteConfig::new(sonus_gold::prefs::PUBLIC_INFERENCE_BASE_URL, None);
+        let mut config = RemoteConfig::new(exaudio_gold::prefs::PUBLIC_INFERENCE_BASE_URL, None);
         config.release = release.to_string();
         RemoteBackend::new(
             config,

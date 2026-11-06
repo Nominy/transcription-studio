@@ -3,8 +3,8 @@ use time::OffsetDateTime;
 
 use crate::editor_model::submit_control::AdminFlagPayload;
 use anyhow::{Context, Result};
+use exaudio_babel_lint::linter::{LintSeverity, ServerLintIssue};
 use serde_json::{Value, json};
-use sonus_babel_lint::linter::{LintSeverity, ServerLintIssue};
 use studio_babel::{META_REVIEW_ACTION_DECISION, export_json, import_json};
 use studio_core::{EditorCommand, Project, Segment, SegmentMutationPolicy};
 
@@ -342,7 +342,7 @@ struct LowConfidenceAcknowledgements {
     words: BTreeMap<String, std::collections::BTreeSet<usize>>,
 }
 
-impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandProvider {
+impl exaudio_extension::document::CommandProvider for BabelLowConfidenceCommandProvider {
     fn command_ids(&self) -> &[&str] {
         &["babel.acknowledge-low-confidence-word"]
     }
@@ -350,9 +350,9 @@ impl sonus_extension::document::CommandProvider for BabelLowConfidenceCommandPro
     fn execute(
         &self,
         command: &str,
-        request: &sonus_extension::document::CommandRequest<'_>,
-    ) -> std::result::Result<sonus_extension::document::CommandOutcome, String> {
-        use sonus_extension::document::{CommandOutcome, DocumentEdit, DocumentTransaction};
+        request: &exaudio_extension::document::CommandRequest<'_>,
+    ) -> std::result::Result<exaudio_extension::document::CommandOutcome, String> {
+        use exaudio_extension::document::{CommandOutcome, DocumentEdit, DocumentTransaction};
 
         if command != "babel.acknowledge-low-confidence-word" {
             return Err(format!("Unknown Babel review command {command}."));

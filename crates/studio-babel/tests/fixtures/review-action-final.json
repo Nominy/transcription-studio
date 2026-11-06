@@ -365,8 +365,8 @@
           ],
           "lintErrors": [],
           "processedRecordingUriMap": {
-            "7a54b1cc-d57a-52b2-a2a6-d00ab89ab96b": "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav",
-            "cc369471-bbd7-543f-881e-c4738c76215d": "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/4833cfdc-8e84-5f58-b342-71cd7fab8d60.wav"
+            "7a54b1cc-d57a-52b2-a2a6-d00ab89ab96b": "s3://exaudio-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav",
+            "cc369471-bbd7-543f-881e-c4738c76215d": "s3://exaudio-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/4833cfdc-8e84-5f58-b342-71cd7fab8d60.wav"
           },
           "transcriptionChunkProcessedRecordings": [
             {

@@ -1,8 +1,8 @@
 //! Typed Reviewer/Drafting backend responses and their parsers.
 
 use anyhow::{Context, Result, anyhow, bail};
+use exaudio_babel_domain::i18n::localized;
 use serde_json::{Value, json};
-use sonus_babel_domain::i18n::localized;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReviewerTemplate {

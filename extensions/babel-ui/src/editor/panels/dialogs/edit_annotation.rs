@@ -1,20 +1,20 @@
 //! Add/Edit Annotation dialog for an annotation row (categories + intensity).
 
+use exaudio_babel_domain::edit::annotation::EditAnnotationDialog;
+use exaudio_babel_domain::edit::create_region::{
+    OTHER_CATEGORY, intensity_label, primary_category_options, secondary_category_options,
+};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::edit::annotation::EditAnnotationDialog;
-use sonus_babel_domain::edit::create_region::{
-    OTHER_CATEGORY, intensity_label, primary_category_options, secondary_category_options,
-};
 
 use super::create_region::{category_choices, intensity_picker, update_dialog_state};
 use crate::services::document_dialogs;
 use crate::text::localized;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{
     choice, dialog_footer, dialog_header, error_text, field, primary_button,
 };
 

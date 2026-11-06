@@ -1,8 +1,8 @@
 # Extension index tooling and marketplace backend
 
-`sonus-marketplace` implements schema validation, GitHub transport/cache, dependency
+`exaudio-marketplace` implements schema validation, GitHub transport/cache, dependency
 plans, permission consent boundaries, and a transactional WASM-only installation store.
-`sonus-extension-index` is the real validation/inspection/install CLI. Neither executes
+`exaudio-extension-index` is the real validation/inspection/install CLI. Neither executes
 repository source or build scripts. There is no default public catalog URL until an
 actual reviewed index is published; the host supplies an explicit GitHub raw URL.
 
@@ -40,34 +40,34 @@ before tagging; if initially absent, CI records its actual generated lockfile in
 
 ## Workspace and commands
 
-Workspace members: `crates/sonus-marketplace`, `tools/extension-index`.
-Workspace dependency: `sonus-marketplace = { path = "crates/sonus-marketplace" }`.
+Workspace members: `crates/exaudio-marketplace`, `tools/extension-index`.
+Workspace dependency: `exaudio-marketplace = { path = "crates/exaudio-marketplace" }`.
 The crates declare their own semver, sha2, zip and fs2 dependencies and reuse shared
-sonus-extension, reqwest, serde, serde_json, thiserror, tempfile, tokio and url dependencies.
+exaudio-extension, reqwest, serde, serde_json, thiserror, tempfile, tokio and url dependencies.
 
 Run from the Exaudio repository (replace uppercase arguments with real files/identities):
 
 ```text
-cargo run -p sonus-extension-index -- validate-index tools/extension-index/template/index.json
-cargo run -p sonus-extension-index -- init-index NEW_LOCAL_INDEX_DIRECTORY
-cargo run -p sonus-extension-index -- init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT NEW_AUTHOR_DIRECTORY
-cargo run -p sonus-extension-index -- inspect INDEX.json QUERY
-cargo run -p sonus-extension-index -- pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE
-cargo run -p sonus-extension-index -- validate-index PROPOSED.json PREVIOUS.json
-cargo run -p sonus-extension-index -- release-entry OWNER REPO manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
-cargo run -p sonus-extension-index -- validate-package INDEX.json ID VERSION PACKAGE.exaudio
-cargo run -p sonus-extension-index -- fetch RAW_GITHUB_URL CACHE.json
-cargo run -p sonus-extension-index -- fetch RAW_GITHUB_URL CACHE.json --offline
-cargo run -p sonus-extension-index -- plan-release INDEX.json ID VERSION STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- plan-mode INDEX.json ID VERSION MODE STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- install INDEX.json SELECTION.json STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- install-release RAW_GITHUB_URL CACHE.json SELECTION.json STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- preview-developer PACKAGE.exaudio
-cargo run -p sonus-extension-index -- install-developer INDEX.json PACKAGE.exaudio APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
-cargo run -p sonus-extension-index -- disable ID STORE HOST.json
-cargo run -p sonus-extension-index -- enable INDEX.json ID STORE HOST.json
-cargo run -p sonus-extension-index -- uninstall ID STORE HOST.json
-cargo run -p sonus-extension-index -- rollback INDEX.json STORE HOST.json
+cargo run -p exaudio-extension-index -- validate-index tools/extension-index/template/index.json
+cargo run -p exaudio-extension-index -- init-index NEW_LOCAL_INDEX_DIRECTORY
+cargo run -p exaudio-extension-index -- init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT NEW_AUTHOR_DIRECTORY
+cargo run -p exaudio-extension-index -- inspect INDEX.json QUERY
+cargo run -p exaudio-extension-index -- pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE
+cargo run -p exaudio-extension-index -- validate-index PROPOSED.json PREVIOUS.json
+cargo run -p exaudio-extension-index -- release-entry OWNER REPO manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
+cargo run -p exaudio-extension-index -- validate-package INDEX.json ID VERSION PACKAGE.exaudio
+cargo run -p exaudio-extension-index -- fetch RAW_GITHUB_URL CACHE.json
+cargo run -p exaudio-extension-index -- fetch RAW_GITHUB_URL CACHE.json --offline
+cargo run -p exaudio-extension-index -- plan-release INDEX.json ID VERSION STORE HOST.json GRANTS.json
+cargo run -p exaudio-extension-index -- plan-mode INDEX.json ID VERSION MODE STORE HOST.json GRANTS.json
+cargo run -p exaudio-extension-index -- install INDEX.json SELECTION.json STORE HOST.json GRANTS.json
+cargo run -p exaudio-extension-index -- install-release RAW_GITHUB_URL CACHE.json SELECTION.json STORE HOST.json GRANTS.json
+cargo run -p exaudio-extension-index -- preview-developer PACKAGE.exaudio
+cargo run -p exaudio-extension-index -- install-developer INDEX.json PACKAGE.exaudio APPROVED_SHA256 DEPENDENCIES.json STORE HOST.json GRANTS.json
+cargo run -p exaudio-extension-index -- disable ID STORE HOST.json
+cargo run -p exaudio-extension-index -- enable INDEX.json ID STORE HOST.json
+cargo run -p exaudio-extension-index -- uninstall ID STORE HOST.json
+cargo run -p exaudio-extension-index -- rollback INDEX.json STORE HOST.json
 ```
 
 `SELECTION.json` and `DEPENDENCIES.json` are arrays of objects with `id`, exact `version`
@@ -109,7 +109,7 @@ Run long smoke/build jobs under the project's durable psmux/logging policy.
    any persisted component: it checks enabled built-in dependencies, grants, pinned archive
    integrity and exact extracted-file equality without requiring the network. `host.builtins`
    must exclude disabled native extensions. `state()` alone is inventory, not this integrity gate.
-3. `plan_mode`, `plan_release`, and `plan_developer` invoke the shared sonus-extension
+3. `plan_mode`, `plan_release`, and `plan_developer` invoke the shared exaudio-extension
    resolver. They produce exact release selections, install/update/keep changes, required-by
    reasons, unapproved permission requests and dependency/API/active-document blockers.
    Recommended extensions are not silently installed. The host supplies built-in manifests
@@ -152,7 +152,7 @@ rollback are host/WASM-shell responsibilities, not hidden marketplace build hook
 ## Verification and smoke expectations
 
 No commands in this document imply that verification has already run. Main integration
-should run `cargo nextest run -p sonus-marketplace` and check the CLI crate once all siblings land.
+should run `cargo nextest run -p exaudio-marketplace` and check the CLI crate once all siblings land.
 Tests include traversal/absolute/drive paths, special filenames, symlinks, native payloads,
 expansion limits, incorrect digests/manifests, invalid origins/schema/history, local HTTP
 fetch and offline fallback, atomic multi-dependency failure, permission/source approval,

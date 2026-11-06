@@ -1,21 +1,21 @@
 //! One `BabelController` per (mode, account): it owns the account's client and keeps the
 //! dashboard alive while the shell shows an editor. Credentials live in the account's
-//! directory (see `sonus_babel_services::account`); the shell decides which account a mode
+//! directory (see `exaudio_babel_services::account`); the shell decides which account a mode
 //! launches with.
 use std::{collections::BTreeMap, path::PathBuf, rc::Rc};
 
-use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme, WindowExt as _};
-use gpui_kit::*;
-use sonus_babel_domain::route::StartupRoute;
-use sonus_babel_services::account::{AccountStatus, AccountStore};
-use sonus_babel_services::babel::{BabelClient, LoadedTask};
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::screens::ui;
-use sonus_shell::{
+use exaudio_babel_domain::route::StartupRoute;
+use exaudio_babel_services::account::{AccountStatus, AccountStore};
+use exaudio_babel_services::babel::{BabelClient, LoadedTask};
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::screens::ui;
+use exaudio_shell::{
     DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ProviderInstance, ProviderRegistry,
     ProviderStatus, ShellHandle,
 };
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, WindowExt as _};
+use gpui_kit::*;
 use studio_editor::workflow::StudioWorkflow;
 
 use crate::screens::error_task::{ErrorTaskEvent, ErrorTaskOpen, ErrorTaskScreen};
@@ -53,7 +53,7 @@ impl DashboardFilter {
         }
     }
 
-    pub fn accepts(self, project: &sonus_babel_services::babel::DashboardProject) -> bool {
+    pub fn accepts(self, project: &exaudio_babel_services::babel::DashboardProject) -> bool {
         match self {
             Self::Transcription => !project.is_error_categorization(),
             Self::ErrorReview => project.is_error_categorization(),
@@ -85,7 +85,7 @@ pub fn controller_for_mode(mode_id: &str, cx: &App) -> Option<Entity<BabelContro
 
 /// The account directory of a provider instance.
 pub fn account_store(instance: &ProviderInstance) -> AccountStore {
-    AccountStore::new(sonus_shell::providers::instance_dir(instance))
+    AccountStore::new(exaudio_shell::providers::instance_dir(instance))
 }
 
 /// Provider status: credentials present and usable.
@@ -125,8 +125,8 @@ pub fn sign_out_instance(instance: &ProviderInstance, cx: &mut App) {
 /// registry does not know (a portable install moved to another machine). Never changes
 /// the selection of accounts the registry already has.
 pub fn rediscover_accounts(cx: &mut App) {
-    let provider_dir = sonus_shell::providers::providers_root().join(PROVIDER_ID);
-    let records = sonus_babel_services::account::discover_records(&provider_dir);
+    let provider_dir = exaudio_shell::providers::providers_root().join(PROVIDER_ID);
+    let records = exaudio_babel_services::account::discover_records(&provider_dir);
     if records.is_empty() {
         return;
     }
@@ -175,7 +175,7 @@ pub fn sign_in_again(
 
 /// Reloads a remote task using the client captured when this document was opened.
 pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut App) {
-    use sonus_babel_services::babel::{
+    use exaudio_babel_services::babel::{
         OpenedTask, TaskRequest, review_action_id, route_metadata_from_project,
     };
     let origin = model.read(cx).origin().clone();
@@ -211,7 +211,7 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
     controller.update(cx, |controller, cx| {
         let request = TaskRequest::ReviewAction { review_action_id };
         let transport = client.clone();
-        controller.reload = Some(sonus_shell::services::spawn_service_in(
+        controller.reload = Some(exaudio_shell::services::spawn_service_in(
             window,
             cx,
             async move { transport.open_task(&request, metadata).await },
@@ -477,8 +477,11 @@ impl BabelController {
     ) -> anyhow::Result<Entity<EditorModel>> {
         self.leave_task(cx);
         let project = workflow.into_project();
-        let document =
-            sonus_babel_domain::document_environment(&project, project.id.clone(), &self.mode_id)?;
+        let document = exaudio_babel_domain::document_environment(
+            &project,
+            project.id.clone(),
+            &self.mode_id,
+        )?;
         let origin = DocumentOrigin {
             mode_id: self.mode_id.clone(),
             instance: Some(self.instance.clone()),

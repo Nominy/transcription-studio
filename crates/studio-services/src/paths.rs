@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-const DEFAULT_APP_SUPPORT_DIR_NAME: &str = "Transcription Studio";
+const DEFAULT_APP_SUPPORT_DIR_NAME: &str = "Exaudio";
 
-/// `%APPDATA%/Transcription Studio`, `~/Library/Application Support/Transcription Studio`
-/// on macOS, or `$XDG_CONFIG_HOME|~/.config/Transcription Studio` elsewhere.
+/// `%APPDATA%/Exaudio`, `~/Library/Application Support/Exaudio`
+/// on macOS, or `$XDG_CONFIG_HOME|~/.config/Exaudio` elsewhere.
 pub fn app_support_dir() -> PathBuf {
     app_support_dir_named(DEFAULT_APP_SUPPORT_DIR_NAME)
 }
@@ -74,7 +74,7 @@ mod tests {
                 None,
                 None
             ),
-            PathBuf::from(r"C:\Users\me\AppData\Roaming").join("Transcription Studio")
+            PathBuf::from(r"C:\Users\me\AppData\Roaming").join("Exaudio")
         );
     }
 
@@ -85,7 +85,7 @@ mod tests {
             PathBuf::from("/Users/me")
                 .join("Library")
                 .join("Application Support")
-                .join("Transcription Studio")
+                .join("Exaudio")
         );
     }
 
@@ -99,7 +99,7 @@ mod tests {
                 Some("/home/me/.config"),
                 Some("/home/me")
             ),
-            PathBuf::from("/home/me/.config").join("Transcription Studio")
+            PathBuf::from("/home/me/.config").join("Exaudio")
         );
     }
 
@@ -107,9 +107,7 @@ mod tests {
     fn falls_back_to_home_config_outside_macos() {
         assert_eq!(
             app_support_dir_for_env(NAME, "linux", None, None, Some("/home/me")),
-            PathBuf::from("/home/me")
-                .join(".config")
-                .join("Transcription Studio")
+            PathBuf::from("/home/me").join(".config").join("Exaudio")
         );
     }
 

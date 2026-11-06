@@ -1,4 +1,4 @@
-use sonus_sdk::{Guest, ProviderHandler, host, types::*};
+use exaudio_sdk::{Guest, ProviderHandler, host, types::*};
 use std::cell::RefCell;
 
 const ACCOUNT: &str = "example.hello.account";
@@ -93,17 +93,17 @@ fn finish_sign_in() -> Result<(), String> {
     }
     let instance = ProviderInstance {
         provider: ACCOUNT.into(),
-        id: sonus_sdk::instance_id(&name),
+        id: exaudio_sdk::instance_id(&name),
         label: name.clone(),
     };
-    sonus_sdk::instance_secret_set(&instance, NAME_SECRET, Some(&name))?;
+    exaudio_sdk::instance_secret_set(&instance, NAME_SECRET, Some(&name))?;
     SETUP.with(|setup| setup.borrow_mut().take());
-    sonus_sdk::provider_setup_done(ACCOUNT, request_id, &instance.id, &name)
+    exaudio_sdk::provider_setup_done(ACCOUNT, request_id, &instance.id, &name)
 }
 
 fn open_notes(request_id: u64, instance: Option<ProviderInstance>) -> Result<(), String> {
     let instance = instance.ok_or("Hello notes needs a Hello account")?;
-    let name = sonus_sdk::instance_secret_get(&instance, NAME_SECRET)?
+    let name = exaudio_sdk::instance_secret_get(&instance, NAME_SECRET)?
         .ok_or("This account is signed out; sign in again")?;
     host::publish_mode_document(&ModeDocument {
         mode: NOTES.into(),
@@ -163,17 +163,17 @@ impl ProviderHandler for HelloPanel {
         Ok(())
     }
     fn on_provider_status(instance: ProviderInstance) -> Result<(), String> {
-        match sonus_sdk::instance_secret_get(&instance, NAME_SECRET)? {
-            Some(name) => sonus_sdk::publish_status(
+        match exaudio_sdk::instance_secret_get(&instance, NAME_SECRET)? {
+            Some(name) => exaudio_sdk::publish_status(
                 &instance,
                 ProviderState::Ready,
                 &format!("Signed in as {name}"),
             ),
-            None => sonus_sdk::publish_status(&instance, ProviderState::NeedsSignIn, ""),
+            None => exaudio_sdk::publish_status(&instance, ProviderState::NeedsSignIn, ""),
         }
     }
     fn on_provider_sign_out(instance: ProviderInstance) -> Result<(), String> {
-        sonus_sdk::instance_secret_set(&instance, NAME_SECRET, None)
+        exaudio_sdk::instance_secret_set(&instance, NAME_SECRET, None)
     }
 }
 
@@ -213,7 +213,7 @@ impl Guest for HelloPanel {
                 title: id.into(),
             })?;
         }
-        sonus_sdk::command_panel(
+        exaudio_sdk::command_panel(
             "insert-greeting",
             "hello-panel",
             "Hello from an extension",
@@ -229,8 +229,8 @@ impl Guest for HelloPanel {
             kind: ContributionKind::Event,
             title: "Refresh empty-segment hints".into(),
         })?;
-        sonus_sdk::register_provider(ACCOUNT, "Hello account")?;
-        sonus_sdk::register_mode(NOTES, "Hello notes")
+        exaudio_sdk::register_provider(ACCOUNT, "Hello account")?;
+        exaudio_sdk::register_mode(NOTES, "Hello notes")
     }
     fn deactivate() {
         // The host removes every owned contribution, even if a guest traps here.
@@ -255,11 +255,11 @@ impl Guest for HelloPanel {
         let id = value.document_id.ok_or("open a document first")?;
         let document = host::snapshot(&id)?;
         let edits = if let Some(segment) = document.segments.first() {
-            sonus_sdk::insert_text(
+            exaudio_sdk::insert_text(
                 &document,
                 &segment.id,
                 0,
-                "Hello from Sonus! ".into(),
+                "Hello from Exaudio! ".into(),
                 "Insert greeting".into(),
             )?
         } else {
@@ -277,7 +277,7 @@ impl Guest for HelloPanel {
                     speaker_id: lane.speaker_id.clone(),
                     start_ms: 0,
                     end_ms: 1000,
-                    text: "Hello from Sonus! ".into(),
+                    text: "Hello from Exaudio! ".into(),
                     metadata: Vec::new(),
                 })],
             }
@@ -315,7 +315,7 @@ impl Guest for HelloPanel {
         }
     }
     fn on_event(value: Event) -> Result<(), String> {
-        if let Some(result) = sonus_sdk::provider_event::<Self>(&value) {
+        if let Some(result) = exaudio_sdk::provider_event::<Self>(&value) {
             return result;
         }
         match value {
@@ -330,4 +330,4 @@ impl Guest for HelloPanel {
     }
 }
 
-sonus_sdk::bindings::export!(HelloPanel with_types_in sonus_sdk::bindings);
+exaudio_sdk::bindings::export!(HelloPanel with_types_in exaudio_sdk::bindings);

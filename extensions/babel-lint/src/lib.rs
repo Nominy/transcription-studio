@@ -5,19 +5,19 @@ pub mod project_lint_tag_config;
 
 use std::sync::Arc;
 
+use exaudio_extension::document::{
+    Diagnostic, DiagnosticCollection, DiagnosticProvider, DocumentProviders, Severity,
+};
 use linter::{
     LintKind, LintSeverity, ProjectLintAnalysis, ServerLintSnapshot,
     combine_server_and_local_issues, server_lint_issues_for_segment,
 };
-use sonus_extension::document::{
-    Diagnostic, DiagnosticCollection, DiagnosticProvider, DocumentProviders, Severity,
-};
 use studio_core::Project;
 
-pub const ID: &str = "sonus.babel-lint";
+pub const ID: &str = "exaudio.babel-lint";
 pub const MANIFEST_JSON: &str = include_str!("../manifest.json");
 
-pub fn manifest() -> Result<sonus_extension::manifest::ExtensionManifest, serde_json::Error> {
+pub fn manifest() -> Result<exaudio_extension::manifest::ExtensionManifest, serde_json::Error> {
     serde_json::from_str(MANIFEST_JSON)
 }
 

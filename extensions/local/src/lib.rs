@@ -11,18 +11,18 @@ use std::{
     },
 };
 
+use exaudio_extension::ExtensionManifest;
+use exaudio_shell::screens::ui::{self, localized};
+use exaudio_shell::screens::{local_files, recovery};
+use exaudio_shell::{
+    ContributionRegistry, DocumentOrigin, ModeContribution, ProviderEnvironment, ShellHandle,
+};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
-use sonus_extension::ExtensionManifest;
-use sonus_shell::screens::ui::{self, localized};
-use sonus_shell::screens::{local_files, recovery};
-use sonus_shell::{
-    ContributionRegistry, DocumentOrigin, ModeContribution, ProviderEnvironment, ShellHandle,
-};
 
-pub const ID: &str = "sonus.local";
+pub const ID: &str = "exaudio.local";
 
 pub fn manifest() -> Result<ExtensionManifest, serde_json::Error> {
     serde_json::from_str(include_str!("../manifest.json"))
@@ -234,7 +234,7 @@ impl Render for LocalHome {
         let recent = local_files::recent(cx);
         v_flex()
             .size_full()
-            .id("sonus-local")
+            .id("exaudio-local")
             .overflow_y_scroll()
             .p_8()
             .gap_4()
@@ -276,7 +276,7 @@ impl Render for LocalHome {
                                 .disabled(self.busy)
                                 .on_click(move |_, window, cx| {
                                     if let Err(error) =
-                                        sonus_shell::root::open_demo(&demo, window, cx)
+                                        exaudio_shell::root::open_demo(&demo, window, cx)
                                     {
                                         window.push_notification(
                                             Notification::error(error.to_string()),

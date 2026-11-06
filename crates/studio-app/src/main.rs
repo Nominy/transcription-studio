@@ -7,9 +7,9 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     studio_services::updater::run_startup_hooks();
     #[cfg(feature = "babel")]
-    if let Some(code) = sonus_babel_services::auth::cli::run_from_args(std::env::args()) {
+    if let Some(code) = exaudio_babel_services::auth::cli::run_from_args(std::env::args()) {
         return code;
     }
-    sonus_shell::app::run(bundled::register);
+    exaudio_shell::app::run(bundled::register);
     ExitCode::SUCCESS
 }

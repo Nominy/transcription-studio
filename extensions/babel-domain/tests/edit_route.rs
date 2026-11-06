@@ -1,13 +1,13 @@
 //! Startup route parsing, project metadata entries and load plan (ported from the iced app's
 //! startup_route.rs behavior tests).
 
-use sonus_babel_domain::route::{
+use exaudio_babel_domain::route::{
     META_ACTIVE_QUEUE_ID, META_CHUNKED_QUEUE_ID, META_DISPLAY_FEEDBACK, META_FEEDBACK_INITIAL_OPEN,
     META_REVIEW_ACTION_ID, META_STITCHED_QUEUE_ID, META_TASK_LOOKUP_OPEN,
     META_TASK_LOOKUP_PROCESSED_ID, META_TASK_LOOKUP_REVIEW_ACTION_ID,
     META_TASK_LOOKUP_SHOW_STITCHED, normalize_key,
 };
-use sonus_babel_domain::route::{RouteLoad, StartupRoute};
+use exaudio_babel_domain::route::{RouteLoad, StartupRoute};
 
 fn entry(key: &str, value: &str) -> (String, String) {
     (key.to_string(), value.to_string())

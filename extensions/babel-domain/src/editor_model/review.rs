@@ -2,11 +2,11 @@ use super::submit_control::SubmitBlocker;
 use super::{EditorSession, EditorSessionView};
 use crate::babel_metadata::project_is_babel_backed;
 use crate::i18n::{count, localized_fmt};
-use sonus_babel_lint::linter::{
+use exaudio_babel_lint::linter::{
     LintSeverity, ServerLintIssue, UNRESOLVED_LOW_CONFIDENCE_RULE,
     server_lint_issue_matches_segment,
 };
-use sonus_extension::document::{Diagnostic, Severity};
+use exaudio_extension::document::{Diagnostic, Severity};
 use studio_core::Project;
 use studio_editor::transcript_model::diagnostic_key;
 

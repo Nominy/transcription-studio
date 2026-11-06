@@ -6,7 +6,7 @@ use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
 use crate::text::localized;
-use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
+use exaudio_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
 
 struct SkipDialog {
     panels: Entity<TaskPanels>,

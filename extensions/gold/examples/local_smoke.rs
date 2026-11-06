@@ -31,8 +31,8 @@ mod smoke {
     };
 
     use bytes::Bytes;
+    use exaudio_gold::{LocalBackend, LocalConfig, protocol::ModelsState};
     use serde_json::{Value, json};
-    use sonus_gold::{LocalBackend, LocalConfig, protocol::ModelsState};
     use studio_inference::{
         AlignRequest, InferenceBackend, InferenceProgress, LaneAudio, ProgressSink, TimingResponse,
     };

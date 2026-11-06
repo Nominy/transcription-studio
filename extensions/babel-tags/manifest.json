@@ -1,12 +1,12 @@
 {
-  "id": "sonus.babel-tags",
+  "id": "exaudio.babel-tags",
   "name": "Babel tags",
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
   "description": "Tag completion, СКАЗ conversion and number tools for Babel tasks.",
   "license": "MIT",
-  "dependencies": {"sonus.babel-lint": "^0.1"},
+  "dependencies": {"exaudio.babel-lint": "^0.1"},
   "permissions": [{"kind": "document-read"}, {"kind": "document-edit"}, {"kind": "selection-control"}],
   "modes": []
 }

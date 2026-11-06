@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 pub const SUBACCOUNT_RELAY_SETTINGS_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_SETTINGS";
 pub const SUBACCOUNT_RELAY_URL_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_URL";
 
-const APP_SUPPORT_DIR_NAME: &str = "Transcription Studio";
+const APP_SUPPORT_DIR_NAME: &str = "Exaudio";
 /// File name of a relay session inside an account directory.
 pub const SESSION_FILE_NAME: &str = "subaccount.json";
 const RELAY_SETTINGS_FILE_NAME: &str = "subaccount-relay-settings.json";

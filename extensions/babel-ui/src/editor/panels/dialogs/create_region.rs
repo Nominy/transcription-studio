@@ -3,22 +3,22 @@
 //! - the attached "Add Region" card for a row the waveform drag already created in a
 //!   transcription project (text only; Cancel keeps the created row).
 
+use exaudio_babel_domain::edit::create_region::{
+    CreateRegionDialog, CreateRegionMode, CreateRegionTimeField, OTHER_CATEGORY, category_label,
+    intensity_label, intensity_options, primary_category_options, secondary_category_options,
+    track_options,
+};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::edit::create_region::{
-    CreateRegionDialog, CreateRegionMode, CreateRegionTimeField, OTHER_CATEGORY, category_label,
-    intensity_label, intensity_options, primary_category_options, secondary_category_options,
-    track_options,
-};
 
 use crate::services::document_dialogs;
 use crate::text::localized;
-use sonus_babel_domain::edit::BabelAnnotationDialogs;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{
+use exaudio_babel_domain::edit::BabelAnnotationDialogs;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{
     Choice, choice, dialog_footer, dialog_header, error_text, field, primary_button,
 };
 

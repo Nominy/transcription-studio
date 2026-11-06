@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const storageKey = "sonus.site.language";
+  const storageKey = "exaudio.site.language";
   const textNodes = Array.from(document.querySelectorAll("[data-en]"), node => ({
     node,
     russian: Array.from(node.childNodes, child => child.cloneNode(true)),

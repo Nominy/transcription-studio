@@ -1,7 +1,7 @@
 //! UI language for user-facing domain and service messages.
 //!
 //! The domain and service crates have no access to the shell's settings, so the Babel UI
-//! mirrors the shell language here (`sonus_babel_ui::text::localized` does it on every
+//! mirrors the shell language here (`exaudio_babel_ui::text::localized` does it on every
 //! call). Messages built before the first UI render fall back to Russian, matching the
 //! shell default.
 

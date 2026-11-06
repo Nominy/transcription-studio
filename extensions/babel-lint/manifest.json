@@ -1,5 +1,5 @@
 {
-  "id": "sonus.babel-lint",
+  "id": "exaudio.babel-lint",
   "name": "Babel checks",
   "version": "0.1.0",
   "api": "^0.1",

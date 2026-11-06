@@ -5,8 +5,8 @@
 //! `getReviewActionDataById`), as the Review Helper does.
 
 use anyhow::{Result, anyhow, bail};
+use exaudio_babel_domain::i18n::{localized, with_detail};
 use serde_json::{Value, json};
-use sonus_babel_domain::i18n::{localized, with_detail};
 use studio_core::Project;
 
 use crate::babel::{BabelClient, BabelRequest};

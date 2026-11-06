@@ -7,8 +7,8 @@ use studio_core::{AudioLane, Project, Segment};
 use time::OffsetDateTime;
 
 use super::model::{GeneratedReview, ReviewerSession};
-use sonus_babel_domain::i18n::localized;
-use sonus_gold::polish::DraftingConfig;
+use exaudio_babel_domain::i18n::localized;
+use exaudio_gold::polish::DraftingConfig;
 
 fn not_a_babel_task() -> &'static str {
     localized(

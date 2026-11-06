@@ -1,8 +1,8 @@
-use sonus_babel_lint::{
+use exaudio_babel_lint::{
     BabelDiagnosticProvider,
     linter::{LintSeverity, ServerLintIssue, ServerLintSnapshot},
 };
-use sonus_extension::document::{DiagnosticProvider, DocumentProviders, Severity};
+use exaudio_extension::document::{DiagnosticProvider, DocumentProviders, Severity};
 use studio_core::Project;
 
 fn empty_project() -> Project {
@@ -59,6 +59,6 @@ fn unassociated_server_issues_remain_blocking_and_keep_multiplicity() {
 fn babel_diagnostics_require_explicit_registration() {
     let mut providers = DocumentProviders::default();
     assert!(providers.diagnostics.is_empty());
-    sonus_babel_lint::register(&mut providers);
+    exaudio_babel_lint::register(&mut providers);
     assert_eq!(providers.diagnostics.len(), 1);
 }

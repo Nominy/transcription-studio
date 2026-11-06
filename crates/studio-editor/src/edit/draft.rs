@@ -9,7 +9,7 @@ use studio_core::{Project, Segment, SegmentUpdate};
 use super::format::{format_time, parse_time};
 use super::text::CrossRowTextEdit;
 use super::time::{TimeEditState, TimeField, start_time_cell_edit};
-use sonus_extension::document::Severity;
+use exaudio_extension::document::Severity;
 
 /// Each segment retains at most this many text snapshots in either direction.
 pub const TEXT_HISTORY_MAX_ENTRIES: usize = 100;

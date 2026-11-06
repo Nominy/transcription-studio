@@ -1,5 +1,5 @@
 {
-  "id": "sonus.lint-basic",
+  "id": "exaudio.lint-basic",
   "name": "Basic checks",
   "version": "0.1.0",
   "api": "^0.1.0",

@@ -1,10 +1,10 @@
-# sonus.formats
+# exaudio.formats
 
 Optional, bundled native format contributions for SRT, WebVTT and UTF-8 plain text. No Babel dependency, checking rules, audio decoder, native-project serializer, or implicit enablement. `extension.json` declares identity and the required public API version.
 
 ## Host integration
 
-The shell owns one `sonus_extension::format::FormatRegistry` inside its contribution registry. First approve the extension manifest and permissions through the host lifecycle. Only on enabled activation call `sonus_formats::register(&mut contributions.formats)`. This registers `sonus.formats.srt`, `sonus.formats.vtt`, and `sonus.formats.txt` atomically. Disable/removal must call `unregister_extension("sonus.formats")`; never keep cached picker entries or providers usable after disable. Build import/export menus from live `entries()` and their capability flags, not a core format list. Registration alone is not permission approval.
+The shell owns one `exaudio_extension::format::FormatRegistry` inside its contribution registry. First approve the extension manifest and permissions through the host lifecycle. Only on enabled activation call `exaudio_formats::register(&mut contributions.formats)`. This registers `exaudio.formats.srt`, `exaudio.formats.vtt`, and `exaudio.formats.txt` atomically. Disable/removal must call `unregister_extension("exaudio.formats")`; never keep cached picker entries or providers usable after disable. Build import/export menus from live `entries()` and their capability flags, not a core format list. Registration alone is not permission approval.
 
 `FormatProvider::import(&[u8]) -> Result<ImportContent, FormatError>` produces either:
 
@@ -30,15 +30,15 @@ The host owns file picking and file writes, validates imported records against i
 `examples/roundtrip.rs` uses a synthetic overlapping two-speaker Unicode transcript and roundtrips each provider through the public API:
 
 ```text
-cargo run -p sonus-formats --example roundtrip
-cargo nextest run -p sonus-formats -p sonus-extension
+cargo run -p exaudio-formats --example roundtrip
+cargo nextest run -p exaudio-formats -p exaudio-extension
 ```
 
 Tests exercise known output, UTF-8/multiline text, overlap stability, rounding/carry and long hours, VTT markup safety/settings, honest untimed TXT, error locations, invalid timing and bounded input, plus atomic registration and owner-scoped removal. They do not pin Rust source text.
 
 ## Manual UI smoke scenario
 
-1. Enable `sonus.formats`, open a short local audio file, and create two overlapping segments with different speakers, multiline Unicode text, and a start at zero.
+1. Enable `exaudio.formats`, open a short local audio file, and create two overlapping segments with different speakers, multiline Unicode text, and a start at zero.
 2. Export SRT, VTT and TXT with speaker labels off, then export with labels on. Inspect timestamps and literal text such as `<tag> & 世界` in VTT.
 3. Reopen each timed subtitle export against the selected audio. Confirm cue text/timing/overlaps; default SRT speaker labels are not inferred. Reopen TXT and confirm an explicit untimed workflow, not fabricated segments.
 4. Import a malformed second cue and confirm a cue/line error with no partial document mutation.

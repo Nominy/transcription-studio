@@ -104,14 +104,14 @@ if [[ -n "${STUDIO_ALPHA_FEED_URL:-}" ]]; then
 fi
 
 # Build the app, relay and isolated compiler together so shared dependency features stay unified.
-cargo build -p studio-app -p studio-relay -p sonus-wasm --release --locked
+cargo build -p studio-app -p studio-relay -p exaudio-wasm --release --locked
 
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir" "$output_dir"
 cp "$source_dir/studio-app" "$stage_dir/$main_exe"
 cp "$source_dir/studio-relay" "$stage_dir/studio-relay"
-cp "$source_dir/sonus-wasm-worker" "$stage_dir/sonus-wasm-worker"
-chmod +x "$stage_dir/$main_exe" "$stage_dir/studio-relay" "$stage_dir/sonus-wasm-worker"
+cp "$source_dir/exaudio-wasm-worker" "$stage_dir/exaudio-wasm-worker"
+chmod +x "$stage_dir/$main_exe" "$stage_dir/studio-relay" "$stage_dir/exaudio-wasm-worker"
 mkdir -p "$stage_dir/assets/demo"
 cp "$repo_root/crates/studio-editor/assets/demo/speaker_1.wav" "$stage_dir/assets/demo/"
 cp "$repo_root/crates/studio-editor/assets/demo/speaker_2.wav" "$stage_dir/assets/demo/"

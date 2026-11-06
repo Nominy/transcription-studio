@@ -1,9 +1,16 @@
-//! Babel account setup (the `sonus.babel.account` provider's sign-in view): phone/e-mail
+//! Babel account setup (the `exaudio.babel.account` provider's sign-in view): phone/e-mail
 //! code login or a sub-account relay code. On success the credentials are stored in the
 //! account's directory and the shell is told which instance was configured.
 
 use std::sync::{Arc, LazyLock};
 
+use exaudio_babel_services::account::{
+    AccountKind, AccountRecord, AccountStore, direct_instance_id, relay_instance_id, relay_label,
+};
+use exaudio_babel_services::auth;
+use exaudio_babel_services::auth::flow::{AuthFlow, AuthStartup};
+use exaudio_babel_services::subaccounts;
+use exaudio_shell::{ProviderInstance, ProviderSetup};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
@@ -12,17 +19,10 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::account::{
-    AccountKind, AccountRecord, AccountStore, direct_instance_id, relay_instance_id, relay_label,
-};
-use sonus_babel_services::auth;
-use sonus_babel_services::auth::flow::{AuthFlow, AuthStartup};
-use sonus_babel_services::subaccounts;
-use sonus_shell::{ProviderInstance, ProviderSetup};
 
 use crate::screens::ShellModels;
 use crate::text::{failed, localized};
-use sonus_shell::services::spawn_service_in;
+use exaudio_shell::services::spawn_service_in;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {

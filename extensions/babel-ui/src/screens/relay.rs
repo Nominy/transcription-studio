@@ -1,10 +1,10 @@
 //! The bundled sub-account relay process and the remembered relay host URL, shared by the
 //! dashboard (Settings, Sub-accounts) and the tray menu.
 
+use exaudio_babel_services::babel::DashboardProject;
+use exaudio_babel_services::relay::{RelayLaunchConfig, RelayProcess, RelayStatus};
+use exaudio_babel_services::subaccounts::{self, owner};
 use gpui_kit::*;
-use sonus_babel_services::babel::DashboardProject;
-use sonus_babel_services::relay::{RelayLaunchConfig, RelayProcess, RelayStatus};
-use sonus_babel_services::subaccounts::{self, owner};
 
 use crate::text::{localized, localized_fmt, with_detail};
 
@@ -227,7 +227,7 @@ impl RelayModel {
         let Some(host_url) = owner::project_queue_sync_host(false, &self.host_url, &configs) else {
             return;
         };
-        self.sync_task = Some(sonus_shell::services::spawn_service(
+        self.sync_task = Some(exaudio_shell::services::spawn_service(
             cx,
             async move { owner::push_project_queue_configs(&auth_store, &host_url, &configs).await },
             |this, result, cx| {

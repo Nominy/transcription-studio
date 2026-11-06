@@ -4,14 +4,14 @@
 use std::rc::Rc;
 
 use crate::text::localized;
+use exaudio_babel_domain::editor_model::task_lookup::{
+    TaskLookupEffect, TaskLookupEvent, TaskLookupState,
+};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::task_lookup::{
-    TaskLookupEffect, TaskLookupEvent, TaskLookupState,
-};
 
 fn stitched_description(cx: &App) -> &'static str {
     localized(

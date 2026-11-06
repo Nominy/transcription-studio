@@ -6,7 +6,7 @@
   "action_worker_id": "6314b752-00b2-57bb-a1e3-1cd9140ecc44",
   "action_decision": "in-progress",
   "is_worker_resuming_claim": false,
-  "source": "sonus_demo/synthetic_dialogue",
+  "source": "exaudio_demo/synthetic_dialogue",
   "format": "review-action-materialized-package",
   "speakers": [
     {

@@ -5,8 +5,8 @@
 pub mod bindings {
     wit_bindgen::generate!({ path: "../../wit", world: "extension", pub_export_macro: true });
 }
-pub use bindings::exports::sonus::extension::guest::Guest;
-pub use bindings::sonus::extension::{host, types};
+pub use bindings::exports::exaudio::extension::guest::Guest;
+pub use bindings::exaudio::extension::{host, types};
 
 /// Build a revision-pinned, single undo-unit insertion. UTF-8 byte offsets are
 /// checked locally for ergonomics and authoritatively checked again by the host.

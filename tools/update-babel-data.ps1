@@ -47,10 +47,10 @@ function Get-Sha256Hex {
 # Mirrors cache_dir() in extensions/babel-lint/build.rs.
 function Get-BuildCache {
     if ($env:LOCALAPPDATA) {
-        return Join-Path $env:LOCALAPPDATA "Sonus/build-cache"
+        return Join-Path $env:LOCALAPPDATA "Exaudio/build-cache"
     }
     $cache = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME } else { Join-Path $HOME ".cache" }
-    return Join-Path $cache "sonus/build-cache"
+    return Join-Path $cache "exaudio/build-cache"
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path

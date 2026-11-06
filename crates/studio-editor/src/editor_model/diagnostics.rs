@@ -1,6 +1,6 @@
 use super::EditorSession;
 use crate::transcript_model::diagnostic_key;
-use sonus_extension::document::Severity;
+use exaudio_extension::document::Severity;
 use studio_core::Project;
 
 impl EditorSession {

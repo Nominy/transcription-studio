@@ -61,9 +61,9 @@ Modes are add-on contributions and declare the add-ons they require. Keep depend
 
 ## Extensions and privacy
 
-Native Rust extensions supply bundled tools. Installable **WebAssembly components** use the [Rust SDK](sdk/rust/README.md) and the typed [WIT API](wit/sonus-extension.wit) to contribute commands, panels, diagnostics, formats and modes.
+Native Rust extensions supply bundled tools. Installable **WebAssembly components** use the [Rust SDK](sdk/rust/README.md) and the typed [WIT API](wit/exaudio-extension.wit) to contribute commands, panels, diagnostics, formats and modes.
 
-The [GitHub marketplace index](https://github.com/Nominy/sonus-extensions) describes extension releases; extension authors host source and versioned packages in their own GitHub repositories. The index endpoint is [`index.json`](https://raw.githubusercontent.com/Nominy/sonus-extensions/main/index.json). Inspect the author, source, compatibility and requested permissions before installing: inclusion in an index is not a security endorsement.
+The [GitHub marketplace index](https://github.com/Nominy/exaudio-extensions) describes extension releases; extension authors host source and versioned packages in their own GitHub repositories. The index endpoint is [`index.json`](https://raw.githubusercontent.com/Nominy/exaudio-extensions/main/index.json). Inspect the author, source, compatibility and requested permissions before installing: inclusion in an index is not a security endorsement.
 
 WASM document, audio, storage and network-host access require explicit grants. Bundled native code has the application's privileges, not an OS sandbox. Local editing does not require uploading your recording. Remote AI may send audio/text to a provider; Babel and Relay communicate with their services. Review permissions and provider terms before using sensitive material. Local processing does not make remote features offline.
 
@@ -78,7 +78,7 @@ WASM document, audio, storage and network-host access require explicit grants. B
 
 ## Build and contribute
 
-Windows development needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools + Windows SDK, and CMake. Package names retain `studio-*` and `sonus-*` where they identify existing crates and extension ids; the product is Exaudio.
+Windows development needs Git, the Rust toolchain pinned in `rust-toolchain.toml`, MSVC C++ build tools + Windows SDK, and CMake. Internal crate names keep the `studio-*` prefix; the product and its extension ids are Exaudio.
 
 ```powershell
 # General-purpose toolkit including AI tools, without the Babel data bundle

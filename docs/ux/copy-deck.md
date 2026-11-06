@@ -519,14 +519,14 @@ heading. RU: `Аккаунты`, `Выйти`, `Добавить ещё акка
 
 | Extension | EN name · description | RU |
 |---|---|---|
-| sonus.local | **[gone]** from the list (it is the Start screen) | |
-| sonus.formats | `Subtitles and text` · `Import and export SRT, WebVTT and plain text.` | `Субтитры и текст` · `Импорт и экспорт SRT, WebVTT и обычного текста.` |
-| sonus.lint-basic | `Basic checks` · see §6 | |
-| sonus.gold | `AI tools` · `Align words, draft text, fill segments and remove noise — on this computer or a remote server.` | `Инструменты ИИ` · `Выравнивание слов, черновики, заполнение сегментов и удаление шума — на этом компьютере или удалённом сервере.` |
-| sonus.babel | `Babel` · `Take, edit and submit Babel tasks.` | `Babel` · `Брать, редактировать и сдавать задачи Babel.` |
-| sonus.babel-lint | `Babel checks` · `Babel's transcription rules with automatic fixes.` | `Проверки Babel` · `Правила транскрипции Babel с автоисправлениями.` |
-| sonus.babel-tags | `Babel tags` · `Tag completion, СКАЗ conversion and number tools for Babel tasks.` | `Теги Babel` · `Подсказки тегов, преобразование в СКАЗ и работа с числами для задач Babel.` |
-| sonus.babel-relay | `Babel relay` · `Sign in to Babel through a sub-account relay.` | `Ретранслятор Babel` · `Вход в Babel через ретранслятор для под-аккаунтов.` |
+| exaudio.local | **[gone]** from the list (it is the Start screen) | |
+| exaudio.formats | `Subtitles and text` · `Import and export SRT, WebVTT and plain text.` | `Субтитры и текст` · `Импорт и экспорт SRT, WebVTT и обычного текста.` |
+| exaudio.lint-basic | `Basic checks` · see §6 | |
+| exaudio.gold | `AI tools` · `Align words, draft text, fill segments and remove noise — on this computer or a remote server.` | `Инструменты ИИ` · `Выравнивание слов, черновики, заполнение сегментов и удаление шума — на этом компьютере или удалённом сервере.` |
+| exaudio.babel | `Babel` · `Take, edit and submit Babel tasks.` | `Babel` · `Брать, редактировать и сдавать задачи Babel.` |
+| exaudio.babel-lint | `Babel checks` · `Babel's transcription rules with automatic fixes.` | `Проверки Babel` · `Правила транскрипции Babel с автоисправлениями.` |
+| exaudio.babel-tags | `Babel tags` · `Tag completion, СКАЗ conversion and number tools for Babel tasks.` | `Теги Babel` · `Подсказки тегов, преобразование в СКАЗ и работа с числами для задач Babel.` |
+| exaudio.babel-relay | `Babel relay` · `Sign in to Babel through a sub-account relay.` | `Ретранслятор Babel` · `Вход в Babel через ретранслятор для под-аккаунтов.` |
 | example.hello-panel | `Hello panel` · `Example extension: inserts a greeting.` | `Панель-пример` · `Пример расширения: вставляет приветствие.` |
 
 ---

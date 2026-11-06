@@ -5,19 +5,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use semver::Version;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use sonus_extension::ExtensionManifest;
-use sonus_marketplace::{
+use exaudio_extension::ExtensionManifest;
+use exaudio_marketplace::{
     Catalog, CatalogExtension, DeveloperInstallRequest, HostState, InstallRequest,
     InstallationStore, Limits, MarketplaceClient, OperationControl, PermissionGrants, Release,
     ReleaseAsset, Repository,
 };
+use semver::Version;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
-const USAGE: &str = "sonus-extension-index commands:
+const USAGE: &str = "exaudio-extension-index commands:
   init-index DESTINATION
   init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT DESTINATION
   validate-index INDEX.json [PREVIOUS.json]
@@ -239,12 +239,12 @@ async fn run(control: &OperationControl) -> Result<()> {
                 extensions: vec![entry.clone()],
             }
             .validate()?;
-            sonus_marketplace::validate_package(&package_bytes, &entry.releases[0], limits)?;
+            exaudio_marketplace::validate_package(&package_bytes, &entry.releases[0], limits)?;
             print(&entry)?;
         }
         ["validate-package", path, id, version, package] => {
             let index = catalog(path)?;
-            print(&sonus_marketplace::validate_package(
+            print(&exaudio_marketplace::validate_package(
                 &bytes(package, limits.compressed_bytes)?,
                 release(&index, id, version)?,
                 limits,
@@ -253,7 +253,7 @@ async fn run(control: &OperationControl) -> Result<()> {
         ["plan-mode", path, id, version, mode, store, host, grants] => {
             let index = catalog(path)?;
             let installed = InstallationStore::open(store)?.state()?;
-            let diff = sonus_marketplace::plan_mode(
+            let diff = exaudio_marketplace::plan_mode(
                 &index,
                 &release(&index, id, version)?.manifest,
                 mode,
@@ -269,7 +269,7 @@ async fn run(control: &OperationControl) -> Result<()> {
         ["plan-release", path, id, version, store, host, grants] => {
             let index = catalog(path)?;
             let installed = InstallationStore::open(store)?.state()?;
-            let diff = sonus_marketplace::plan_release(
+            let diff = exaudio_marketplace::plan_release(
                 &index,
                 release(&index, id, version)?,
                 &installed.active,
@@ -282,11 +282,13 @@ async fn run(control: &OperationControl) -> Result<()> {
             }
         }
         ["preview-developer", package] => {
-            print(&sonus_marketplace::preview_developer_package_with_progress(
-                Path::new(package),
-                limits,
-                control,
-            )?)?;
+            print(
+                &exaudio_marketplace::preview_developer_package_with_progress(
+                    Path::new(package),
+                    limits,
+                    control,
+                )?,
+            )?;
         }
         [
             "install-developer",
@@ -304,7 +306,7 @@ async fn run(control: &OperationControl) -> Result<()> {
             let dependencies =
                 request(&index, &selection, json(grants)?, store.state()?.generation)?;
             let request = DeveloperInstallRequest {
-                preview: sonus_marketplace::preview_developer_package_with_progress(
+                preview: exaudio_marketplace::preview_developer_package_with_progress(
                     Path::new(package),
                     limits,
                     control,
@@ -501,7 +503,7 @@ fn pack(
     }
     let temporary = writer.finish()?;
     temporary.as_file().sync_all()?;
-    let mut preview = sonus_marketplace::preview_developer_package_with_progress(
+    let mut preview = exaudio_marketplace::preview_developer_package_with_progress(
         temporary.path(),
         limits,
         control,

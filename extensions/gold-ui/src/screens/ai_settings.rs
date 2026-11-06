@@ -5,6 +5,12 @@
 
 use std::sync::Arc;
 
+use exaudio_gold::bundle::{DOWNLOAD_STAGE, EXTRACT_STAGE};
+use exaudio_gold::polish::BackendHealth;
+use exaudio_gold::prefs::{
+    AiSettings, ExecutionLocation, REASONING_EFFORTS, SERVICE_TIERS, normalize_base_url,
+};
+use exaudio_gold::protocol::{HostStatus, ModelsState, SampleResult};
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress;
@@ -14,19 +20,13 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_gold::bundle::{DOWNLOAD_STAGE, EXTRACT_STAGE};
-use sonus_gold::polish::BackendHealth;
-use sonus_gold::prefs::{
-    AiSettings, ExecutionLocation, REASONING_EFFORTS, SERVICE_TIERS, normalize_base_url,
-};
-use sonus_gold::protocol::{HostStatus, ModelsState, SampleResult};
 use studio_inference::{BackendStatus, InferenceProgress, InferenceResult, ProgressSink};
 
 use crate::editor::inference_audio::until_cancelled;
 use crate::editor::panels::gold_progress::{hold, label};
 use crate::services::GoldServices;
-use sonus_shell::screens::ui::{self, Tone, localized};
-use sonus_shell::services::{AppServices, spawn_service};
+use exaudio_shell::screens::ui::{self, Tone, localized};
+use exaudio_shell::services::{AppServices, spawn_service};
 
 /// Execution locations with their EN / RU labels.
 const LOCATIONS: [(ExecutionLocation, &str, &str); 2] = [
@@ -309,7 +309,7 @@ impl AiSettingsView {
         op: ModelOp,
         cx: &mut Context<Self>,
         work: impl FnOnce(
-            Arc<sonus_gold::LocalBackend>,
+            Arc<exaudio_gold::LocalBackend>,
             ProgressSink,
         ) -> std::pin::Pin<Box<dyn Future<Output = InferenceResult<T>> + Send>>,
         done: impl FnOnce(&mut Self, T, &App) -> String + 'static,

@@ -1,7 +1,7 @@
 mod edit_support;
 
 use edit_support::{doc, seg};
-use sonus_extension::document::{DocumentEdit, DocumentTransaction, QuickFix, TextRange};
+use exaudio_extension::document::{DocumentEdit, DocumentTransaction, QuickFix, TextRange};
 
 #[test]
 fn extension_transaction_is_one_undo_unit() {

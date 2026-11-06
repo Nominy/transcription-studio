@@ -6,8 +6,8 @@ use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
 use crate::text::{failed, localized};
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
 
 struct ExitConfirmDialog {
     panels: Entity<TaskPanels>,

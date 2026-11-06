@@ -1,7 +1,7 @@
 # Exaudio Rust component SDK
 
-The API is `sonus:extension/extension@0.1.0` in `wit/sonus-extension.wit`.
-`sonus-sdk` generates guest bindings with wit-bindgen 0.46; `sonus-wasm` generates
+The API is `exaudio:extension/extension@0.1.0` in `wit/exaudio-extension.wit`.
+`exaudio-sdk` generates guest bindings with wit-bindgen 0.46; `exaudio-wasm` generates
 host bindings with Wasmtime 38. There is no WASI linker, ambient filesystem,
 process spawning, networking, clock or random source. Use the typed host imports.
 The example is entirely offline.
@@ -11,12 +11,12 @@ The example is entirely offline.
 For an independently cloneable author repository, use the repository generator:
 
 ```text
-sonus-extension-index init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT DESTINATION
+exaudio-extension-index init-author OWNER REPOSITORY EXTENSION_ID VERSION SDK_GITHUB_URL FULL_SDK_COMMIT DESTINATION
 ```
 
 Supply an actual accessible SDK repository URL and full published commit; there is
 no invented default release. The generated standalone repository has its own
-`src/lib.rs`, manifest and release workflow. Its Cargo dependency pins `sonus-sdk`
+`src/lib.rs`, manifest and release workflow. Its Cargo dependency pins `exaudio-sdk`
 by Git URL and revision; Cargo's complete SDK repository checkout supplies the WIT
 package. Keep the MIT notices and commit the generated Cargo.lock file.
 
@@ -25,7 +25,7 @@ target and `wasm-tools`, then run these commands from this repository root:
 
 ```powershell
 cargo build --manifest-path extensions/examples/hello-panel/Cargo.toml --target wasm32-unknown-unknown --release
-wasm-tools component new extensions/examples/hello-panel/target/wasm32-unknown-unknown/release/sonus_example_hello_panel.wasm -o module.wasm
+wasm-tools component new extensions/examples/hello-panel/target/wasm32-unknown-unknown/release/exaudio_example_hello_panel.wasm -o module.wasm
 pwsh -File extensions/examples/hello-panel/package.ps1 -Component module.wasm
 ```
 
@@ -46,7 +46,7 @@ component/world validation.
 
 ## Native host integration
 
-Implement `sonus_wasm::HostServices` (`crates/sonus-wasm/src/services.rs`) and create
+Implement `exaudio_wasm::HostServices` (`crates/exaudio-wasm/src/services.rs`) and create
 `Runtime::spawn(manifest.id, Arc<dyn HostServices>, Limits)`. `load(Package)` takes
 verified component bytes, the shared `ExtensionManifest`, explicit user grants,
 and every constraint from modes currently open. Declared permissions are not grants.
@@ -103,14 +103,14 @@ alone cannot start playback).
 
 A manifest may declare `providers` (`{ "id", "name", "multiple" }`) and modes may name one
 in `provider`. The guest registers `ContributionKind::Provider` for each declared id
-(`sonus_sdk::register_provider`) and implements `sonus_sdk::ProviderHandler`, routing
-`Guest::on_event` through `sonus_sdk::provider_event::<Self>(&event)`:
+(`exaudio_sdk::register_provider`) and implements `exaudio_sdk::ProviderHandler`, routing
+`Guest::on_event` through `exaudio_sdk::provider_event::<Self>(&event)`:
 
 - `Event::ProviderSetup { provider, request_id, instance }` — the shell is opening a mode
   and needs an account. Publish UI for `contribution = provider` (the shell shows it as the
   sign-in step) and finish with `provider_setup_done(provider, request_id, id, label)` or
   `provider_setup_cancel`. `id` is stable per account and `[a-z0-9-]`
-  (`sonus_sdk::instance_id` derives one); `label` is what users see. `instance` is set when
+  (`exaudio_sdk::instance_id` derives one); `label` is what users see. `instance` is set when
   re-authenticating an existing account and the id must stay the same.
 - `Event::ProviderStatus(instance)` — answer with `publish_status(instance, Ready |
   NeedsSignIn | Error, detail)` before returning; the shell waits one call deadline and
@@ -140,9 +140,9 @@ requires a new Runtime. Successful replacement instead emits `Output::Activated`
 which resets owned contributions but keeps the generation live. Native queues must
 reject late outputs from terminal generations.
 
-The application must ship `sonus-wasm-worker(.exe)` beside its actual executable
+The application must ship `exaudio-wasm-worker(.exe)` beside its actual executable
 (macOS: `Contents/MacOS`). Build it with
-`cargo build --release -p sonus-wasm --bin sonus-wasm-worker`.
+`cargo build --release -p exaudio-wasm --bin exaudio-wasm-worker`.
 Runtime never searches PATH; an absolute `Limits::compiler_path` override is only
 for a trusted host installation/test harness, never extension-controlled input.
 The child waits for a start gate until Windows Job Object memory limits have been
@@ -188,12 +188,12 @@ observable verification runner:
 
 ```powershell
 cargo build --manifest-path extensions/examples/hello-panel/Cargo.toml --target wasm32-unknown-unknown --release --features runtime-probes
-wasm-tools component new extensions/examples/hello-panel/target/wasm32-unknown-unknown/release/sonus_example_hello_panel.wasm -o probe-component.wasm
+wasm-tools component new extensions/examples/hello-panel/target/wasm32-unknown-unknown/release/exaudio_example_hello_panel.wasm -o probe-component.wasm
 pwsh -File extensions/examples/hello-panel/smoke.ps1 -Component probe-component.wasm
 ```
 
 The actual Wasmtime test activates the panel, publishes an empty-segment diagnostic,
-dispatches a button click, observes `Hello from Sonus! ` in the document with exactly
+dispatches a button click, observes `Hello from Exaudio! ` in the document with exactly
 one undo entry, and observes updated diagnostics. It rejects invalid/incompatible
 replacements while the previous guest remains callable, checks a successful reload,
 denies ungranted document access, isolates explicit trap/fuel/memory probes, and

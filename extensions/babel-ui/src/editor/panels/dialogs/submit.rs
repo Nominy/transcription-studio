@@ -1,14 +1,14 @@
 //! Submit confirmation dialog (review / practice / final assessment copy).
 
+use exaudio_babel_domain::editor_model::submit_control::SubmitKind;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::submit_control::SubmitKind;
 
 use crate::editor::panels::task::TaskPanels;
 use crate::text::localized;
-use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
+use exaudio_shell::editor::panels::ui::{dialog_footer, dialog_header, error_text, primary_button};
 
 pub struct SubmitCopy {
     pub trigger: &'static str,

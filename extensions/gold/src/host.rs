@@ -622,7 +622,7 @@ fn create_hidden_window() -> Result<HWND, HostError> {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
-            w!("Transcription Studio inference"),
+            w!("Exaudio inference"),
             WS_OVERLAPPEDWINDOW,
             0,
             0,

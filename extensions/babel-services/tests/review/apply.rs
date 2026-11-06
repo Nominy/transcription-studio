@@ -1,4 +1,4 @@
-use sonus_gold::polish::{
+use exaudio_gold::polish::{
     DraftRow, RedistributionAllocation, RedistributionMove, RedistributionPreview,
     apply_draft_rows, apply_redistribution, apply_redistribution_moves,
 };

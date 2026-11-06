@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::screens::ui;
+use exaudio_shell::{DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ShellHandle};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
-use sonus_babel_domain::workflow::BabelWorkflowExt;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::screens::ui;
-use sonus_shell::{DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ShellHandle};
 
 use crate::FILE_ID;
 use crate::text::{failed, localized, localized_fmt};
@@ -27,7 +27,7 @@ pub fn launch(
 pub fn open_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
     open_babel_json(window, cx, move |result, window, cx| {
         let opened = result.map_err(anyhow::Error::msg).and_then(|file| {
-            let document = sonus_babel_domain::document_environment(
+            let document = exaudio_babel_domain::document_environment(
                 &file.project,
                 file.path.to_string_lossy().into_owned(),
                 FILE_ID,

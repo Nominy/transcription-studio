@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::timeline_model::{LaneColor, TimeRange};
-use sonus_extension::document::DocumentEnvironment;
+use exaudio_extension::document::DocumentEnvironment;
 use studio_core::Segment;
 use studio_waveform::{
     DISPLAY_SAMPLE_RATE, DecodedAudio, DisplaySignal, LineWaveform, PeakCache, WaveViewport,

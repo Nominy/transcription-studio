@@ -9,7 +9,7 @@ use crate::edit::text::TextMoveDirection;
 use crate::edit::time::{
     CommitTimeCellEdit, CommitTimeCellResult, TimeEditState, TimeField, commit_time_cell_edit,
 };
-use sonus_extension::document::{Completion, CompletionRequest, TextRange};
+use exaudio_extension::document::{Completion, CompletionRequest, TextRange};
 
 /// Open provider completion list for a row.
 #[derive(Debug, Clone, PartialEq, Eq)]

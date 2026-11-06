@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use exaudio_babel_services::babel::DashboardProject;
+use exaudio_babel_services::subaccounts::owner::{self, ManagedSubaccount, OwnerDashboard};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -10,13 +12,11 @@ use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::babel::DashboardProject;
-use sonus_babel_services::subaccounts::owner::{self, ManagedSubaccount, OwnerDashboard};
 
 use crate::screens::ShellModels;
 use crate::text::{count, is_russian, localized, localized_fmt};
-use sonus_shell::screens::ui;
-use sonus_shell::services::spawn_service_in;
+use exaudio_shell::screens::ui;
+use exaudio_shell::services::spawn_service_in;
 
 /// Asks the dashboard to (re)load projects for the access checkboxes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

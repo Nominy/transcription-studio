@@ -1,14 +1,14 @@
 //! Settings › Babel: the sub-account relay host and where Babel sign-ins are stored.
 //! Accounts themselves (sign in / sign out / add another) live in Settings › Accounts.
+use exaudio_babel_services::{account, relay::RelayStatus};
+use exaudio_shell::ShellHandle;
+use exaudio_shell::screens::ui;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::{account, relay::RelayStatus};
-use sonus_shell::ShellHandle;
-use sonus_shell::screens::ui;
 
 use crate::ID;
 use crate::root;
@@ -116,7 +116,7 @@ impl SettingsView {
                     value.trim()
                 );
             }
-            let source = sonus_shell::providers::providers_root();
+            let source = exaudio_shell::providers::providers_root();
             account::move_providers_root(&source, &target)?;
             Ok(target)
         });
@@ -216,7 +216,7 @@ impl SettingsView {
     }
 
     fn render_sign_in(&self, cx: &mut Context<Self>) -> Div {
-        let current = sonus_shell::providers::providers_root();
+        let current = exaudio_shell::providers::providers_root();
         let portable = portable_target().ok();
         let already_portable = portable.as_ref() == Some(&current);
         ui::card(
@@ -271,7 +271,7 @@ impl Render for SettingsView {
     }
 }
 
-/// `<executable dir>/providers`: where [`sonus_shell::providers::providers_root`] looks first.
+/// `<executable dir>/providers`: where [`exaudio_shell::providers::providers_root`] looks first.
 fn portable_target() -> anyhow::Result<std::path::PathBuf> {
     let executable = std::env::current_exe()?;
     let directory = executable

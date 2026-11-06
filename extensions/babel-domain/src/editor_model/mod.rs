@@ -5,7 +5,7 @@ mod review;
 pub mod review_actions;
 pub mod submit_control;
 pub mod task_lookup;
-use sonus_babel_lint::linter::ServerLintSnapshot;
+use exaudio_babel_lint::linter::ServerLintSnapshot;
 use studio_core::Project;
 use studio_editor::editor_model::EditorSession as CoreSession;
 
@@ -85,7 +85,7 @@ impl EditorSession<'_> {
         if snapshot.revision != self.core.edit_revision() {
             return false;
         }
-        use sonus_extension::document::DiagnosticProvider;
+        use exaudio_extension::document::DiagnosticProvider;
         let provider = crate::server_diagnostics::ServerDiagnosticProvider {
             snapshot: Some(snapshot.clone()),
         };

@@ -2,8 +2,8 @@
 //! carry in source, see `src/data.rs`) into `OUT_DIR/babel-data`.
 //!
 //! The bundle is private: it is not downloadable, so builds read it from the per-user build
-//! cache (`%LOCALAPPDATA%\Sonus\build-cache` on Windows, else `$XDG_CACHE_HOME/sonus/build-cache`
-//! or `~/.cache/sonus/build-cache`), keyed and verified by its SHA-256.
+//! cache (`%LOCALAPPDATA%\Exaudio\build-cache` on Windows, else `$XDG_CACHE_HOME/exaudio/build-cache`
+//! or `~/.cache/exaudio/build-cache`), keyed and verified by its SHA-256.
 //! `tools/update-babel-data.ps1 -Fetch` puts it there (SSH access to the bundle host required);
 //! `tools/update-babel-data.ps1` publishes a new one.
 
@@ -67,14 +67,14 @@ fn main() {
 
 fn cache_dir() -> PathBuf {
     if let Some(local) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local).join("Sonus").join("build-cache");
+        return PathBuf::from(local).join("Exaudio").join("build-cache");
     }
     let cache = env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env::var_os("HOME").expect("HOME or LOCALAPPDATA is set")).join(".cache")
         });
-    cache.join("sonus").join("build-cache")
+    cache.join("exaudio").join("build-cache")
 }
 
 fn file_sha256(path: &Path) -> String {

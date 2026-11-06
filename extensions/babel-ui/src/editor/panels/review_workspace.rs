@@ -5,21 +5,21 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use exaudio_babel_services::review::{
+    EvidenceDetail, ProposalDecision, ReviewerCard, ReviewerSuggestion, TemplateSearch,
+};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::review::{
-    EvidenceDetail, ProposalDecision, ReviewerCard, ReviewerSuggestion, TemplateSearch,
-};
 
 use super::task::TaskPanels;
 use crate::text;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
-use sonus_shell::editor::panels::ui::{caption, muted};
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
+use exaudio_shell::editor::panels::ui::{caption, muted};
 
 /// Inputs owned by one card.
 struct CardInputs {

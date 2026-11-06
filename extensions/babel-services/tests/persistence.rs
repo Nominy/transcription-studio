@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
-use sonus_babel_services::{
+use exaudio_babel_services::{
     babel::META_REVIEW_ACTION_ID,
     prefs::{ORIGINAL_SCRIPT_HIDDEN_KEY, SCRIPT_CONTEXT_HIDDEN_KEY},
     recovery,

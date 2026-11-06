@@ -1,16 +1,16 @@
 # @@EXTENSION_ID@@
 
-This is a standalone Sonus extension repository owned by `@@OWNER@@/@@REPOSITORY@@`.
+This is a standalone Exaudio extension repository owned by `@@OWNER@@/@@REPOSITORY@@`.
 It contains real starter functionality: a panel and command that insert a greeting in one
 undoable document transaction, plus empty-segment diagnostics. Customize that implementation
 and the manifest before publishing your extension.
 
 The SDK dependency is fetched from `@@SDK_URL@@`, pinned to full commit
-`@@SDK_COMMIT@@`. There are **no relative dependencies on a Sonus checkout**. Cargo checks
+`@@SDK_COMMIT@@`. There are **no relative dependencies on a Exaudio checkout**. Cargo checks
 out the complete SDK repository, so the SDK's internal WIT files remain available. The same
 commit supplies the release validator and packaging CLI in CI. The generator does not
 claim that a supplied repository/commit is already public: the maintainer must supply a
-real accessible published commit containing `sonus-sdk` and `sonus-extension-index`.
+real accessible published commit containing `exaudio-sdk` and `exaudio-extension-index`.
 
 ## Build and test locally
 
@@ -19,12 +19,12 @@ Install the pinned Rust toolchain from `rust-toolchain.toml`, then run:
 ```text
 rustup target add wasm32-unknown-unknown
 cargo install --locked --version 1.239.0 wasm-tools
-cargo install --locked --git @@SDK_URL@@ --rev @@SDK_COMMIT@@ sonus-extension-index
+cargo install --locked --git @@SDK_URL@@ --rev @@SDK_COMMIT@@ exaudio-extension-index
 cargo build --release --target wasm32-unknown-unknown
 wasm-tools component new target/wasm32-unknown-unknown/release/@@CRATE_ARTIFACT@@.wasm -o module.wasm
 wasm-tools validate module.wasm
-sonus-extension-index pack manifest.json module.wasm @@EXTENSION_ID@@-@@VERSION@@.exaudio LICENSE
-sonus-extension-index preview-developer @@EXTENSION_ID@@-@@VERSION@@.exaudio
+exaudio-extension-index pack manifest.json module.wasm @@EXTENSION_ID@@-@@VERSION@@.exaudio LICENSE
+exaudio-extension-index preview-developer @@EXTENSION_ID@@-@@VERSION@@.exaudio
 ```
 
 Commit the generated `Cargo.lock` before tagging a release so dependency resolution is
@@ -33,7 +33,7 @@ attaches the exact resolved lockfile to the release as `build-Cargo.lock`; this 
 actual build inputs but does not pretend those transitive dependencies were pinned in the
 source commit. Subsequent releases should use a committed lockfile.
 
-Load the archive as a developer source in Sonus, explicitly approve its SHA256 and requested
+Load the archive as a developer source in Exaudio, explicitly approve its SHA256 and requested
 permissions, and exercise its panel/command/diagnostics. The example requests document read
 and edit only. Declaring permissions does not grant them. Runtime/ABI validation and your
 functional tests remain necessary; archive validation alone is not an extension test.
@@ -62,7 +62,7 @@ indexed release: publish a new version for changed source, manifest or bytes.
 ## Submit to a reviewed index
 
 After the GitHub release exists, submit the generated `index-entry.json` in a PR to your
-chosen Sonus index's `index.json`. Append its release to an existing entry when appropriate;
+chosen Exaudio index's `index.json`. Append its release to an existing entry when appropriate;
 do not duplicate the identity or overwrite an existing version. Maintainers independently
 review repository ownership, tag/source correspondence, license, permissions and actual
 release bytes. Index inclusion is **not automatic** and this workflow does not use a token

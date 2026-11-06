@@ -15,22 +15,22 @@ use editor::panels::{
     task::{Drawer, TaskPanels},
     transport::TransportStrip,
 };
-use gpui_kit::*;
-use sonus_extension::ExtensionManifest;
-use sonus_shell::contributions::{CommandContext, KeybindingContribution};
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::{
+use exaudio_extension::ExtensionManifest;
+use exaudio_shell::contributions::{CommandContext, KeybindingContribution};
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::{
     CommandContribution, ContributionRegistry, ModeContribution, PanelLocation,
     ProviderContribution, ProviderRegistry, ShellHandle,
 };
+use gpui_kit::*;
 use std::rc::Rc;
 
-pub const ID: &str = "sonus.babel";
+pub const ID: &str = "exaudio.babel";
 /// Error-review mode: same account, error-categorization projects only.
-pub const ERRORS_ID: &str = "sonus.babel.errors";
-pub const FILE_ID: &str = "sonus.babel-file";
+pub const ERRORS_ID: &str = "exaudio.babel.errors";
+pub const FILE_ID: &str = "exaudio.babel-file";
 /// Provider type of the Babel sign-in (phone/e-mail or sub-account code).
-pub const PROVIDER_ID: &str = "sonus.babel.account";
+pub const PROVIDER_ID: &str = "exaudio.babel.account";
 
 pub fn manifest() -> anyhow::Result<ExtensionManifest> {
     let manifest: ExtensionManifest = serde_json::from_str(include_str!("../manifest.json"))?;
@@ -56,7 +56,7 @@ fn with_panels(
 }
 
 /// Activates the Babel contributions after the host registers the reviewed manifest: the
-/// `sonus.babel.account` provider type and the three modes. No authentication or project
+/// `exaudio.babel.account` provider type and the three modes. No authentication or project
 /// request occurs until the shell launches a mode with a configured account.
 pub fn register(cx: &mut App) -> anyhow::Result<()> {
     if !cx.has_global::<screens::ShellModels>() {
@@ -83,9 +83,9 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     let registry = cx.global_mut::<ContributionRegistry>();
     registry.register_document_provider_factory(
         ID,
-        "sonus.babel.domain",
+        "exaudio.babel.domain",
         vec![ID.into(), ERRORS_ID.into(), FILE_ID.into()],
-        Rc::new(sonus_babel_domain::domain_providers),
+        Rc::new(exaudio_babel_domain::domain_providers),
     )?;
     registry.register_mode(
         ID,
@@ -120,7 +120,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.context",
+        "exaudio.babel.context",
         t("Task context", "Контекст задачи"),
         PanelLocation::Inspector,
         Rc::new(|shell, window, cx| {
@@ -130,7 +130,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.feedback",
+        "exaudio.babel.feedback",
         t("Feedback", "Отзыв"),
         PanelLocation::Sidebar,
         Rc::new(|shell, window, cx| {
@@ -140,7 +140,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.assistant",
+        "exaudio.babel.assistant",
         t("Babel assistant", "Помощник Babel"),
         PanelLocation::Sidebar,
         Rc::new(|shell, window, cx| {
@@ -151,7 +151,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.review",
+        "exaudio.babel.review",
         "Magic Review",
         PanelLocation::Overlay,
         Rc::new(|shell, window, cx| {
@@ -162,7 +162,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.grader",
+        "exaudio.babel.grader",
         t("Grader", "Оценка"),
         PanelLocation::Overlay,
         Rc::new(|shell, window, cx| {
@@ -172,7 +172,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.actions",
+        "exaudio.babel.actions",
         t("Task actions", "Действия с задачей"),
         PanelLocation::Transport,
         Rc::new(|shell, window, cx| {
@@ -183,7 +183,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.settings",
+        "exaudio.babel.settings",
         "Babel",
         PanelLocation::Settings,
         Rc::new(|shell, window, cx| {
@@ -193,7 +193,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_panel(
         ID,
-        "sonus.babel.review-settings",
+        "exaudio.babel.review-settings",
         t("AI review", "ИИ-ревью"),
         PanelLocation::Settings,
         Rc::new(|_, window, cx| {
@@ -203,32 +203,32 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     for (id, label, shortcut, action) in [
         (
-            "sonus.babel.submit",
+            "exaudio.babel.submit",
             t("Submit", "Отправить"),
             Some("ctrl-enter"),
             TaskPanels::request_submit
                 as fn(&mut TaskPanels, &mut Window, &mut Context<TaskPanels>),
         ),
         (
-            "sonus.babel.skip",
+            "exaudio.babel.skip",
             t("Skip", "Пропустить"),
             None,
             TaskPanels::request_skip,
         ),
         (
-            "sonus.babel.flag",
+            "exaudio.babel.flag",
             t("Flag recording", "Пометить запись"),
             None,
             TaskPanels::request_admin_flag,
         ),
         (
-            "sonus.babel.drop-claim",
+            "exaudio.babel.drop-claim",
             t("Release task", "Отпустить задачу"),
             None,
             TaskPanels::drop_claim,
         ),
         (
-            "sonus.babel.magic-review",
+            "exaudio.babel.magic-review",
             "Magic Review",
             None,
             TaskPanels::magic_review,
@@ -248,7 +248,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_command(
         ID,
         CommandContribution {
-            id: "sonus.babel.feedback".into(),
+            id: "exaudio.babel.feedback".into(),
             label: t("Feedback", "Отзыв").into(),
             shortcut: None,
             toolbar: false,
@@ -262,7 +262,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_command(
         ID,
         CommandContribution {
-            id: "sonus.babel.grader".into(),
+            id: "exaudio.babel.grader".into(),
             label: t("Grade", "Оценить").into(),
             shortcut: None,
             toolbar: false,
@@ -274,13 +274,13 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_command(
         ID,
         CommandContribution {
-            id: "sonus.babel.edit-annotation".into(),
+            id: "exaudio.babel.edit-annotation".into(),
             label: t("Edit annotation", "Изменить аннотацию").into(),
             shortcut: None,
             toolbar: false,
             run: Rc::new(|shell, window, cx| {
                 shell.dispatch_document_command(
-                    "sonus.babel.edit-annotation",
+                    "exaudio.babel.edit-annotation",
                     serde_json::Value::Null,
                     window,
                     cx,
@@ -290,7 +290,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     )?;
     registry.register_document_command(
         ID,
-        "sonus.babel.edit-annotation",
+        "exaudio.babel.edit-annotation",
         Rc::new(|shell, arguments, window, cx| {
             let Some(model) = shell.editor_model(cx) else {
                 return;
@@ -319,7 +319,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     );
     registry.register_document_command(
         ID,
-        "sonus.babel.open-create-region",
+        "exaudio.babel.open-create-region",
         Rc::new(|shell, arguments, window, cx| {
             let model = model(&shell, cx);
             let state = services::document_dialogs(&model, cx);
@@ -373,17 +373,17 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     );
     for (id, label, command) in [
         (
-            "sonus.babel.autofix-row",
+            "exaudio.babel.autofix-row",
             t("Fix this segment", "Исправить сегмент"),
             "babel.autofix-row",
         ),
         (
-            "sonus.babel.autofix-all",
+            "exaudio.babel.autofix-all",
             t("Fix all segments", "Исправить все сегменты"),
             "babel.autofix-all",
         ),
         (
-            "sonus.babel.skaz-selection",
+            "exaudio.babel.skaz-selection",
             t("Convert to СКАЗ", "Преобразовать в СКАЗ"),
             "babel.skaz-selection",
         ),
@@ -408,7 +408,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         )?;
     }
     for digit in '0'..='9' {
-        let id = format!("sonus.babel.skaz-digit-{digit}");
+        let id = format!("exaudio.babel.skaz-digit-{digit}");
         registry.register_command(
             ID,
             CommandContribution {
@@ -443,7 +443,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_command(
         ID,
         CommandContribution {
-            id: "sonus.babel.acknowledge-warning".into(),
+            id: "exaudio.babel.acknowledge-warning".into(),
             label: t("Dismiss warning", "Скрыть предупреждение").into(),
             shortcut: None,
             toolbar: false,
@@ -465,33 +465,33 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         },
     )?;
     for id in [
-        "sonus.babel.feedback",
-        "sonus.babel.assistant",
-        "sonus.babel.review",
-        "sonus.babel.grader",
-        "sonus.babel.actions",
+        "exaudio.babel.feedback",
+        "exaudio.babel.assistant",
+        "exaudio.babel.review",
+        "exaudio.babel.grader",
+        "exaudio.babel.actions",
     ] {
         registry.set_panel_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
     for id in [
-        "sonus.babel.submit",
-        "sonus.babel.skip",
-        "sonus.babel.flag",
-        "sonus.babel.drop-claim",
-        "sonus.babel.magic-review",
-        "sonus.babel.feedback",
-        "sonus.babel.grader",
+        "exaudio.babel.submit",
+        "exaudio.babel.skip",
+        "exaudio.babel.flag",
+        "exaudio.babel.drop-claim",
+        "exaudio.babel.magic-review",
+        "exaudio.babel.feedback",
+        "exaudio.babel.grader",
     ] {
         registry.set_command_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
     for (id, label, start) in [
         (
-            "sonus.babel.relay-start",
+            "exaudio.babel.relay-start",
             t("Start sub-account relay", "Запустить ретранслятор"),
             true,
         ),
         (
-            "sonus.babel.relay-stop",
+            "exaudio.babel.relay-stop",
             t("Stop sub-account relay", "Остановить ретранслятор"),
             false,
         ),

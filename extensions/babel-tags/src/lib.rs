@@ -3,17 +3,17 @@ pub mod autofix;
 pub mod skaz;
 pub mod tags;
 
-use sonus_extension::document::{
+use exaudio_extension::document::{
     CommandOutcome, CommandProvider, CommandRequest, Completion, CompletionProvider,
     CompletionRequest, DocumentProviders, DraftReplacement, TextRange,
 };
 use std::sync::Arc;
 use studio_core::Project;
 
-pub const ID: &str = "sonus.babel-tags";
+pub const ID: &str = "exaudio.babel-tags";
 pub const MANIFEST_JSON: &str = include_str!("../manifest.json");
 
-pub fn manifest() -> Result<sonus_extension::manifest::ExtensionManifest, serde_json::Error> {
+pub fn manifest() -> Result<exaudio_extension::manifest::ExtensionManifest, serde_json::Error> {
     serde_json::from_str(MANIFEST_JSON)
 }
 

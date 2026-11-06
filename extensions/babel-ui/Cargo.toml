@@ -1,5 +1,5 @@
 [package]
-name = "sonus-babel-ui"
+name = "exaudio-babel-ui"
 version = "0.3.0"
 edition.workspace = true
 license.workspace = true
@@ -19,11 +19,11 @@ studio-editor.workspace = true
 studio-inference.workspace = true
 studio-services.workspace = true
 studio-waveform.workspace = true
-sonus-shell = { path = "../../crates/sonus-shell" }
-sonus-extension = { path = "../../crates/sonus-extension" }
-sonus-babel-domain = { path = "../babel-domain" }
-sonus-babel-lint = { path = "../babel-lint" }
-sonus-babel-tags = { path = "../babel-tags" }
-sonus-babel-services = { path = "../babel-services" }
-sonus-gold = { path = "../gold" }
-sonus-gold-ui = { path = "../gold-ui" }
+exaudio-shell = { path = "../../crates/exaudio-shell" }
+exaudio-extension = { path = "../../crates/exaudio-extension" }
+exaudio-babel-domain = { path = "../babel-domain" }
+exaudio-babel-lint = { path = "../babel-lint" }
+exaudio-babel-tags = { path = "../babel-tags" }
+exaudio-babel-services = { path = "../babel-services" }
+exaudio-gold = { path = "../gold" }
+exaudio-gold-ui = { path = "../gold-ui" }

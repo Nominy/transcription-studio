@@ -1,16 +1,16 @@
 mod common;
 
 use common::{MockResponse, MockServer, contains};
-use sonus_babel_services::account::{
+use exaudio_babel_services::account::{
     AccountKind, AccountRecord, AccountStatus, AccountStore, direct_instance_id, discover_records,
     move_providers_root, relay_instance_id,
 };
-use sonus_babel_services::auth::{
+use exaudio_babel_services::auth::{
     self, AuthCookie, AuthStore,
     cli::{AuthCli, AuthCliCommand, parse_args},
     flow::{AuthFlow, AuthStartup, AuthStep},
 };
-use sonus_babel_services::subaccounts::{self, SubaccountSession};
+use exaudio_babel_services::subaccounts::{self, SubaccountSession};
 
 const NOW: i64 = 1_782_754_800;
 
@@ -186,7 +186,7 @@ fn relay_session_makes_a_relay_client_and_wins_over_cookies() {
 fn records_are_rediscovered_and_the_root_moves_as_a_whole() {
     let temp = tempfile::tempdir().expect("temp dir");
     let root = temp.path().join("providers");
-    let provider_dir = root.join("sonus.babel.account");
+    let provider_dir = root.join("exaudio.babel.account");
     let record = AccountRecord {
         id: direct_instance_id("tester@example.com"),
         label: "tester@example.com".into(),
@@ -212,7 +212,7 @@ fn records_are_rediscovered_and_the_root_moves_as_a_whole() {
     let target = temp.path().join("portable").join("providers");
     move_providers_root(&root, &target).expect("move");
     assert!(!root.exists(), "the source root is moved, not copied");
-    let moved = AccountStore::new(target.join("sonus.babel.account").join(&record.id));
+    let moved = AccountStore::new(target.join("exaudio.babel.account").join(&record.id));
     assert_eq!(moved.read_record().expect("read").as_ref(), Some(&record));
     assert_eq!(
         moved.status("https://clerk.babel.audio", NOW),
@@ -533,7 +533,7 @@ fn cli_ignores_regular_args_and_rejects_bad_combinations() {
         ])
         .is_err()
     );
-    assert!(sonus_babel_services::auth::cli::run_from_args(["studio-app", "--other"]).is_none());
+    assert!(exaudio_babel_services::auth::cli::run_from_args(["studio-app", "--other"]).is_none());
 }
 
 #[test]

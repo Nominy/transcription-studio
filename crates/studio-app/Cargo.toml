@@ -12,26 +12,26 @@ path = "src/main.rs"
 [features]
 default = ["batteries-included"]
 batteries-included = ["local", "formats", "basic-checks", "gold", "babel"]
-local = ["dep:sonus-local"]
-formats = ["dep:sonus-formats"]
-basic-checks = ["dep:sonus-lint-basic"]
-gold = ["dep:sonus-gold-ui"]
-babel = ["dep:sonus-babel-ui", "dep:sonus-babel-services", "dep:sonus-babel-lint", "dep:sonus-babel-tags"]
+local = ["dep:exaudio-local"]
+formats = ["dep:exaudio-formats"]
+basic-checks = ["dep:exaudio-lint-basic"]
+gold = ["dep:exaudio-gold-ui"]
+babel = ["dep:exaudio-babel-ui", "dep:exaudio-babel-services", "dep:exaudio-babel-lint", "dep:exaudio-babel-tags"]
 
 [dependencies]
 anyhow.workspace = true
 gpui-kit.workspace = true
-sonus-extension.workspace = true
-sonus-shell.workspace = true
+exaudio-extension.workspace = true
+exaudio-shell.workspace = true
 studio-services.workspace = true
-sonus-local = { workspace = true, optional = true }
-sonus-formats = { workspace = true, optional = true }
-sonus-lint-basic = { workspace = true, optional = true }
-sonus-gold-ui = { workspace = true, optional = true }
-sonus-babel-ui = { workspace = true, optional = true }
-sonus-babel-services = { workspace = true, optional = true }
-sonus-babel-lint = { workspace = true, optional = true }
-sonus-babel-tags = { workspace = true, optional = true }
+exaudio-local = { workspace = true, optional = true }
+exaudio-formats = { workspace = true, optional = true }
+exaudio-lint-basic = { workspace = true, optional = true }
+exaudio-gold-ui = { workspace = true, optional = true }
+exaudio-babel-ui = { workspace = true, optional = true }
+exaudio-babel-services = { workspace = true, optional = true }
+exaudio-babel-lint = { workspace = true, optional = true }
+exaudio-babel-tags = { workspace = true, optional = true }
 
 [build-dependencies]
 embed-resource = "3"

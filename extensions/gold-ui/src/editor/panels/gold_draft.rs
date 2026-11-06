@@ -11,6 +11,14 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use exaudio_extension::document::{DocumentEdit, DocumentTransaction};
+use exaudio_gold::polish::{
+    AudioTrack, DraftAudioCueStatus, DraftAudioGuard, DraftAudioMode, DraftResult, DraftRow,
+    DraftRowPreview, DraftStreamEvent, DraftSummary, DraftingConfig, broker_audio_tracks,
+    draft_audio_cue_status, draft_row_previews, resolve_draft_audio,
+};
+use exaudio_gold::prefs::ExecutionLocation;
+use exaudio_gold::protocol::lane_name;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
@@ -20,14 +28,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_extension::document::{DocumentEdit, DocumentTransaction};
-use sonus_gold::polish::{
-    AudioTrack, DraftAudioCueStatus, DraftAudioGuard, DraftAudioMode, DraftResult, DraftRow,
-    DraftRowPreview, DraftStreamEvent, DraftSummary, DraftingConfig, broker_audio_tracks,
-    draft_audio_cue_status, draft_row_previews, resolve_draft_audio,
-};
-use sonus_gold::prefs::ExecutionLocation;
-use sonus_gold::protocol::lane_name;
 use studio_core::Project;
 use studio_editor::edit::{
     DraftedRow, RowSnapshot, TranscriptionTarget, remove_word_final_ellipsis,
@@ -45,10 +45,10 @@ use crate::editor::inference_audio::{AudioReadError, read_lane_audio, until_canc
 use crate::editor::timing_cache::{SavedTiming, TimingCache, lane_timings, timed_lanes};
 use crate::screens::ai_settings::AiSettingsView;
 use crate::services::GoldServices;
-use sonus_shell::editor::model::{EditorModel, LaneSource};
-use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
-use sonus_shell::editor::panels::ui::{caption, muted};
-use sonus_shell::screens::ui::{details, error_notification, localized};
+use exaudio_shell::editor::model::{EditorModel, LaneSource};
+use exaudio_shell::editor::panels::modal::{CloseModal, ModalFocus, badge, dialog_surface, modal};
+use exaudio_shell::editor::panels::ui::{caption, muted};
+use exaudio_shell::screens::ui::{details, error_notification, localized};
 
 /// Changed/failed rows listed in the Changes panel.
 const CHANGES_LIMIT: usize = 40;

@@ -1,7 +1,7 @@
 //! Tag autocompletion for transcript text: trigger detection before the caret, project-aware
 //! tag matching, and replacement at the caret (or wrapping a selection in a style tag).
 
-use sonus_babel_lint::project_lint_tag_config::BabelProjectLintTagConfig;
+use exaudio_babel_lint::project_lint_tag_config::BabelProjectLintTagConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagSuggestionKind {
@@ -64,10 +64,10 @@ pub fn suggestions_for_text(
 
 /// Completion requests use byte ranges so the rule package never owns editor drafts.
 pub fn completions_for_request(
-    request: &sonus_extension::document::CompletionRequest<'_>,
-) -> Vec<sonus_extension::document::Completion> {
-    use sonus_extension::document::{Completion, TextRange};
-    let config = sonus_babel_lint::project_lint_tag_config::resolve_babel_project_lint_tag_config(
+    request: &exaudio_extension::document::CompletionRequest<'_>,
+) -> Vec<exaudio_extension::document::Completion> {
+    use exaudio_extension::document::{Completion, TextRange};
+    let config = exaudio_babel_lint::project_lint_tag_config::resolve_babel_project_lint_tag_config(
         request.project,
     );
     let range = request.selection;

@@ -12,7 +12,7 @@ mod workspace;
 
 use std::collections::BTreeMap;
 
-use sonus_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::workflow::StudioWorkflow;
 

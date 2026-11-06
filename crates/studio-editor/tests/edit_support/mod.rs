@@ -50,13 +50,14 @@ pub fn seg(id: &str, lane: &str, start: f64, end: f64, text: &str) -> Segment {
 pub fn doc(segments: Vec<Segment>) -> EditorDoc {
     EditorDoc::from_project(
         project(segments),
-        sonus_extension::document::DocumentEnvironment::local("test"),
+        exaudio_extension::document::DocumentEnvironment::local("test"),
     )
 }
 
 pub fn read_only_doc(segments: Vec<Segment>) -> EditorDoc {
     let project = project(segments);
-    let mut environment = sonus_extension::document::DocumentEnvironment::local(project.id.clone());
+    let mut environment =
+        exaudio_extension::document::DocumentEnvironment::local(project.id.clone());
     environment.policy.read_only = true;
     EditorDoc::from_project(project, environment)
 }
@@ -64,14 +65,14 @@ pub fn read_only_doc(segments: Vec<Segment>) -> EditorDoc {
 pub fn stable_sample_doc() -> EditorDoc {
     EditorDoc::from_project(
         serde_json::from_str(STABLE_NATIVE_PROJECT_JSON).expect("native fixture should parse"),
-        sonus_extension::document::DocumentEnvironment::local("test"),
+        exaudio_extension::document::DocumentEnvironment::local("test"),
     )
 }
 
 pub fn sample_doc() -> EditorDoc {
     EditorDoc::from_project(
         studio_editor::load_sample_project().expect("sample project"),
-        sonus_extension::document::DocumentEnvironment::local("test"),
+        exaudio_extension::document::DocumentEnvironment::local("test"),
     )
 }
 

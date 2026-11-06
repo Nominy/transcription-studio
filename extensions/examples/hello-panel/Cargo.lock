@@ -21,6 +21,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "exaudio-example-hello-panel"
+version = "0.1.0"
+dependencies = [
+ "exaudio-sdk",
+]
+
+[[package]]
+name = "exaudio-sdk"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,20 +284,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "sonus-example-hello-panel"
-version = "0.1.0"
-dependencies = [
- "sonus-sdk",
-]
-
-[[package]]
-name = "sonus-sdk"
-version = "0.1.0"
-dependencies = [
- "wit-bindgen",
-]
 
 [[package]]
 name = "syn"

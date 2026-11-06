@@ -275,7 +275,7 @@ $cargoTargetDir = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
 $sourceExePath = Join-Path $cargoTargetDir "release/studio-app.exe"
 $sourceRelayExePath = Join-Path $cargoTargetDir "release/studio-relay.exe"
 # Isolated compiler child for untrusted extension .wasm; the app resolves it as its sibling.
-$sourceWasmWorkerPath = Join-Path $cargoTargetDir "release/sonus-wasm-worker.exe"
+$sourceWasmWorkerPath = Join-Path $cargoTargetDir "release/exaudio-wasm-worker.exe"
 $iconPath = Join-Path $repoRoot "assets/app/exaudio.ico"
 Assert-ChildPath -Parent $repoRoot -Child $stagePath
 Assert-ChildPath -Parent $repoRoot -Child $outputPath
@@ -298,7 +298,7 @@ if (-not $SkipBuild) {
     $env:STUDIO_BUILD_VERSION = $Version
     $env:STUDIO_UPDATE_CHANNEL = $UpdateChannel
     # One resolution keeps shared Wasmtime dependencies from being rebuilt with a second feature set.
-    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "-p", "studio-relay", "-p", "sonus-wasm", "--release", "--locked")
+    Invoke-CheckedCommand -Command "cargo" -Arguments @("build", "-p", "studio-app", "-p", "studio-relay", "-p", "exaudio-wasm", "--release", "--locked")
 }
 
 foreach ($binary in @($sourceExePath, $sourceRelayExePath, $sourceWasmWorkerPath)) {
@@ -314,7 +314,7 @@ New-Item -ItemType Directory -Force -Path $stagePath | Out-Null
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 Copy-Item -LiteralPath $sourceExePath -Destination (Join-Path $stagePath $MainExe)
 Copy-Item -LiteralPath $sourceRelayExePath -Destination (Join-Path $stagePath "studio-relay.exe")
-Copy-Item -LiteralPath $sourceWasmWorkerPath -Destination (Join-Path $stagePath "sonus-wasm-worker.exe")
+Copy-Item -LiteralPath $sourceWasmWorkerPath -Destination (Join-Path $stagePath "exaudio-wasm-worker.exe")
 $demoSource = Join-Path $repoRoot "crates/studio-editor/assets/demo"
 $demoDestination = Join-Path $stagePath "assets/demo"
 New-Item -ItemType Directory -Force -Path $demoDestination | Out-Null

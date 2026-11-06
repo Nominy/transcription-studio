@@ -6,25 +6,25 @@
 
 use std::collections::BTreeMap;
 
+use exaudio_babel_domain::editor_model::feedback_assessment::{
+    FEEDBACK_MAX_COMMENT_LENGTH, FeedbackDraftSaveRequest,
+};
+use exaudio_babel_services::review::{
+    CategoryGrade, FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback, feedback_is_tts_project,
+    load_feedback_bootstrap, save_feedback_draft,
+};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::feedback_assessment::{
-    FEEDBACK_MAX_COMMENT_LENGTH, FeedbackDraftSaveRequest,
-};
-use sonus_babel_services::review::{
-    CategoryGrade, FeedbackBootstrapIds, FeedbackForm, ReviewerFeedback, feedback_is_tts_project,
-    load_feedback_bootstrap, save_feedback_draft,
-};
 
 use super::task::{Drawer, TaskPanels};
 use crate::text;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{caption, muted};
-use sonus_shell::services::spawn_service_in;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{caption, muted};
+use exaudio_shell::services::spawn_service_in;
 
 /// Rating buttons: value and label (EN, RU).
 const RATINGS: [(u8, &str, &str); 3] = [

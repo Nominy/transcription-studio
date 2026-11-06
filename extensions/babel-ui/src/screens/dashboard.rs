@@ -3,6 +3,14 @@
 
 use std::collections::BTreeMap;
 
+use exaudio_babel_domain::editor_model::task_lookup::{TaskLookupEffect, TaskLookupState};
+use exaudio_babel_domain::route::{RouteLoad, StartupRoute};
+use exaudio_babel_services::babel::{
+    DashboardProject, META_STITCHED_QUEUE_ID, OpenedTask, ROUTE_METADATA_KEYS, RouteContext,
+    TaskRequest, daily_task_progress,
+};
+use exaudio_babel_services::recovery::{self, RecoveryDraft};
+use exaudio_babel_services::subaccounts::SubaccountSession;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -10,14 +18,6 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::task_lookup::{TaskLookupEffect, TaskLookupState};
-use sonus_babel_domain::route::{RouteLoad, StartupRoute};
-use sonus_babel_services::babel::{
-    DashboardProject, META_STITCHED_QUEUE_ID, OpenedTask, ROUTE_METADATA_KEYS, RouteContext,
-    TaskRequest, daily_task_progress,
-};
-use sonus_babel_services::recovery::{self, RecoveryDraft};
-use sonus_babel_services::subaccounts::SubaccountSession;
 use studio_editor::workflow::StudioWorkflow;
 
 use crate::editor::panels::dialogs::no_work;
@@ -28,11 +28,11 @@ use crate::screens::error_task::ErrorTaskOpen;
 use crate::screens::subaccounts::{LoadProjects, SubaccountsView};
 use crate::screens::task_lookup;
 use crate::text::{count, is_russian, localized, localized_fmt};
-use sonus_babel_services::babel::BabelClient;
-use sonus_shell::screens::settings::SettingsView;
-use sonus_shell::screens::ui::{self, Tone};
-use sonus_shell::screens::updates;
-use sonus_shell::services::spawn_service_in;
+use exaudio_babel_services::babel::BabelClient;
+use exaudio_shell::screens::settings::SettingsView;
+use exaudio_shell::screens::ui::{self, Tone};
+use exaudio_shell::screens::updates;
+use exaudio_shell::services::spawn_service_in;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -121,7 +121,7 @@ impl Problem {
 
 pub struct DashboardScreen {
     root: WeakEntity<BabelController>,
-    shell: sonus_shell::ShellHandle,
+    shell: exaudio_shell::ShellHandle,
     client: BabelClient,
     /// Which projects this mode lists; every project is kept for owner-side features.
     filter: DashboardFilter,
@@ -148,7 +148,7 @@ pub struct DashboardScreen {
 impl DashboardScreen {
     pub fn new(
         root: WeakEntity<BabelController>,
-        shell: sonus_shell::ShellHandle,
+        shell: exaudio_shell::ShellHandle,
         client: BabelClient,
         filter: DashboardFilter,
         route: Option<StartupRoute>,
@@ -170,7 +170,7 @@ impl DashboardScreen {
         let mut subscriptions = vec![
             // The sidebar shows the update notice.
             cx.observe(
-                &sonus_shell::screens::ShellModels::updater(cx),
+                &exaudio_shell::screens::ShellModels::updater(cx),
                 |_, _, cx| cx.notify(),
             ),
         ];
@@ -529,7 +529,7 @@ impl DashboardScreen {
         &mut self,
         request: TaskRequest,
         project_id: Option<String>,
-        result: Result<OpenedTask, sonus_babel_services::babel::BabelError>,
+        result: Result<OpenedTask, exaudio_babel_services::babel::BabelError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -630,7 +630,7 @@ impl DashboardScreen {
     }
 
     fn open_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = sonus_shell::root::open_demo(&self.shell, window, cx) {
+        if let Err(error) = exaudio_shell::root::open_demo(&self.shell, window, cx) {
             self.problem = Some(
                 Problem::new(
                     localized(cx, "Couldn't open the demo", "Не удалось открыть демо"),
@@ -764,7 +764,7 @@ impl DashboardScreen {
                     .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
             );
 
-        let version = sonus_shell::screens::ShellModels::updater(cx)
+        let version = exaudio_shell::screens::ShellModels::updater(cx)
             .read(cx)
             .state()
             .current_version

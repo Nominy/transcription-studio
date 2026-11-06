@@ -1,13 +1,13 @@
 //! Optional Gold polish transport. This capability works on generic local projects too;
 //! installing it never marks a document as Babel-origin or selects its task route.
 
-use gpui_kit::*;
-use sonus_babel_services::review::{ReviewBackend, build_draft_generate_payload};
-use sonus_gold::polish::{AudioTrack, BackendHealth, DraftResult, DraftingConfig};
-use sonus_gold_ui::services::{
+use exaudio_babel_services::review::{ReviewBackend, build_draft_generate_payload};
+use exaudio_gold::polish::{AudioTrack, BackendHealth, DraftResult, DraftingConfig};
+use exaudio_gold_ui::services::{
     PolishEvents, PolishFuture, PolishProvider, register_polish_provider,
     unregister_polish_provider,
 };
+use gpui_kit::*;
 use std::sync::Arc;
 use studio_core::Project;
 

@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
+use exaudio_gold::protocol::lane_name;
 use serde::{Deserialize, Serialize};
-use sonus_gold::protocol::lane_name;
 use studio_audio::sha256_hex;
 use studio_core::timing::{LaneTimings, TimingToken as WordToken};
 use studio_inference::{LaneAudio, TimingResponse};

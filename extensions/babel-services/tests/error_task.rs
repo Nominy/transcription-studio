@@ -10,9 +10,8 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::post;
-use serde_json::{Value, json};
-use sonus_babel_services::babel::BabelRequest;
-use sonus_babel_services::babel::error_task::{
+use exaudio_babel_services::babel::BabelRequest;
+use exaudio_babel_services::babel::error_task::{
     AlignBackend, AlignError, AssistantStatus, AudioInterval, BoundaryNote, CancelToken,
     ClipDirection, DecisionStore, DiffAlignment, DiffSide, ErrorChoices, ErrorLabelDraft,
     ErrorSource, ErrorTaskIdentity, ErrorTaskSnapshot, InitialFillRequest, NormalizedDiff,
@@ -22,7 +21,8 @@ use sonus_babel_services::babel::error_task::{
     parse_error_task, parse_style_guide_document, payload_is_error_task, readiness,
     segment_error_diff_context, select_style_guide_document, submission, valid_categories,
 };
-use sonus_gold::prefs::ExecutionLocation;
+use exaudio_gold::prefs::ExecutionLocation;
+use serde_json::{Value, json};
 use studio_inference::{
     AlignRequest, AlignResponse, BackendStatus, DraftResponse, EnhancedLane, InferenceBackend,
     InferenceResult, LaneAudio, PreservedRow, ProgressSink, TimingResponse, TimingToken,
@@ -1430,7 +1430,7 @@ fn fill_request(
         diff_end_seconds: 1.5,
         context_start_seconds: 0.5,
         context_end_seconds: 2.5,
-        text_window: sonus_babel_services::babel::error_task::TextWindow {
+        text_window: exaudio_babel_services::babel::error_task::TextWindow {
             human_start: 0,
             human_end: u16_len(&source.human.text),
             machine_start: 0,

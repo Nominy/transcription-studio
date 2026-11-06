@@ -1,4 +1,4 @@
-use sonus_local::audio::{ImportStrings, import_audio};
+use exaudio_local::audio::{ImportStrings, import_audio};
 use std::{fs, path::PathBuf};
 
 const TONE: &[u8] =

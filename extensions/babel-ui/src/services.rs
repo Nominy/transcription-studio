@@ -1,8 +1,8 @@
 //! Babel transport is captured per document; credentials never select a document's route.
+use exaudio_babel_domain::editor_model::BabelDocumentState;
+use exaudio_babel_services::{babel::BabelClient, review::ReviewBackend};
+use exaudio_shell::editor::model::EditorModel;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::BabelDocumentState;
-use sonus_babel_services::{babel::BabelClient, review::ReviewBackend};
-use sonus_shell::editor::model::EditorModel;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -53,7 +53,7 @@ pub(crate) fn local_audio_sources(
 struct DocumentServices {
     model: WeakEntity<EditorModel>,
     client: Option<BabelClient>,
-    dialogs: Rc<RefCell<sonus_babel_domain::edit::BabelAnnotationDialogs>>,
+    dialogs: Rc<RefCell<exaudio_babel_domain::edit::BabelAnnotationDialogs>>,
     state: Rc<RefCell<BabelDocumentState>>,
 }
 #[derive(Default)]
@@ -83,7 +83,7 @@ fn attach_document(model: &Entity<EditorModel>, client: Option<BabelClient>, cx:
             client,
             state,
             dialogs: Rc::new(RefCell::new(
-                sonus_babel_domain::edit::BabelAnnotationDialogs::default(),
+                exaudio_babel_domain::edit::BabelAnnotationDialogs::default(),
             )),
         },
     );
@@ -111,7 +111,7 @@ pub fn document_state(model: &Entity<EditorModel>, cx: &App) -> Rc<RefCell<Babel
 pub fn document_dialogs(
     model: &Entity<EditorModel>,
     cx: &App,
-) -> Rc<RefCell<sonus_babel_domain::edit::BabelAnnotationDialogs>> {
+) -> Rc<RefCell<exaudio_babel_domain::edit::BabelAnnotationDialogs>> {
     cx.global::<Documents>()
         .0
         .get(&model.entity_id())

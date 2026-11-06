@@ -1,12 +1,12 @@
 {
-  "id": "sonus.babel",
+  "id": "exaudio.babel",
   "name": "Babel",
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
   "description": "Take, edit and submit Babel tasks.",
   "license": "MIT",
-  "dependencies": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
+  "dependencies": { "exaudio.babel-lint": "^0.1", "exaudio.babel-tags": "^0.1" },
   "permissions": [
     { "kind": "document-read" }, { "kind": "document-edit" },
     { "kind": "audio-read" }, { "kind": "transport-control" },
@@ -18,11 +18,11 @@
     { "kind": "network", "scope": "openrouter.ai" }
   ],
   "providers": [
-    { "id": "sonus.babel.account", "name": "Babel account", "multiple": true }
+    { "id": "exaudio.babel.account", "name": "Babel account", "multiple": true }
   ],
   "modes": [
-    { "id": "sonus.babel", "name": "Babel", "provider": "sonus.babel.account", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
-    { "id": "sonus.babel.errors", "name": "Babel error review", "provider": "sonus.babel.account", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
-    { "id": "sonus.babel-file", "name": "Babel file", "launch": "direct", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } }
+    { "id": "exaudio.babel", "name": "Babel", "provider": "exaudio.babel.account", "requires": { "exaudio.babel-lint": "^0.1", "exaudio.babel-tags": "^0.1" }, "recommends": { "exaudio.gold": "^0.1" } },
+    { "id": "exaudio.babel.errors", "name": "Babel error review", "provider": "exaudio.babel.account", "requires": { "exaudio.babel-lint": "^0.1", "exaudio.babel-tags": "^0.1" }, "recommends": { "exaudio.gold": "^0.1" } },
+    { "id": "exaudio.babel-file", "name": "Babel file", "launch": "direct", "requires": { "exaudio.babel-lint": "^0.1", "exaudio.babel-tags": "^0.1" }, "recommends": { "exaudio.gold": "^0.1" } }
   ]
 }

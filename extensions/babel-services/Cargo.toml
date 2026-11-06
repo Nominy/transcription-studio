@@ -1,5 +1,5 @@
 [package]
-name = "sonus-babel-services"
+name = "exaudio-babel-services"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -22,9 +22,9 @@ studio-editor.workspace = true
 studio-inference.workspace = true
 studio-services.workspace = true
 studio-waveform.workspace = true
-sonus-babel-domain.workspace = true
-sonus-babel-lint.workspace = true
-sonus-gold.workspace = true
+exaudio-babel-domain.workspace = true
+exaudio-babel-lint.workspace = true
+exaudio-gold.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["parsing"] }

@@ -1,5 +1,5 @@
-use sonus_babel_domain::workflow::BabelWorkflowExt;
-use sonus_babel_lint::linter::{LintSeverity, ServerLintIssue};
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_lint::linter::{LintSeverity, ServerLintIssue};
 use studio_babel::BabelTaskPackage;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::workflow::StudioWorkflow;
@@ -670,8 +670,8 @@ fn workflow_saves_and_reloads_local_project() {
 
 #[test]
 fn low_confidence_command_accumulates_words_and_returns_one_revision_bound_edit() {
-    use sonus_babel_domain::workflow::BabelLowConfidenceCommandProvider;
-    use sonus_extension::document::{CommandProvider, CommandRequest, DocumentEdit};
+    use exaudio_babel_domain::workflow::BabelLowConfidenceCommandProvider;
+    use exaudio_extension::document::{CommandProvider, CommandRequest, DocumentEdit};
     let mut row = segment("review", 0.0, 2.0, "first second");
     row.metadata.insert(
         "babelLowConfidenceWords".into(),

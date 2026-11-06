@@ -1945,6 +1945,293 @@ dependencies = [
 ]
 
 [[package]]
+name = "exaudio-babel-domain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "exaudio-babel-lint",
+ "exaudio-babel-tags",
+ "exaudio-extension",
+ "serde",
+ "serde_json",
+ "studio-babel",
+ "studio-core",
+ "studio-editor",
+ "studio-waveform",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
+name = "exaudio-babel-lint"
+version = "0.1.0"
+dependencies = [
+ "exaudio-extension",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "studio-core",
+ "tar",
+ "unicode-normalization",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "exaudio-babel-services"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "exaudio-babel-domain",
+ "exaudio-babel-lint",
+ "exaudio-gold",
+ "futures-util",
+ "httpdate",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "studio-babel",
+ "studio-core",
+ "studio-editor",
+ "studio-inference",
+ "studio-services",
+ "studio-waveform",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "unicode-normalization",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "exaudio-babel-tags"
+version = "0.1.0"
+dependencies = [
+ "exaudio-babel-lint",
+ "exaudio-extension",
+ "serde_json",
+ "studio-core",
+ "studio-editor",
+]
+
+[[package]]
+name = "exaudio-babel-ui"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "bytes",
+ "exaudio-babel-domain",
+ "exaudio-babel-lint",
+ "exaudio-babel-services",
+ "exaudio-babel-tags",
+ "exaudio-extension",
+ "exaudio-gold",
+ "exaudio-gold-ui",
+ "exaudio-shell",
+ "gpui-kit",
+ "serde",
+ "serde_json",
+ "studio-audio",
+ "studio-babel",
+ "studio-core",
+ "studio-editor",
+ "studio-inference",
+ "studio-services",
+ "studio-waveform",
+]
+
+[[package]]
+name = "exaudio-extension"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "studio-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "exaudio-extension-index"
+version = "0.1.0"
+dependencies = [
+ "exaudio-extension",
+ "exaudio-marketplace",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zip 2.6.1",
+]
+
+[[package]]
+name = "exaudio-formats"
+version = "0.1.0"
+dependencies = [
+ "exaudio-extension",
+ "serde_json",
+ "studio-core",
+]
+
+[[package]]
+name = "exaudio-gold"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "futures-util",
+ "multer",
+ "rand 0.9.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "studio-core",
+ "studio-editor",
+ "studio-inference",
+ "studio-services",
+ "studio-waveform",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "uuid",
+ "webview2-com",
+ "windows 0.62.2",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "exaudio-gold-ui"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "bytes",
+ "exaudio-extension",
+ "exaudio-gold",
+ "exaudio-shell",
+ "gpui-kit",
+ "serde",
+ "serde_json",
+ "studio-audio",
+ "studio-core",
+ "studio-editor",
+ "studio-inference",
+ "studio-services",
+ "studio-waveform",
+]
+
+[[package]]
+name = "exaudio-lint-basic"
+version = "0.1.0"
+dependencies = [
+ "exaudio-extension",
+ "serde_json",
+ "studio-core",
+]
+
+[[package]]
+name = "exaudio-local"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "exaudio-extension",
+ "exaudio-shell",
+ "gpui-kit",
+ "serde_json",
+ "studio-audio",
+ "studio-core",
+ "studio-project",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "exaudio-marketplace"
+version = "0.1.0"
+dependencies = [
+ "exaudio-extension",
+ "fs2",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "zip 2.6.1",
+]
+
+[[package]]
+name = "exaudio-shell"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "bytes",
+ "exaudio-extension",
+ "exaudio-marketplace",
+ "exaudio-wasm",
+ "futures-lite",
+ "gpui-kit",
+ "keyring",
+ "notify",
+ "raw-window-handle",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "studio-audio",
+ "studio-core",
+ "studio-editor",
+ "studio-project",
+ "studio-services",
+ "studio-waveform",
+ "sys-locale",
+ "tempfile",
+ "time",
+ "tray-icon",
+ "unicode-linebreak",
+ "unicode-segmentation",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "exaudio-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "exaudio-extension",
+ "libc",
+ "semver",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+ "wasmtime",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "exr"
 version = "1.74.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7147,293 +7434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sonus-babel-domain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "sonus-babel-lint",
- "sonus-babel-tags",
- "sonus-extension",
- "studio-babel",
- "studio-core",
- "studio-editor",
- "studio-waveform",
- "tempfile",
- "thiserror 2.0.18",
- "time",
-]
-
-[[package]]
-name = "sonus-babel-lint"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonus-extension",
- "studio-core",
- "tar",
- "unicode-normalization",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "sonus-babel-services"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64",
- "bytes",
- "futures-util",
- "httpdate",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonus-babel-domain",
- "sonus-babel-lint",
- "sonus-gold",
- "studio-babel",
- "studio-core",
- "studio-editor",
- "studio-inference",
- "studio-services",
- "studio-waveform",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "unicode-normalization",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "sonus-babel-tags"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sonus-babel-lint",
- "sonus-extension",
- "studio-core",
- "studio-editor",
-]
-
-[[package]]
-name = "sonus-babel-ui"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "bytes",
- "gpui-kit",
- "serde",
- "serde_json",
- "sonus-babel-domain",
- "sonus-babel-lint",
- "sonus-babel-services",
- "sonus-babel-tags",
- "sonus-extension",
- "sonus-gold",
- "sonus-gold-ui",
- "sonus-shell",
- "studio-audio",
- "studio-babel",
- "studio-core",
- "studio-editor",
- "studio-inference",
- "studio-services",
- "studio-waveform",
-]
-
-[[package]]
-name = "sonus-extension"
-version = "0.1.0"
-dependencies = [
- "semver",
- "serde",
- "serde_json",
- "studio-core",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "sonus-extension-index"
-version = "0.1.0"
-dependencies = [
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonus-extension",
- "sonus-marketplace",
- "tempfile",
- "tokio",
- "zip 2.6.1",
-]
-
-[[package]]
-name = "sonus-formats"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sonus-extension",
- "studio-core",
-]
-
-[[package]]
-name = "sonus-gold"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64",
- "bytes",
- "futures-util",
- "multer",
- "rand 0.9.4",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "studio-core",
- "studio-editor",
- "studio-inference",
- "studio-services",
- "studio-waveform",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "uuid",
- "webview2-com",
- "windows 0.62.2",
- "zip 8.6.0",
-]
-
-[[package]]
-name = "sonus-gold-ui"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "bytes",
- "gpui-kit",
- "serde",
- "serde_json",
- "sonus-extension",
- "sonus-gold",
- "sonus-shell",
- "studio-audio",
- "studio-core",
- "studio-editor",
- "studio-inference",
- "studio-services",
- "studio-waveform",
-]
-
-[[package]]
-name = "sonus-lint-basic"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sonus-extension",
- "studio-core",
-]
-
-[[package]]
-name = "sonus-local"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "gpui-kit",
- "serde_json",
- "sonus-extension",
- "sonus-shell",
- "studio-audio",
- "studio-core",
- "studio-project",
- "tempfile",
- "uuid",
-]
-
-[[package]]
-name = "sonus-marketplace"
-version = "0.1.0"
-dependencies = [
- "fs2",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonus-extension",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "url",
- "zip 2.6.1",
-]
-
-[[package]]
-name = "sonus-shell"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "async-channel",
- "bytes",
- "futures-lite",
- "gpui-kit",
- "keyring",
- "notify",
- "raw-window-handle",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonus-extension",
- "sonus-marketplace",
- "sonus-wasm",
- "studio-audio",
- "studio-core",
- "studio-editor",
- "studio-project",
- "studio-services",
- "studio-waveform",
- "sys-locale",
- "tempfile",
- "time",
- "tray-icon",
- "unicode-linebreak",
- "unicode-segmentation",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "sonus-wasm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "semver",
- "serde_json",
- "sha2 0.10.9",
- "sonus-extension",
- "tempfile",
- "url",
- "wasmtime",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7545,17 +7545,17 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "embed-resource",
+ "exaudio-babel-lint",
+ "exaudio-babel-services",
+ "exaudio-babel-tags",
+ "exaudio-babel-ui",
+ "exaudio-extension",
+ "exaudio-formats",
+ "exaudio-gold-ui",
+ "exaudio-lint-basic",
+ "exaudio-local",
+ "exaudio-shell",
  "gpui-kit",
- "sonus-babel-lint",
- "sonus-babel-services",
- "sonus-babel-tags",
- "sonus-babel-ui",
- "sonus-extension",
- "sonus-formats",
- "sonus-gold-ui",
- "sonus-lint-basic",
- "sonus-local",
- "sonus-shell",
  "studio-services",
 ]
 
@@ -7597,9 +7597,9 @@ name = "studio-editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "exaudio-extension",
  "serde",
  "serde_json",
- "sonus-extension",
  "studio-core",
  "studio-project",
  "studio-waveform",

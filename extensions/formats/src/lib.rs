@@ -3,14 +3,14 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use sonus_extension::ExtensionManifest;
-use sonus_extension::format::{
+use exaudio_extension::ExtensionManifest;
+use exaudio_extension::format::{
     ExportOptions, FormatDescriptor, FormatError, FormatProvider, FormatRegistry, ImportContent,
     ImportedCue,
 };
 use studio_core::Project;
 
-pub const EXTENSION_ID: &str = "sonus.formats";
+pub const EXTENSION_ID: &str = "exaudio.formats";
 pub const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CUES: usize = 100_000;
 pub const MAX_CUE_BYTES: usize = 256 * 1024;
@@ -44,14 +44,14 @@ impl FormatProvider for SubtitleFormat {
     fn descriptor(&self) -> FormatDescriptor {
         let (id, name, extension, media_type) = match self {
             Self::Srt => (
-                "sonus.formats.srt",
+                "exaudio.formats.srt",
                 "SubRip (.srt)",
                 "srt",
                 "application/x-subrip",
             ),
-            Self::WebVtt => ("sonus.formats.vtt", "WebVTT (.vtt)", "vtt", "text/vtt"),
+            Self::WebVtt => ("exaudio.formats.vtt", "WebVTT (.vtt)", "vtt", "text/vtt"),
             Self::Text => (
-                "sonus.formats.txt",
+                "exaudio.formats.txt",
                 "Plain text (.txt)",
                 "txt",
                 "text/plain",

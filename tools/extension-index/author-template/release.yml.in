@@ -1,4 +1,4 @@
-name: Build and release Sonus extension
+name: Build and release Exaudio extension
 
 on:
   push:
@@ -40,7 +40,7 @@ jobs:
           rustup show
           rustup target add wasm32-unknown-unknown
           cargo install --locked --version "$WASM_TOOLS_VERSION" wasm-tools
-          cargo install --locked --git "$SDK_REPOSITORY" --rev "$SDK_COMMIT" sonus-extension-index
+          cargo install --locked --git "$SDK_REPOSITORY" --rev "$SDK_COMMIT" exaudio-extension-index
       - name: Build the real WASM component
         shell: bash
         run: |
@@ -59,8 +59,8 @@ jobs:
           id=$(jq -r '.id' manifest.json)
           version=$(jq -r '.version' manifest.json)
           asset="$id-$version.exaudio"
-          sonus-extension-index pack manifest.json dist/module.wasm "dist/$asset" LICENSE
-          sonus-extension-index release-entry '@@OWNER@@' '@@REPOSITORY@@' manifest.json "dist/$asset" "$RELEASE_TAG" "$(git rev-parse HEAD)" > dist/index-entry.json
+          exaudio-extension-index pack manifest.json dist/module.wasm "dist/$asset" LICENSE
+          exaudio-extension-index release-entry '@@OWNER@@' '@@REPOSITORY@@' manifest.json "dist/$asset" "$RELEASE_TAG" "$(git rev-parse HEAD)" > dist/index-entry.json
           cp Cargo.lock dist/build-Cargo.lock
           jq -n --arg repository "$GITHUB_REPOSITORY" --arg commit "$(git rev-parse HEAD)" --arg sdkRepository "$SDK_REPOSITORY" --arg sdkCommit "$SDK_COMMIT" --arg wasmTools "$WASM_TOOLS_VERSION" '{repository:$repository,commit:$commit,sdkRepository:$sdkRepository,sdkCommit:$sdkCommit,wasmTools:$wasmTools}' > dist/build-source.json
       - uses: actions/upload-artifact@v4
@@ -97,6 +97,6 @@ jobs:
             exit 1
           fi
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" \
-            --notes 'Sonus WASM extension. Submit the attached index-entry.json in a reviewed index PR. Checksums are not publisher signatures.' \
+            --notes 'Exaudio WASM extension. Submit the attached index-entry.json in a reviewed index PR. Checksums are not publisher signatures.' \
             release-assets/*.exaudio release-assets/index-entry.json release-assets/build-Cargo.lock release-assets/build-source.json
           echo 'Release published. Index inclusion still requires a separate reviewed pull request.' >> "$GITHUB_STEP_SUMMARY"

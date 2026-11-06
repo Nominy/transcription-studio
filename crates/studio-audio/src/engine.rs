@@ -421,7 +421,7 @@ impl AudioEngine {
             && lanes > 0
         {
             eprintln!(
-                "Transcription Studio audio playback: tracks={lanes} start={start:.3}s speed={:.2}x",
+                "Exaudio audio playback: tracks={lanes} start={start:.3}s speed={:.2}x",
                 self.transport.speed()
             );
         }

@@ -3,14 +3,14 @@
 
 use std::{io::Cursor, path::PathBuf, time::Duration};
 
-use sonus_babel_services::relay::{
+use exaudio_babel_services::relay::{
     RelayLaunchConfig, RelayProcess, RelayStatus, read_relay_ready,
     relay_executable_path_for_app_exe, relay_ready_url, wait_for_relay_ready,
 };
-use sonus_babel_services::subaccounts::owner::{
+use exaudio_babel_services::subaccounts::owner::{
     ProjectQueueConfig, parse_dashboard, project_queue_sync_host,
 };
-use sonus_babel_services::subaccounts::{
+use exaudio_babel_services::subaccounts::{
     SubaccountSession, normalize_relay_host_url, parse_login_response, parse_presigned_urls,
     parse_relay_payload, parse_relay_settings, parse_session, read_relay_host_url, read_session,
     save_relay_host_url, save_session,

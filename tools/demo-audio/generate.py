@@ -1,4 +1,4 @@
-"""Synthesises Sonus's two-speaker demo task: an original Russian dialogue spoken by two
+"""Synthesises Exaudio's two-speaker demo task: an original Russian dialogue spoken by two
 Piper voices, one speaker per channel file, with annotations timed to the synthesised speech.
 
 usage: python tools/demo-audio/generate.py <voices_dir>
@@ -30,7 +30,7 @@ DEMO_DIR = REPO / "crates/studio-editor/assets/demo"
 SAMPLE_TASK = REPO / "crates/studio-editor/assets/sample-task.json"
 SAMPLE_PROJECT = REPO / "crates/studio-editor/assets/sample-project.json"
 RATE = 44_100
-NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Nominy/sonus/demo")
+NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Nominy/exaudio/demo")
 
 # Speaker 1 answers in Piper's "denis" voice, speaker 2 asks in "dmitri".
 VOICES = {"speaker-1": ("ru_RU-denis-medium", 1.0), "speaker-2": ("ru_RU-dmitri-medium", 0.95)}
@@ -205,7 +205,7 @@ def sample_task(rows):
         "action_worker_id": ident("worker"),
         "action_decision": "in-progress",
         "is_worker_resuming_claim": False,
-        "source": "sonus_demo/synthetic_dialogue",
+        "source": "exaudio_demo/synthetic_dialogue",
         "format": "review-action-materialized-package",
         "speakers": [{"speaker_key": s, "label": f"Speaker {s[-1]}"} for s in VOICES],
         "audio_tracks": tracks,
@@ -216,7 +216,7 @@ def sample_task(rows):
 def native_project(task):
     labels = {speaker["speaker_key"]: speaker["label"] for speaker in task["speakers"]}
     return {
-        "id": "sonus-synthetic-demo",
+        "id": "exaudio-synthetic-demo",
         "name": "Synthetic two-speaker demo",
         "speakers": [{"id": key, "label": label} for key, label in labels.items()],
         "lanes": [

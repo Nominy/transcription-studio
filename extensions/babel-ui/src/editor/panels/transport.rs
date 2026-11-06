@@ -3,6 +3,14 @@
 //! skip / flag / save / submit, or the read-only notice and actions). A second row carries the
 //! diff toolbar when the task has versions to compare.
 
+use exaudio_babel_domain::editor_model::diff_toolbar::{
+    AnnotationDiffMetrics, DiffMetrics, DiffToolbarState, MetricTriplet, TranscriptionDiffMetrics,
+};
+use exaudio_babel_domain::editor_model::review_actions::{
+    ReadOnlyActionCommand, ReadOnlyNotice, ReviewActionStrip,
+};
+use exaudio_babel_domain::editor_model::{AssessmentPhase, EditorSession};
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
@@ -12,26 +20,18 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_domain::editor_model::diff_toolbar::{
-    AnnotationDiffMetrics, DiffMetrics, DiffToolbarState, MetricTriplet, TranscriptionDiffMetrics,
-};
-use sonus_babel_domain::editor_model::review_actions::{
-    ReadOnlyActionCommand, ReadOnlyNotice, ReviewActionStrip,
-};
-use sonus_babel_domain::editor_model::{AssessmentPhase, EditorSession};
-use sonus_babel_domain::workflow::BabelWorkflowExt;
 use studio_editor::editor_model::SaveStatus;
 
 use super::dialogs::submit;
 use super::flows::skip_disabled_tooltip;
 use super::task::{Drawer, TaskPanels, TaskPanelsEvent};
 use crate::text::{count, failed, localized, localized_fmt};
-use sonus_shell::ShellHandle;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{
+use exaudio_shell::ShellHandle;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{
     Choice, choice, muted, stable_text, tabular_figures, vertical_rule,
 };
-use sonus_shell::screens::local_files;
+use exaudio_shell::screens::local_files;
 
 pub struct TransportStrip {
     model: Entity<EditorModel>,

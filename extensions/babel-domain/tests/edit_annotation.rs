@@ -1,24 +1,25 @@
 #[path = "../../../crates/studio-editor/tests/edit_support/mod.rs"]
 mod edit_support;
 use edit_support::*;
-use serde_json::json;
-use sonus_babel_domain::edit::BabelAnnotationDialogs;
-use sonus_babel_domain::edit::annotation::EditAnnotationError;
-use sonus_babel_domain::edit::create_region::{
+use exaudio_babel_domain::edit::BabelAnnotationDialogs;
+use exaudio_babel_domain::edit::annotation::EditAnnotationError;
+use exaudio_babel_domain::edit::create_region::{
     BACKGROUND_NOISE_ANNOTATION_PROJECT_ID, CreateRegionDialog, CreateRegionError,
     CreateRegionMode, secondary_category_options,
 };
-use sonus_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use serde_json::json;
 use studio_core::Project;
 use studio_editor::edit::{EditorDoc, Effect};
 use studio_editor::workflow::StudioWorkflow;
 
-fn babel_environment(project: &Project) -> sonus_extension::document::DocumentEnvironment {
-    let mut environment = sonus_babel_domain::document_environment(project, "test", "sonus.babel")
-        .expect("Babel fixture mode must be supported");
-    environment.providers = sonus_babel_domain::domain_providers(project);
-    sonus_babel_lint::register(&mut environment.providers);
-    sonus_babel_tags::register(&mut environment.providers);
+fn babel_environment(project: &Project) -> exaudio_extension::document::DocumentEnvironment {
+    let mut environment =
+        exaudio_babel_domain::document_environment(project, "test", "exaudio.babel")
+            .expect("Babel fixture mode must be supported");
+    environment.providers = exaudio_babel_domain::domain_providers(project);
+    exaudio_babel_lint::register(&mut environment.providers);
+    exaudio_babel_tags::register(&mut environment.providers);
     environment
 }
 
@@ -494,7 +495,7 @@ fn annotation_drag_dispatches_domain_dialog_without_creating_native_row() {
         .iter()
         .find_map(|effect| {
             if let Effect::ExecuteCommand { command, arguments } = effect {
-                assert_eq!(command, "sonus.babel.open-create-region");
+                assert_eq!(command, "exaudio.babel.open-create-region");
                 Some(arguments)
             } else {
                 None

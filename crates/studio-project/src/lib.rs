@@ -46,7 +46,7 @@ use thiserror::Error;
 
 const PROJECT_FILE: &str = "project.json";
 const RECOVERY_FILE: &str = "autosave/recovery.json";
-const FORMAT: &str = "sonus-project";
+const FORMAT: &str = "exaudio-project";
 const VERSION: u32 = 1;
 const SUPPORT_DIRS: [&str; 4] = ["audio", "rules", "journal", "autosave"];
 

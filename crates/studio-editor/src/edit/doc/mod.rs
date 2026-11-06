@@ -42,7 +42,7 @@ use crate::editor_model::{EditorSession, ProblemCounts};
 use crate::timing::WordTimings;
 use crate::transcript_model::{TranscriptRowView, speaker_label};
 use crate::workflow::StudioWorkflow;
-use sonus_extension::document::{DocumentEnvironment, Severity};
+use exaudio_extension::document::{DocumentEnvironment, Severity};
 
 /// Side effects the UI performs after an operation.
 #[derive(Debug, Clone, PartialEq)]

@@ -1,4 +1,4 @@
-//! Native Wavesurfer-shaped waveform core for Transcription Studio.
+//! Native Wavesurfer-shaped waveform core for Exaudio.
 
 mod audio;
 mod cache;

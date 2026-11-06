@@ -1,8 +1,8 @@
-use serde::Deserialize;
-use serde_json::Value;
-use sonus_extension::document::{
+use exaudio_extension::document::{
     CommandOutcome, CommandProvider, CommandRequest, DocumentEdit, DocumentTransaction,
 };
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::i18n::{localized, with_detail};
 

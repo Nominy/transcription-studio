@@ -48,9 +48,9 @@ Stable download endpoints, available after the first public release:
 `release.yml` then, on `windows-latest`:
 
 1. fails unless the tag is exactly `v` + the `studio-app` version;
-2. builds `studio-app`, `studio-relay` and `sonus-wasm` together in one Cargo invocation,
+2. builds `studio-app`, `studio-relay` and `exaudio-wasm` together in one Cargo invocation,
    keeping shared dependency features unified, with `STUDIO_UPDATE_CHANNEL=stable`;
-   `sonus-wasm-worker` is the isolated compiler child for untrusted extension `.wasm` and
+   `exaudio-wasm-worker` is the isolated compiler child for untrusted extension `.wasm` and
    ships beside `Exaudio.exe` (or the main executable in macOS `Contents/MacOS`);
 3. generates release notes (GitHub's generated notes plus download/SmartScreen lines);
 4. downloads the previous release's full package (`vpk download github`) so the new release
@@ -124,8 +124,9 @@ Up to 0.2.x the private alpha was packaged as `TranscriptionStudio` and publishe
 (`Exaudio`, installed into `%LocalAppData%\Exaudio`) on its own feeds under
 `https://reviewgen.ovh/exaudio/alpha/...`; nothing publishes to the old feeds any more, so old
 installs stay frozen and never see an Exaudio package. Install Exaudio once from
-`Exaudio-alpha-Setup.exe` (or a stable release), then uninstall Transcription Studio. Sign-in,
-drafts and settings are kept: their storage locations did not change.
+`Exaudio-alpha-Setup.exe` (or a stable release), then uninstall the old `TranscriptionStudio`
+package. Sign-in, drafts and settings are not carried over: Exaudio reads its application-support
+directory `Exaudio`, not the old `Transcription Studio` one.
 
 Before the first Exaudio alpha publish, the web server must serve `/var/www/exaudio/` as
 `https://reviewgen.ovh/exaudio/` (the publisher creates the feed directories itself).
@@ -192,4 +193,4 @@ Prerequisites for shipping a pin in a release:
 - the runtime's licence allows downloading it onto users' machines from Exaudio;
 - changing the pin is a reviewed change to `gold-inference.json`, made by a maintainer with
   access to the runtime's source; the end-to-end check is the `local_smoke` example of
-  `sonus-gold` (`extensions/gold`) on a WebGPU machine.
+  `exaudio-gold` (`extensions/gold`) on a WebGPU machine.

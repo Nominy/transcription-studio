@@ -1,9 +1,9 @@
 [workspace]
 members = [
-  "crates/sonus-extension",
-  "crates/sonus-marketplace",
-  "crates/sonus-wasm",
-  "crates/sonus-shell",
+  "crates/exaudio-extension",
+  "crates/exaudio-marketplace",
+  "crates/exaudio-wasm",
+  "crates/exaudio-shell",
   "extensions/babel-domain",
   "extensions/babel-ui",
   "extensions/gold-ui",
@@ -54,20 +54,20 @@ time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync"] }
 url = "2.5"
 velopack = "1.2.0"
-sonus-extension = { path = "crates/sonus-extension" }
-sonus-marketplace = { path = "crates/sonus-marketplace" }
-sonus-shell = { path = "crates/sonus-shell" }
-sonus-wasm = { path = "crates/sonus-wasm" }
-sonus-local = { path = "extensions/local" }
-sonus-formats = { path = "extensions/formats" }
-sonus-lint-basic = { path = "extensions/lint-basic" }
-sonus-babel-ui = { path = "extensions/babel-ui" }
-sonus-gold-ui = { path = "extensions/gold-ui" }
-sonus-babel-domain = { path = "extensions/babel-domain" }
-sonus-babel-services = { path = "extensions/babel-services" }
-sonus-babel-lint = { path = "extensions/babel-lint" }
-sonus-babel-tags = { path = "extensions/babel-tags" }
-sonus-gold = { path = "extensions/gold" }
+exaudio-extension = { path = "crates/exaudio-extension" }
+exaudio-marketplace = { path = "crates/exaudio-marketplace" }
+exaudio-shell = { path = "crates/exaudio-shell" }
+exaudio-wasm = { path = "crates/exaudio-wasm" }
+exaudio-local = { path = "extensions/local" }
+exaudio-formats = { path = "extensions/formats" }
+exaudio-lint-basic = { path = "extensions/lint-basic" }
+exaudio-babel-ui = { path = "extensions/babel-ui" }
+exaudio-gold-ui = { path = "extensions/gold-ui" }
+exaudio-babel-domain = { path = "extensions/babel-domain" }
+exaudio-babel-services = { path = "extensions/babel-services" }
+exaudio-babel-lint = { path = "extensions/babel-lint" }
+exaudio-babel-tags = { path = "extensions/babel-tags" }
+exaudio-gold = { path = "extensions/gold" }
 studio-core = { path = "crates/studio-core" }
 studio-project = { path = "crates/studio-project" }
 studio-babel = { path = "crates/studio-babel" }

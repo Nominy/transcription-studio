@@ -8,16 +8,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{
-    ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt as _, h_flex, v_flex,
-};
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
-use sonus_babel_services::babel::LoadedErrorTask;
-use sonus_babel_services::babel::error_task::{
+use exaudio_babel_services::babel::LoadedErrorTask;
+use exaudio_babel_services::babel::error_task::{
     AlignBackend, AlignedDiff, AssistantPhase, AssistantStatus, BoundaryNote, CATEGORY_GROUPS,
     CancelToken, ClipSource, DecisionStore, DiffSide, ErrorChoices, ErrorLabelDraft, ErrorSource,
     ErrorTask, ErrorTaskError, ErrorTaskIdentity, ErrorTaskSnapshot, InitialFillRequest, LabelRow,
@@ -26,17 +18,25 @@ use sonus_babel_services::babel::error_task::{
     group_name, grouped_label_categories, initial_fill_decision, label_rows, level_one_categories,
     picks_by_key, readiness, status_with_boundary_note, submission,
 };
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{
+    ActiveTheme, Disableable, IconName, Selectable, Sizable, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use studio_audio::{AudioEngine, PlaybackState, decode_audio_file};
 use studio_editor::edit::format::format_time;
 
-use sonus_babel_services::babel::BabelClient;
-use sonus_gold::prefs::AiPreferences;
-use sonus_gold_ui::services::GoldServices;
-use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header};
-use sonus_shell::screens::ui::{self, Tone};
+use exaudio_babel_services::babel::BabelClient;
+use exaudio_gold::prefs::AiPreferences;
+use exaudio_gold_ui::services::GoldServices;
+use exaudio_shell::editor::panels::ui::{dialog_footer, dialog_header};
+use exaudio_shell::screens::ui::{self, Tone};
 
 use crate::text::{count, failed, localized, localized_fmt};
-use sonus_shell::services::spawn_service_in;
+use exaudio_shell::services::spawn_service_in;
 
 const LANE: &str = "target";
 const WHOLE_QUESTION: (&str, &str) = (
@@ -438,7 +438,7 @@ impl ErrorTaskScreen {
         self.submit_error = None;
         // The assistant never writes after a submit started.
         self.assistant.run = None;
-        self.submit_task = Some(sonus_shell::services::spawn_service(
+        self.submit_task = Some(exaudio_shell::services::spawn_service(
             cx,
             async move { babel.submit_error_label(payload).await },
             move |this, result, cx| {
@@ -510,8 +510,8 @@ impl ErrorTaskScreen {
     }
 
     fn gold_inference_available(cx: &App) -> bool {
-        cx.global::<sonus_shell::ContributionRegistry>()
-            .is_enabled("sonus.gold")
+        cx.global::<exaudio_shell::ContributionRegistry>()
+            .is_enabled("exaudio.gold")
             && cx.try_global::<GoldServices>().is_some()
     }
 
@@ -521,7 +521,7 @@ impl ErrorTaskScreen {
         }
         let services = cx.try_global::<GoldServices>()?;
         let ai = cx
-            .global::<sonus_shell::services::AppServices>()
+            .global::<exaudio_shell::services::AppServices>()
             .storage
             .ai_settings();
         Some(AlignBackend {
@@ -797,7 +797,7 @@ impl ErrorTaskScreen {
         // The answers Initial fill may complete: any edit before it returns wins.
         let baseline = self.choices.clone();
         let ai = cx
-            .global::<sonus_shell::services::AppServices>()
+            .global::<exaudio_shell::services::AppServices>()
             .storage
             .ai_settings();
         let request = InitialFillRequest {

@@ -218,7 +218,7 @@ fn split_allocates_text_by_word_ratio_and_selects_right_row() {
     segment.text = "one two three four five".to_string();
     let mut doc = EditorDoc::from_project(
         stable_project,
-        sonus_extension::document::DocumentEnvironment::local("test"),
+        exaudio_extension::document::DocumentEnvironment::local("test"),
     );
 
     let outcome = ok(doc.split_segment_at("annotation-1", 2.0));

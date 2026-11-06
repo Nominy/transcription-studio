@@ -7,7 +7,7 @@ use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::*;
 
 use crate::text::{localized, localized_fmt};
-use sonus_shell::editor::panels::ui::{dialog_footer, dialog_header};
+use exaudio_shell::editor::panels::ui::{dialog_footer, dialog_header};
 
 /// Opens the non-dismissible no-work modal; "Back to projects" closes it and calls `on_back`.
 /// `job_kind` fills "No {job_kind} tasks right now".

@@ -2,13 +2,13 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use gpui_kit::*;
-use sonus_gold::polish::{
+use exaudio_gold::polish::{
     AudioTrack, BackendHealth, DraftResult, DraftStreamEvent, DraftingConfig,
 };
-use sonus_gold::prefs::{AiPreferences, AiSettings, ExecutionLocation};
-use sonus_gold::remote::{RemoteBackend, RemoteConfig, TimingTokenStore};
-use sonus_gold::{LocalBackend, LocalConfig};
+use exaudio_gold::prefs::{AiPreferences, AiSettings, ExecutionLocation};
+use exaudio_gold::remote::{RemoteBackend, RemoteConfig, TimingTokenStore};
+use exaudio_gold::{LocalBackend, LocalConfig};
+use gpui_kit::*;
 use studio_core::Project;
 use studio_inference::InferenceBackend;
 use studio_services::prefs::UiStorage;

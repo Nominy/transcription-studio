@@ -12,14 +12,14 @@ API that third-party extensions use; there is no private side door.
 
 ```mermaid
 flowchart TD
-    App["studio-app: bundled composition"] --> Shell["sonus-shell: editor UI, contribution and provider registries"]
+    App["studio-app: bundled composition"] --> Shell["exaudio-shell: editor UI, contribution and provider registries"]
     App --> Extensions["First-party Rust extensions"]
     Extensions -->|modes, providers, panels, checks, formats| Shell
     Shell --> Start["Start: one tile per mode → sign-in step (if provider) → launch window → editor"]
     Shell --> Core["Core document, audio and project crates"]
-    Shell --> API["sonus-extension: neutral contracts (manifests, resolve)"]
-    Shell --> Wasm["sonus-wasm: component runtime (modes, providers via WIT)"]
-    Shell --> Marketplace["sonus-marketplace: GitHub index and packages"]
+    Shell --> API["exaudio-extension: neutral contracts (manifests, resolve)"]
+    Shell --> Wasm["exaudio-wasm: component runtime (modes, providers via WIT)"]
+    Shell --> Marketplace["exaudio-marketplace: GitHub index and packages"]
     Shell --> Instances["app support/providers/&lt;type&gt;/&lt;id&gt;/ (per-account credentials)"]
     Wasm --> API
     Marketplace --> API
@@ -36,10 +36,10 @@ The core owns only what every transcript editor needs.
 | `studio-waveform` | Waveform peaks and rendering. |
 | `studio-project` | Versioned native project folders, copied audio, atomic save and recovery snapshots. |
 | `studio-editor` | Segment editing, boundaries, cut/loop selection, find, playback-follow, caret navigation, keymaps and view state. Consumes diagnostics and presentation providers; contains no checking rules. |
-| `sonus-extension` | Versioned manifests, dependency resolution and UI-independent document/format/provider contracts. |
-| `sonus-wasm` | Sandboxed component instances and isolated compiler worker. |
-| `sonus-marketplace` | Reviewed GitHub catalog, package validation, installation, updates and rollback. |
-| `sonus-shell` | GPUI surfaces, owner-scoped contribution lifecycle, native/WASM bridges and global settings. |
+| `exaudio-extension` | Versioned manifests, dependency resolution and UI-independent document/format/provider contracts. |
+| `exaudio-wasm` | Sandboxed component instances and isolated compiler worker. |
+| `exaudio-marketplace` | Reviewed GitHub catalog, package validation, installation, updates and rollback. |
+| `exaudio-shell` | GPUI surfaces, owner-scoped contribution lifecycle, native/WASM bridges and global settings. |
 | `studio-app` | Thin executable that selects and registers the bundled extensions. |
 
 The core has **no** linter, no AI, no import/export besides its native format, no platform
@@ -49,9 +49,9 @@ policies a mode supplies for the documents it opens.
 Existing implementation crates retain their `studio-*` names. `studio-services` contains
 only native HTTP/runtime/path/storage/updater services and native recovery delegated to
 `studio-project` with an explicit audio source base. `studio-inference` contains provider
-contracts, not an inference runtime. `extensions/gold` (`sonus-gold`) owns the local runtime,
+contracts, not an inference runtime. `extensions/gold` (`exaudio-gold`) owns the local runtime,
 remote coordinator, AI preferences and provider-neutral drafting/polish algorithms;
-`extensions/babel-services` (`sonus-babel-services`) owns authentication, task/review clients,
+`extensions/babel-services` (`exaudio-babel-services`) owns authentication, task/review clients,
 relay hosting and Babel JSON recovery. Babel clients capture the account instance (direct or
 relay-backed) per document origin; the selected account never chooses a document's save
 route after the fact. Constructors do not activate modes; the host owns the selected services
@@ -63,7 +63,7 @@ serialized preference keys remain unchanged.
 
 An extension is a package with a manifest and code:
 
-`manifest.json` uses the same strict schema as `sonus_extension::ExtensionManifest`:
+`manifest.json` uses the same strict schema as `exaudio_extension::ExtensionManifest`:
 
 ```json
 {
@@ -95,7 +95,7 @@ are explicitly approved separately. Existing application-support paths remain un
 ### 2.1 Lifecycle
 
 Native extensions register a manifest and activation factory with
-`sonus_shell::contributions::register_native_extension`. The host retains that factory for
+`exaudio_shell::contributions::register_native_extension`. The host retains that factory for
 disable/re-enable, honors persisted preferences, and removes owner-scoped contributions
 and resources on deactivation. Mode dependencies prevent unsafe removal.
 
@@ -113,7 +113,7 @@ the Unity editor.
 - **Mode** — a Start-screen tile: its launch window (dashboard/browser), document sources
   (list/browse/claim/open → `Project` + origin), the save / submit pipeline for its documents,
   document policy (read-only, checks required before submit, which extensions are active in
-  its documents), a settings page. `sonus.local` is a mode like any other.
+  its documents), a settings page. `exaudio.local` is a mode like any other.
 - **Provider** — an account type a mode signs in with: a setup (sign-in) view, a status
   probe and a sign-out hook. Instances are stored by the shell; credentials live in the
   instance's own directory (§2.3).
@@ -169,15 +169,15 @@ the Unity editor.
 - Storage: settings (schema-validated), key-value state, secrets (OS keyring), cache directory.
 - Network: HTTP client limited to manifest-declared hosts.
 - Logging into the per-extension log shown on the Extensions page.
-- Inter-extension services: an extension may publish a typed service (e.g. `sonus.babel`
+- Inter-extension services: an extension may publish a typed service (e.g. `exaudio.babel`
   exposes its Babel client to its sibling modes); consumers declare the dependency.
 
 ### 2.3 Modes, providers and documents
 
 A **mode** is a tile on the Start screen: a way of getting documents into the editor. The
-bundled `sonus.local` mode is a tile like any other ("open audio and projects on this
+bundled `exaudio.local` mode is a tile like any other ("open audio and projects on this
 computer"); platform modes such as Babel are tiles contributed by their extensions. A
-**provider** is an account type a mode signs in with (for example `sonus.babel.account`).
+**provider** is an account type a mode signs in with (for example `exaudio.babel.account`).
 Providers are invisible by default: the user sees a mode, is asked to sign in the first time
 it needs an account, and otherwise never meets the provider.
 
@@ -208,14 +208,14 @@ it needs an account, and otherwise never meets the provider.
 
 ```json
 {
-  "providers": [{ "id": "sonus.babel.account", "name": "Babel account", "multiple": true }],
+  "providers": [{ "id": "exaudio.babel.account", "name": "Babel account", "multiple": true }],
   "modes": [{
-    "id": "sonus.babel",
+    "id": "exaudio.babel",
     "name": "Babel",
-    "provider": "sonus.babel.account",
+    "provider": "exaudio.babel.account",
     "launch": "window",
-    "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
-    "recommends": { "sonus.gold": "^0.1" }
+    "requires": { "exaudio.babel-lint": "^0.1", "exaudio.babel-tags": "^0.1" },
+    "recommends": { "exaudio.gold": "^0.1" }
   }]
 }
 ```
@@ -233,7 +233,7 @@ it needs an account, and otherwise never meets the provider.
 A configured account is a `ProviderInstance { provider, id, label }`. `id` is stable per
 account (phone-number hash, `host+user`) and path-safe (`[a-z0-9-]`). The shell's
 `ProviderRegistry` persists the instance list and the selected instance per type in
-`UiStorage` (`sonus.providers.instances`, `sonus.providers.selected`). Each provider type
+`UiStorage` (`exaudio.providers.instances`, `exaudio.providers.selected`). Each provider type
 contributes `ProviderContribution { id, label, multiple, setup, status, sign_out }`: a setup
 view factory, a status probe (`Ready { detail } | NeedsSignIn | Error`) and a sign-out hook.
 
@@ -249,7 +249,7 @@ a document carries its `DocumentOrigin { mode_id, instance, read_only, native_pa
 save, recovery, submit and the set of active document-scoped extensions are resolved from
 that origin.
 
-**WASM provider surface** (`wit/sonus-extension.wit`)
+**WASM provider surface** (`wit/exaudio-extension.wit`)
 
 `contribution-kind` gains `provider`. Records: `provider-instance`, `provider-setup`,
 `provider-setup-result`, `provider-state`, `provider-status`; `mode-open` carries
@@ -260,12 +260,12 @@ grants), `provider-setup-done`, `provider-setup-cancel`, `publish-provider-statu
 
 **Babel split**
 
-The Babel extension declares one provider, `sonus.babel.account` (`multiple: true`; sign-in
+The Babel extension declares one provider, `exaudio.babel.account` (`multiple: true`; sign-in
 by phone/e-mail or by sub-account relay code — a relay-backed account is just another
 instance of the same type, stored as
-`providers/sonus.babel.account/<id>/{auth.json | subaccount.json, account.json}`), and
-three modes: `sonus.babel` (Babel · transcription tasks, provider), `sonus.babel.errors`
-(Babel error review · error review tasks, provider) and `sonus.babel-file` (Babel file · edit
+`providers/exaudio.babel.account/<id>/{auth.json | subaccount.json, account.json}`), and
+three modes: `exaudio.babel` (Babel · transcription tasks, provider), `exaudio.babel.errors`
+(Babel error review · error review tasks, provider) and `exaudio.babel-file` (Babel file · edit
 an exported task offline; no provider, `launch: "direct"` — it opens the picked file
 straight into the editor). The former separate "Relay" mode is gone.
 
@@ -292,29 +292,29 @@ page shows which mode requires each extension and why.
 
 ## 3. Extension APIs
 
-### 3.1 Rust (`sonus-extension`)
+### 3.1 Rust (`exaudio-extension`)
 
-The UI-independent contracts are in `sonus-extension`; native UI registration is exposed by
-`sonus-shell`. For example, the bundled basic-checks extension is explicitly registered:
+The UI-independent contracts are in `exaudio-extension`; native UI registration is exposed by
+`exaudio-shell`. For example, the bundled basic-checks extension is explicitly registered:
 
 ```rust
 use gpui_kit::{App, BorrowAppContext};
-use sonus_shell::ContributionRegistry;
+use exaudio_shell::ContributionRegistry;
 
 fn activate(cx: &mut App) -> anyhow::Result<()> {
     cx.update_global::<ContributionRegistry, _>(|registry, _| {
         registry.register_document_providers(
-            sonus_lint_basic::ID,
-            "sonus.lint-basic.checks",
-            vec!["sonus.local".into()],
-            sonus_lint_basic::providers(),
+            exaudio_lint_basic::ID,
+            "exaudio.lint-basic.checks",
+            vec!["exaudio.local".into()],
+            exaudio_lint_basic::providers(),
         )
     })
 }
 
 pub fn register(cx: &mut App) -> anyhow::Result<()> {
-    sonus_shell::contributions::register_native_extension(
-        sonus_lint_basic::manifest()?,
+    exaudio_shell::contributions::register_native_extension(
+        exaudio_lint_basic::manifest()?,
         activate,
         cx,
     )
@@ -325,7 +325,7 @@ Rust extensions may also return arbitrary gpui views for panels, windows, inspec
 launch windows and provider setup views. Built-ins are Rust extensions; they never reach into
 the shell or core internals.
 
-### 3.2 WASM (`wit/sonus-extension.wit`, world `sonus:extension/extension@0.1.0`)
+### 3.2 WASM (`wit/exaudio-extension.wit`, world `exaudio:extension/extension@0.1.0`)
 
 The guest exports lifecycle, command, UI-event and document-event callbacks. Providers
 publish typed diagnostics, completions, decorations, UI trees and overlays through host
@@ -335,7 +335,7 @@ imports; mode, provider (setup/status/sign-out) and format requests are typed ev
 Host calls enforce explicit grants and document scope. Guest document IDs identify an
 individual open incarnation, not a persisted project ID; stale revisions and handles from a
 closed document cannot mutate its replacement. Instance calls have fuel, epoch, memory and
-output limits. Untrusted component compilation runs in the separate `sonus-wasm-worker`
+output limits. Untrusted component compilation runs in the separate `exaudio-wasm-worker`
 process with memory and termination limits; externally supplied native/AOT artifacts are not
 accepted as components.
 
@@ -358,15 +358,15 @@ in time-and-lane coordinates, with hit regions).
 
 | Extension | Kind | Contributes |
 |---|---|---|
-| `sonus.local` | mode | **Local** tile: open common audio files (one lane per file), open or restore native projects, demo. Its launch window is the local Start content. No provider; core native project save/reopen remains available without this extension. |
-| `sonus.formats` | formats | SRT, WebVTT and plain text import/export. Plain text imports explicitly have no timing. |
-| `sonus.lint-basic` | diagnostics | Optional language-neutral whitespace, empty-segment, timing and same-lane overlap checks with safe fixes. Active in Local documents by default, but not required by the mode. |
-| `sonus.gold` | AI | Local Gold runtime: transcription, word alignment, denoise; model manager and settings. |
-| `sonus.babel` | provider + modes | Provider `sonus.babel.account` (`multiple: true`; phone/e-mail or relay sub-account sign-in, credentials per instance directory). Modes **Babel** (`sonus.babel`, transcription tasks) and **Babel error review** (`sonus.babel.errors`), both using that provider, plus **Babel file** (`sonus.babel-file`, offline editing of an exported task, no provider, `launch: "direct"`). All three require `sonus.babel-lint` and `sonus.babel-tags`; the task modes recommend `sonus.gold`. |
-| `sonus.babel-lint` | diagnostics | Babel's Gold (gold-non-bg) rules and the Helper rule set, with their autofixes; active in Babel documents. |
-| `sonus.babel-tags` | editing | Babel tag/curly/angle conventions: completions, decorations, tag-aware autofixes and number→СКАЗ conversion. |
+| `exaudio.local` | mode | **Local** tile: open common audio files (one lane per file), open or restore native projects, demo. Its launch window is the local Start content. No provider; core native project save/reopen remains available without this extension. |
+| `exaudio.formats` | formats | SRT, WebVTT and plain text import/export. Plain text imports explicitly have no timing. |
+| `exaudio.lint-basic` | diagnostics | Optional language-neutral whitespace, empty-segment, timing and same-lane overlap checks with safe fixes. Active in Local documents by default, but not required by the mode. |
+| `exaudio.gold` | AI | Local Gold runtime: transcription, word alignment, denoise; model manager and settings. |
+| `exaudio.babel` | provider + modes | Provider `exaudio.babel.account` (`multiple: true`; phone/e-mail or relay sub-account sign-in, credentials per instance directory). Modes **Babel** (`exaudio.babel`, transcription tasks) and **Babel error review** (`exaudio.babel.errors`), both using that provider, plus **Babel file** (`exaudio.babel-file`, offline editing of an exported task, no provider, `launch: "direct"`). All three require `exaudio.babel-lint` and `exaudio.babel-tags`; the task modes recommend `exaudio.gold`. |
+| `exaudio.babel-lint` | diagnostics | Babel's Gold (gold-non-bg) rules and the Helper rule set, with their autofixes; active in Babel documents. |
+| `exaudio.babel-tags` | editing | Babel tag/curly/angle conventions: completions, decorations, tag-aware autofixes and number→СКАЗ conversion. |
 
-`sonus.babel-file` has a file-only save target and never selects a remote client from
+`exaudio.babel-file` has a file-only save target and never selects a remote client from
 whichever account happens to be selected.
 
 ## 5. Distribution
@@ -389,7 +389,7 @@ change. `extensions/examples/` holds templates.
 
 Each extension is a GitHub repository owned by its author. Its repository contains
 `manifest.json`, source, license, documentation and versioned GitHub Releases with
-`.exaudio` assets. A public index repository (`Nominy/sonus-extensions`) is the discovery
+`.exaudio` assets. A public index repository (`Nominy/exaudio-extensions`) is the discovery
 and reviewed release catalog, not a server that executes third-party repository code.
 Index contributions are pull requests.
 

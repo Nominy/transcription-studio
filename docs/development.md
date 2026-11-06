@@ -37,7 +37,7 @@ Building the app does not install AI model weights. Source builds are not Velopa
 
 ### Babel bundle prerequisite
 
-The build script at `extensions/babel-lint/build.rs` reads the SHA-256 pin in `extensions/babel-lint/babel-data.json` and verifies `babel-data-<sha256>.tar` in the per-user cache. On Windows that cache is `%LOCALAPPDATA%\Sonus\build-cache`; elsewhere it is `$XDG_CACHE_HOME/sonus/build-cache`, falling back to `~/.cache/sonus/build-cache`. The bundle contains `babel-lint-data.json`, `error-category-names.json` and `lint-parity.json`.
+The build script at `extensions/babel-lint/build.rs` reads the SHA-256 pin in `extensions/babel-lint/babel-data.json` and verifies `babel-data-<sha256>.tar` in the per-user cache. On Windows that cache is `%LOCALAPPDATA%\Exaudio\build-cache`; elsewhere it is `$XDG_CACHE_HOME/exaudio/build-cache`, falling back to `~/.cache/exaudio/build-cache`. The bundle contains `babel-lint-data.json`, `error-category-names.json` and `lint-parity.json`.
 
 The archive is currently available only from the author's existing cache or private artifact store; there is no public bundle URL. Maintainers with authorized SSH access can prepare the exact pinned archive using:
 
@@ -84,15 +84,15 @@ A narrow check is not a passing full-workspace test run. Native GUI behavior, au
 
 ## Extension development
 
-Start with the [Rust SDK build/package guide](../sdk/rust/README.md) and [`hello-panel`](../extensions/examples/hello-panel). It describes the actual toolchain, component conversion, manifest, package layout, explicit grants and real-component smoke. Keep the [WIT contract](../wit/sonus-extension.wit) and SDK compatible with the host version you target.
+Start with the [Rust SDK build/package guide](../sdk/rust/README.md) and [`hello-panel`](../extensions/examples/hello-panel). It describes the actual toolchain, component conversion, manifest, package layout, explicit grants and real-component smoke. Keep the [WIT contract](../wit/exaudio-extension.wit) and SDK compatible with the host version you target.
 
-The [marketplace index repository](https://github.com/Nominy/sonus-extensions) references packages released from each author's GitHub repository. The endpoint is `https://raw.githubusercontent.com/Nominy/sonus-extensions/main/index.json`. Publish immutable versioned artifacts with their source identity, byte size, SHA-256 and requested permissions; an index record is not a license or security endorsement. Do not embed API keys or assume that manifest declarations automatically grant host access.
+The [marketplace index repository](https://github.com/Nominy/exaudio-extensions) references packages released from each author's GitHub repository. The endpoint is `https://raw.githubusercontent.com/Nominy/exaudio-extensions/main/index.json`. Publish immutable versioned artifacts with their source identity, byte size, SHA-256 and requested permissions; an index record is not a license or security endorsement. Do not embed API keys or assume that manifest declarations automatically grant host access.
 
 Native Rust extensions have application privileges. Installable WASM components use explicit typed host capabilities and resource limits, not arbitrary ambient filesystem/process/network access. Modes declare required extensions; removing a dependency while its mode is open is not a supported way to reduce the workspace's capabilities.
 
 ## Website development
 
-`site/` is plain HTML, CSS and JavaScript with no build framework, package manager, external fonts or analytics. Russian is the no-JavaScript/default language. The explicit RU/EN controls persist `sonus.site.language` in local storage when storage is available; system/browser language does not override the Russian default. Colors and existing brand headers follow `prefers-color-scheme`. `site/assets/` contains copies of the three source SVGs in `assets/brand/`; the Pages workflow refreshes those copies while assembling the artifact.
+`site/` is plain HTML, CSS and JavaScript with no build framework, package manager, external fonts or analytics. Russian is the no-JavaScript/default language. The explicit RU/EN controls persist `exaudio.site.language` in local storage when storage is available; system/browser language does not override the Russian default. Colors and existing brand headers follow `prefers-color-scheme`. `site/assets/` contains copies of the three source SVGs in `assets/brand/`; the Pages workflow refreshes those copies while assembling the artifact.
 
 Open `site/index.html` for a quick static preview. For browser automation that requires HTTP, serve `site/` through the development environment's observable server runner; for example the actual foreground workload can be `python -m http.server 4173 --directory site --bind 127.0.0.1`. A long-lived server belongs in a named psmux session and must be stopped when finished.
 

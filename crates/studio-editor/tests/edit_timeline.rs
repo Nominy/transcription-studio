@@ -1574,7 +1574,7 @@ fn timeline_defaults_persist_in_project_metadata_and_hydrate_on_reload() {
 
     let reloaded = EditorDoc::from_project(
         doc.project().clone(),
-        sonus_extension::document::DocumentEnvironment::local("test"),
+        exaudio_extension::document::DocumentEnvironment::local("test"),
     );
 
     let session = reloaded.session();

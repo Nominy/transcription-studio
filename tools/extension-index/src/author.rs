@@ -1,7 +1,7 @@
 use crate::Result;
+use exaudio_extension::{ExtensionManifest, Permission, Runtime};
+use exaudio_marketplace::{Catalog, CatalogExtension, Repository};
 use semver::Version;
-use sonus_extension::{ExtensionManifest, Permission, Runtime};
-use sonus_marketplace::{Catalog, CatalogExtension, Repository};
 use std::{collections::BTreeMap, path::Path};
 
 pub struct Spec<'a> {
@@ -74,7 +74,7 @@ fn render(spec: &Spec<'_>) -> Result<BTreeMap<&'static str, String>> {
     }
     let manifest = ExtensionManifest {
         id: spec.id.to_owned(), name: spec.id.to_owned(), version: version.clone(),
-        api: format!("^{}", sonus_extension::API_VERSION).parse()?, runtime: Runtime::Wasm,
+        api: format!("^{}", exaudio_extension::API_VERSION).parse()?, runtime: Runtime::Wasm,
         description: "An independently authored panel and command with undoable greeting insertion and empty-segment diagnostics.".into(),
         license: "MIT".into(), dependencies: BTreeMap::new(),
         permissions: vec![Permission::DocumentRead, Permission::DocumentEdit], modes: Vec::new(),
@@ -84,7 +84,7 @@ fn render(spec: &Spec<'_>) -> Result<BTreeMap<&'static str, String>> {
     let crate_name = spec.id.replace('.', "-");
     let artifact = crate_name.replace('-', "_");
     let cargo = format!(
-        "[package]\nname = {crate_name:?}\nversion = {version:?}\nedition = \"2024\"\nlicense = \"MIT\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nsonus-sdk = {{ git = {sdk:?}, rev = {revision:?} }}\n\n[workspace]\n\n[profile.release]\nlto = true\nopt-level = \"s\"\npanic = \"abort\"\nstrip = true\n",
+        "[package]\nname = {crate_name:?}\nversion = {version:?}\nedition = \"2024\"\nlicense = \"MIT\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nexaudio-sdk = {{ git = {sdk:?}, rev = {revision:?} }}\n\n[workspace]\n\n[profile.release]\nlto = true\nopt-level = \"s\"\npanic = \"abort\"\nstrip = true\n",
         version = version.to_string(),
         sdk = spec.sdk_repository,
         revision = spec.sdk_commit
@@ -169,14 +169,14 @@ mod tests {
             repository: "author-extension",
             id: "fixture.author",
             version: "1.0.0",
-            sdk_repository: "https://github.com/fixture/sonus",
+            sdk_repository: "https://github.com/fixture/exaudio",
             sdk_commit: "0123456789abcdef0123456789abcdef01234567",
             destination: Path::new("unused"),
         };
         let files = render(&spec).unwrap();
         assert!(
             files["Cargo.toml"]
-                .contains("sonus-sdk = { git = \"https://github.com/fixture/sonus\"")
+                .contains("exaudio-sdk = { git = \"https://github.com/fixture/exaudio\"")
         );
         assert!(files["Cargo.toml"].contains(spec.sdk_commit));
         assert!(!files["Cargo.toml"].contains("path ="));
@@ -184,8 +184,8 @@ mod tests {
         let workflow = &files[".github/workflows/release.yml"];
         for required in [
             "wasm-tools component new",
-            "sonus-extension-index pack",
-            "sonus-extension-index release-entry",
+            "exaudio-extension-index pack",
+            "exaudio-extension-index release-entry",
             "gh release create",
             "--verify-tag",
             "contents: read",
@@ -206,13 +206,13 @@ mod tests {
             repository: "author-extension",
             id: "fixture.author",
             version: "1.0.0",
-            sdk_repository: "https://github.com/fixture/sonus",
+            sdk_repository: "https://github.com/fixture/exaudio",
             sdk_commit: "main",
             destination: Path::new("unused"),
         };
         assert!(render(&spec).is_err());
         spec.sdk_commit = "0123456789abcdef0123456789abcdef01234567";
-        spec.sdk_repository = "https://github.com/fixture/sonus'; echo injected";
+        spec.sdk_repository = "https://github.com/fixture/exaudio'; echo injected";
         assert!(render(&spec).is_err());
         spec.sdk_repository = "http://127.0.0.1/sdk";
         assert!(render(&spec).is_err());

@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
+use exaudio_gold::bundle::{DOWNLOAD_STAGE, EXTRACT_STAGE};
+use exaudio_shell::screens::ui::localized;
 use gpui_kit::App;
-use sonus_gold::bundle::{DOWNLOAD_STAGE, EXTRACT_STAGE};
-use sonus_shell::screens::ui::localized;
 use studio_inference::InferenceProgress;
 
 /// Studio's first local call installs Gold's runtime before any model work.

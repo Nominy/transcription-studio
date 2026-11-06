@@ -1,13 +1,13 @@
 //! One language per string. Every user-facing Babel string goes through `localized`
 //! (static text) or `localized_fmt` (templates); errors use `failed` / `with_detail`.
 
+use exaudio_babel_domain::i18n;
 use gpui_kit::*;
-use sonus_babel_domain::i18n;
 
-pub use sonus_babel_domain::i18n::{count, fill, with_detail};
+pub use exaudio_babel_domain::i18n::{count, fill, with_detail};
 
 pub fn is_russian(cx: &App) -> bool {
-    let russian = sonus_shell::screens::ui::localized(cx, "en", "ru") == "ru";
+    let russian = exaudio_shell::screens::ui::localized(cx, "en", "ru") == "ru";
     i18n::set_russian(russian);
     russian
 }

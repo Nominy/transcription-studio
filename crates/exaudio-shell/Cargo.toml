@@ -1,0 +1,38 @@
+[package]
+name = "exaudio-shell"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-channel = "2.5"
+bytes.workspace = true
+gpui-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+studio-audio.workspace = true
+studio-core.workspace = true
+studio-editor.workspace = true
+studio-project.workspace = true
+studio-services.workspace = true
+studio-waveform.workspace = true
+exaudio-extension.workspace = true
+exaudio-wasm.workspace = true
+exaudio-marketplace.workspace = true
+unicode-linebreak = "0.1.5"
+unicode-segmentation = "1.12"
+reqwest = { workspace = true, features = ["blocking"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+notify = "8"
+sha2 = "0.10"
+tempfile.workspace = true
+futures-lite = "2"
+sys-locale = "0.3"
+time = { workspace = true, features = ["local-offset"] }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+tray-icon = "0.21.0"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

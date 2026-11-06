@@ -1,6 +1,6 @@
 //! Writes known synthetic subtitle exports and reads them through the same public API.
-use sonus_extension::format::{ExportOptions, FormatProvider, ImportContent};
-use sonus_formats::SubtitleFormat;
+use exaudio_extension::format::{ExportOptions, FormatProvider, ImportContent};
+use exaudio_formats::SubtitleFormat;
 use studio_core::{Project, Segment, Speaker};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

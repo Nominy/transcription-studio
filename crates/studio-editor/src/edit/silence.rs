@@ -10,7 +10,7 @@ use crate::editor_model::EditorSession;
 use crate::timeline_model::TimeRange;
 use crate::track_filter::TrackFilter;
 use crate::workflow::StudioWorkflow;
-use sonus_extension::document::DocumentEnvironment;
+use exaudio_extension::document::DocumentEnvironment;
 
 /// Absolute sample amplitude counted as speech (about -62 dBFS).
 pub const AUDIO_TRIM_THRESHOLD: f32 = 0.000_794_328_2;

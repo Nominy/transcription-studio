@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use crate::editor::panels::task::TaskPanels;
 use crate::text::localized;
-use sonus_shell::editor::panels::ui::{
+use exaudio_shell::editor::panels::ui::{
     dialog_footer, dialog_header, error_text, field, primary_button,
 };
 

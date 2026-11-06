@@ -1,4 +1,4 @@
-use sonus_extension::document::{
+use exaudio_extension::document::{
     Diagnostic, DiagnosticCollection, DiagnosticProvider, DocumentEnvironment, Severity,
 };
 use std::sync::{

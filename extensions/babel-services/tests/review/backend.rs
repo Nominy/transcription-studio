@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use serde_json::{Value, json};
-use sonus_babel_services::review::{
+use exaudio_babel_services::review::{
     BackendHttpMethod, ReviewBackend, ReviewBackendRequest, parse_sse_done_payload,
     review_backend_url,
 };
-use sonus_gold::polish::AudioTrack;
+use exaudio_gold::polish::AudioTrack;
+use serde_json::{Value, json};
 
 #[test]
 fn reviewer_session_and_template_routes_encode_ids_and_queries() {

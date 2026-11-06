@@ -30,7 +30,7 @@ use super::clef::{
 };
 use super::diff_align::{AudioInterval, TimedWord};
 use super::{ErrorTaskError, ErrorTaskIdentity};
-use sonus_gold::prefs::ExecutionLocation;
+use exaudio_gold::prefs::ExecutionLocation;
 use studio_inference::{AlignRequest, InferenceBackend, InferenceErrorKind, ProgressSink};
 
 /// Provider timeout of one ASR or decisions request (body read included).

@@ -4,29 +4,29 @@
 //! There is no transcript autosave (the old app had none); the feedback form and reviewer
 //! comments autosave on their own.
 
-use gpui_kit::component::WindowExt;
-use gpui_kit::component::notification::Notification;
-use gpui_kit::*;
-use sonus_babel_domain::editor_model::EditorSession;
-use sonus_babel_domain::editor_model::review_actions::ReadOnlyActionCommand;
-use sonus_babel_domain::editor_model::submit_control::SubmitKind;
-use sonus_babel_lint::linter::{ServerLintIssue, ServerLintSnapshot};
-use sonus_babel_services::babel::{
+use exaudio_babel_domain::editor_model::EditorSession;
+use exaudio_babel_domain::editor_model::review_actions::ReadOnlyActionCommand;
+use exaudio_babel_domain::editor_model::submit_control::SubmitKind;
+use exaudio_babel_lint::linter::{ServerLintIssue, ServerLintSnapshot};
+use exaudio_babel_services::babel::{
     BabelError, SaveAnnotationsRequest, SaveOutcome, SubmitReviewActionRequest, active_queue_id,
     review_action_id,
 };
-use sonus_babel_services::recovery;
-use sonus_babel_services::review::{
+use exaudio_babel_services::recovery;
+use exaudio_babel_services::review::{
     build_reviewer_analytics_payload, reviewer_capability_available,
 };
+use gpui_kit::component::WindowExt;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::*;
 
 use super::dialogs;
 use super::task::{Drawer, TaskPanels, TaskPanelsEvent};
 use crate::services::BabelServices;
 use crate::text::{failed, localized, localized_fmt};
-use sonus_babel_domain::workflow::BabelWorkflowExt;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::services::{spawn_service, spawn_service_in};
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::services::{spawn_service, spawn_service_in};
 
 type LeaveCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
 
@@ -41,7 +41,7 @@ pub(crate) struct Flows {
     leave: Option<LeaveCallback>,
     /// Save & Continue: leave once a save leaves the task clean.
     continue_after_save: bool,
-    saved: Option<sonus_shell::screens::local_files::Saved>,
+    saved: Option<exaudio_shell::screens::local_files::Saved>,
     save_task: Option<Task<()>>,
     submit_task: Option<Task<()>>,
     other_task: Option<Task<()>>,
@@ -83,7 +83,7 @@ pub fn request_leave(
 }
 
 impl TaskPanels {
-    fn babel(&self, cx: &App) -> sonus_babel_services::babel::BabelClient {
+    fn babel(&self, cx: &App) -> exaudio_babel_services::babel::BabelClient {
         crate::services::document_client(&self.model, cx)
     }
 
@@ -135,7 +135,7 @@ impl TaskPanels {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        saved: Option<sonus_shell::screens::local_files::Saved>,
+        saved: Option<exaudio_shell::screens::local_files::Saved>,
     ) {
         self.flows.saved = saved;
         let doc = self.model.read(cx).doc();

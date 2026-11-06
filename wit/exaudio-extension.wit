@@ -1,0 +1,131 @@
+package exaudio:extension@0.1.0;
+
+interface types {
+    variant scalar { text(string), number(f64), boolean(bool) }
+    record property { key: string, value: scalar }
+    record speaker { id: string, label: string }
+    record lane { id: string, speaker-id: option<string>, label: string, source-id: option<string> }
+    // Source IDs are host handles, NEVER ambient filesystem paths.
+    record audio-source { id: string, label: string, sample-rate: u32, frames: u64, channels: u32 }
+    record segment { id: string, lane: string, speaker-id: option<string>, start-ms: u64, end-ms: u64, text: string, metadata: list<property> }
+    record document { id: string, revision: u64, name: string, mode: string, read-only: bool, speakers: list<speaker>, lanes: list<lane>, sources: list<audio-source>, metadata: list<property>, segments: list<segment> }
+    record text-edit { segment-id: string, start-byte: u32, end-byte: u32, text: string }
+    variant edit { replace-text(text-edit), insert-segment(segment), remove-segment(string), replace-segment(segment) }
+    record transaction { document-id: string, expected-revision: u64, label: string, edits: list<edit> }
+    record text-range { segment-id: string, start-byte: u32, end-byte: u32 }
+    enum severity { hint, info, warning, error }
+    record diagnostic { id: string, range: text-range, severity: severity, message: string, fix: option<transaction> }
+    record diagnostics { provider: string, document-id: string, revision: u64, items: list<diagnostic> }
+    record completion { label: string, detail: string, edit: text-edit }
+    record completions { request-id: u64, document-id: string, revision: u64, items: list<completion> }
+    record decoration { range: text-range, class: string, hover: option<string> }
+    record decorations { provider: string, document-id: string, revision: u64, items: list<decoration> }
+    record point { time-ms: f64, lane: f32 }
+    record color { red: u8, green: u8, blue: u8, alpha: u8 }
+    record line { start: point, end: point, color: color, width: f32 }
+    record rect { start: point, end: point, color: color }
+    record label { at: point, text: string, color: color }
+    record curve { points: list<point>, color: color, width: f32 }
+    record hit-region { id: string, start: point, end: point }
+    variant draw { line(line), rect(rect), label(label), curve(curve), hit-region(hit-region) }
+    record overlay { provider: string, document-id: string, revision: u64, draws: list<draw> }
+    enum widget { stack, row, scroll, split, tabs, text, markdown, icon, image, waveform, button, toggle, text-input, number, select, slider, list-view, table, progress, badge, callout }
+    record layout-config { gap: u16, padding: u16 }
+    record input-config { placeholder: string, multiline: bool, read-only: bool }
+    record choice { key: string, label: string }
+    record choice-config { options: list<choice>, selected: option<string> }
+    record number-config { min: f64, max: f64, step: f64 }
+    record table-column { key: string, title: string }
+    record table-row { key: string, cells: list<string> }
+    record table-config { columns: list<table-column>, rows: list<table-row>, selected: option<string> }
+    record asset-config { asset-id: string, alt: string, width: u32, height: u32 }
+    record waveform-config { document-id: string, lane-id: string, start-ms: u64, end-ms: u64, channel: u32 }
+    variant widget-config { plain, layout(layout-config), input(input-config), choices(choice-config), numeric(number-config), table(table-config), asset(asset-config), waveform(waveform-config) }
+    // Flat tree: parent precedes child; tabs' option keys identify child node IDs.
+    record ui-node { id: string, parent: option<u32>, widget: widget, config: widget-config, text: string, value: string, enabled: bool, command: option<string> }
+    record ui-tree { contribution: string, nodes: list<ui-node> }
+    enum contribution-kind { command, panel, inspector, menu, diagnostics, completions, decorations, overlay, event, mode, importer, exporter, provider }
+    record registration { id: string, kind: contribution-kind, title: string }
+    enum ui-event-kind { click, change, submit, row-select, hover }
+    record ui-event { contribution: string, node: string, kind: ui-event-kind, value: string, document-id: option<string> }
+    record selection { document-id: string, revision: u64, ranges: list<text-range> }
+    record command { id: string, document-id: option<string>, selection: option<selection>, arguments: list<property> }
+    record document-event { document-id: string, revision: u64 }
+    record completion-request { request-id: u64, document-id: string, revision: u64, segment-id: string, byte-offset: u32 }
+    // A configured account of a provider type. Credentials live in the instance's own
+    // secret namespace (`instance-secret-*`), never in this record.
+    record provider-instance { provider: string, id: string, label: string }
+    // Setup is requested by the shell while opening a mode; the guest publishes its sign-in
+    // UI for `contribution = provider id` and finishes with `provider-setup-done` /
+    // `provider-setup-cancel`. `instance` is set when re-authenticating an existing account.
+    record provider-setup { provider: string, request-id: u64, instance: option<provider-instance> }
+    record provider-setup-result { provider: string, request-id: u64, id: string, label: string }
+    enum provider-state { ready, needs-sign-in, error }
+    record provider-status { instance: provider-instance, state: provider-state, detail: string }
+    record mode-open { mode: string, request-id: u64, key: string, instance: option<provider-instance> }
+    record mode-document { mode: string, request-id: u64, document: document }
+    record import-request { provider: string, request-id: u64, name: string, media-type: string, bytes: list<u8> }
+    record export-request { provider: string, request-id: u64, document-id: string, revision: u64, media-type: string }
+    record import-result { provider: string, request-id: u64, document: document }
+    record export-result { provider: string, request-id: u64, name: string, media-type: string, bytes: list<u8> }
+    variant event { document-opened(document-event), document-changed(document-event), document-closed(string), completion(completion-request), tick(u64), cancelled(u64), mode-open(mode-open), mode-close(string), import-request(import-request), export-request(export-request), provider-setup(provider-setup), provider-setup-cancelled(u64), provider-status(provider-instance), provider-sign-out(provider-instance) }
+    record transport { document-id: string, position-ms: u64, playing: bool, rate: f32 }
+    record progress { task-id: u64, label: string, completed: u64, total: option<u64> }
+    record audio-request { document-id: string, lane-id: string, start-frame: u64, frames: u32, channel: u32 }
+    record audio-data { sample-rate: u32, samples: list<f32> }
+    record header { name: string, value: string }
+    record http-request { url: string, method: string, headers: list<header>, body: list<u8> }
+    record http-response { status: u16, headers: list<header>, body: list<u8> }
+}
+
+interface host {
+    use types.{document, transaction, registration, diagnostics, completions, decorations, overlay, ui-tree, progress, audio-request, audio-data, http-request, http-response, selection, transport, mode-document, import-result, export-result, provider-instance, provider-setup-result, provider-status};
+    snapshot: func(document-id: string) -> result<document, string>;
+    propose: func(transaction: transaction) -> result<u64, string>;
+    register: func(descriptor: registration) -> result<_, string>;
+    publish-diagnostics: func(value: diagnostics) -> result<_, string>;
+    publish-completions: func(value: completions) -> result<_, string>;
+    publish-decorations: func(value: decorations) -> result<_, string>;
+    publish-overlay: func(value: overlay) -> result<_, string>;
+    publish-ui: func(value: ui-tree) -> result<_, string>;
+    report-progress: func(value: progress) -> result<_, string>;
+    cancelled: func() -> bool;
+    audio: func(request: audio-request) -> result<audio-data, string>;
+    http: func(request: http-request) -> result<http-response, string>;
+    storage-get: func(key: string) -> result<option<list<u8>>, string>;
+    storage-set: func(key: string, value: list<u8>) -> result<_, string>;
+    secret-get: func(key: string) -> result<option<string>, string>;
+    // Per-instance secrets and storage for provider types (requires `secrets` / `storage`).
+    // Only instances of providers this extension declares are accessible.
+    instance-secret-get: func(instance: provider-instance, key: string) -> result<option<string>, string>;
+    instance-secret-set: func(instance: provider-instance, key: string, value: option<string>) -> result<_, string>;
+    instance-storage-get: func(instance: provider-instance, key: string) -> result<option<list<u8>>, string>;
+    instance-storage-set: func(instance: provider-instance, key: string, value: list<u8>) -> result<_, string>;
+    provider-setup-done: func(value: provider-setup-result) -> result<_, string>;
+    provider-setup-cancel: func(provider: string, request-id: u64) -> result<_, string>;
+    // Answer to a `provider-status` event; unanswered within the call deadline = error.
+    // May also be published unsolicited (e.g. after a request fails) to replace the
+    // host's cached answer for that instance.
+    publish-provider-status: func(value: provider-status) -> result<_, string>;
+    selection-get: func(document-id: string) -> result<selection, string>;
+    selection-set: func(value: selection) -> result<_, string>;
+    transport-get: func(document-id: string) -> result<transport, string>;
+    transport-set: func(value: transport) -> result<_, string>;
+    publish-mode-document: func(value: mode-document) -> result<_, string>;
+    publish-import: func(value: import-result) -> result<_, string>;
+    publish-export: func(value: export-result) -> result<_, string>;
+}
+
+interface guest {
+    use types.{event, command, ui-event};
+    activate: func() -> result<_, string>;
+    deactivate: func();
+    on-event: func(value: event) -> result<_, string>;
+    on-command: func(value: command) -> result<_, string>;
+    on-ui-event: func(value: ui-event) -> result<_, string>;
+}
+
+world extension {
+    import host;
+    export guest;
+}

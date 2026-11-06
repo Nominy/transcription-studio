@@ -19,8 +19,8 @@ use super::model::{
     parse_template_search,
 };
 use super::snapshot::ReviewSnapshot;
-use sonus_babel_domain::i18n::localized;
-use sonus_gold::polish::{
+use exaudio_babel_domain::i18n::localized;
+use exaudio_gold::polish::{
     AudioTrack, BackendHealth, DraftResult, DraftStreamEvent, DraftStreamStep,
     RedistributionPreview, SseParser, draft_stream_step, parse_backend_health, parse_draft_result,
     parse_redistribution,

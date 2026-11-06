@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use sonus_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
 use studio_core::Project;
 use studio_editor::workflow::StudioWorkflow;
 

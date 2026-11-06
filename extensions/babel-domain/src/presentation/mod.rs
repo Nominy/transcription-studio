@@ -77,7 +77,7 @@ pub fn build_transcript_rows(
                 word_views: build_transcript_word_views(segment),
                 has_asserted_warning: false,
                 has_unresolved_low_confidence:
-                    sonus_babel_lint::linter::has_unresolved_low_confidence_word(segment),
+                    exaudio_babel_lint::linter::has_unresolved_low_confidence_word(segment),
                 is_read_only,
                 can_insert_above: availability.can_insert_above,
                 can_insert_below: availability.can_insert_below,
@@ -236,12 +236,12 @@ pub struct BabelPresentationProvider {
     pub acknowledgements: std::sync::Arc<crate::workflow::BabelLowConfidenceCommandProvider>,
 }
 
-impl sonus_extension::document::DecorationProvider for BabelPresentationProvider {
+impl exaudio_extension::document::DecorationProvider for BabelPresentationProvider {
     fn decorate(
         &self,
         project: &Project,
         revision: u64,
-    ) -> Vec<sonus_extension::document::Decoration> {
+    ) -> Vec<exaudio_extension::document::Decoration> {
         build_transcript_rows(project, &TrackFilter::All, None, true)
             .into_iter()
             .map(|mut row| {
@@ -252,8 +252,8 @@ impl sonus_extension::document::DecorationProvider for BabelPresentationProvider
                         revision,
                     );
                 }
-                sonus_extension::document::Decoration {
-                    source: "sonus.babel-domain".into(),
+                exaudio_extension::document::Decoration {
+                    source: "exaudio.babel-domain".into(),
                     kind: TRANSCRIPT_ROW_DECORATION.into(),
                     segment_id: row.segment_id.clone(),
                     range: None,
@@ -265,7 +265,7 @@ impl sonus_extension::document::DecorationProvider for BabelPresentationProvider
     }
 }
 
-impl sonus_extension::document::SegmentKindProvider for BabelPresentationProvider {
+impl exaudio_extension::document::SegmentKindProvider for BabelPresentationProvider {
     fn is_text(&self, segment: &studio_core::Segment) -> Option<bool> {
         Some(
             segment

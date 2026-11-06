@@ -3,17 +3,17 @@
 use super::task::{Drawer, TaskPanels};
 use crate::services::BabelServices;
 use crate::text::{count, failed, localized, localized_fmt};
+use exaudio_babel_services::review::build_draft_redistribute_payload;
+use exaudio_gold::polish::{DraftingConfig, RedistributionPreview, apply_redistribution};
+use exaudio_gold::prefs::AiPreferences;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::ui::{caption, muted};
+use exaudio_shell::services::spawn_service_in;
+use exaudio_shell::{ContributionRegistry, ShellHandle};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::*;
-use sonus_babel_services::review::build_draft_redistribute_payload;
-use sonus_gold::polish::{DraftingConfig, RedistributionPreview, apply_redistribution};
-use sonus_gold::prefs::AiPreferences;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::ui::{caption, muted};
-use sonus_shell::services::spawn_service_in;
-use sonus_shell::{ContributionRegistry, ShellHandle};
 
 const COMPACT_LIMIT: usize = 180;
 
@@ -94,7 +94,7 @@ impl CapabilityPanel {
         }
         self.commit_pending_drafts(cx);
         let settings = cx
-            .global::<sonus_shell::services::AppServices>()
+            .global::<exaudio_shell::services::AppServices>()
             .storage
             .ai_settings();
         let config = DraftingConfig::from_inputs(
@@ -258,21 +258,21 @@ impl CapabilityPanel {
                         .child(
                             button("dr-gold-draft", localized(cx, "Draft with AI", "Черновик с ИИ"))
                                 .icon(gpui_kit::assets::IconName::WandSparkles)
-                                .disabled(read_only || !cx.global::<ContributionRegistry>().is_enabled("sonus.gold"))
+                                .disabled(read_only || !cx.global::<ContributionRegistry>().is_enabled("exaudio.gold"))
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.shell.dispatch("sonus.gold.draft", window, cx);
+                                    this.shell.dispatch("exaudio.gold.draft", window, cx);
                                 })),
                         )
                         .child(button("dr-timestamps", localized(cx, "Align words", "Выровнять слова"))
-                            .disabled(!cx.global::<ContributionRegistry>().is_enabled("sonus.gold"))
+                            .disabled(!cx.global::<ContributionRegistry>().is_enabled("exaudio.gold"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.shell.dispatch("sonus.gold.align", window, cx);
+                                this.shell.dispatch("exaudio.gold.align", window, cx);
                             })))
                         .child(
                             button("dr-transcribe", localized(cx, "Fill this segment", "Заполнить сегмент"))
-                                .disabled(read_only || !cx.global::<ContributionRegistry>().is_enabled("sonus.gold"))
+                                .disabled(read_only || !cx.global::<ContributionRegistry>().is_enabled("exaudio.gold"))
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.shell.dispatch("sonus.gold.transcribe-segment", window, cx);
+                                    this.shell.dispatch("exaudio.gold.transcribe-segment", window, cx);
                                 })),
                         )
                         .child(
@@ -285,8 +285,8 @@ impl CapabilityPanel {
                         )
                         .child(
                             button("dr-ai-settings", localized(cx, "AI settings", "Настройки ИИ"))
-                                .disabled(!cx.global::<ContributionRegistry>().is_enabled("sonus.gold"))
-                                .on_click(cx.listener(|this, _, window, cx| this.shell.dispatch("sonus.gold.settings", window, cx))),
+                                .disabled(!cx.global::<ContributionRegistry>().is_enabled("exaudio.gold"))
+                                .on_click(cx.listener(|this, _, window, cx| this.shell.dispatch("exaudio.gold.settings", window, cx))),
                         ),
                 )
                 .child(muted(

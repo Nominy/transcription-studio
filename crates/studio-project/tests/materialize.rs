@@ -83,7 +83,7 @@ fn save_uses_one_versioned_manifest_and_preserves_opaque_metadata() {
         assert!(root.join(name).is_dir());
     }
     let stored = manifest(&root);
-    assert_eq!(stored["format"], "sonus-project");
+    assert_eq!(stored["format"], "exaudio-project");
     assert_eq!(stored["version"], 1);
     assert_eq!(stored["project"]["segments"][0]["text"], "Hello.");
     let loaded = load_project(&root).unwrap();
@@ -247,7 +247,7 @@ fn recovery_uses_native_contract_without_changing_manual_save() {
     assert_eq!(fs::read(root.join("project.json")).unwrap(), before);
     let snapshot: Value =
         serde_json::from_slice(&fs::read(root.join("autosave/recovery.json")).unwrap()).unwrap();
-    assert_eq!(snapshot["format"], "sonus-project");
+    assert_eq!(snapshot["format"], "exaudio-project");
     assert_eq!(snapshot["version"], 1);
     assert_eq!(snapshot["project"]["segments"][0]["text"], "Recovered edit");
     fs::rename(&root, &moved).unwrap();

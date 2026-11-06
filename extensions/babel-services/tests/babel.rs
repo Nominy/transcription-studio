@@ -3,15 +3,15 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::{MockResponse, MockServer, contains};
-use serde_json::{Value, json};
-use sonus_babel_domain::editor_model::feedback_assessment::{
+use exaudio_babel_domain::editor_model::feedback_assessment::{
     FeedbackDraftSaveRequest, FeedbackInputResponse,
 };
-use sonus_babel_domain::workflow::BabelWorkflowExt;
-use sonus_babel_services::babel::{
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_services::babel::{
     self, BabelClient, BabelConfig, BabelRequest, Fixture, LoadedTask, OpenedTask, RouteContext,
     SaveAnnotationsRequest, SubmitReviewActionRequest, TaskRequest,
 };
+use serde_json::{Value, json};
 use studio_editor::workflow::StudioWorkflow;
 
 fn transcript(opened: OpenedTask) -> LoadedTask {
@@ -529,7 +529,7 @@ async fn claim_without_annotations_loads_them_by_review_action_id() {
 
     let project = task.workflow.project();
     assert_eq!(project.segments.len(), 24);
-    let lint = sonus_babel_domain::babel_metadata::server_lint_snapshot_from_project(project, 0)
+    let lint = exaudio_babel_domain::babel_metadata::server_lint_snapshot_from_project(project, 0)
         .expect("imported server lint");
     assert_eq!(lint.issues.len(), 1);
     assert_eq!(lint.issues[0].reason, "Fallback lint reason.");
@@ -739,7 +739,7 @@ async fn subaccount_session_routes_envelope_to_relay() {
         ),
     )
     .expect("session store");
-    let session = sonus_babel_services::subaccounts::read_session(&store_path)
+    let session = exaudio_babel_services::subaccounts::read_session(&store_path)
         .expect("read session")
         .expect("saved session");
     let client = BabelClient::relay(session);
@@ -878,10 +878,11 @@ fn write_adapter_script(path: &std::path::Path) {
 #[tokio::test]
 async fn direct_account_ignores_another_accounts_relay_session() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let relay_account = sonus_babel_services::account::AccountStore::new(temp.path().join("relay"));
-    sonus_babel_services::subaccounts::save_session(
+    let relay_account =
+        exaudio_babel_services::account::AccountStore::new(temp.path().join("relay"));
+    exaudio_babel_services::subaccounts::save_session(
         &relay_account.session_path(),
-        &sonus_babel_services::subaccounts::SubaccountSession {
+        &exaudio_babel_services::subaccounts::SubaccountSession {
             host_url: "http://127.0.0.1:9".into(),
             token: "unrelated-relay-token".into(),
             subaccount_id: "other-account".into(),

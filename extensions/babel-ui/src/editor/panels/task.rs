@@ -5,16 +5,16 @@
 //! editor session: which drawer is open, the feedback form, the reviewer workspace, pending
 //! service flows and the doc-driven dialogs (add region / edit annotation).
 
-use gpui_kit::*;
-use sonus_babel_domain::editor_model::BabelDocumentState;
-use sonus_babel_services::review::{
+use exaudio_babel_domain::editor_model::BabelDocumentState;
+use exaudio_babel_services::review::{
     FeedbackForm, feedback_initially_open, feedback_is_tts_project, reviewer_capability_available,
 };
+use gpui_kit::*;
 use std::{cell::RefCell, rc::Rc};
 
 use super::flows::Flows;
 use super::reviewer::{Grader, MagicReview};
-use sonus_shell::editor::model::EditorModel;
+use exaudio_shell::editor::model::EditorModel;
 
 /// Right-hand drawer currently shown next to the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,7 @@ pub mod route;
 pub mod server_diagnostics;
 pub mod workflow;
 
-use sonus_extension::document::{
+use exaudio_extension::document::{
     DocumentEnvironment, DocumentOrigin, DocumentPolicy, DocumentProviders,
 };
 use std::sync::Arc;
@@ -50,7 +50,7 @@ pub fn document_environment(
     anyhow::ensure!(
         matches!(
             mode_id,
-            "sonus.babel" | "sonus.babel.errors" | "sonus.babel-file"
+            "exaudio.babel" | "exaudio.babel.errors" | "exaudio.babel-file"
         ),
         "Unknown Babel mode `{mode_id}`"
     );
@@ -61,10 +61,10 @@ pub fn document_environment(
         },
         policy: DocumentPolicy {
             read_only: babel_metadata::project_is_read_only(project),
-            segment_edit_command: Some("sonus.babel.edit-annotation".into()),
+            segment_edit_command: Some("exaudio.babel.edit-annotation".into()),
             minimum_cut_milliseconds: 1000,
             region_creation_command: edit::create_region::project_uses_annotation_mode(project)
-                .then(|| "sonus.babel.open-create-region".into()),
+                .then(|| "exaudio.babel.open-create-region".into()),
         },
         providers: DocumentProviders::default(),
     })

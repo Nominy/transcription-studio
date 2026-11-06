@@ -386,7 +386,7 @@ fn export_json_preserves_review_action_envelope_after_edits() {
             )
             .and_then(serde_json::Value::as_str),
         Some(
-            "s3://sonus-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav"
+            "s3://exaudio-demo-audio/transcription-chunks/demo/afc30681-b4f7-56b5-9fa0-e2fb5ec7b00b/f5b736b9-60ff-5355-ae5a-e909aa644e72/8aec034b-1486-546a-89de-47ee0ab3ee60.wav"
         )
     );
 }

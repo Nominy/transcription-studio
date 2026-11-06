@@ -1,9 +1,9 @@
 use anyhow::anyhow;
-use serde_json::json;
-use sonus_babel_services::review::{
+use exaudio_babel_services::review::{
     ReviewerNext, ReviewerSession, ReviewerTemplate, ReviewerWorkspace, parse_finalize_outcome,
     parse_reviewer_session,
 };
+use serde_json::json;
 
 fn session_with_id(
     session_id: &str,

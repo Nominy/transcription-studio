@@ -1616,7 +1616,7 @@ fn parse_normal_key(
 ) -> Option<(Keystroke, bool)> {
     let (key_char, prefer_character_input) = process_key(vkey, lparam.hiword());
 
-    // Transcription Studio patch: printable keys are named by their physical position on a
+    // Exaudio patch: printable keys are named by their physical position on a
     // US keyboard (like the browser's `KeyboardEvent.code`), so shortcuts work the same under
     // any layout (Russian, AZERTY, …). Shift stays a modifier; typed text still comes from
     // `key_char`.

@@ -1,12 +1,12 @@
 //! Review preferences belong to Babel and remain available without Gold UI enabled.
 
+use exaudio_gold::prefs::{AiPreferences, AiSettings};
+use exaudio_shell::{screens::ui, services::AppServices};
 use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_gold::prefs::{AiPreferences, AiSettings};
-use sonus_shell::{screens::ui, services::AppServices};
 
 use crate::text::{localized, localized_fmt};
 

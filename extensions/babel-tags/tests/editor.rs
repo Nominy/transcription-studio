@@ -1,5 +1,5 @@
 #![allow(unused_must_use)]
-use sonus_extension::document::{Completion, DocumentEnvironment};
+use exaudio_extension::document::{Completion, DocumentEnvironment};
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::edit::{CompletionKey, EditError, EditorDoc, Effect, Outcome, TextSelection};
 
@@ -39,7 +39,7 @@ fn seg(id: &str, lane: &str, start: f64, end: f64, text: &str) -> Segment {
 }
 fn registered_doc(project: Project) -> EditorDoc {
     let mut environment = DocumentEnvironment::local(project.id.clone());
-    sonus_babel_tags::register(&mut environment.providers);
+    exaudio_babel_tags::register(&mut environment.providers);
     EditorDoc::from_project(project, environment)
 }
 fn doc(segments: Vec<Segment>) -> EditorDoc {

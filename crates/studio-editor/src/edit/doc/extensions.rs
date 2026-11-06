@@ -1,7 +1,7 @@
 //! Revision-checked extension commands and transactions; no provider is implicit.
 use std::borrow::Cow;
 
-use sonus_extension::document::{
+use exaudio_extension::document::{
     CommandRequest, DocumentEdit, DocumentTransaction, QuickFix, TextRange,
 };
 use studio_core::{Project, Segment};

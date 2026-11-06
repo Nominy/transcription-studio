@@ -107,7 +107,7 @@ impl Args {
 fn print_help() {
     println!(
         "Usage: studio-relay [--bind 127.0.0.1:8787] [--store path] [--owner-token token] [--babel-service-command command] [--upstream-url url] [--task-cents cents]\n\n\
-Runs the Transcription Studio Sub-account relay.\n\
+Runs the Exaudio Sub-account relay.\n\
 Environment: STUDIO_SUBACCOUNT_RELAY_STORE, STUDIO_SUBACCOUNT_OWNER_TOKEN, STUDIO_BABEL_SERVICE_COMMAND, STUDIO_SUBACCOUNT_UPSTREAM_URL, STUDIO_SUBACCOUNT_TASK_CENTS."
     );
 }

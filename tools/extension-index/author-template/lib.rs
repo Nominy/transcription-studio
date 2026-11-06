@@ -1,4 +1,4 @@
-use sonus_sdk::{Guest, host, types::*};
+use exaudio_sdk::{Guest, host, types::*};
 
 struct AuthorExtension;
 
@@ -17,7 +17,7 @@ fn refresh_diagnostics(document_id: &str) -> Result<(), String> {
 
 impl Guest for AuthorExtension {
     fn activate() -> Result<(), String> {
-        sonus_sdk::command_panel("insert-greeting", "author-panel", "Author extension", "Insert greeting")?;
+        exaudio_sdk::command_panel("insert-greeting", "author-panel", "Author extension", "Insert greeting")?;
         host::register(&Registration { id: "empty-segments".into(), kind: ContributionKind::Diagnostics,
             title: "Empty segments".into() })?;
         host::register(&Registration { id: "document-events".into(), kind: ContributionKind::Event,
@@ -33,7 +33,7 @@ impl Guest for AuthorExtension {
         let id = command.document_id.ok_or("open a document first")?;
         let document = host::snapshot(&id)?;
         let transaction = if let Some(segment) = document.segments.first() {
-            sonus_sdk::insert_text(&document, &segment.id, 0, "Hello from an extension! ".into(), "Insert greeting".into())?
+            exaudio_sdk::insert_text(&document, &segment.id, 0, "Hello from an extension! ".into(), "Insert greeting".into())?
         } else {
             let lane = document.lanes.first().ok_or("document has no lane to insert into")?;
             Transaction { document_id: document.id.clone(), expected_revision: document.revision,
@@ -61,4 +61,4 @@ impl Guest for AuthorExtension {
     }
 }
 
-sonus_sdk::bindings::export!(AuthorExtension with_types_in sonus_sdk::bindings);
+exaudio_sdk::bindings::export!(AuthorExtension with_types_in exaudio_sdk::bindings);

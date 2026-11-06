@@ -1,0 +1,23 @@
+[package]
+name = "exaudio-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+exaudio-extension.workspace = true
+semver = "1.0"
+url.workspace = true
+wasmtime = { version = "38", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "wat"] }
+tempfile.workspace = true
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true

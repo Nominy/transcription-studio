@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
 use serde_json::{Map, Value};
-use sonus_babel_domain::workflow::BabelWorkflowExt;
 use studio_core::{Project, Segment};
 use studio_editor::workflow::StudioWorkflow;
 
-pub use sonus_babel_lint::project_lint_tag_config::{
+pub use exaudio_babel_lint::project_lint_tag_config::{
     META_BABEL_PROJECT_ID as META_PROJECT_ID, META_BABEL_PROJECT_SLUG as META_PROJECT_SLUG,
 };
 

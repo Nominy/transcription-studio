@@ -1,5 +1,5 @@
 {
-  "id": "sonus.local",
+  "id": "exaudio.local",
   "name": "Local",
   "version": "0.1.0",
   "api": "^0.1",
@@ -14,14 +14,14 @@
     { "kind": "file-picker" }
   ],
   "modes": [{
-    "id": "sonus.local",
+    "id": "exaudio.local",
     "name": "Local",
     "launch": "window",
     "requires": {},
     "recommends": {
-      "sonus.formats": "^0.1",
-      "sonus.lint-basic": "^0.1",
-      "sonus.gold": "^0.1"
+      "exaudio.formats": "^0.1",
+      "exaudio.lint-basic": "^0.1",
+      "exaudio.gold": "^0.1"
     }
   }]
 }

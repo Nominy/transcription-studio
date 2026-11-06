@@ -1,5 +1,5 @@
-use sonus_extension::format::{ExportOptions, FormatProvider, FormatRegistry, ImportContent};
-use sonus_formats::{EXTENSION_ID, SubtitleFormat};
+use exaudio_extension::format::{ExportOptions, FormatProvider, FormatRegistry, ImportContent};
+use exaudio_formats::{EXTENSION_ID, SubtitleFormat};
 use studio_core::{Project, Segment, Speaker};
 
 fn segment(id: &str, start: f64, end: f64, text: &str, speaker: &str) -> Segment {
@@ -33,7 +33,7 @@ fn project(segments: Vec<Segment>) -> Project {
         metadata: Default::default(),
     }
 }
-fn timed(content: ImportContent) -> Vec<sonus_extension::format::ImportedCue> {
+fn timed(content: ImportContent) -> Vec<exaudio_extension::format::ImportedCue> {
     match content {
         ImportContent::Timed(cues) => cues,
         ImportContent::Untimed(_) => panic!("expected timed cues"),
@@ -239,7 +239,7 @@ fn bounded_utf8_and_blank_subtitle_payload_validation() {
         assert!(codec.import(&[0xff]).is_err());
         assert!(
             codec
-                .import(&vec![b'x'; sonus_formats::MAX_INPUT_BYTES + 1])
+                .import(&vec![b'x'; exaudio_formats::MAX_INPUT_BYTES + 1])
                 .is_err()
         );
         assert!(codec.import(b"\0").is_err());
@@ -262,13 +262,13 @@ fn bounded_utf8_and_blank_subtitle_payload_validation() {
 fn optional_registry_registration_and_disable_are_real() {
     let mut registry = FormatRegistry::default();
     assert_eq!(registry.entries().len(), 0);
-    let manifest = sonus_formats::manifest();
+    let manifest = exaudio_formats::manifest();
     manifest.validate().unwrap();
     manifest.check_host_compatibility().unwrap();
     assert_eq!(manifest.id, EXTENSION_ID);
-    sonus_formats::register(&mut registry).unwrap();
+    exaudio_formats::register(&mut registry).unwrap();
     assert_eq!(registry.entries().len(), 3);
-    let srt = registry.get("sonus.formats.srt").unwrap();
+    let srt = registry.get("exaudio.formats.srt").unwrap();
     assert_eq!(
         timed(
             srt.import(b"1\n00:00:00,000 --> 00:00:01,000\nhello\n")
@@ -277,12 +277,12 @@ fn optional_registry_registration_and_disable_are_real() {
         .text,
         "hello"
     );
-    assert!(sonus_formats::register(&mut registry).is_err());
+    assert!(exaudio_formats::register(&mut registry).is_err());
     assert_eq!(registry.entries().len(), 3);
     registry.unregister_extension(EXTENSION_ID);
     assert!(registry.entries().is_empty());
-    assert!(registry.get("sonus.formats.srt").is_none());
-    sonus_formats::register(&mut registry).unwrap();
+    assert!(registry.get("exaudio.formats.srt").is_none());
+    exaudio_formats::register(&mut registry).unwrap();
     assert_eq!(registry.entries().len(), 3);
 }
 

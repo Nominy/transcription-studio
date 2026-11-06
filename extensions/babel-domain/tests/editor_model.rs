@@ -1,26 +1,26 @@
-use sonus_babel_domain::editor_model::context_panels::{original_script, script_context};
-use sonus_babel_domain::editor_model::diff_toolbar::{DiffCompareOption, DiffMetrics};
-use sonus_babel_domain::editor_model::feedback_assessment::{
+use exaudio_babel_domain::editor_model::context_panels::{original_script, script_context};
+use exaudio_babel_domain::editor_model::diff_toolbar::{DiffCompareOption, DiffMetrics};
+use exaudio_babel_domain::editor_model::feedback_assessment::{
     FEEDBACK_MAX_COMMENT_LENGTH, FeedbackDraft, FeedbackInput, FeedbackInputResponse,
     FeedbackRubricEntry, FeedbackSaveRequestInput, compute_feedback_draft_save_request,
     get_rubric_fields_for_flags, has_other_feedback_flag, parse_feedback_responses,
     serialize_feedback_draft,
 };
-use sonus_babel_domain::editor_model::review_actions::{
+use exaudio_babel_domain::editor_model::review_actions::{
     DropClaimState, ReadOnlyAction, ReadOnlyActionCommand, ReadOnlyNotice, ReviewActionStrip,
 };
-use sonus_babel_domain::editor_model::submit_control::{
+use exaudio_babel_domain::editor_model::submit_control::{
     AdminFlagPayload, SubmitBlocker, SubmitEligibility, SubmitKind,
 };
-use sonus_babel_domain::editor_model::task_lookup::{
+use exaudio_babel_domain::editor_model::task_lookup::{
     TaskLookupEffect, TaskLookupEvent, TaskLookupState,
 };
-use sonus_babel_domain::editor_model::{
+use exaudio_babel_domain::editor_model::{
     AssessmentPhase, BabelDocumentState, EditorSession as DomainSession, ReviewState,
 };
-use sonus_babel_domain::workflow::BabelWorkflowExt;
-use sonus_babel_lint::linter::{LintSeverity, ServerLintIssue, ServerLintSnapshot};
-use sonus_extension::document::Severity;
+use exaudio_babel_domain::workflow::BabelWorkflowExt;
+use exaudio_babel_lint::linter::{LintSeverity, ServerLintIssue, ServerLintSnapshot};
+use exaudio_extension::document::Severity;
 use studio_babel::import_json;
 use studio_core::{AudioLane, Project, Segment, Speaker};
 use studio_editor::editor_model::buffered_playback::{
@@ -37,13 +37,13 @@ use studio_editor::transcript_model::{
 use studio_editor::workflow::StudioWorkflow;
 use studio_waveform::DecodedAudio;
 
-fn test_environment(project: &Project) -> sonus_extension::document::DocumentEnvironment {
+fn test_environment(project: &Project) -> exaudio_extension::document::DocumentEnvironment {
     let mut environment =
-        sonus_babel_domain::document_environment(project, project.id.clone(), "sonus.babel")
+        exaudio_babel_domain::document_environment(project, project.id.clone(), "exaudio.babel")
             .expect("registered Babel mode");
-    environment.providers = sonus_babel_domain::domain_providers(project);
-    sonus_babel_lint::register(&mut environment.providers);
-    sonus_babel_tags::register(&mut environment.providers);
+    environment.providers = exaudio_babel_domain::domain_providers(project);
+    exaudio_babel_lint::register(&mut environment.providers);
+    exaudio_babel_tags::register(&mut environment.providers);
     environment
 }
 
@@ -79,7 +79,7 @@ impl EditorSession {
     fn diff_toolbar(
         &self,
         project: &Project,
-    ) -> sonus_babel_domain::editor_model::diff_toolbar::DiffToolbarState {
+    ) -> exaudio_babel_domain::editor_model::diff_toolbar::DiffToolbarState {
         self.domain.view(&self.core).diff_toolbar(project)
     }
     fn can_submit_review(&self, project: &Project) -> bool {
@@ -3394,7 +3394,7 @@ fn partial_word_acknowledgements_are_shared_with_neutral_presentation() {
     let outcome = provider
         .execute(
             command,
-            &sonus_extension::document::CommandRequest {
+            &exaudio_extension::document::CommandRequest {
                 project: &project,
                 revision: session.edit_revision(),
                 segment_id: Some("words"),
@@ -3417,7 +3417,7 @@ fn annotation_classification_is_explicitly_installed_by_the_domain() {
     row.metadata
         .insert("type".into(), serde_json::json!("sound"));
     let project = project_with_segments(vec![row]);
-    let local = sonus_extension::document::DocumentEnvironment::local("native");
+    let local = exaudio_extension::document::DocumentEnvironment::local("native");
     assert!(local.is_text_segment(&project.segments[0]));
     let domain = test_environment(&project);
     assert!(!domain.is_text_segment(&project.segments[0]));
@@ -3427,10 +3427,10 @@ fn annotation_classification_is_explicitly_installed_by_the_domain() {
 fn domain_construction_does_not_enable_optional_lint_or_tags() {
     let project = project_with_segments(vec![segment("empty", 1.0, 2.0, "")]);
     let mut environment =
-        sonus_babel_domain::document_environment(&project, "review", "sonus.babel").unwrap();
+        exaudio_babel_domain::document_environment(&project, "review", "exaudio.babel").unwrap();
     assert!(environment.providers.diagnostics.is_empty());
     assert!(environment.providers.completions.is_empty());
-    environment.providers = sonus_babel_domain::domain_providers(&project);
+    environment.providers = exaudio_babel_domain::domain_providers(&project);
     assert!(environment.providers.completions.is_empty());
     let core = CoreSession::for_project_with_environment(&project, environment);
     assert!(core.transcript_rows(&project)[0].lint.is_none());
@@ -3438,7 +3438,7 @@ fn domain_construction_does_not_enable_optional_lint_or_tags() {
 
 #[test]
 fn server_arbitration_preserves_raw_local_results_and_unrelated_provider_identity() {
-    use sonus_extension::document::DiagnosticCollection;
+    use exaudio_extension::document::DiagnosticCollection;
     let project = project_with_segments(vec![segment("empty", 1.0, 2.0, "")]);
     let mut core = CoreSession::for_project_with_environment(&project, test_environment(&project));
     let local = core

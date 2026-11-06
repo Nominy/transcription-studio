@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
+use exaudio_babel_domain::i18n::localized;
 use serde_json::{Map, Value, json};
-use sonus_babel_domain::i18n::localized;
 use studio_core::Project;
 
 use super::model::{

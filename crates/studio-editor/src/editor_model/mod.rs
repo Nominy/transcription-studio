@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::timeline_model::{LaneWaveform, TimeRange, display_waveform};
 use crate::track_filter::TrackFilter;
 use crate::transcript_model::{TranscriptRowView, build_transcript_rows};
-use sonus_extension::document::{DiagnosticCollection, DocumentEnvironment, Severity};
+use exaudio_extension::document::{DiagnosticCollection, DocumentEnvironment, Severity};
 use studio_core::Project;
 
 pub use transport::PLAYBACK_SPEED_STEPS;
@@ -244,7 +244,7 @@ impl EditorSession {
         self.compose_diagnostics(project);
     }
 
-    pub fn decorations(&self, project: &Project) -> Vec<sonus_extension::document::Decoration> {
+    pub fn decorations(&self, project: &Project) -> Vec<exaudio_extension::document::Decoration> {
         self.environment
             .providers
             .decorations

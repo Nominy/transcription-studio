@@ -34,7 +34,7 @@ pub use response::{FeedbackDraftBootstrap, SaveOutcome};
 pub(crate) use transport::presigned_chunk_urls_payload;
 pub use transport::{BabelConfig, Fixture};
 
-use sonus_babel_lint::linter::ServerLintIssue;
+use exaudio_babel_lint::linter::ServerLintIssue;
 
 /// A failed Babel operation. `lint_issues` is set when Babel rejected a
 /// save/submit with lint results the editor should still display.

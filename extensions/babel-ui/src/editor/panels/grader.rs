@@ -4,18 +4,18 @@
 
 use std::rc::Rc;
 
+use exaudio_babel_services::review::{CategoryGrade, grade_category_title};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::review::{CategoryGrade, grade_category_title};
 
 use super::task::TaskPanels;
 use crate::text;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::editor::panels::modal::{CloseModal, ModalFocus, dialog_surface, modal};
-use sonus_shell::editor::panels::ui::muted;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::editor::panels::modal::{CloseModal, ModalFocus, dialog_surface, modal};
+use exaudio_shell::editor::panels::ui::muted;
 
 /// Score buttons: value and label (EN, RU).
 const SCORE_LABELS: [(u8, &str, &str); 3] = [

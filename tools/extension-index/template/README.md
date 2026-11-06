@@ -12,7 +12,7 @@ this empty index and add only published, reviewed releases. There are no example
   review process before publishing your index.
 - Protect the default branch and require maintainer review of pull requests. Configure
   your GitHub repository settings; the local template does not create those settings.
-- CI should run the trusted Exaudio `sonus-extension-index validate-index` executable on
+- CI should run the trusted Exaudio `exaudio-extension-index validate-index` executable on
   both the proposed catalog and the previous default-branch catalog. Pin the validator
   source commit or a verified tool release in your own CI. Never execute a contributor's
   build scripts or untrusted CI changes with privileged credentials.
@@ -38,7 +38,7 @@ suffixes are rejected. Default limits are 32 MiB compressed, 128 MiB expanded, 4
 entries and a 256 KiB manifest. The module must be a WASM component; runtime compilation
 and ABI validation are the host's responsibility before executing it.
 
-`manifest.json` uses the exact `sonus-extension::ExtensionManifest` JSON schema: `id`,
+`manifest.json` uses the exact `exaudio-extension::ExtensionManifest` JSON schema: `id`,
 `name`, semver `version`, API semver requirement `api`, `runtime: "wasm"`, `description`,
 `license`, `dependencies` (ID to version requirement), `permissions` (capability objects),
 and `modes` (ID/name/requires/recommends). Unknown fields are rejected. IDs are dotted
@@ -49,7 +49,7 @@ lowercase identifiers. Capability declarations request access; they do not grant
 1. Commit the author's source and manifest. Record the full Git source commit ID.
 2. Build locally using the author's toolchain. Package the real WASM component and exact
    manifest into `.exaudio`. The trusted CLI can do this with
-   `sonus-extension-index pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE`.
+   `exaudio-extension-index pack manifest.json COMPONENT.wasm OUTPUT.exaudio LICENSE`.
    It validates the archive and refuses to overwrite existing artifacts. Do not include
    native binaries or build scripts.
 3. Create a versioned GitHub release in the author's repository and upload the archive.
@@ -57,7 +57,7 @@ lowercase identifiers. Capability declarations request access; they do not grant
 4. Generate a real entry from those exact bytes with the trusted validator:
 
    ```text
-   sonus-extension-index release-entry OWNER REPOSITORY manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
+   exaudio-extension-index release-entry OWNER REPOSITORY manifest.json PACKAGE.exaudio TAG SOURCE_COMMIT
    ```
 
    It validates the package and prints an entry; it does not upload anything or prove

@@ -3,7 +3,7 @@ use studio_core::Project;
 use serde_json::Value;
 
 pub(crate) use crate::editor_model::AssessmentPhase;
-use sonus_babel_lint::linter::{LintSeverity, ServerLintIssue, ServerLintSnapshot};
+use exaudio_babel_lint::linter::{LintSeverity, ServerLintIssue, ServerLintSnapshot};
 
 const META_EXTRA_PACKAGE: &str = "babel.extra.package";
 const META_EXTRA_PACKAGE_LINT_ERRORS: &str = "babel.extra.package.lint_errors";

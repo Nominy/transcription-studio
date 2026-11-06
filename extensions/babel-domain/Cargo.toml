@@ -1,5 +1,5 @@
 [package]
-name = "sonus-babel-domain"
+name = "exaudio-babel-domain"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -12,12 +12,12 @@ serde_json.workspace = true
 studio-core.workspace = true
 studio-babel.workspace = true
 studio-editor.workspace = true
-sonus-extension = { path = "../../crates/sonus-extension" }
-sonus-babel-lint = { path = "../babel-lint" }
+exaudio-extension = { path = "../../crates/exaudio-extension" }
+exaudio-babel-lint = { path = "../babel-lint" }
 time.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-sonus-babel-tags = { path = "../babel-tags" }
+exaudio-babel-tags = { path = "../babel-tags" }
 tempfile.workspace = true
 studio-waveform.workspace = true

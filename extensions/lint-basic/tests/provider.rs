@@ -1,5 +1,7 @@
-use sonus_extension::document::{DiagnosticCollection, DiagnosticProvider, DocumentEdit, Severity};
-use sonus_lint_basic::{BasicChecks, ID};
+use exaudio_extension::document::{
+    DiagnosticCollection, DiagnosticProvider, DocumentEdit, Severity,
+};
+use exaudio_lint_basic::{BasicChecks, ID};
 use studio_core::{Project, Segment};
 
 fn segment(id: &str, lane: &str, text: &str, start: f64, end: f64) -> Segment {
@@ -30,18 +32,18 @@ fn check(text: &str) -> DiagnosticCollection {
 
 #[test]
 fn manifest_is_valid_and_provider_is_opt_in() {
-    let manifest = sonus_lint_basic::manifest().unwrap();
+    let manifest = exaudio_lint_basic::manifest().unwrap();
     manifest.validate().unwrap();
     manifest.check_host_compatibility().unwrap();
     assert_eq!(manifest.id, ID);
     assert!(manifest.modes.is_empty());
     assert!(
-        sonus_extension::document::DocumentEnvironment::local("test")
+        exaudio_extension::document::DocumentEnvironment::local("test")
             .providers
             .diagnostics
             .is_empty()
     );
-    let providers = sonus_lint_basic::providers(sonus_lint_basic::Language::En);
+    let providers = exaudio_lint_basic::providers(exaudio_lint_basic::Language::En);
     assert_eq!(providers.diagnostics.len(), 1);
     assert_eq!(
         providers.diagnostics[0]

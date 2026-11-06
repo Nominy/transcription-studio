@@ -12,20 +12,20 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use gpui_kit::*;
-use sonus_babel_services::review::{
+use exaudio_babel_services::review::{
     CommentSave, GradeResult, ProposalDecision, ReviewBackend, ReviewCredentials, ReviewSnapshot,
     ReviewerFeedback, ReviewerNext, ReviewerSession, ReviewerWorkspace, TEMPLATE_SEARCH_LIMIT,
     capture_review_snapshot, current_review_state, current_transcript_key,
     reviewer_capability_available,
 };
+use gpui_kit::*;
 
 use super::task::TaskPanels;
 use crate::services::BabelServices;
 use crate::text;
-use sonus_gold::prefs::AiPreferences;
-use sonus_shell::editor::model::EditorModel;
-use sonus_shell::services::spawn_service_in;
+use exaudio_gold::prefs::AiPreferences;
+use exaudio_shell::editor::model::EditorModel;
+use exaudio_shell::services::spawn_service_in;
 
 const AUTOSAVE_INTERVAL: Duration = Duration::from_millis(500);
 /// Callers named in row-draft commit messages.
@@ -147,7 +147,7 @@ impl TaskPanels {
     /// Backend with the Review key/model from Settings (paid routes need them).
     fn keyed_backend(cx: &App) -> anyhow::Result<ReviewBackend> {
         let settings = cx
-            .global::<sonus_shell::services::AppServices>()
+            .global::<exaudio_shell::services::AppServices>()
             .storage
             .ai_settings();
         let credentials =
@@ -200,7 +200,7 @@ impl TaskPanels {
             return;
         }
         let fast = cx
-            .global::<sonus_shell::services::AppServices>()
+            .global::<exaudio_shell::services::AppServices>()
             .storage
             .ai_settings()
             .review_fast_mode;

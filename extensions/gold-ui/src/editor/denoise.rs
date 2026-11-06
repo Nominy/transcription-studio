@@ -13,6 +13,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use exaudio_gold::prefs::ExecutionLocation;
+use exaudio_gold::remote::GOLD_ENHANCEMENT_MODEL;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::popover::Popover;
@@ -24,8 +26,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_gold::prefs::ExecutionLocation;
-use sonus_gold::remote::GOLD_ENHANCEMENT_MODEL;
 use studio_audio::{DecodedAudio, EnhancedAudioCache, decode_audio_bytes, sha256_hex};
 use studio_core::AudioLane;
 use studio_inference::{
@@ -35,11 +35,11 @@ use studio_services::paths::app_support_dir;
 
 use crate::editor::inference_audio::{read_lane_audio, until_cancelled};
 use crate::services::GoldServices;
-use sonus_shell::editor::model::{EditorModel, LaneSource};
-use sonus_shell::editor::panels::ui::{
+use exaudio_shell::editor::model::{EditorModel, LaneSource};
+use exaudio_shell::editor::panels::ui::{
     dialog_footer, dialog_header, muted, stable_text, tabular_figures,
 };
-use sonus_shell::screens::ui::{error_block, localized};
+use exaudio_shell::screens::ui::{error_block, localized};
 
 /// Slider detent, in percent.
 const MIX_STEP_PERCENT: u8 = 10;
