@@ -487,6 +487,8 @@ fn http_response(status: &str, body: &[u8], headers: &str) -> (String, thread::J
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets inherit the listener's non-blocking mode on Windows.
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();
@@ -788,6 +790,7 @@ async fn cancellation_interrupts_an_inflight_http_response() {
                 Err(error) => panic!("fixture server failed: {error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
