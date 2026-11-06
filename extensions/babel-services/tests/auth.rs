@@ -1,11 +1,16 @@
 mod common;
 
 use common::{MockResponse, MockServer, contains};
+use sonus_babel_services::account::{
+    AccountKind, AccountRecord, AccountStatus, AccountStore, direct_instance_id, discover_records,
+    move_providers_root, relay_instance_id,
+};
 use sonus_babel_services::auth::{
     self, AuthCookie, AuthStore,
-    cli::{AuthCliCommand, parse_args},
+    cli::{AuthCli, AuthCliCommand, parse_args},
     flow::{AuthFlow, AuthStartup, AuthStep},
 };
+use sonus_babel_services::subaccounts::{self, SubaccountSession};
 
 const NOW: i64 = 1_782_754_800;
 
@@ -73,27 +78,149 @@ fn store_round_trips_through_save() {
 }
 
 #[test]
-fn detach_copies_store_next_to_executable() {
+fn accounts_in_different_directories_do_not_share_cookies() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let source = temp.path().join("app-support").join("babel-auth.json");
-    let target =
-        auth::store_path_next_to_executable(&temp.path().join("detached").join("studio-app.exe"))
-            .expect("target path");
+    let first = AccountStore::new(temp.path().join(direct_instance_id("+7 999 000 00 01")));
+    let second = AccountStore::new(temp.path().join(direct_instance_id("+7 999 000 00 02")));
+    assert_ne!(first.dir(), second.dir());
     let store = AuthStore {
         cookies: vec![cookie(
             "__client",
-            "client-cookie",
+            "first-cookie",
             "clerk.babel.audio",
             None,
         )],
         ..AuthStore::default()
     };
-    auth::save_store(&source, &store).expect("source store");
+    auth::save_store(&first.auth_path(), &store).expect("first store");
 
-    auth::detach_store_to_path(&source, &target).expect("detach");
+    assert_eq!(
+        first.status("https://clerk.babel.audio", NOW),
+        AccountStatus::Ready {
+            detail: "Signed in".into()
+        }
+    );
+    assert_eq!(
+        second.status("https://clerk.babel.audio", NOW),
+        AccountStatus::NeedsSignIn
+    );
+    assert!(second.client().expect("read").is_none());
+    let client = first.client().expect("read").expect("direct client");
+    assert_eq!(
+        client.config().auth_store.as_deref(),
+        Some(first.auth_path().as_path())
+    );
+    assert_eq!(client.config().data_dir.as_deref(), Some(first.dir()));
 
-    assert_eq!(auth::read_store(&target).expect("target"), store);
-    assert!(source.exists(), "detaching copies, it does not move");
+    first.clear_credentials().expect("sign out");
+    assert_eq!(
+        first.status("https://clerk.babel.audio", NOW),
+        AccountStatus::NeedsSignIn
+    );
+}
+
+#[test]
+fn expired_or_pending_cookies_need_sign_in() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = AccountStore::new(temp.path().join("acct"));
+    auth::save_store(
+        &store.auth_path(),
+        &AuthStore {
+            cookies: vec![cookie(
+                "__client",
+                "old",
+                "clerk.babel.audio",
+                Some(NOW - 1),
+            )],
+            ..AuthStore::default()
+        },
+    )
+    .expect("expired store");
+    assert_eq!(
+        store.status("https://clerk.babel.audio", NOW),
+        AccountStatus::NeedsSignIn
+    );
+    auth::save_store(
+        &store.auth_path(),
+        &AuthStore {
+            cookies: vec![cookie("__client", "fresh", "clerk.babel.audio", None)],
+            pending_sign_in_id: Some("si_pending".into()),
+            ..AuthStore::default()
+        },
+    )
+    .expect("pending store");
+    assert_eq!(
+        store.status("https://clerk.babel.audio", NOW),
+        AccountStatus::NeedsSignIn
+    );
+}
+
+#[test]
+fn relay_session_makes_a_relay_client_and_wins_over_cookies() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let session = SubaccountSession {
+        host_url: "https://relay.example.com".into(),
+        token: "relay-token".into(),
+        subaccount_id: "sub-1".into(),
+        display_name: "Travel laptop".into(),
+    };
+    let store = AccountStore::new(
+        temp.path()
+            .join(relay_instance_id(&session.host_url, &session.subaccount_id)),
+    );
+    subaccounts::save_session(&store.session_path(), &session).expect("session");
+    assert_eq!(
+        store.status("https://clerk.babel.audio", NOW),
+        AccountStatus::Ready {
+            detail: "https://relay.example.com".into()
+        }
+    );
+    let client = store.client().expect("read").expect("relay client");
+    assert_eq!(client.config().relay_session.as_ref(), Some(&session));
+    assert_eq!(client.config().data_dir.as_deref(), Some(store.dir()));
+    store.clear_credentials().expect("sign out");
+    assert!(store.client().expect("read").is_none());
+}
+
+#[test]
+fn records_are_rediscovered_and_the_root_moves_as_a_whole() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("providers");
+    let provider_dir = root.join("sonus.babel.account");
+    let record = AccountRecord {
+        id: direct_instance_id("tester@example.com"),
+        label: "tester@example.com".into(),
+        kind: AccountKind::Direct,
+        identifier: "tester@example.com".into(),
+    };
+    let store = AccountStore::new(provider_dir.join(&record.id));
+    store.save_record(&record).expect("record");
+    auth::save_store(
+        &store.auth_path(),
+        &AuthStore {
+            cookies: vec![cookie("__client", "c", "clerk.babel.audio", None)],
+            ..AuthStore::default()
+        },
+    )
+    .expect("cookies");
+    // A directory whose name does not match its record is ignored.
+    AccountStore::new(provider_dir.join("stray"))
+        .save_record(&record)
+        .expect("stray record");
+    assert_eq!(discover_records(&provider_dir), vec![record.clone()]);
+
+    let target = temp.path().join("portable").join("providers");
+    move_providers_root(&root, &target).expect("move");
+    assert!(!root.exists(), "the source root is moved, not copied");
+    let moved = AccountStore::new(target.join("sonus.babel.account").join(&record.id));
+    assert_eq!(moved.read_record().expect("read").as_ref(), Some(&record));
+    assert_eq!(
+        moved.status("https://clerk.babel.audio", NOW),
+        AccountStatus::Ready {
+            detail: "Signed in".into()
+        }
+    );
+    assert!(move_providers_root(&target, &target.join("nested")).is_err());
 }
 
 #[test]
@@ -340,14 +467,19 @@ fn cli_parses_start_login_with_reset() {
     assert_eq!(
         parse_args([
             "studio-app",
+            "--babel-auth-store",
+            "C:/accounts/tester/auth.json",
             "--babel-auth-start-login",
             "tester@example.com",
             "--babel-auth-reset",
         ])
         .expect("parse"),
-        Some(AuthCliCommand::StartLogin {
-            identifier: "tester@example.com".to_string(),
-            reset: true,
+        Some(AuthCli {
+            store: "C:/accounts/tester/auth.json".into(),
+            command: AuthCliCommand::StartLogin {
+                identifier: "tester@example.com".to_string(),
+                reset: true,
+            }
         })
     );
 }
@@ -355,11 +487,26 @@ fn cli_parses_start_login_with_reset() {
 #[test]
 fn cli_parses_verify_login_code() {
     assert_eq!(
-        parse_args(["studio-app", "--babel-auth-verify-login=123456"]).expect("parse"),
-        Some(AuthCliCommand::VerifyLogin {
-            code: "123456".to_string()
+        parse_args([
+            "studio-app",
+            "--babel-auth-verify-login=123456",
+            "--babel_auth_store=/tmp/auth.json"
+        ])
+        .expect("parse"),
+        Some(AuthCli {
+            store: "/tmp/auth.json".into(),
+            command: AuthCliCommand::VerifyLogin {
+                code: "123456".to_string()
+            }
         })
     );
+}
+
+#[test]
+fn cli_requires_a_store_for_login_commands() {
+    assert!(parse_args(["studio-app", "--babel-auth-verify-login=123456"]).is_err());
+    assert!(parse_args(["studio-app", "--babel-auth-store=x", "--babel-auth-store=y"]).is_err());
+    assert!(parse_args(["studio-app", "--babel-auth-store=/tmp/auth.json"]).is_err());
 }
 
 #[test]

@@ -879,11 +879,11 @@ fn write_adapter_script(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn direct_document_ignores_persisted_relay_account() {
+async fn direct_account_ignores_another_accounts_relay_session() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let store = temp.path().join("subaccount-session.json");
+    let relay_account = sonus_babel_services::account::AccountStore::new(temp.path().join("relay"));
     sonus_babel_services::subaccounts::save_session(
-        &store,
+        &relay_account.session_path(),
         &sonus_babel_services::subaccounts::SubaccountSession {
             host_url: "http://127.0.0.1:9".into(),
             token: "unrelated-relay-token".into(),
@@ -892,15 +892,15 @@ async fn direct_document_ignores_persisted_relay_account() {
         },
     )
     .expect("persist unrelated login");
-    // SAFETY: nextest isolates each test in its own process.
-    unsafe { std::env::set_var("STUDIO_SUBACCOUNT_SESSION_STORE", &store) };
     let direct = MockServer::json(vec![
         r#"{"success":true,"updatedAt":"2026-07-07T12:00:00Z"}"#,
     ]);
     let client = BabelClient::direct(BabelConfig {
         authorization: Some("Bearer direct-account".into()),
-        ..BabelConfig::live(direct.base_url.clone())
+        base_url: direct.base_url.clone(),
+        ..BabelConfig::for_account(&temp.path().join("direct"))
     });
+    assert!(client.config().relay_session.is_none());
     client
         .save_annotations(SaveAnnotationsRequest {
             review_action_id: "direct-document".into(),

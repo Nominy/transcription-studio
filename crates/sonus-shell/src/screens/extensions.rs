@@ -2,14 +2,17 @@
 //! package transaction cannot be abandoned between durable installation and activation.
 mod model;
 
-use super::ui::{self, localized as text};
-use crate::{ShellHandle, contributions::ContributionRegistry};
+use super::{
+    accounts,
+    ui::{self, localized as text},
+};
+use crate::{ProviderRegistry, ShellHandle, contributions::ContributionRegistry};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{Disableable, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use model::{DEFAULT_INDEX, ExtensionsModel, Preview, Removal};
+use model::{DEFAULT_INDEX, ExtensionsEvent, ExtensionsModel, Preview, Removal};
 use sonus_extension::ExtensionManifest;
 use sonus_marketplace::InstallProvenance;
 use std::collections::BTreeMap;
@@ -21,6 +24,7 @@ pub fn startup(shell: ShellHandle, cx: &mut App) {
 }
 
 pub struct ExtensionsView {
+    shell: ShellHandle,
     model: Entity<ExtensionsModel>,
     search: Entity<InputState>,
     url: Entity<InputState>,
@@ -30,9 +34,62 @@ pub struct ExtensionsView {
     _subscriptions: Vec<Subscription>,
 }
 
+/// After a catalog install, offers sign-in for every provider type that a newly active
+/// extension's modes need and that has no configured instance yet. Providers are offered
+/// one after another; "Later" skips to the next.
+fn offer_provider_setup(shell: ShellHandle, owners: &[String], window: &mut Window, cx: &mut App) {
+    let registry = cx.global::<ContributionRegistry>();
+    let providers = cx.global::<ProviderRegistry>();
+    let mut pending: Vec<(String, String)> = Vec::new();
+    for manifest in registry
+        .manifests()
+        .iter()
+        .filter(|manifest| owners.contains(&manifest.id))
+    {
+        for mode in &manifest.modes {
+            let Some(provider) = &mode.provider else {
+                continue;
+            };
+            if providers.provider_type(provider).is_some()
+                && providers.instances(provider).is_empty()
+                && !pending.iter().any(|(id, _)| id == provider)
+            {
+                pending.push((provider.clone(), mode.name.clone()));
+            }
+        }
+    }
+    pending.reverse();
+    offer_next(shell, pending, window, cx);
+}
+
+fn offer_next(
+    shell: ShellHandle,
+    mut pending: Vec<(String, String)>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some((provider, mode_label)) = pending.pop() else {
+        return;
+    };
+    let title = format!("{} {mode_label}", text(cx, "Sign in to", "Вход в"));
+    let next_shell = shell.clone();
+    accounts::open_setup_dialog(
+        shell,
+        &provider,
+        Some(title),
+        accounts::SetupRequest {
+            instance: None,
+            cancel_label: text(cx, "Later", "Позже"),
+            on_done: Box::new(move |_, window, cx| offer_next(next_shell, pending, window, cx)),
+        },
+        window,
+        cx,
+    );
+}
+
 impl ExtensionsView {
     pub fn new(shell: ShellHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let model = model::shared(shell, cx);
+        let model = model::shared(shell.clone(), cx);
         let search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(text(
                 cx,
@@ -48,6 +105,14 @@ impl ExtensionsView {
         let index = cx.new(|cx| InputState::new(window, cx).default_value(source));
         let subscriptions = vec![
             cx.observe(&model, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&model, window, |this, _, event, window, cx| {
+                let ExtensionsEvent::Activated(owners) = event;
+                let shell = this.shell.clone();
+                let owners = owners.clone();
+                window.defer(cx, move |window, cx| {
+                    offer_provider_setup(shell, &owners, window, cx)
+                });
+            }),
             cx.subscribe(&search, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -62,6 +127,7 @@ impl ExtensionsView {
         let focus = cx.focus_handle();
         search.update(cx, |input, cx| input.focus(window, cx));
         Self {
+            shell,
             model,
             search,
             url,

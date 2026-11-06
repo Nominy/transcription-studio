@@ -52,12 +52,39 @@ pub enum PanelLocation {
     Settings,
     Transport,
 }
+/// Context handed to a mode when the shell launches it: requirements are active and, when
+/// the manifest declares a provider, `instance` is configured and ready.
+#[derive(Clone, Debug)]
+pub struct ModeLaunchContext {
+    pub mode_id: String,
+    pub instance: Option<crate::providers::ProviderInstance>,
+}
+/// Returns the mode's launch window, or `None` when the mode opened a document itself
+/// (`ModeLaunch::Direct`) and the shell should stay on the editor or go back to Start.
+pub type ModeLaunchFactory =
+    Rc<dyn Fn(ShellHandle, ModeLaunchContext, &mut Window, &mut App) -> Option<AnyView>>;
 #[derive(Clone)]
 pub struct ModeContribution {
     pub id: String,
     pub label: String,
     pub description: String,
-    pub home: ViewFactory,
+    pub launch: ModeLaunchFactory,
+}
+impl ModeContribution {
+    /// A mode whose launch window is a plain view (the common case).
+    pub fn with_window(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        description: impl Into<String>,
+        window: impl Fn(ShellHandle, ModeLaunchContext, &mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            description: description.into(),
+            launch: Rc::new(move |shell, context, w, cx| Some(window(shell, context, w, cx))),
+        }
+    }
 }
 
 pub struct ModeRequirements {
@@ -536,6 +563,15 @@ impl ContributionRegistry {
             .map(|x| x.contribution.clone())
             .collect()
     }
+    /// Manifest declaration of a registered mode (provider, launch kind).
+    pub fn mode_manifest(&self, id: &str) -> Option<&sonus_extension::ModeManifest> {
+        let owned = self.modes.get(id)?;
+        self.manifests
+            .get(&owned.owner)?
+            .modes
+            .iter()
+            .find(|mode| mode.id == id)
+    }
     pub fn commands(&self) -> Vec<CommandContribution> {
         self.commands
             .values()
@@ -644,6 +680,26 @@ impl ContributionRegistry {
     }
 }
 
+/// Removes every contribution of `owner` from both registries (contributions and
+/// provider types). Use instead of `ContributionRegistry::clear_contributions` when a `cx`
+/// is available.
+pub fn clear_owner(owner: &str, cx: &mut App) {
+    cx.global_mut::<ContributionRegistry>()
+        .clear_contributions(owner);
+    clear_provider_types(owner, cx);
+}
+/// `ContributionRegistry::force_remove` plus provider-type removal.
+pub fn force_remove_owner(owner: &str, cx: &mut App) {
+    cx.global_mut::<ContributionRegistry>().force_remove(owner);
+    clear_provider_types(owner, cx);
+}
+fn clear_provider_types(owner: &str, cx: &mut App) {
+    if cx.has_global::<crate::ProviderRegistry>() {
+        cx.global_mut::<crate::ProviderRegistry>()
+            .clear_types(owner);
+    }
+}
+
 pub fn unload_extension(owner: &str, cx: &mut App) -> Result<()> {
     if cx
         .global::<ContributionRegistry>()
@@ -689,6 +745,7 @@ pub fn unload_extension(owner: &str, cx: &mut App) -> Result<()> {
         });
     }
     cx.global_mut::<ContributionRegistry>().unload(owner)?;
+    clear_provider_types(owner, cx);
     for callback in callbacks {
         callback(cx);
     }
@@ -798,7 +855,7 @@ pub fn enable_extension(owner: &str, cx: &mut App) -> Result<()> {
             .teardown
             .remove(owner)
             .unwrap_or_default();
-        cx.global_mut::<ContributionRegistry>().force_remove(owner);
+        force_remove_owner(owner, cx);
         for callback in callbacks {
             callback(cx);
         }
@@ -855,7 +912,7 @@ mod tests {
                     id: "sonus.test.mode".into(),
                     label: "Test".into(),
                     description: String::new(),
-                    home: Rc::new(|_, _, _| {
+                    launch: Rc::new(|_, _, _, _| {
                         panic!("UI factory is not invoked by dependency resolution")
                     }),
                 },

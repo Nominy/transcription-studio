@@ -14,7 +14,7 @@ use super::store::{
     AuthCookie, AuthStore, cookie_header_for_url, merge_response_cookies, parse_set_cookie,
     read_store, read_store_or_default, save_store, trimmed,
 };
-use super::{babel_base_url, clerk_url, now_unix_seconds, store_path};
+use super::{babel_base_url, clerk_url, now_unix_seconds};
 use studio_services::http;
 
 const CLERK_INSTANCE_SUFFIX: &str = "v1aVht_F";
@@ -87,7 +87,7 @@ fn jwt_cache() -> MutexGuard<'static, JwtCache> {
 }
 
 /// Dropped on every auth transition so a previous session's token is never reused.
-pub(super) fn clear_jwt_cache() {
+pub fn clear_jwt_cache() {
     jwt_cache().entry = None;
 }
 
@@ -99,11 +99,11 @@ fn jwt_exp_unix_seconds(jwt: &str) -> Option<i64> {
     value.get("exp").and_then(Value::as_i64)
 }
 
-/// Starts a phone-code login against the default store/URLs (resetting any
+/// Starts a phone-code login into `store_path` with the default URLs (resetting any
 /// previous store, as the login screen does).
-pub async fn start_login(identifier: &str) -> Result<PhoneCodeLoginStart> {
+pub async fn start_login(store_path: &Path, identifier: &str) -> Result<PhoneCodeLoginStart> {
     start_phone_code_login(
-        &store_path(),
+        store_path,
         identifier,
         &babel_base_url(),
         &clerk_url(),
@@ -113,10 +113,10 @@ pub async fn start_login(identifier: &str) -> Result<PhoneCodeLoginStart> {
     .await
 }
 
-/// Verifies the SMS code for the pending login in the default store.
-pub async fn verify_login(code: &str) -> Result<PhoneCodeLoginComplete> {
+/// Verifies the SMS code for the pending login in `store_path`.
+pub async fn verify_login(store_path: &Path, code: &str) -> Result<PhoneCodeLoginComplete> {
     verify_phone_code_login(
-        &store_path(),
+        store_path,
         code,
         &babel_base_url(),
         &clerk_url(),

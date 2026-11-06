@@ -1,13 +1,18 @@
 //! Document-scoped navigation; no authentication or platform policy lives in the shell.
+//! Opening a mode is a journey: resolve requirements → make sure the mode's provider has a
+//! ready instance (sign-in step, chooser) → launch. Providers render their own sign-in.
 use crate::{
-    ContributionRegistry, DocumentOrigin, ProviderEnvironment,
+    ContributionRegistry, DocumentOrigin, ModeContribution, ModeLaunchContext,
+    ProviderContribution, ProviderEnvironment, ProviderInstance, ProviderRegistry, ProviderStatus,
     editor::{EditorScreen, EditorScreenEvent, model::EditorModel},
-    screens, tray,
+    screens::{self, accounts},
+    tray,
 };
 use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
+use sonus_extension::ModeLaunch;
 use std::{path::PathBuf, rc::Rc};
 
 pub type LeaveGuard = Rc<dyn Fn(&mut Window, &mut App, Box<dyn FnOnce(&mut Window, &mut App)>)>;
@@ -60,6 +65,42 @@ impl ShellHandle {
                 cx.notify();
             })
             .ok();
+    }
+    /// Runs a provider type's setup in a dialog over the current screen. `on_done` gets
+    /// `Some(instance)` once the instance is stored in the [`ProviderRegistry`], `None`
+    /// when the user cancels or the provider type is not installed. Called exactly once.
+    pub fn request_provider_setup(
+        &self,
+        provider_id: &str,
+        instance: Option<ProviderInstance>,
+        on_done: crate::providers::ProviderSetupOutcome,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        accounts::open_setup_dialog(
+            self.clone(),
+            provider_id,
+            None,
+            accounts::SetupRequest {
+                instance,
+                cancel_label: screens::ui::localized(cx, "Cancel", "Отмена"),
+                on_done,
+            },
+            window,
+            cx,
+        );
+    }
+    /// Status of a configured instance as reported by its provider type.
+    pub fn provider_status(&self, instance: &ProviderInstance, cx: &App) -> ProviderStatus {
+        match cx
+            .global::<ProviderRegistry>()
+            .provider_type(&instance.provider)
+        {
+            Some(provider) => (provider.status)(instance, cx),
+            None => {
+                ProviderStatus::Error(format!("Provider is not installed: {}", instance.provider))
+            }
+        }
     }
     pub fn open_document(
         &self,
@@ -137,6 +178,8 @@ enum Screen {
 pub struct StudioRoot {
     screen: Screen,
     leave_guard: Option<LeaveGuard>,
+    /// Mode whose launch window (or launched document) is current; the editor returns here.
+    launched: Option<String>,
     _updater: Subscription,
 }
 impl StudioRoot {
@@ -145,6 +188,7 @@ impl StudioRoot {
         Self {
             screen: Screen::Home,
             leave_guard: None,
+            launched: None,
             _updater: updater,
         }
     }
@@ -171,19 +215,17 @@ impl StudioRoot {
         }) {
             anyhow::bail!("Save or close the current document before opening another");
         }
-        if cx
+        if !cx
             .global::<ContributionRegistry>()
             .modes()
             .iter()
             .any(|m| m.id == origin.mode_id)
         {
-            cx.global_mut::<ContributionRegistry>()
-                .enter_mode(&origin.mode_id)?;
-        } else if origin.provider_id.is_some() {
             anyhow::bail!("The document's mode is not installed: {}", origin.mode_id);
-        } else {
-            cx.global_mut::<ContributionRegistry>().leave_mode();
         }
+        cx.global_mut::<ContributionRegistry>()
+            .enter_mode(&origin.mode_id)?;
+        self.launched = Some(origin.mode_id.clone());
         environment.document.origin.mode = origin.mode_id.clone();
         self.release_editor(cx);
         crate::contributions::merge_providers(
@@ -202,16 +244,18 @@ impl StudioRoot {
             |root, _, _: &EditorScreenEvent, window, cx| {
                 let mode = root
                     .editor_model(cx)
-                    .map(|model| model.read(cx).origin().mode_id.clone());
-                if let Some(mode) = mode.filter(|id| {
-                    cx.global::<ContributionRegistry>()
-                        .modes()
-                        .iter()
-                        .any(|m| &m.id == id)
-                }) {
-                    root.show_mode(&mode, window, cx);
-                } else {
-                    root.show_home(window, cx);
+                    .map(|model| model.read(cx).origin().mode_id.clone())
+                    .or_else(|| root.launched.clone());
+                let registry = cx.global::<ContributionRegistry>();
+                let returns_to_window = mode.as_deref().is_some_and(|id| {
+                    registry.modes().iter().any(|m| m.id == id)
+                        && registry
+                            .mode_manifest(id)
+                            .is_some_and(|manifest| manifest.launch == ModeLaunch::Window)
+                });
+                match mode.filter(|_| returns_to_window) {
+                    Some(mode) => root.show_mode(&mode, window, cx),
+                    None => root.show_home(window, cx),
                 }
             },
         );
@@ -231,6 +275,7 @@ impl StudioRoot {
                 .update(cx, |root, cx| {
                     root.release_editor(cx);
                     root.leave_guard = None;
+                    root.launched = None;
                     cx.global_mut::<ContributionRegistry>().leave_mode();
                     root.screen = Screen::Home;
                     cx.notify();
@@ -238,25 +283,37 @@ impl StudioRoot {
                 .ok();
         });
     }
+    /// Opens a mode: requirements, then the provider step when the manifest declares one,
+    /// then `launch`.
     pub fn show_mode(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let id = id.to_owned();
         let handle = self.handle(cx);
         self.confirm_leave(window, cx, move |window, cx| {
-            let resolved = cx.global_mut::<ContributionRegistry>().enter_mode(&id);
-            match resolved {
-                Ok(mode) => {
-                    handle
-                        .0
-                        .update(cx, |root, cx| {
-                            root.release_editor(cx);
-                            root.leave_guard = None;
-                            root.screen = Screen::Home;
-                        })
-                        .ok();
-                    let view = (mode.home)(handle.clone(), window, cx);
-                    handle.show_view(view, window, cx);
+            let entered = cx.global_mut::<ContributionRegistry>().enter_mode(&id);
+            let mode = match entered {
+                Ok(mode) => mode,
+                Err(error) => {
+                    window.push_notification(Notification::error(error.to_string()), cx);
+                    return;
                 }
-                Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
+            };
+            handle
+                .0
+                .update(cx, |root, cx| {
+                    root.release_editor(cx);
+                    root.leave_guard = None;
+                    root.launched = Some(id.clone());
+                    root.screen = Screen::Home;
+                    cx.notify();
+                })
+                .ok();
+            let provider = cx
+                .global::<ContributionRegistry>()
+                .mode_manifest(&id)
+                .and_then(|manifest| manifest.provider.clone());
+            match provider {
+                Some(provider) => resolve_instance(handle, mode, provider, window, cx),
+                None => launch(handle, mode, None, window, cx),
             }
         });
     }
@@ -279,7 +336,7 @@ impl StudioRoot {
             let width = (window.viewport_size().width - px(64.)).min(px(1200.));
             let height = (window.viewport_size().height - px(160.)).max(px(240.));
             dialog
-                .title(screens::ui::localized(cx, "Extensions", "Расширения"))
+                .title(screens::ui::localized(cx, "Add-ons", "Дополнения"))
                 .w(width)
                 .child(div().h(height).min_h_0().child(view.clone()))
         });
@@ -295,6 +352,7 @@ impl StudioRoot {
                 .update(cx, |root, cx| {
                     root.release_editor(cx);
                     root.leave_guard = None;
+                    root.launched = None;
                     root.screen = Screen::Home;
                     cx.global_mut::<ContributionRegistry>().leave_mode();
                     cx.notify();
@@ -319,12 +377,8 @@ impl StudioRoot {
                 Box::new(move |window, cx| window.defer(cx, done)),
             );
         } else if let Some(model) = self.editor_model(cx) {
-            let handler = model
-                .read(cx)
-                .origin()
-                .provider_id
-                .as_deref()
-                .and_then(|provider| cx.global::<ContributionRegistry>().leave_handler(provider));
+            let mode_id = model.read(cx).origin().mode_id.clone();
+            let handler = cx.global::<ContributionRegistry>().leave_handler(&mode_id);
             if let Some(handler) = handler {
                 handler(
                     model,
@@ -347,7 +401,164 @@ impl StudioRoot {
             model.update(cx, |m, _| m.unload());
         }
     }
+    /// Leaves a page-less state after a launch that produced no window and no document.
+    fn settle_after_launch(&mut self, cx: &mut Context<Self>) {
+        if self.editor_model(cx).is_some() {
+            return;
+        }
+        if matches!(self.screen, Screen::Page(_)) {
+            self.screen = Screen::Home;
+        }
+        if matches!(self.screen, Screen::Home) {
+            self.launched = None;
+            cx.global_mut::<ContributionRegistry>().leave_mode();
+        }
+        cx.notify();
+    }
 }
+
+/// Picks the provider instance a mode launches with, running sign-in or the chooser when
+/// needed, then launches.
+fn resolve_instance(
+    handle: ShellHandle,
+    mode: ModeContribution,
+    provider_id: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let registry = cx.global::<ProviderRegistry>();
+    let Some(provider) = registry.provider_type(&provider_id).cloned() else {
+        window.push_notification(
+            Notification::error(format!(
+                "{} needs the {provider_id} provider, which is not installed",
+                mode.label
+            )),
+            cx,
+        );
+        handle.show_home(window, cx);
+        return;
+    };
+    let instances = registry.instances(&provider_id);
+    if instances.is_empty() {
+        return show_setup(handle, mode, provider, None, window, cx);
+    }
+    let Some(instance) = registry.selected(&provider_id) else {
+        let title = format!(
+            "{} · {}",
+            mode.label,
+            screens::ui::localized(cx, "Choose an account", "Выберите аккаунт")
+        );
+        let pick_handle = handle.clone();
+        let pick_mode = mode.clone();
+        let pick_provider = provider_id.clone();
+        let add_handle = handle.clone();
+        let add_mode = mode.clone();
+        let add_provider = provider.clone();
+        let chooser = cx.new(|cx| {
+            accounts::Chooser::new(
+                title,
+                &provider,
+                move |instance, window, cx| {
+                    cx.update_global::<ProviderRegistry, _>(|registry, cx| {
+                        registry.select(&instance, cx)
+                    });
+                    resolve_instance(
+                        pick_handle.clone(),
+                        pick_mode.clone(),
+                        pick_provider.clone(),
+                        window,
+                        cx,
+                    );
+                },
+                provider.multiple.then(|| {
+                    Rc::new(move |window: &mut Window, cx: &mut App| {
+                        show_setup(
+                            add_handle.clone(),
+                            add_mode.clone(),
+                            add_provider.clone(),
+                            None,
+                            window,
+                            cx,
+                        )
+                    }) as Rc<dyn Fn(&mut Window, &mut App)>
+                }),
+                cx,
+            )
+        });
+        handle.show_view(chooser.into(), window, cx);
+        return;
+    };
+    match (provider.status)(&instance, cx) {
+        ProviderStatus::Ready { .. } => launch(handle, mode, Some(instance), window, cx),
+        ProviderStatus::NeedsSignIn => {
+            show_setup(handle, mode, provider, Some(instance), window, cx)
+        }
+        ProviderStatus::Error(error) => {
+            window.push_notification(Notification::error(error), cx);
+            show_setup(handle, mode, provider, Some(instance), window, cx)
+        }
+    }
+}
+
+/// The sign-in step of opening `mode`: a full page titled "Sign in to {mode}". Done
+/// continues the launch; cancel returns to Start.
+fn show_setup(
+    handle: ShellHandle,
+    mode: ModeContribution,
+    provider: ProviderContribution,
+    instance: Option<ProviderInstance>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let title = format!(
+        "{} {}",
+        screens::ui::localized(cx, "Sign in to", "Вход в"),
+        mode.label
+    );
+    let done_handle = handle.clone();
+    let on_done: accounts::SetupOutcome = Box::new(move |instance, window, cx| match instance {
+        Some(instance) => launch(done_handle, mode, Some(instance), window, cx),
+        None => done_handle.show_home(window, cx),
+    });
+    let page = accounts::SetupPage::new(
+        handle.clone(),
+        &provider,
+        title,
+        accounts::SetupRequest {
+            instance,
+            cancel_label: screens::ui::localized(cx, "Cancel", "Отмена"),
+            on_done,
+        },
+        window,
+        cx,
+    );
+    handle.show_view(page.into(), window, cx);
+}
+
+/// Invokes the mode's launch factory. A returned view becomes the launch window; `None`
+/// means the mode opened a document itself (or declined), so the shell settles.
+fn launch(
+    handle: ShellHandle,
+    mode: ModeContribution,
+    instance: Option<ProviderInstance>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let context = ModeLaunchContext {
+        mode_id: mode.id.clone(),
+        instance,
+    };
+    match (mode.launch)(handle.clone(), context, window, cx) {
+        Some(view) => handle.show_view(view, window, cx),
+        None => {
+            handle
+                .0
+                .update(cx, |root, cx| root.settle_after_launch(cx))
+                .ok();
+        }
+    }
+}
+
 impl Render for StudioRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match &self.screen {
@@ -368,7 +579,7 @@ impl Render for StudioRoot {
                             .border_color(cx.theme().border)
                             .child(
                                 Button::new("mode-home")
-                                    .label(screens::ui::localized(cx, "Home", "Главная"))
+                                    .label(screens::ui::localized(cx, "Start", "Начало"))
                                     .on_click(move |_, window, cx| home.show_home(window, cx)),
                             )
                             .child(div().flex_1())
@@ -381,7 +592,7 @@ impl Render for StudioRoot {
                             )
                             .child(
                                 Button::new("mode-extensions")
-                                    .label(screens::ui::localized(cx, "Extensions", "Расширения"))
+                                    .label(screens::ui::localized(cx, "Add-ons", "Дополнения"))
                                     .on_click(move |_, window, cx| {
                                         extensions.show_extensions(window, cx)
                                     }),

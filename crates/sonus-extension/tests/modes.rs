@@ -17,6 +17,7 @@ fn extension(id: &str, version: &str, dependencies: &[(&str, &str)]) -> Extensio
             .collect(),
         permissions: vec![],
         modes: vec![],
+        providers: vec![],
     }
 }
 
@@ -30,6 +31,8 @@ fn owner(required: &[(&str, &str)]) -> ExtensionManifest {
             .map(|(id, range)| ((*id).into(), range.parse().unwrap()))
             .collect(),
         recommends: BTreeMap::new(),
+        provider: None,
+        launch: Default::default(),
     });
     extension
 }
@@ -158,5 +161,41 @@ fn newer_host_api_releases_remain_visible_but_are_not_selected() {
     assert!(matches!(
         resolve_mode(&owner, "example.edit", &[&future]),
         Err(ResolveError::Unsatisfied { .. })
+    ));
+}
+
+#[test]
+fn mode_provider_must_come_from_the_resolved_set() {
+    let mut owner = owner(&[("example.account", "^1")]);
+    owner.modes[0].provider = Some("example.account.login".into());
+    let mut account = extension("example.account", "1.0.0", &[]);
+    account.providers.push(sonus_extension::ProviderManifest {
+        id: "example.account.login".into(),
+        name: "Example account".into(),
+        multiple: false,
+    });
+    let plan = resolve_mode(&owner, "example.edit", &[&account]).unwrap();
+    assert_eq!(plan.provider_owner, Some("example.account"));
+
+    let unrelated = extension("example.account", "1.0.0", &[]);
+    assert!(matches!(
+        resolve_mode(&owner, "example.edit", &[&unrelated]),
+        Err(ResolveError::UnknownProvider { .. })
+    ));
+}
+
+#[test]
+fn duplicate_provider_declarations_are_invalid() {
+    let mut account = extension("example.account", "1.0.0", &[]);
+    for _ in 0..2 {
+        account.providers.push(sonus_extension::ProviderManifest {
+            id: "example.account.login".into(),
+            name: "Example account".into(),
+            multiple: true,
+        });
+    }
+    assert!(matches!(
+        account.validate(),
+        Err(sonus_extension::ManifestError::DuplicateProvider(_))
     ));
 }

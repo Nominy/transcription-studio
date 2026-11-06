@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+pub(super) static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 struct ImportPending {
     provider: String,
     reply: async_channel::Sender<w::ImportResult>,

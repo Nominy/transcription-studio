@@ -7351,6 +7351,7 @@ dependencies = [
  "sonus-shell",
  "studio-audio",
  "studio-core",
+ "studio-project",
  "tempfile",
  "uuid",
 ]

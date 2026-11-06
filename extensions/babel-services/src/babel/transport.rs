@@ -77,8 +77,11 @@ pub struct BabelConfig {
     pub authorization: Option<String>,
     /// Command printing `{"cookie"|"authorization": ...}` JSON or a raw cookie, run per request.
     pub auth_command: Option<String>,
-    /// Native auth store; `None` resolves [`auth::store_path`] per request.
+    /// Native auth store (`auth.json` of the account). `None` with no other auth source
+    /// means the client cannot authenticate: live requests report "signed out".
     pub auth_store: Option<PathBuf>,
+    /// Per-account directory for caches (remote audio). `None` → a temp directory.
+    pub data_dir: Option<PathBuf>,
     pub clerk_url: String,
     /// Explicit relay origin captured when the document/session is opened.
     /// `None` always means direct Babel, regardless of persisted subaccount login.
@@ -103,8 +106,19 @@ impl BabelConfig {
             authorization: env_nonblank(ENV_AUTHORIZATION),
             auth_command: env_nonblank(ENV_AUTH_COMMAND),
             auth_store: None,
+            data_dir: None,
             clerk_url: auth::clerk_url(),
             relay_session: None,
+        }
+    }
+
+    /// The env configuration bound to one account directory: cookies are read from its
+    /// `auth.json` and caches live beside it.
+    pub fn for_account(account_dir: &std::path::Path) -> Self {
+        Self {
+            auth_store: Some(auth::auth_store_path(account_dir)),
+            data_dir: Some(account_dir.to_path_buf()),
+            ..Self::from_env()
         }
     }
 
@@ -118,6 +132,7 @@ impl BabelConfig {
             authorization: None,
             auth_command: None,
             auth_store: None,
+            data_dir: None,
             clerk_url: auth::clerk_url(),
             relay_session: None,
         }
@@ -127,6 +142,16 @@ impl BabelConfig {
     pub fn relay(session: crate::subaccounts::SubaccountSession) -> Self {
         let mut config = Self::live(session.host_url.clone());
         config.relay_session = Some(session);
+        config
+    }
+
+    /// [`Self::relay`] with caches kept in the account directory.
+    pub fn relay_in(
+        session: crate::subaccounts::SubaccountSession,
+        account_dir: &std::path::Path,
+    ) -> Self {
+        let mut config = Self::relay(session);
+        config.data_dir = Some(account_dir.to_path_buf());
         config
     }
 }
@@ -310,9 +335,13 @@ async fn live_auth_headers(config: &BabelConfig) -> Result<LiveAuth, TransportEr
         return Ok(auth);
     }
 
-    let store_path = config.auth_store.clone().unwrap_or_else(auth::store_path);
+    let Some(store_path) = config.auth_store.as_deref() else {
+        return Err(TransportError::signed_out(auth_configuration_error(
+            "no Babel account is attached to this client; sign in first",
+        )));
+    };
     let authorization = auth::mint_babel_authorization(
-        &store_path,
+        store_path,
         &config.base_url,
         &config.clerk_url,
         time::OffsetDateTime::now_utc().unix_timestamp(),

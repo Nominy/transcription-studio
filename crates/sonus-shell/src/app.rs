@@ -1,6 +1,6 @@
 //! Native window composition. The executable explicitly supplies bundled contributions.
 use crate::{
-    ContributionRegistry, ShellHandle,
+    ContributionRegistry, ProviderRegistry, ShellHandle,
     keymap::ActiveKeymap,
     root::StudioRoot,
     screens::{ShellModels, settings},
@@ -16,6 +16,8 @@ pub fn run(register: impl FnOnce(&mut App) -> anyhow::Result<()> + 'static) {
             gpui_kit::init(cx);
             cx.set_global(AppServices::from_env());
             cx.set_global(ContributionRegistry::default());
+            let providers = ProviderRegistry::load(cx);
+            cx.set_global(providers);
             settings::apply_saved_theme(cx);
             ActiveKeymap::init(cx);
             crate::zoom::init(cx);

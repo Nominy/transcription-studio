@@ -1,36 +1,25 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::v_flex;
 use gpui_kit::*;
 use sonus_babel_domain::workflow::BabelWorkflowExt;
 use sonus_shell::editor::model::EditorModel;
-use sonus_shell::{DocumentOrigin, ProviderEnvironment, ShellHandle};
+use sonus_shell::{DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ShellHandle};
 
-struct BabelFileHome {
-    shell: ShellHandle,
-}
+use crate::FILE_ID;
 
+/// `ModeLaunch::Direct`: the file picker opens immediately and the document, when chosen,
+/// becomes the editor. There is no launch window; cancelling leaves the shell on Start.
 /// The offline mode never reads account credentials or requests platform data.
-pub fn build_home(shell: ShellHandle, _window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|_| BabelFileHome { shell }).into()
-}
-
-impl Render for BabelFileHome {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().p_6().gap_4()
-            .child(crate::screens::auth::brand(cx))
-            .child(sonus_shell::screens::ui::card(
-                "Babel files",
-                Some("Edit an exported Babel JSON file offline. Saving writes only to your local file; nothing is claimed or submitted."),
-                cx,
-            ).child(Button::new("open-babel-file").primary().label("Open Babel JSON…")
-                .on_click(cx.listener(|this, _, window, cx| open_document(this.shell.clone(), window, cx)))))
-            .child(Button::new("babel-file-home").label("All workspaces")
-                .on_click(cx.listener(|this, _, window, cx| this.shell.show_home(window, cx))))
-    }
+pub fn launch(
+    shell: ShellHandle,
+    _context: ModeLaunchContext,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyView> {
+    open_document(shell, window, cx);
+    None
 }
 
 pub fn open_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
@@ -39,11 +28,11 @@ pub fn open_document(shell: ShellHandle, window: &mut Window, cx: &mut App) {
             let document = sonus_babel_domain::document_environment(
                 &file.project,
                 file.path.to_string_lossy().into_owned(),
-                "sonus.babel-file",
+                FILE_ID,
             )?;
             let origin = DocumentOrigin {
-                mode_id: "sonus.babel-file".to_string(),
-                provider_id: Some("sonus.babel-file".to_string()),
+                mode_id: FILE_ID.to_string(),
+                instance: None,
                 read_only: document.policy.read_only,
                 native_path: Some(file.path.clone()),
             };

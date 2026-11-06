@@ -99,6 +99,33 @@ There are no arbitrary guest threads and no linter policy in the runtime. Select
 changes require SelectionControl; playback/seek requires TransportControl (AudioRead
 alone cannot start playback).
 
+## Provider types (accounts)
+
+A manifest may declare `providers` (`{ "id", "name", "multiple" }`) and modes may name one
+in `provider`. The guest registers `ContributionKind::Provider` for each declared id
+(`sonus_sdk::register_provider`) and implements `sonus_sdk::ProviderHandler`, routing
+`Guest::on_event` through `sonus_sdk::provider_event::<Self>(&event)`:
+
+- `Event::ProviderSetup { provider, request_id, instance }` — the shell is opening a mode
+  and needs an account. Publish UI for `contribution = provider` (the shell shows it as the
+  sign-in step) and finish with `provider_setup_done(provider, request_id, id, label)` or
+  `provider_setup_cancel`. `id` is stable per account and `[a-z0-9-]`
+  (`sonus_sdk::instance_id` derives one); `label` is what users see. `instance` is set when
+  re-authenticating an existing account and the id must stay the same.
+- `Event::ProviderStatus(instance)` — answer with `publish_status(instance, Ready |
+  NeedsSignIn | Error, detail)` before returning; the shell waits one call deadline and
+  treats silence as an error. `NeedsSignIn` re-runs setup for that instance.
+- `Event::ProviderSignOut(instance)` — delete the account's credentials.
+- `Event::ModeOpen { instance, .. }` carries the instance the user chose for the mode.
+
+Credentials live in per-instance namespaces: `instance_secret_get/set` (grant `secrets`)
+and `instance_storage_get/set` (grant `storage`). The host scopes both to instances whose
+provider this extension declares — another extension holding the same grants cannot read
+them — and stores them under the instance directory (`providers/<provider>/<id>/wasm/<ext>/`),
+which is deleted with the instance. Ordinary `storage-*`/`secret-get` remain extension-wide.
+Host side: `HostServices::instance_*` receive only pre-validated instances; the shell's
+`Bridge` re-checks the declaration before touching the filesystem.
+
 ## Lifecycle, limits and hot reload
 
 Every call receives fresh fuel, output-byte and elapsed-time budgets. Wasmtime memory,

@@ -1,10 +1,10 @@
 {
   "id": "sonus.local",
-  "name": "Local workspace",
+  "name": "Local",
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
-  "description": "Open audio and edit native projects without an account.",
+  "description": "Open audio and projects on this computer.",
   "license": "MIT",
   "dependencies": {},
   "permissions": [
@@ -15,7 +15,8 @@
   ],
   "modes": [{
     "id": "sonus.local",
-    "name": "Local workspace",
+    "name": "Local",
+    "launch": "window",
     "requires": {},
     "recommends": {
       "sonus.formats": "^0.1",

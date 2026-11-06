@@ -1,6 +1,8 @@
 //! Startup auth gate and login-screen state (Babel phone-code or sub-account code).
 
-use super::store::{AuthStore, read_store, store_path, trimmed};
+use std::path::Path;
+
+use super::store::{AuthStore, read_store, trimmed};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthStep {
@@ -38,9 +40,9 @@ pub struct AuthFlow {
 }
 
 impl AuthFlow {
-    /// Startup decision from the default store; unreadable/missing store → login prompt.
-    pub fn startup() -> AuthStartup {
-        match read_store(&store_path()) {
+    /// Startup decision from the store at `store_path`; unreadable/missing store → login prompt.
+    pub fn startup(store_path: &Path) -> AuthStartup {
+        match read_store(store_path) {
             Ok(store) => Self::startup_from_store(Some(&store)),
             Err(_) => AuthStartup::Flow(Self::login_prompt()),
         }

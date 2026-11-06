@@ -78,18 +78,19 @@ pub fn save(model: &Entity<EditorModel>, window: &mut Window, cx: &mut App, done
         window.push_notification(Notification::error("This document is read-only."), cx);
         return;
     }
-    if let Some(provider) = model.read(cx).origin().provider_id.clone() {
-        let handler = cx
-            .global::<crate::ContributionRegistry>()
-            .save_handler(&provider);
-        if let Some(handler) = handler {
-            handler(model.clone(), window, cx, done);
-        } else {
-            window.push_notification(
-                Notification::error(format!("Save provider unavailable: {provider}")),
-                cx,
-            );
-        }
+    let mode_id = model.read(cx).origin().mode_id.clone();
+    let handler = cx
+        .global::<crate::ContributionRegistry>()
+        .save_handler(&mode_id);
+    if let Some(handler) = handler {
+        handler(model.clone(), window, cx, done);
+        return;
+    }
+    if model.read(cx).origin().instance.is_some() {
+        window.push_notification(
+            Notification::error(format!("Save handler unavailable for {mode_id}")),
+            cx,
+        );
         return;
     }
     if let Some(path) = model.read(cx).origin().native_path.clone() {

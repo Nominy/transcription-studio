@@ -178,6 +178,14 @@ impl BabelClient {
         Self::new(BabelConfig::relay(session))
     }
 
+    /// [`Self::relay`] with caches kept in `account_dir`.
+    pub fn relay_in(
+        session: crate::subaccounts::SubaccountSession,
+        account_dir: &std::path::Path,
+    ) -> Self {
+        Self::new(BabelConfig::relay_in(session, account_dir))
+    }
+
     /// Raw normalized response for `request` (also used by the review/subaccount services).
     pub async fn raw(&self, request: &BabelRequest) -> Result<String, BabelError> {
         payload_for(&self.config, request)

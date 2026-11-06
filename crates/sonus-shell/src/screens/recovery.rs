@@ -34,7 +34,7 @@ pub fn start(model: &Entity<EditorModel>, cx: &mut App) -> Task<()> {
         loop {
             cx.background_executor().timer(Duration::from_secs(5)).await;
             let snapshot = model.update(cx, |model, cx| {
-                if model.origin().provider_id.is_some()
+                if model.origin().instance.is_some()
                     || model.doc().is_read_only()
                     || (!model.doc().session().is_dirty && !model.doc().has_pending_drafts())
                 {

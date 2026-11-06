@@ -21,7 +21,7 @@ use sonus_babel_services::subaccounts::SubaccountSession;
 use studio_editor::workflow::StudioWorkflow;
 
 use crate::editor::panels::dialogs::no_work;
-use crate::root::{BabelController, BabelMode};
+use crate::root::{BabelController, DashboardFilter};
 use crate::screens::ShellModels;
 use crate::screens::auth::{brand, brand_mark};
 use crate::screens::error_task::ErrorTaskOpen;
@@ -79,6 +79,10 @@ pub struct DashboardScreen {
     root: WeakEntity<BabelController>,
     shell: sonus_shell::ShellHandle,
     client: BabelClient,
+    /// Which projects this mode lists; every project is kept for owner-side features.
+    filter: DashboardFilter,
+    /// The account this dashboard works as (shown in the sidebar; removed on sign-out).
+    account_label: SharedString,
     section: Section,
     projects: Vec<DashboardProject>,
     /// Signed-in worker (decides whether a viewed error task is editable).
@@ -92,7 +96,8 @@ pub struct DashboardScreen {
     route_metadata: Vec<(String, String)>,
     subaccount: Option<SubaccountSession>,
     settings: Entity<SettingsView>,
-    subaccounts: Entity<SubaccountsView>,
+    /// Owner-side sub-account management; `None` for sub-account (relay) logins.
+    subaccounts: Option<Entity<SubaccountsView>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -101,24 +106,37 @@ impl DashboardScreen {
         root: WeakEntity<BabelController>,
         shell: sonus_shell::ShellHandle,
         client: BabelClient,
+        filter: DashboardFilter,
         route: Option<StartupRoute>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let account_label: SharedString = root
+            .upgrade()
+            .map(|controller| controller.read(cx).instance().label.clone())
+            .unwrap_or_default()
+            .into();
         let settings = cx.new(|cx| SettingsView::new(shell.clone(), window, cx));
-        let subaccounts = cx.new(|cx| SubaccountsView::new(window, cx));
-        let subscriptions = vec![
-            cx.subscribe_in(
-                &subaccounts,
-                window,
-                |this, _, _: &LoadProjects, window, cx| this.refresh(window, cx),
-            ),
+        let subaccounts = client
+            .config()
+            .auth_store
+            .clone()
+            .filter(|_| client.config().relay_session.is_none())
+            .map(|auth_store| cx.new(|cx| SubaccountsView::new(auth_store, window, cx)));
+        let mut subscriptions = vec![
             // The sidebar shows the update notice.
             cx.observe(
                 &sonus_shell::screens::ShellModels::updater(cx),
                 |_, _, cx| cx.notify(),
             ),
         ];
+        if let Some(subaccounts) = &subaccounts {
+            subscriptions.push(cx.subscribe_in(
+                subaccounts,
+                window,
+                |this, _, _: &LoadProjects, window, cx| this.refresh(window, cx),
+            ));
+        }
         let route_metadata = route
             .as_ref()
             .map(|route| {
@@ -134,6 +152,8 @@ impl DashboardScreen {
             client,
             root,
             shell,
+            filter,
+            account_label,
             section: Section::Projects,
             projects: Vec::new(),
             worker_id: None,
@@ -161,12 +181,22 @@ impl DashboardScreen {
     pub fn cancel_requests(&mut self, cx: &mut Context<Self>) {
         self.refresh = None;
         self.task_load = None;
-        self.subaccounts
-            .update(cx, |view, cx| view.cancel_request(cx));
+        if let Some(subaccounts) = &self.subaccounts {
+            subaccounts.update(cx, |view, cx| view.cancel_request(cx));
+        }
     }
 
+    /// Every project the account can see (owner-side features need the unfiltered list).
     pub fn projects(&self) -> &[DashboardProject] {
         &self.projects
+    }
+
+    /// The projects this mode shows.
+    fn visible_projects(&self) -> impl Iterator<Item = &DashboardProject> {
+        let filter = self.filter;
+        self.projects
+            .iter()
+            .filter(move |project| filter.accepts(project))
     }
 
     pub fn show_error(&mut self, detail: String, cx: &mut Context<Self>) {
@@ -198,11 +228,16 @@ impl DashboardScreen {
                             this.problem = None;
                         }
                         let projects = this.projects.clone();
-                        this.subaccounts
-                            .update(cx, |view, cx| view.set_projects(projects.clone(), cx));
-                        if this.subaccount.is_none() {
-                            ShellModels::relay(cx)
-                                .update(cx, |relay, cx| relay.sync_project_queues(&projects, cx));
+                        if let Some(subaccounts) = &this.subaccounts {
+                            subaccounts
+                                .update(cx, |view, cx| view.set_projects(projects.clone(), cx));
+                        }
+                        if let Some(auth_store) = this.client.config().auth_store.clone()
+                            && this.subaccount.is_none()
+                        {
+                            ShellModels::relay(cx).update(cx, |relay, cx| {
+                                relay.sync_project_queues(&projects, auth_store, cx)
+                            });
                         }
                     }
                     Err(error) if error.signed_out => {
@@ -573,36 +608,42 @@ impl DashboardScreen {
 
     fn select_section(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
         self.section = section;
-        if section == Section::Subaccounts && self.subaccount.is_none() {
-            self.subaccounts
-                .update(cx, |view, cx| view.ensure_loaded(window, cx));
+        if section == Section::Subaccounts
+            && let Some(subaccounts) = &self.subaccounts
+        {
+            subaccounts.update(cx, |view, cx| view.ensure_loaded(window, cx));
         }
         cx.notify();
     }
 
-    fn use_subaccount_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.root
-            .update(cx, |root, cx| root.enter_mode(BabelMode::Relay, window, cx))
-            .ok();
-    }
-
-    fn use_babel_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let root = self.root.clone();
+    /// Removes the account (credentials and all) and returns to Start. Deferred because
+    /// the controller owning this dashboard is dropped on the way.
+    fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(controller) = self.root.upgrade() else {
+            return;
+        };
+        let instance = controller.read(cx).instance().clone();
+        let shell = self.shell.clone();
         window.defer(cx, move |window, cx| {
-            root.update(cx, |root, cx| {
-                if root.sign_out(window, cx) {
-                    root.enter_mode(BabelMode::Direct, window, cx);
-                }
-            })
-            .ok();
+            crate::root::sign_out(instance, shell, window, cx);
         });
     }
 
-    /// Clears the main Babel login and returns to sign-in.
-    fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let root = self.root.clone();
+    /// Expired session: remove the account and reopen the mode, which signs in again.
+    fn sign_in_again(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(controller) = self.root.upgrade() else {
+            return;
+        };
+        let (mode_id, instance) = {
+            let controller = controller.read(cx);
+            (
+                controller.mode_id().to_string(),
+                controller.instance().clone(),
+            )
+        };
+        let shell = self.shell.clone();
         window.defer(cx, move |window, cx| {
-            root.update(cx, |root, cx| root.sign_out(window, cx)).ok();
+            crate::root::sign_in_again(mode_id, instance, shell, window, cx);
         });
     }
 
@@ -638,56 +679,29 @@ impl DashboardScreen {
                     }))
             };
 
-        let account = match &self.subaccount {
-            Some(session) => {
-                let name = if session.display_name.trim().is_empty() {
-                    session.subaccount_id.clone()
-                } else {
-                    session.display_name.clone()
-                };
-                v_flex()
-                    .items_start()
-                    .gap_1()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(name))
-                    .child(ui::muted("Sub-account workspace", cx))
-                    .child(
-                        Button::new("use-babel-account")
-                            .ghost()
-                            .small()
-                            .label("Use Babel account")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.use_babel_account(window, cx)
-                            })),
-                    )
-            }
-            None => v_flex()
-                .items_start()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Main Babel account"),
-                )
-                .child(ui::muted("Full project access", cx))
-                .child(
-                    Button::new("use-subaccount-code")
-                        .ghost()
-                        .small()
-                        .label("Use sub-account code")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.use_subaccount_code(window, cx)),
-                        ),
-                )
-                .child(
-                    Button::new("sign-out")
-                        .ghost()
-                        .small()
-                        .icon(sign_out_icon())
-                        .label("Sign out")
-                        .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
-                ),
+        let account_kind = if self.subaccount.is_some() {
+            "Sub-account"
+        } else {
+            "Babel account"
         };
+        let account = v_flex()
+            .items_start()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(self.account_label.clone()),
+            )
+            .child(ui::muted(account_kind, cx))
+            .child(
+                Button::new("sign-out")
+                    .ghost()
+                    .small()
+                    .icon(sign_out_icon())
+                    .label("Sign out")
+                    .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
+            );
 
         let version = sonus_shell::screens::ShellModels::updater(cx)
             .read(cx)
@@ -703,12 +717,14 @@ impl DashboardScreen {
                 "Projects",
                 Section::Projects,
             ))
-            .child(nav(
-                "nav-subaccounts",
-                IconName::Network,
-                "Sub-accounts",
-                Section::Subaccounts,
-            ))
+            .when(self.subaccount.is_none(), |this| {
+                this.child(nav(
+                    "nav-subaccounts",
+                    IconName::Network,
+                    "Sub-accounts",
+                    Section::Subaccounts,
+                ))
+            })
             .child(nav(
                 "nav-settings",
                 IconName::Settings,
@@ -725,22 +741,13 @@ impl DashboardScreen {
             .border_r_1()
             .border_color(theme.sidebar_border);
         if compact {
-            // Narrow window (or large zoom): icons only; the account actions stay reachable.
-            let account_action = if self.subaccount.is_some() {
-                Button::new("use-babel-account")
-                    .ghost()
-                    .small()
-                    .icon(IconName::User)
-                    .tooltip("Use Babel account")
-                    .on_click(cx.listener(|this, _, window, cx| this.use_babel_account(window, cx)))
-            } else {
-                Button::new("sign-out")
-                    .ghost()
-                    .small()
-                    .icon(sign_out_icon())
-                    .tooltip("Sign out")
-                    .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx)))
-            };
+            // Narrow window (or large zoom): icons only; sign-out stays reachable.
+            let account_action = Button::new("sign-out")
+                .ghost()
+                .small()
+                .icon(sign_out_icon())
+                .tooltip("Sign out")
+                .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx)));
             return sidebar
                 .px_2()
                 .items_center()
@@ -869,15 +876,16 @@ impl DashboardScreen {
     }
 
     fn render_progress(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.projects.is_empty() {
+        let visible: Vec<DashboardProject> = self.visible_projects().cloned().collect();
+        if visible.is_empty() {
             return None;
         }
-        let (completed, limit, limited) = daily_task_progress(&self.projects);
+        let (completed, limit, limited) = daily_task_progress(&visible);
         let theme = cx.theme();
         let summary = if limited > 0 {
             format!("{completed} of {limit} tasks today")
         } else {
-            format!("{} projects available", self.projects.len())
+            format!("{} projects available", visible.len())
         };
         let detail = if limited > 0 {
             format!(
@@ -1076,7 +1084,8 @@ impl DashboardScreen {
             content = content.child(progress);
         }
 
-        let list = if self.projects.is_empty() {
+        let visible: Vec<&DashboardProject> = self.visible_projects().collect();
+        let list = if visible.is_empty() {
             let (title, detail): (&str, &str) = if !self.loaded && self.refresh.is_some() {
                 (
                     "Loading your projects…",
@@ -1135,10 +1144,10 @@ impl DashboardScreen {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("Available projects"),
                         )
-                        .child(ui::muted(format!("{} total", self.projects.len()), cx)),
+                        .child(ui::muted(format!("{} total", visible.len()), cx)),
                 )
                 .children(
-                    self.projects
+                    visible
                         .iter()
                         .enumerate()
                         .map(|(ix, project)| {
@@ -1151,30 +1160,19 @@ impl DashboardScreen {
     }
 
     fn render_subaccounts(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.subaccount.is_some() {
-            return v_flex()
+        match &self.subaccounts {
+            Some(subaccounts) => subaccounts.clone().into_any_element(),
+            None => v_flex()
                 .w_full()
                 .child(ui::banner(
                     Tone::Info,
                     "Sub-account device",
                     Some("Sub-accounts are managed from the main Babel account.".into()),
-                    Some(
-                        Button::new("subaccount-use-babel")
-                            .outline()
-                            .small()
-                            .label("Use Babel account")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.use_babel_account(window, cx)
-                                }),
-                            )
-                            .into_any_element(),
-                    ),
+                    None,
                     cx,
                 ))
-                .into_any_element();
+                .into_any_element(),
         }
-        self.subaccounts.clone().into_any_element()
     }
 }
 
@@ -1221,7 +1219,9 @@ impl Render for DashboardScreen {
                             .small()
                             .icon(sign_out_icon())
                             .label("Sign in again")
-                            .on_click(cx.listener(|this, _, window, cx| this.sign_out(window, cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.sign_in_again(window, cx)),
+                            ),
                     )
                     .child(dismiss)
                     .into_any_element()

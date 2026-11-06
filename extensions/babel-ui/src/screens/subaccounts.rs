@@ -1,6 +1,7 @@
 //! Sub-account owner management: create / revoke relay logins, project access, analytics.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -28,6 +29,8 @@ enum OwnerRequest {
 }
 
 pub struct SubaccountsView {
+    /// The owner account's `auth.json`; owner requests authenticate with it.
+    auth_store: PathBuf,
     projects: Vec<DashboardProject>,
     host_url: Entity<InputState>,
     create_label: Entity<InputState>,
@@ -43,7 +46,7 @@ pub struct SubaccountsView {
 impl EventEmitter<LoadProjects> for SubaccountsView {}
 
 impl SubaccountsView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(auth_store: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let relay = ShellModels::relay(cx);
         let host = relay.read(cx).host_url().to_string();
         let host_url = cx.new(|cx| {
@@ -81,6 +84,7 @@ impl SubaccountsView {
             }),
         ];
         Self {
+            auth_store,
             projects: Vec::new(),
             host_url,
             create_label,
@@ -144,13 +148,16 @@ impl SubaccountsView {
         };
         self.error = None;
         let creating = matches!(request, OwnerRequest::Create(_));
+        let auth_store = self.auth_store.clone();
         let future = async move {
             match request {
-                OwnerRequest::Load => owner::load_dashboard(&host).await,
-                OwnerRequest::Create(label) => owner::create_subaccount(&host, &label).await,
-                OwnerRequest::Revoke(id) => owner::revoke_subaccount(&host, &id).await,
+                OwnerRequest::Load => owner::load_dashboard(&auth_store, &host).await,
+                OwnerRequest::Create(label) => {
+                    owner::create_subaccount(&auth_store, &host, &label).await
+                }
+                OwnerRequest::Revoke(id) => owner::revoke_subaccount(&auth_store, &host, &id).await,
                 OwnerRequest::Assign(id, projects) => {
-                    owner::assign_projects(&host, &id, &projects).await
+                    owner::assign_projects(&auth_store, &host, &id, &projects).await
                 }
             }
         };

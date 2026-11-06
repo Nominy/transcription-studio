@@ -1,5 +1,7 @@
-//! Owner-side sub-account management on the relay host, authenticated with the main Babel
-//! account (dashboard "Sub-accounts" section).
+//! Owner-side sub-account management on the relay host, authenticated with the owner's
+//! main Babel account (its `auth.json`; dashboard "Sub-accounts" section).
+
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -38,8 +40,8 @@ pub struct ProjectQueueConfig {
     pub stitched_queue_id: String,
 }
 
-pub async fn load_dashboard(host_url: &str) -> Result<OwnerDashboard> {
-    let (host_url, headers) = owner_target(host_url).await?;
+pub async fn load_dashboard(auth_store: &Path, host_url: &str) -> Result<OwnerDashboard> {
+    let (host_url, headers) = owner_target(auth_store, host_url).await?;
     let response = studio_services::http::client()
         .get(api_url(&host_url, OWNER_DASHBOARD_PATH))
         .headers(headers)
@@ -49,8 +51,12 @@ pub async fn load_dashboard(host_url: &str) -> Result<OwnerDashboard> {
 }
 
 /// Creates a sub-account with `label`; returns the refreshed dashboard.
-pub async fn create_subaccount(host_url: &str, label: &str) -> Result<OwnerDashboard> {
-    let (host_url, headers) = owner_target(host_url).await?;
+pub async fn create_subaccount(
+    auth_store: &Path,
+    host_url: &str,
+    label: &str,
+) -> Result<OwnerDashboard> {
+    let (host_url, headers) = owner_target(auth_store, host_url).await?;
     let response = studio_services::http::client()
         .post(api_url(&host_url, OWNER_SUBACCOUNTS_PATH))
         .headers(headers)
@@ -60,8 +66,12 @@ pub async fn create_subaccount(host_url: &str, label: &str) -> Result<OwnerDashb
     dashboard_response(response).await
 }
 
-pub async fn revoke_subaccount(host_url: &str, subaccount_id: &str) -> Result<OwnerDashboard> {
-    let (host_url, headers) = owner_target(host_url).await?;
+pub async fn revoke_subaccount(
+    auth_store: &Path,
+    host_url: &str,
+    subaccount_id: &str,
+) -> Result<OwnerDashboard> {
+    let (host_url, headers) = owner_target(auth_store, host_url).await?;
     let response = studio_services::http::client()
         .delete(api_url(
             &host_url,
@@ -78,11 +88,12 @@ pub async fn revoke_subaccount(host_url: &str, subaccount_id: &str) -> Result<Ow
 
 /// Replaces the projects a sub-account may work on.
 pub async fn assign_projects(
+    auth_store: &Path,
     host_url: &str,
     subaccount_id: &str,
     project_ids: &[String],
 ) -> Result<OwnerDashboard> {
-    let (host_url, headers) = owner_target(host_url).await?;
+    let (host_url, headers) = owner_target(auth_store, host_url).await?;
     let response = studio_services::http::client()
         .put(api_url(
             &host_url,
@@ -100,10 +111,11 @@ pub async fn assign_projects(
 
 /// Pushes dashboard project queue ids to the relay (`PUT .../owner/project-queues`).
 pub async fn push_project_queue_configs(
+    auth_store: &Path,
     host_url: &str,
     configs: &[ProjectQueueConfig],
 ) -> Result<()> {
-    let (host_url, headers) = owner_target(host_url).await?;
+    let (host_url, headers) = owner_target(auth_store, host_url).await?;
     let response = studio_services::http::client()
         .put(api_url(&host_url, OWNER_PROJECT_QUEUES_PATH))
         .headers(headers)
@@ -212,10 +224,13 @@ fn parse_managed_subaccount(value: &Value) -> Option<ManagedSubaccount> {
     })
 }
 
-async fn owner_target(host_url: &str) -> Result<(String, reqwest::header::HeaderMap)> {
+async fn owner_target(
+    auth_store: &Path,
+    host_url: &str,
+) -> Result<(String, reqwest::header::HeaderMap)> {
     let host_url = normalize_relay_host_url(host_url)?;
     let authorization = crate::auth::mint_babel_authorization(
-        &crate::auth::store_path(),
+        auth_store,
         &crate::auth::babel_base_url(),
         &crate::auth::clerk_url(),
         OffsetDateTime::now_utc().unix_timestamp(),

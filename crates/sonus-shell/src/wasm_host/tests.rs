@@ -6,9 +6,11 @@ fn bridge(capacity: usize) -> (Bridge, async_channel::Receiver<Message>) {
         Bridge {
             owner: "test.extension".into(),
             grants: Mutex::new(BTreeSet::from([Permission::DocumentRead])),
+            providers: Mutex::new(BTreeSet::from(["test.account".to_string()])),
             scope: Mutex::new(None),
             sender,
             root: PathBuf::new(),
+            status: Mutex::new(ProviderStatusSlots::default()),
             removed: AtomicBool::new(false),
             overflow: AtomicBool::new(false),
         },
@@ -65,6 +67,137 @@ fn exact_cancellation_token_prevents_admitting_owner_work() {
     assert!(host.snapshot(&cx, "document", 1024).is_err());
     assert!(receiver.try_recv().is_err());
 }
+fn guest_instance_of(provider: &str) -> w::ProviderInstance {
+    w::ProviderInstance {
+        provider: provider.into(),
+        id: "alice".into(),
+        label: "Alice".into(),
+    }
+}
+#[test]
+fn status_answers_reach_the_waiting_requester_and_undeclared_providers_are_dropped() {
+    let (host, receiver) = bridge(8);
+    let instance = guest_instance_of("test.account");
+    let waiter = host.await_status(&instance);
+    let answer = w::ProviderStatus {
+        instance: instance.clone(),
+        state: w::ProviderState::Ready,
+        detail: "signed in".into(),
+    };
+    host.emit("test.extension", Output::ProviderStatus(answer.clone()));
+    assert_eq!(waiter.try_recv().unwrap().detail, "signed in");
+    assert_eq!(host.cached_status(&instance).unwrap().detail, "signed in");
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Message::Output(Output::ProviderStatus(_)))
+    ));
+    // A status for a provider this extension does not declare is neither cached nor queued.
+    let foreign = guest_instance_of("other.account");
+    host.emit(
+        "test.extension",
+        Output::ProviderStatus(w::ProviderStatus {
+            instance: foreign.clone(),
+            ..answer
+        }),
+    );
+    assert!(host.cached_status(&foreign).is_none());
+    assert!(receiver.try_recv().is_err());
+    host.forget_status(&instance);
+    assert!(host.cached_status(&instance).is_none());
+}
+#[test]
+fn instance_namespaces_require_grant_and_declaration() {
+    let (host, _receiver) = bridge(8);
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let cx = CallContext {
+        extension_id: "test.extension",
+        deadline: Instant::now() + Duration::from_secs(1),
+        cancellation: &cancellation,
+    };
+    let declared = guest_instance_of("test.account");
+    assert!(
+        host.instance_root(&cx, Permission::Secrets, &declared)
+            .unwrap_err()
+            .contains("permission denied")
+    );
+    host.grants.lock().unwrap().insert(Permission::Secrets);
+    let root = host
+        .instance_root(&cx, Permission::Secrets, &declared)
+        .unwrap();
+    assert!(
+        root.ends_with(
+            PathBuf::from("providers")
+                .join("test.account")
+                .join("alice")
+                .join("wasm")
+                .join("test.extension")
+        )
+    );
+    assert!(
+        host.instance_root(
+            &cx,
+            Permission::Secrets,
+            &guest_instance_of("other.account")
+        )
+        .unwrap_err()
+        .contains("does not declare")
+    );
+    let mut traversal = declared;
+    traversal.id = "../alice".into();
+    assert!(
+        host.instance_root(&cx, Permission::Secrets, &traversal)
+            .is_err()
+    );
+}
+#[test]
+fn silent_or_finished_guest_status_checks_fail_instead_of_hanging() {
+    let (sender, receiver) = mpsc::sync_channel::<w::ProviderStatus>(1);
+    // Guest keeps running without answering: bounded by the deadline.
+    let started = Instant::now();
+    let timed_out = wait_for_status(&receiver, started + Duration::from_millis(30), || {
+        GuestCall::Running
+    })
+    .unwrap_err();
+    assert!(timed_out.contains("in time"), "{timed_out}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // Guest returned without publishing: fails at once, not at the deadline.
+    let started = Instant::now();
+    assert!(
+        wait_for_status(&receiver, started + Duration::from_secs(30), || {
+            GuestCall::Finished
+        })
+        .is_err()
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        wait_for_status(&receiver, Instant::now() + Duration::from_secs(30), || {
+            GuestCall::Failed("trap".into())
+        })
+        .unwrap_err()
+        .contains("trap")
+    );
+    // An answer that arrives while the guest call is still running wins immediately.
+    sender
+        .try_send(w::ProviderStatus {
+            instance: guest_instance_of("test.account"),
+            state: w::ProviderState::NeedsSignIn,
+            detail: String::new(),
+        })
+        .unwrap();
+    let answered = wait_for_status(&receiver, Instant::now() + Duration::from_secs(30), || {
+        GuestCall::Running
+    })
+    .unwrap();
+    assert_eq!(answered.state, w::ProviderState::NeedsSignIn);
+    drop(sender);
+    assert!(
+        wait_for_status(&receiver, Instant::now() + Duration::from_secs(30), || {
+            GuestCall::Running
+        })
+        .unwrap_err()
+        .contains("unloaded")
+    );
+}
 fn manifest(id: &str, mode: Option<(&str, bool)>) -> ExtensionManifest {
     let modes=mode.map(|(mode,requires)|serde_json::json!({"id":mode,"name":mode,"requires":if requires {serde_json::json!({"test.extension":"*"})}else{serde_json::json!({})}})).into_iter().collect::<Vec<_>>();
     serde_json::from_value(serde_json::json!({"id":id,"name":id,"version":"1.0.0","api":"*","runtime":"wasm","description":"test","license":"MIT","dependencies":{},"permissions":[],"modes":modes})).unwrap()
@@ -89,7 +222,7 @@ fn registered_modes() -> ContributionRegistry {
                         id: mode.id,
                         label: mode.name,
                         description: String::new(),
-                        home: std::rc::Rc::new(|_, _, _| {
+                        launch: std::rc::Rc::new(|_, _, _, _| {
                             panic!("authorization must not render a mode")
                         }),
                     },

@@ -357,12 +357,19 @@ impl Instance {
         let component = compiler::compile(engine, &package.component, limits, &cancellation)?;
         let mut linker = Linker::new(engine);
         lift::add_to_linker(&mut linker)?;
+        let providers = package
+            .manifest
+            .providers
+            .iter()
+            .map(|provider| provider.id.clone())
+            .collect();
         let mut store = Store::new(
             engine,
             State::new(
                 id.into(),
                 services,
                 package.grants,
+                providers,
                 limits.clone(),
                 cancellation.clone(),
             ),

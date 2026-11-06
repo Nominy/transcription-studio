@@ -84,7 +84,8 @@ leaf!(
     types::Line,
     types::Rect,
     types::LayoutConfig,
-    types::NumberConfig
+    types::NumberConfig,
+    types::ProviderState
 );
 macro_rules! record {
     ($name:ident { $($field:ident : $ty:ty => $wit:literal),* $(,)? }) => {
@@ -193,6 +194,9 @@ record!(Transport { document_id: WasmStr => "document-id", position_ms: u64 => "
 record!(ModeDocument { mode: WasmStr => "mode", request_id: u64 => "request-id", document: Document => "document" });
 record!(ImportResult { provider: WasmStr => "provider", request_id: u64 => "request-id", document: Document => "document" });
 record!(ExportResult { provider: WasmStr => "provider", request_id: u64 => "request-id", name: WasmStr => "name", media_type: WasmStr => "media-type", bytes: WasmList<u8> => "bytes" });
+record!(ProviderInstance { provider: WasmStr => "provider", id: WasmStr => "id", label: WasmStr => "label" });
+record!(ProviderSetupResult { provider: WasmStr => "provider", request_id: u64 => "request-id", id: WasmStr => "id", label: WasmStr => "label" });
+record!(ProviderStatus { instance: ProviderInstance => "instance", state: types::ProviderState => "state", detail: WasmStr => "detail" });
 
 pub(crate) fn add_to_linker(linker: &mut Linker<State>) -> Result<()> {
     // WIT's type-only dependency has no host functions or resources.
@@ -234,19 +238,38 @@ pub(crate) fn add_to_linker(linker: &mut Linker<State>) -> Result<()> {
     import!("publish-mode-document", publish_mode_document, ModeDocument);
     import!("publish-import", publish_import, ImportResult);
     import!("publish-export", publish_export, ExportResult);
-    host.func_wrap(
-        "storage-set",
-        |mut store: StoreContextMut<'_, State>, (key, value): (WasmStr, WasmList<u8>)| {
-            ensure!(
-                !store.data().cancelled_now(),
-                "cancelled or deadline exceeded"
-            );
-            let mut budget = store.data().remaining;
-            let key = key.take(&mut store, &mut budget)?;
-            let value = value.take(&mut store, &mut budget)?;
-            Ok((store.data_mut().storage_set(key, value),))
-        },
-    )?;
+    import!(
+        "provider-setup-done",
+        provider_setup_done,
+        ProviderSetupResult
+    );
+    import!(
+        "publish-provider-status",
+        publish_provider_status,
+        ProviderStatus
+    );
+    macro_rules! import_args {
+        ($wit:literal, $method:ident, ($($arg:ident : $ty:ty),+)) => {
+            host.func_wrap(
+                $wit,
+                |mut store: StoreContextMut<'_, State>, ($($arg,)+): ($($ty,)+)| {
+                    ensure!(
+                        !store.data().cancelled_now(),
+                        "cancelled or deadline exceeded"
+                    );
+                    let mut budget = store.data().remaining;
+                    $(let $arg = $arg.take(&mut store, &mut budget)?;)+
+                    Ok((store.data_mut().$method($($arg),+),))
+                },
+            )?;
+        };
+    }
+    import_args!("storage-set", storage_set, (key: WasmStr, value: WasmList<u8>));
+    import_args!("instance-secret-get", instance_secret_get, (instance: ProviderInstance, key: WasmStr));
+    import_args!("instance-secret-set", instance_secret_set, (instance: ProviderInstance, key: WasmStr, value: Option<WasmStr>));
+    import_args!("instance-storage-get", instance_storage_get, (instance: ProviderInstance, key: WasmStr));
+    import_args!("instance-storage-set", instance_storage_set, (instance: ProviderInstance, key: WasmStr, value: WasmList<u8>));
+    import_args!("provider-setup-cancel", provider_setup_cancel, (provider: WasmStr, request_id: u64));
     host.func_wrap(
         "cancelled",
         |mut store: StoreContextMut<'_, State>, (): ()| Ok((store.data_mut().cancelled(),)),

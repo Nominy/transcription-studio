@@ -1,19 +1,25 @@
-//! Persisted native auth store (`babel-auth.json`): Clerk cookies + pending sign-in.
+//! Persisted native auth store (`auth.json` inside an account directory): Clerk cookies +
+//! pending sign-in. Callers always pass the path; no process-wide default exists.
 
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use super::{STUDIO_BABEL_AUTH_STORE, clerk};
-use studio_services::paths::app_support_dir_named;
+use super::clerk;
 
-const STORE_FILE_NAME: &str = "babel-auth.json";
+/// File name of the cookie store inside an account directory.
+pub const AUTH_FILE_NAME: &str = "auth.json";
+
+/// `<account dir>/auth.json`.
+pub fn auth_store_path(account_dir: &Path) -> PathBuf {
+    account_dir.join(AUTH_FILE_NAME)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthCookie {
@@ -34,23 +40,6 @@ pub struct AuthStore {
     pub cookies: Vec<AuthCookie>,
     pub pending_sign_in_id: Option<String>,
     pub pending_phone_number_id: Option<String>,
-}
-
-/// Store path: `STUDIO_BABEL_AUTH_STORE`, else `babel-auth.json` next to the
-/// executable if it exists (detached/portable install), else
-/// `<app support "TranscriptionStudio">/babel-auth.json`.
-pub fn store_path() -> PathBuf {
-    if let Ok(path) = env::var(STUDIO_BABEL_AUTH_STORE)
-        && !path.trim().is_empty()
-    {
-        return PathBuf::from(path.trim());
-    }
-    if let Ok(path) = executable_store_path()
-        && path.is_file()
-    {
-        return path;
-    }
-    app_support_dir_named("TranscriptionStudio").join(STORE_FILE_NAME)
 }
 
 pub fn store_from_str(source: &str) -> Result<AuthStore> {
@@ -137,56 +126,25 @@ pub fn save_store(path: &Path, store: &AuthStore) -> Result<()> {
         .with_context(|| format!("failed to write native Babel auth store {}", path.display()))
 }
 
-/// Clears the default store (sign out / "back to login"); also drops the cached JWT.
-pub fn reset_store() -> Result<()> {
+/// Clears the store at `path` (sign out / "back to login"); also drops the cached JWT.
+pub fn reset_store(path: &Path) -> Result<()> {
     clerk::clear_jwt_cache();
-    save_store(&store_path(), &AuthStore::default())
+    save_store(path, &AuthStore::default())
 }
 
-fn executable_store_path() -> Result<PathBuf> {
-    let executable =
-        env::current_exe().context("failed to locate Transcription Studio executable")?;
-    store_path_next_to_executable(&executable)
-}
-
-pub fn store_path_next_to_executable(executable: &Path) -> Result<PathBuf> {
-    let directory = executable.parent().ok_or_else(|| {
-        anyhow!(
-            "failed to locate executable directory for {}",
-            executable.display()
-        )
-    })?;
-    Ok(directory.join(STORE_FILE_NAME))
-}
-
-/// Copies the current store next to the executable so this install carries its
-/// own login (subsequent [`store_path`] calls pick it up). Refuses while
-/// `STUDIO_BABEL_AUTH_STORE` is set. Returns the new store path.
-pub fn detach_store_to_executable() -> Result<PathBuf> {
+/// Deletes the store file; a missing file is not an error. Also drops the cached JWT.
+pub fn delete_store(path: &Path) -> Result<()> {
     clerk::clear_jwt_cache();
-    if let Ok(path) = env::var(STUDIO_BABEL_AUTH_STORE)
-        && !path.trim().is_empty()
-    {
-        bail!(
-            "{STUDIO_BABEL_AUTH_STORE} is set to {}; unset it before detaching the auth store",
-            path.trim()
-        );
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to delete native Babel auth store {}",
+                path.display()
+            )
+        }),
     }
-    let target = executable_store_path()?;
-    detach_store_to_path(&store_path(), &target)?;
-    Ok(target)
-}
-
-/// Copies (not moves) `source` to `target`; creates an empty store when they are the same file.
-pub fn detach_store_to_path(source: &Path, target: &Path) -> Result<()> {
-    if source == target {
-        if !target.exists() {
-            save_store(target, &AuthStore::default())?;
-        }
-        return Ok(());
-    }
-    let store = read_store_or_default(source)?;
-    save_store(target, &store)
 }
 
 /// `name=value; ...` of the cookies matching `url`'s host/path and not expired at `now`.

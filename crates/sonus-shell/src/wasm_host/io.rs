@@ -2,16 +2,20 @@ use super::*;
 use std::{
     fs,
     io::{Read, Write},
+    path::Path,
 };
 const VALUE_LIMIT: usize = 1024 * 1024;
 const OWNER_QUOTA: u64 = 16 * 1024 * 1024;
-fn key_path(host: &Bridge, key: &str) -> Result<PathBuf, String> {
+const SECRETS_FILE: &str = "secrets.json";
+/// Storage lives under `<root>/storage/<sha256(key)>`; `root` is the extension's data
+/// directory or an instance namespace (`providers/<p>/<id>/wasm/<owner>`).
+fn key_path(root: &Path, key: &str) -> Result<PathBuf, String> {
     if key.is_empty() || key.len() > 256 {
         return Err("storage key must contain 1..256 bytes".into());
     }
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(key.as_bytes());
-    Ok(host.root.join("storage").join(format!("{digest:x}")))
+    Ok(root.join("storage").join(format!("{digest:x}")))
 }
 fn private_directory(path: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| e.to_string())?;
@@ -30,12 +34,12 @@ fn private_directory(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 pub(super) fn get(
-    host: &Bridge,
+    root: &Path,
     cx: &CallContext<'_>,
     key: &str,
     max: usize,
 ) -> Result<Option<Vec<u8>>, String> {
-    let path = key_path(host, key)?;
+    let path = key_path(root, key)?;
     let metadata = match fs::symlink_metadata(&path) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -61,7 +65,7 @@ pub(super) fn get(
     Ok(Some(bytes))
 }
 pub(super) fn set(
-    host: &Bridge,
+    root: &Path,
     cx: &CallContext<'_>,
     key: &str,
     value: &[u8],
@@ -69,7 +73,7 @@ pub(super) fn set(
     if value.len() > VALUE_LIMIT {
         return Err("storage value exceeds limit".into());
     }
-    let path = key_path(host, key)?;
+    let path = key_path(root, key)?;
     let parent = path.parent().ok_or("invalid storage path")?;
     private_directory(parent)?;
     let mut total = 0u64;
@@ -116,6 +120,87 @@ pub(super) fn secret(
         return Err("secret exceeds limit".into());
     }
     Ok(value)
+}
+fn read_secrets(path: &Path, cx: &CallContext<'_>) -> Result<BTreeMap<String, String>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > VALUE_LIMIT as u64
+    {
+        return Err("secret store exceeds limit or is not a regular file".into());
+    }
+    cx.check()?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    fs::File::open(path)
+        .map_err(|e| e.to_string())?
+        .take(VALUE_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > VALUE_LIMIT {
+        return Err("secret store exceeds limit".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("corrupt secret store: {e}"))
+}
+/// Instance secrets are one private JSON object per (instance, extension), deleted with
+/// the instance directory. Unlike `secret`, they are writable: provider types create them.
+pub(super) fn instance_secret_get(
+    root: &Path,
+    cx: &CallContext<'_>,
+    key: &str,
+    max: usize,
+) -> Result<Option<String>, String> {
+    if key.is_empty() || key.len() > 256 {
+        return Err("invalid secret key".into());
+    }
+    let value = read_secrets(&root.join(SECRETS_FILE), cx)?.remove(key);
+    cx.check()?;
+    if value
+        .as_ref()
+        .is_some_and(|v| v.len() > max.min(VALUE_LIMIT))
+    {
+        return Err("secret exceeds limit".into());
+    }
+    Ok(value)
+}
+pub(super) fn instance_secret_set(
+    root: &Path,
+    cx: &CallContext<'_>,
+    key: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    if key.is_empty() || key.len() > 256 {
+        return Err("invalid secret key".into());
+    }
+    if value.is_some_and(|v| v.len() > VALUE_LIMIT) {
+        return Err("secret exceeds limit".into());
+    }
+    let path = root.join(SECRETS_FILE);
+    let mut secrets = read_secrets(&path, cx)?;
+    match value {
+        Some(value) => {
+            secrets.insert(key.into(), value.into());
+        }
+        None => {
+            if secrets.remove(key).is_none() {
+                return Ok(());
+            }
+        }
+    }
+    let bytes = serde_json::to_vec(&secrets).map_err(|e| e.to_string())?;
+    if bytes.len() > VALUE_LIMIT {
+        return Err("secret store exceeds limit".into());
+    }
+    private_directory(root)?;
+    let mut file = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    cx.check()?;
+    file.persist(&path).map_err(|e| e.error.to_string())?;
+    Ok(())
 }
 pub(super) fn http(
     host: &Bridge,

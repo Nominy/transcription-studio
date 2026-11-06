@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod extensions;
 pub mod formats;
 pub mod home;

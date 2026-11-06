@@ -6,18 +6,21 @@ be implemented and exercised end to end.
 
 Sonus is a segment-based transcript editor with multi-lane audio playback. That is the whole
 core. Everything else — AI transcription, linting, file formats, task platforms such as Babel —
-is an **extension**, and platforms are **modes** contributed by extensions. Built-in features use
-exactly the same API that third-party extensions use; there is no private side door.
+is an **extension**; platforms are **modes** (Start-screen tiles) contributed by extensions,
+and the accounts they sign in with are **providers**. Built-in features use exactly the same
+API that third-party extensions use; there is no private side door.
 
 ```mermaid
 flowchart TD
-    App["studio-app: bundled composition"] --> Shell["sonus-shell: editor UI and contribution registry"]
+    App["studio-app: bundled composition"] --> Shell["sonus-shell: editor UI, contribution and provider registries"]
     App --> Extensions["First-party Rust extensions"]
-    Extensions --> Shell
+    Extensions -->|modes, providers, panels, checks, formats| Shell
+    Shell --> Start["Start: one tile per mode → sign-in step (if provider) → launch window → editor"]
     Shell --> Core["Core document, audio and project crates"]
-    Shell --> API["sonus-extension: neutral contracts"]
-    Shell --> Wasm["sonus-wasm: component runtime"]
+    Shell --> API["sonus-extension: neutral contracts (manifests, resolve)"]
+    Shell --> Wasm["sonus-wasm: component runtime (modes, providers via WIT)"]
     Shell --> Marketplace["sonus-marketplace: GitHub index and packages"]
+    Shell --> Instances["app support/providers/&lt;type&gt;/&lt;id&gt;/ (per-account credentials)"]
     Wasm --> API
     Marketplace --> API
 ```
@@ -49,11 +52,12 @@ only native HTTP/runtime/path/storage/updater services and native recovery deleg
 contracts, not an inference runtime. `extensions/gold` (`sonus-gold`) owns the local runtime,
 remote coordinator, AI preferences and provider-neutral drafting/polish algorithms;
 `extensions/babel-services` (`sonus-babel-services`) owns authentication, task/review clients,
-relay hosting and Babel JSON recovery. Babel clients capture direct or relay sessions per
-document origin; saved global login state never chooses a document's save route. Constructors
-do not activate modes; the host owns the selected services and shuts down their runtime/relay
-resources when deactivating them. Existing credential, model-cache and draft storage paths
-and serialized preference keys remain unchanged.
+relay hosting and Babel JSON recovery. Babel clients capture the account instance (direct or
+relay-backed) per document origin; the selected account never chooses a document's save
+route after the fact. Constructors do not activate modes; the host owns the selected services
+and shuts down their runtime/relay resources when deactivating them. Credentials live under
+the per-instance provider directory (§2.3); model-cache and draft storage paths and
+serialized preference keys remain unchanged.
 
 ## 2. Extensions
 
@@ -106,11 +110,13 @@ Extensions extend every part of the editor — the same reach Unity editor exten
 the Unity editor.
 
 **Workspace and modes**
-- **Mode** — a platform or workflow: Home card, its own home view (dashboard/browser), sign-in
-  and session, document sources (list/browse/claim/open → `Project` + origin), the save /
-  submit pipeline for its documents, document policy (read-only, checks required before
-  submit, which extensions are active in its documents), a settings page. `sonus.local` is a
-  mode like any other.
+- **Mode** — a Start-screen tile: its launch window (dashboard/browser), document sources
+  (list/browse/claim/open → `Project` + origin), the save / submit pipeline for its documents,
+  document policy (read-only, checks required before submit, which extensions are active in
+  its documents), a settings page. `sonus.local` is a mode like any other.
+- **Provider** — an account type a mode signs in with: a setup (sign-in) view, a status
+  probe and a sign-out hook. Instances are stored by the shell; credentials live in the
+  instance's own directory (§2.3).
 - **Document handlers** — open-file and drag-and-drop handlers by extension/MIME.
 - **Importers / exporters** — bytes ⇄ `Project` (SRT, VTT, TXT, platform JSON, …).
 
@@ -164,20 +170,111 @@ the Unity editor.
 - Network: HTTP client limited to manifest-declared hosts.
 - Logging into the per-extension log shown on the Extensions page.
 - Inter-extension services: an extension may publish a typed service (e.g. `sonus.babel`
-  exposes its Babel client to `sonus.babel-relay`); consumers declare the dependency.
+  exposes its Babel client to its sibling modes); consumers declare the dependency.
 
-### 2.3 Modes and documents
+### 2.3 Modes, providers and documents
 
-Every open document records its **origin**: the mode that opened it and an opaque key.
-Save, recovery, submit, read-only state and the set of active document-scoped extensions
-are resolved through that origin — never from global sign-in state. Leaving the editor
-returns to the origin mode's home view. Modes may activate extensions only for their own
-documents (e.g. Babel's rule sets apply only to Babel tasks).
+A **mode** is a tile on the Start screen: a way of getting documents into the editor. The
+bundled `sonus.local` mode is a tile like any other ("open audio and projects on this
+computer"); platform modes such as Babel are tiles contributed by their extensions. A
+**provider** is an account type a mode signs in with (for example `sonus.babel.account`).
+Providers are invisible by default: the user sees a mode, is asked to sign in the first time
+it needs an account, and otherwise never meets the provider.
+
+**The journey**
+
+1. **Start** lists every installed mode plus *Get more* (Add-ons). No language picker here;
+   it lives in Settings › General.
+2. Clicking a tile calls the shell's `show_mode(id)`:
+   - `enter_mode` resolves the mode's required add-ons (transactional, see below).
+   - If the mode manifest names a `provider`, the shell needs a configured `Ready` instance of
+     that type. None configured → the provider's **setup view** is shown as a step of opening
+     the mode (header "Sign in to {mode label}"); after `ProviderSetup::done` the launch
+     continues. An existing instance in `NeedsSignIn` re-enters setup with that instance.
+     Several instances and none selected → a small chooser, then continue.
+   - The shell calls `ModeContribution.launch(shell, ModeLaunchContext { mode_id, instance })`.
+     `Some(view)` is shown as the mode's **launch window** (a page under the Start / Settings /
+     Add-ons header). `None` means the mode opened a document itself (`launch: "direct"`) or
+     declined; the shell stays where it is.
+3. The editor is the base editor plus the mode's required add-ons plus the user's enabled,
+   compatible add-ons (`active_requirements`).
+4. Closing the editor returns to the mode's launch window (`launch` is invoked again) or to
+   Start for `direct` modes.
+5. Settings › Advanced › **Accounts** lists instances per provider type with status, *Sign out*
+   and — only for `multiple: true` types — *Add another account*. A Start tile shows an account
+   chip only when its provider type has more than one instance (click → switch).
+
+**Manifest fields**
+
+```json
+{
+  "providers": [{ "id": "sonus.babel.account", "name": "Babel account", "multiple": true }],
+  "modes": [{
+    "id": "sonus.babel",
+    "name": "Babel",
+    "provider": "sonus.babel.account",
+    "launch": "window",
+    "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
+    "recommends": { "sonus.gold": "^0.1" }
+  }]
+}
+```
+
+- `providers[]` — `id`, `name`, `multiple` (whether several accounts may be configured).
+- `modes[].provider` — optional provider id. It must be declared by the owning extension or by
+  one of the mode's resolved requirements (`ResolveError::UnknownProvider` otherwise).
+- `modes[].launch` — `window` (default: `launch` returns a view) or `direct` (the mode opens a
+  document itself and has no launch window).
+- `requires` / `recommends` — as before: hard requirements with version ranges, and optional
+  recommendations that never become requirements or silently acquire permissions.
+
+**Provider instances and storage**
+
+A configured account is a `ProviderInstance { provider, id, label }`. `id` is stable per
+account (phone-number hash, `host+user`) and path-safe (`[a-z0-9-]`). The shell's
+`ProviderRegistry` persists the instance list and the selected instance per type in
+`UiStorage` (`sonus.providers.instances`, `sonus.providers.selected`). Each provider type
+contributes `ProviderContribution { id, label, multiple, setup, status, sign_out }`: a setup
+view factory, a status probe (`Ready { detail } | NeedsSignIn | Error`) and a sign-out hook.
+
+Credentials never go into the registry record. Every instance owns a directory
+
+```
+<app support>/providers/<provider type>/<instance id>/
+```
+
+(`providers::instance_dir`; the root is overridable with `STUDIO_PROVIDER_DIR`), one file per
+concern; removing the instance removes the directory. There is no global "signed-in user":
+a document carries its `DocumentOrigin { mode_id, instance, read_only, native_path }`, and
+save, recovery, submit and the set of active document-scoped extensions are resolved from
+that origin.
+
+**WASM provider surface** (`wit/sonus-extension.wit`)
+
+`contribution-kind` gains `provider`. Records: `provider-instance`, `provider-setup`,
+`provider-setup-result`, `provider-state`, `provider-status`; `mode-open` carries
+`instance`. Events: `provider-setup`, `provider-setup-cancelled`, `provider-status`,
+`provider-sign-out`. Host imports: `instance-secret-get/set`, `instance-storage-get/set`
+(scoped to instances of providers the extension declares; require the `secrets` / `storage`
+grants), `provider-setup-done`, `provider-setup-cancel`, `publish-provider-status`.
+
+**Babel split**
+
+The Babel extension declares one provider, `sonus.babel.account` (`multiple: true`; sign-in
+by phone/e-mail or by sub-account relay code — a relay-backed account is just another
+instance of the same type, stored as
+`providers/sonus.babel.account/<id>/{auth.json | subaccount.json, account.json}`), and
+three modes: `sonus.babel` (Babel · transcription tasks, provider), `sonus.babel.errors`
+(Babel error review · error review tasks, provider) and `sonus.babel-file` (Babel file · edit
+an exported task offline; no provider, `launch: "direct"` — it opens the picked file
+straight into the editor). The former separate "Relay" mode is gone.
+
+**Documents**
 
 The shell retains the active `EditorModel` independently of its rendering view.
 Extension panels may query the document during rendering without reentering
 `EditorScreen`'s GPUI entity borrow.
-Settings and Extensions open as overlays: the active document and its mode requirements
+Settings and Add-ons open as overlays: the active document and its mode requirements
 remain intact. Disabling optional providers removes their diagnostics from the open document;
 empty-text checks are not built into core draft validation.
 
@@ -185,27 +282,12 @@ Modes supply ordered local audio candidates through `ProviderEnvironment.audio_s
 Core loading never guesses platform filenames. Babel supplies its cache/export naming rules
 without rewriting canonical remote source references; decoding still runs off the UI thread.
 
-A mode declares **required extensions** (with version ranges) and optional **recommended**
-ones in its manifest:
-
-```json
-{
-  "id": "sonus.babel",
-  "name": "Babel",
-  "requires": {
-    "sonus.babel-lint": "^0.1",
-    "sonus.babel-tags": "^0.1"
-  },
-  "recommends": { "sonus.gold": "^0.1" }
-}
-```
-
 Entering a mode resolves all required extensions and version ranges before opening its
 documents. Bundled packages satisfy requirements without network access. Missing packages
 are offered through the marketplace; new permissions require user approval. Required
 extensions activate for the mode's documents, not globally, and cannot be disabled while
 those documents are open. Activation is transactional: an incompatible dependency, cycle,
-denied permission or failed activation leaves the previous workspace usable. The Extensions
+denied permission or failed activation leaves the previous workspace usable. The Add-ons
 page shows which mode requires each extension and why.
 
 ## 3. Extension APIs
@@ -239,14 +321,16 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
 }
 ```
 
-Rust extensions may also return arbitrary gpui views for panels, windows, inspectors and mode
-home views. Built-ins are Rust extensions; they never reach into the shell or core internals.
+Rust extensions may also return arbitrary gpui views for panels, windows, inspectors, mode
+launch windows and provider setup views. Built-ins are Rust extensions; they never reach into
+the shell or core internals.
 
 ### 3.2 WASM (`wit/sonus-extension.wit`, world `sonus:extension/extension@0.1.0`)
 
 The guest exports lifecycle, command, UI-event and document-event callbacks. Providers
 publish typed diagnostics, completions, decorations, UI trees and overlays through host
-imports; mode and format requests are typed events. `sdk/rust` wraps the generated bindings.
+imports; mode, provider (setup/status/sign-out) and format requests are typed events.
+`sdk/rust` wraps the generated bindings.
 
 Host calls enforce explicit grants and document scope. Guest document IDs identify an
 individual open incarnation, not a persisted project ID; stale revisions and handles from a
@@ -274,30 +358,29 @@ in time-and-lane coordinates, with hit regions).
 
 | Extension | Kind | Contributes |
 |---|---|---|
-| `sonus.local` | mode | Open common audio files, one lane per file, without an account. Core native project save/reopen remains available without this extension. |
+| `sonus.local` | mode | **Local** tile: open common audio files (one lane per file), open or restore native projects, demo. Its launch window is the local Start content. No provider; core native project save/reopen remains available without this extension. |
 | `sonus.formats` | formats | SRT, WebVTT and plain text import/export. Plain text imports explicitly have no timing. |
 | `sonus.lint-basic` | diagnostics | Optional language-neutral whitespace, empty-segment, timing and same-lane overlap checks with safe fixes. Active in Local documents by default, but not required by the mode. |
 | `sonus.gold` | AI | Local Gold runtime: transcription, word alignment, denoise; model manager and settings. |
-| `sonus.babel` | mode | Babel sign-in, dashboard, claims, task open/save/submit, review and feedback, error tasks, AI review. Requires `sonus.babel-lint` and `sonus.babel-tags`; recommends `sonus.gold`. |
+| `sonus.babel` | provider + modes | Provider `sonus.babel.account` (`multiple: true`; phone/e-mail or relay sub-account sign-in, credentials per instance directory). Modes **Babel** (`sonus.babel`, transcription tasks) and **Babel error review** (`sonus.babel.errors`), both using that provider, plus **Babel file** (`sonus.babel-file`, offline editing of an exported task, no provider, `launch: "direct"`). All three require `sonus.babel-lint` and `sonus.babel-tags`; the task modes recommend `sonus.gold`. |
 | `sonus.babel-lint` | diagnostics | Babel's Gold (gold-non-bg) rules and the Helper rule set, with their autofixes; active in Babel documents. |
 | `sonus.babel-tags` | editing | Babel tag/curly/angle conventions: completions, decorations, tag-aware autofixes and number→СКАЗ conversion. |
-| `sonus.babel-relay` | mode | Subaccount sign-in through a relay, relay host management; uses `sonus.babel`'s client service and has the same requirements. |
 
-The Babel extension also supplies `sonus.babel-file`: offline Babel JSON editing with
-the same required rule/tag extensions and a file-only save target. It never selects a
-remote client from whichever account happens to be signed in.
+`sonus.babel-file` has a file-only save target and never selects a remote client from
+whichever account happens to be selected.
 
 ## 5. Distribution
 
 Sonus ships **batteries included**: the release bundles the first-party extensions above.
-Users can open audio, edit, check, export and enter available modes without separately finding
-extensions. AI runtime/model downloads remain explicit, with download size, licensing and
+Users can open audio, edit, check, export and open every bundled mode from Start without
+separately finding extensions; platform modes ask for sign-in on first open. AI runtime/model
+downloads remain explicit, with download size, licensing and
 progress shown before installation; bundled extension code does not mean all model weights
 are bundled. Extensions remain independently managed; required extensions activate within
 their modes rather than becoming unconditional core features.
 
 Third-party extensions are `.sonusext` files: a zip with `manifest.json`, `module.wasm`
-and optional assets. Install from the Extensions page (file or URL); the page lists
+and optional assets. Install from the Add-ons page (file or URL); the page lists
 extensions with version, source (bundled/installed/dev), permissions, required-by, settings,
 logs and enable/disable/uninstall. Developer mode loads an unpacked folder and reloads it on
 change. `extensions/examples/` holds templates.

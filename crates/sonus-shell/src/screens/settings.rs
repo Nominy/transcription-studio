@@ -1,4 +1,5 @@
-//! Shared appearance, shortcuts and updates, followed by registered extension settings.
+//! General (language), appearance, shortcuts and updates, then registered extension
+//! settings, then an Advanced disclosure holding provider accounts.
 
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_kit::component::notification::Notification;
@@ -6,7 +7,9 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Selectable, Sizable, Theme, ThemeMode, WindowExt as _,
     h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::rc::Rc;
 use studio_services::prefs::EditorLayout;
 use studio_services::updater::UpdateChannel;
 
@@ -24,6 +27,7 @@ const LAYOUTS: [(EditorLayout, &str); 3] = [
     (EditorLayout::SplitStacked, "Split stacked"),
     (EditorLayout::SplitSideBySide, "Split side by side"),
 ];
+const LANGUAGES: [(&str, &str); 2] = [("en", "English"), ("ru", "Русский")];
 
 /// Applies the persisted theme (dark by default). Call once at startup.
 pub fn apply_saved_theme(cx: &mut App) {
@@ -39,6 +43,8 @@ pub struct SettingsView {
     layout: EditorLayout,
     contributions: Vec<(String, u64, AnyView)>,
     registry_generation: u64,
+    advanced: bool,
+    accounts: Vec<super::accounts::AccountSection>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,6 +71,8 @@ impl SettingsView {
             layout,
             contributions,
             registry_generation: cx.global::<ContributionRegistry>().generation(),
+            advanced: false,
+            accounts: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -98,6 +106,87 @@ impl SettingsView {
             );
         }
         cx.notify();
+    }
+
+    fn set_language(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = cx
+            .global_mut::<AppServices>()
+            .storage
+            .set_value("sonus.language", id.into())
+        {
+            window.push_notification(Notification::error(error.to_string()), cx);
+        }
+        cx.refresh_windows();
+    }
+
+    fn render_general(&self, cx: &mut Context<Self>) -> Div {
+        let choice = cx
+            .global::<AppServices>()
+            .storage
+            .value("sonus.language")
+            .unwrap_or("ru")
+            .to_owned();
+        ui::card(ui::localized(cx, "General", "Общие"), None, cx).child(
+            h_flex()
+                .flex_wrap()
+                .gap_2()
+                .justify_between()
+                .child(ui::muted(ui::localized(cx, "Language", "Язык"), cx))
+                .child(
+                    ButtonGroup::new("language")
+                        .outline()
+                        .small()
+                        .children(LANGUAGES.iter().map(|(id, label)| {
+                            Button::new(*id).label(*label).selected(choice == *id)
+                        }))
+                        .on_click(cx.listener(|this, clicked: &Vec<usize>, window, cx| {
+                            if let Some((id, _)) = clicked.first().and_then(|ix| LANGUAGES.get(*ix))
+                            {
+                                this.set_language(id, window, cx);
+                            }
+                        })),
+                ),
+        )
+    }
+
+    fn render_advanced(&self, cx: &mut Context<Self>) -> Div {
+        let open = self.advanced;
+        v_flex()
+            .gap_3()
+            .child(
+                Button::new("settings-advanced")
+                    .ghost()
+                    .small()
+                    .icon(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .label(ui::localized(cx, "Advanced", "Дополнительно"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.advanced = !this.advanced;
+                        if this.advanced {
+                            this.accounts = super::accounts::sections(cx);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when(open, |this| {
+                let view = cx.entity().downgrade();
+                let on_change: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
+                    view.update(cx, |this, cx| {
+                        this.accounts = super::accounts::sections(cx);
+                        cx.notify();
+                    })
+                    .ok();
+                });
+                this.child(super::accounts::accounts_card(
+                    self.shell.clone(),
+                    &self.accounts,
+                    on_change,
+                    cx,
+                ))
+            })
     }
 
     fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
@@ -333,9 +422,10 @@ impl Render for SettingsView {
                     .label(ui::localized(cx, "Close", "Закрыть"))
                     .on_click(|_, window, cx| window.close_dialog(cx)),
             )
-            .child(super::home::language_picker(cx))
+            .child(self.render_general(cx))
             .child(self.render_appearance(cx))
             .children(self.contributions.iter().map(|(_, _, view)| view.clone()))
             .child(self.render_updates(cx))
+            .child(self.render_advanced(cx))
     }
 }

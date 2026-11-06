@@ -1,4 +1,6 @@
-//! Sign-in: Babel phone/e-mail code login and sub-account (relay code) login.
+//! Babel account setup (the `sonus.babel.account` provider's sign-in view): phone/e-mail
+//! code login or a sub-account relay code. On success the credentials are stored in the
+//! account's directory and the shell is told which instance was configured.
 
 use std::sync::{Arc, LazyLock};
 
@@ -10,10 +12,14 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use sonus_babel_services::auth::{self, flow::AuthFlow};
+use sonus_babel_services::account::{
+    AccountKind, AccountRecord, AccountStore, direct_instance_id, relay_instance_id, relay_label,
+};
+use sonus_babel_services::auth;
+use sonus_babel_services::auth::flow::{AuthFlow, AuthStartup};
 use sonus_babel_services::subaccounts;
+use sonus_shell::{ProviderInstance, ProviderSetup};
 
-use crate::root::{BabelController, BabelMode};
 use crate::screens::ShellModels;
 use sonus_shell::services::spawn_service_in;
 
@@ -25,9 +31,17 @@ enum Field {
     SubaccountCode,
 }
 
+/// The account a direct login is being written into (known from the identifier onwards).
+struct PendingAccount {
+    id: String,
+    label: String,
+    store: AccountStore,
+}
+
 pub struct AuthScreen {
-    root: WeakEntity<BabelController>,
+    setup: ProviderSetup,
     flow: AuthFlow,
+    pending: Option<PendingAccount>,
     identifier: Entity<InputState>,
     code: Entity<InputState>,
     host_url: Entity<InputState>,
@@ -37,21 +51,20 @@ pub struct AuthScreen {
 }
 
 impl AuthScreen {
-    pub fn new(
-        root: WeakEntity<BabelController>,
-        flow: AuthFlow,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let identifier =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Phone number or e-mail"));
-        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Verification code"));
+    pub fn new(setup: ProviderSetup, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (flow, pending) = Self::initial_flow(&setup);
+        let identifier = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Phone or e-mail")
+                .default_value(flow.identifier.clone())
+        });
+        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Code"));
         let host_url = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Relay URL, e.g. https://relay.example.com")
+                .placeholder("Relay address")
                 .default_value(flow.subaccount_host_url.clone())
         });
-        let subaccount_code = cx.new(|cx| InputState::new(window, cx).placeholder("One-time code"));
+        let subaccount_code = cx.new(|cx| InputState::new(window, cx).placeholder("Code"));
         let subscriptions = vec![
             Self::watch(&identifier, Field::Identifier, window, cx),
             Self::watch(&code, Field::Code, window, cx),
@@ -59,8 +72,9 @@ impl AuthScreen {
             Self::watch(&subaccount_code, Field::SubaccountCode, window, cx),
         ];
         let this = Self {
-            root,
+            setup,
             flow,
+            pending,
             identifier,
             code,
             host_url,
@@ -72,9 +86,43 @@ impl AuthScreen {
         this
     }
 
-    pub fn cancel_request(&mut self) {
-        self.request = None;
-        self.flow.is_pending = false;
+    /// Re-authenticating an existing account resumes where it left off (pending code →
+    /// code step; relay → relay form with the host prefilled); a new account starts fresh.
+    fn initial_flow(setup: &ProviderSetup) -> (AuthFlow, Option<PendingAccount>) {
+        let Some(instance) = &setup.instance else {
+            return (AuthFlow::login_prompt(), None);
+        };
+        let store = crate::root::account_store(instance);
+        let record = store.read_record().ok().flatten();
+        match record {
+            Some(AccountRecord {
+                kind: AccountKind::Relay,
+                identifier,
+                ..
+            }) => {
+                let mut flow = AuthFlow::subaccount_login_prompt();
+                flow.subaccount_host_url = identifier;
+                (flow, None)
+            }
+            Some(AccountRecord {
+                kind: AccountKind::Direct,
+                identifier,
+                id,
+                label,
+            }) => {
+                let mut flow = match AuthFlow::startup(&store.auth_path()) {
+                    AuthStartup::Flow(flow) => flow,
+                    AuthStartup::Authenticated => AuthFlow::login_prompt(),
+                };
+                flow.identifier = identifier;
+                (flow, Some(PendingAccount { id, label, store }))
+            }
+            None => {
+                let mut flow = AuthFlow::login_prompt();
+                flow.identifier = instance.label.clone();
+                (flow, None)
+            }
+        }
     }
 
     fn watch(
@@ -128,6 +176,9 @@ impl AuthScreen {
         let host_url = self.flow.subaccount_host_url.clone();
         self.host_url
             .update(cx, |input, cx| input.set_value(host_url, window, cx));
+        let identifier = self.flow.identifier.clone();
+        self.identifier
+            .update(cx, |input, cx| input.set_value(identifier, window, cx));
         for input in [&self.code, &self.subaccount_code] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
@@ -160,16 +211,34 @@ impl AuthScreen {
         cx.notify();
     }
 
+    /// The directory a new account's credentials go to, derived from the identity the
+    /// provider instance will carry (`provider` + `id`); the label is what users see.
+    fn account_for(&self, id: String, label: String) -> PendingAccount {
+        let instance = ProviderInstance {
+            provider: self.setup.provider.clone(),
+            id,
+            label,
+        };
+        PendingAccount {
+            store: crate::root::account_store(&instance),
+            id: instance.id,
+            label: instance.label,
+        }
+    }
+
     fn start_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.flow.can_start_login() {
             return;
         }
         let identifier = self.flow.identifier.trim().to_string();
+        let account = self.account_for(direct_instance_id(&identifier), identifier.clone());
+        let store_path = account.store.auth_path();
+        self.pending = Some(account);
         self.begin_request(cx);
         self.request = Some(spawn_service_in(
             window,
             cx,
-            async move { auth::start_login(&identifier).await },
+            async move { auth::start_login(&store_path, &identifier).await },
             |this, result, window, cx| match result {
                 Ok(start) => {
                     let mut flow =
@@ -186,31 +255,78 @@ impl AuthScreen {
         if !self.flow.can_submit_code() {
             return;
         }
+        let Some(account) = &self.pending else {
+            self.fail("Start the sign-in again.".into(), cx);
+            return;
+        };
         let code = self.flow.code.trim().to_string();
+        let store_path = account.store.auth_path();
         self.begin_request(cx);
         self.request = Some(spawn_service_in(
             window,
             cx,
-            async move { auth::verify_login(&code).await },
+            async move { auth::verify_login(&store_path, &code).await },
             |this, result, window, cx| match result {
-                Ok(_) => this.enter_dashboard(window, cx),
+                Ok(_) => this.finish_direct(window, cx),
                 Err(error) => this.fail(format!("{error:#}"), cx),
             },
         ));
     }
 
-    /// "Use a different number": forget the pending sign-in and start over.
+    fn finish_direct(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.request = None;
+        let Some(account) = self.pending.take() else {
+            return;
+        };
+        let record = AccountRecord {
+            id: account.id.clone(),
+            label: account.label.clone(),
+            kind: AccountKind::Direct,
+            identifier: self.flow.identifier.trim().to_string(),
+        };
+        if let Err(error) = account.store.save_record(&record) {
+            self.fail(format!("The sign-in could not be saved: {error:#}"), cx);
+            return;
+        }
+        self.setup.done(account.id, account.label, window, cx);
+    }
+
+    /// "Use another number": forget the pending sign-in and start over.
     fn back_to_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.flow.is_pending {
             return;
         }
-        match auth::reset_store() {
-            Ok(()) => self.set_flow(AuthFlow::login_prompt(), window, cx),
+        let reset = match self.pending.take() {
+            Some(account) => auth::reset_store(&account.store.auth_path()),
+            None => Ok(()),
+        };
+        match reset {
+            Ok(()) => {
+                let mut flow = AuthFlow::login_prompt();
+                flow.identifier = self.flow.identifier.clone();
+                self.set_flow(flow, window, cx)
+            }
             Err(error) => {
                 self.flow.error = Some(format!("Sign-in restart failed: {error:#}"));
                 cx.notify();
             }
         }
+    }
+
+    fn switch_to_subaccount(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.flow.is_pending {
+            return;
+        }
+        self.set_flow(AuthFlow::subaccount_login_prompt(), window, cx);
+    }
+
+    fn switch_to_babel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.flow.is_pending {
+            return;
+        }
+        let mut flow = AuthFlow::login_prompt();
+        flow.identifier = self.flow.identifier.clone();
+        self.set_flow(flow, window, cx);
     }
 
     fn subaccount_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -225,53 +341,64 @@ impl AuthScreen {
             cx,
             async move { subaccounts::login_with_code(&host_url, &code).await },
             |this, result, window, cx| match result {
-                Ok(session) => {
-                    let relay = ShellModels::relay(cx);
-                    let remembered = relay.update(cx, |relay, cx| {
-                        relay.remember_host_url(&session.host_url, cx)
-                    });
-                    if let Err(error) = remembered {
-                        window.push_notification(
-                            Notification::warning(format!(
-                                "Relay URL could not be remembered: {error}"
-                            )),
-                            cx,
-                        );
-                        relay.update(cx, |relay, cx| {
-                            relay.adopt_host_url(session.host_url.clone(), cx)
-                        });
-                    }
-                    this.root
-                        .update(cx, |root, cx| root.enter_relay(session, window, cx))
-                        .ok();
-                }
+                Ok(session) => this.finish_relay(session, window, cx),
                 Err(error) => this.fail(format!("{error:#}"), cx),
             },
         ));
     }
 
-    fn enter_dashboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_relay(
+        &mut self,
+        session: subaccounts::SubaccountSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.request = None;
-        self.root
-            .update(cx, |root, cx| root.show_dashboard(window, cx))
-            .ok();
+        let account = self.account_for(
+            relay_instance_id(&session.host_url, &session.subaccount_id),
+            relay_label(&session),
+        );
+        let saved =
+            subaccounts::save_session(&account.store.session_path(), &session).and_then(|()| {
+                account.store.save_record(&AccountRecord {
+                    id: account.id.clone(),
+                    label: account.label.clone(),
+                    kind: AccountKind::Relay,
+                    identifier: session.host_url.clone(),
+                })
+            });
+        if let Err(error) = saved {
+            self.fail(format!("The sign-in could not be saved: {error:#}"), cx);
+            return;
+        }
+        let relay = ShellModels::relay(cx);
+        let remembered = relay.update(cx, |relay, cx| {
+            relay.remember_host_url(&session.host_url, cx)
+        });
+        if let Err(error) = remembered {
+            window.push_notification(
+                Notification::warning(format!("Relay URL could not be remembered: {error}")),
+                cx,
+            );
+            relay.update(cx, |relay, cx| {
+                relay.adopt_host_url(session.host_url.clone(), cx)
+            });
+        }
+        self.setup.done(account.id, account.label, window, cx);
     }
 
     fn texts(&self) -> (&'static str, &'static str) {
         if self.flow.is_subaccount_mode() {
             (
-                "Sign in to a sub-account",
-                "Use the relay address and one-time code from the account owner.",
+                "Sub-account sign-in",
+                "Enter the relay address and the code from the account owner.",
             )
         } else if self.flow.is_code_step() {
-            (
-                "Check your phone",
-                "Enter the verification code Babel sent you.",
-            )
+            ("Enter the code", "Babel sent a code to your phone.")
         } else {
             (
-                "Welcome back",
-                "Sign in with the phone number or e-mail of your Babel account.",
+                "Sign in to Babel",
+                "Use the phone number or e-mail of your Babel account.",
             )
         }
     }
@@ -288,17 +415,11 @@ impl AuthScreen {
                     self.actions(
                         Button::new("use-babel")
                             .ghost()
-                            .label("Use Babel account")
+                            .label("Use a Babel account instead")
                             .disabled(pending)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if !this.flow.is_pending {
-                                    this.root
-                                        .update(cx, |root, cx| {
-                                            root.enter_mode(BabelMode::Direct, window, cx)
-                                        })
-                                        .ok();
-                                }
-                            })),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.switch_to_babel(window, cx)),
+                            ),
                         "Sign in",
                         self.flow.can_submit_subaccount_login(),
                         cx,
@@ -309,12 +430,12 @@ impl AuthScreen {
                 self.actions(
                     Button::new("back-to-login")
                         .ghost()
-                        .label("Use a different number")
+                        .label("Use another number")
                         .disabled(pending)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.back_to_login(window, cx)),
                         ),
-                    "Verify",
+                    "Sign in",
                     self.flow.can_submit_code(),
                     cx,
                 ),
@@ -324,17 +445,13 @@ impl AuthScreen {
                 self.actions(
                     Button::new("use-subaccount")
                         .ghost()
-                        .label("Use sub-account code")
+                        .label("I have a sub-account code")
                         .disabled(pending)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if !this.flow.is_pending {
-                                this.root
-                                    .update(cx, |root, cx| {
-                                        root.enter_mode(BabelMode::Relay, window, cx)
-                                    })
-                                    .ok();
-                            }
-                        })),
+                        .on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.switch_to_subaccount(window, cx)
+                            }),
+                        ),
                     "Continue",
                     self.flow.can_start_login(),
                     cx,
@@ -367,46 +484,48 @@ impl Render for AuthScreen {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let danger = theme.danger;
-        let card =
-            v_flex()
-                .w_full()
-                .max_w(rems(26.25))
-                .gap_5()
-                .p_8()
-                .rounded(theme.radius_lg)
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.background)
-                .shadow_lg()
-                .child(brand(cx))
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_2xl()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(heading),
-                        )
-                        .child(div().text_sm().text_color(muted).child(subtitle)),
-                )
-                .child(self.render_form(cx))
-                .when_some(self.flow.error.clone(), |this, error| {
-                    this.child(div().text_sm().text_color(danger).child(error))
-                })
-                .when(self.flow.is_pending, |this| {
-                    this.child(
-                        h_flex()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(Spinner::new().small())
-                            .child("Signing you in…"),
+        let card = v_flex()
+            .w_full()
+            .max_w(rems(26.25))
+            .gap_5()
+            .p_8()
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .shadow_lg()
+            .child(brand(cx))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(heading),
                     )
-                })
-                .child(div().text_xs().text_color(muted).child(
-                    "Your credentials stay on this device and are only used to talk to Babel.",
-                ));
+                    .child(div().text_sm().text_color(muted).child(subtitle)),
+            )
+            .child(self.render_form(cx))
+            .when_some(self.flow.error.clone(), |this, error| {
+                this.child(div().text_sm().text_color(danger).child(error))
+            })
+            .when(self.flow.is_pending, |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(Spinner::new().small())
+                        .child("Signing in…"),
+                )
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("Your sign-in stays on this device."),
+            );
         div()
             .id("auth-screen")
             .size_full()
@@ -446,13 +565,13 @@ pub fn brand(cx: &App) -> Div {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Sonus"),
+                    .child("Exaudio"),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Babel workspace"),
+                    .child("Babel"),
             ),
     )
 }

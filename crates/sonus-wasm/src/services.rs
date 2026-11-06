@@ -44,6 +44,15 @@ pub enum Output {
     ModeDocument(ModeDocument),
     Import(ImportResult),
     Export(ExportResult),
+    /// The guest finished the sign-in requested by `provider-setup{request-id}`.
+    ProviderSetupDone(ProviderSetupResult),
+    ProviderSetupCancelled {
+        provider: String,
+        request_id: u64,
+    },
+    /// Answer to a `provider-status` event. The owner may deliver it to a waiting
+    /// requester synchronously; it is never queued behind editor outputs.
+    ProviderStatus(ProviderStatus),
     /// Removes ALL contributions, diagnostics, UI and queued work owned by the ID.
     Removed,
 }
@@ -94,6 +103,38 @@ pub trait HostServices: Send + Sync + 'static {
         key: &str,
         max_bytes: usize,
     ) -> Result<Option<String>, String>;
+    /// Per-instance namespaces for provider types. The runtime has already verified that
+    /// the instance's provider is declared by this extension and that the matching grant
+    /// exists; implementations isolate storage per (extension, provider, instance).
+    fn instance_secret_get(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        max_bytes: usize,
+    ) -> Result<Option<String>, String>;
+    /// `None` removes the secret.
+    fn instance_secret_set(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), String>;
+    fn instance_storage_get(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, String>;
+    fn instance_storage_set(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), String>;
     fn selection_get(&self, cx: &CallContext<'_>, document_id: &str) -> Result<Selection, String>;
     /// Atomically validate revision and UTF-8 ranges before changing selection.
     fn selection_set(&self, cx: &CallContext<'_>, value: Selection) -> Result<(), String>;

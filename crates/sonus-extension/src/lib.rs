@@ -9,6 +9,7 @@ pub mod manifest;
 pub mod resolve;
 
 pub use manifest::{
-    API_VERSION, ExtensionManifest, ManifestError, ModeManifest, Permission, Runtime,
+    API_VERSION, ExtensionManifest, ManifestError, ModeLaunch, ModeManifest, Permission,
+    ProviderManifest, Runtime,
 };
 pub use resolve::{ActivationPlan, ResolveError, resolve_mode};

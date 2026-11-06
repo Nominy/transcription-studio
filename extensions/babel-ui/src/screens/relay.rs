@@ -167,8 +167,14 @@ impl RelayModel {
     }
 
     /// Owners push the dashboard's project queue ids to their relay so sub-accounts can claim
-    /// from them; called only by the direct Babel owner's dashboard.
-    pub fn sync_project_queues(&mut self, projects: &[DashboardProject], cx: &mut Context<Self>) {
+    /// from them; called only by a direct Babel account's dashboard with that account's
+    /// `auth.json`.
+    pub fn sync_project_queues(
+        &mut self,
+        projects: &[DashboardProject],
+        auth_store: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
         let configs: Vec<owner::ProjectQueueConfig> = projects
             .iter()
             .map(|project| owner::ProjectQueueConfig {
@@ -182,7 +188,7 @@ impl RelayModel {
         };
         self.sync_task = Some(sonus_shell::services::spawn_service(
             cx,
-            async move { owner::push_project_queue_configs(&host_url, &configs).await },
+            async move { owner::push_project_queue_configs(&auth_store, &host_url, &configs).await },
             |this, result, cx| {
                 this.sync_task = None;
                 if let Err(error) = result {

@@ -140,6 +140,8 @@ fn plan_selection(
             name: "Install".into(),
             requires: BTreeMap::new(),
             recommends: BTreeMap::new(),
+            provider: None,
+            launch: Default::default(),
         });
         synthetic_mode
     };

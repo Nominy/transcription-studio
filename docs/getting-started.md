@@ -12,13 +12,13 @@ Windows 10/11 x64 is the primary target. Packages are unsigned: SmartScreen may 
 
 Alpha is experimental and uses a separate feed. Do not use an alpha build as your only copy of a project. See [release channels](releasing.md) for alpha and manual macOS packages.
 
-### 2. Open audio in Local
+### 2. Open audio from Start
 
-Choose **Local**, then **Open audio**. Select one or more recordings; each file becomes an audio lane. WAV, MP3 and FLAC are good starting points. The local picker also supports OGG, M4A, MP4, WebM and Matroska containers; successful decoding depends on the audio codec inside the file. A video container is an audio source here, not a video-editing workspace.
+Start lists one tile per installed mode. Choose **Local**, then **Open audio…**. Select one or more recordings; each file becomes an audio lane. WAV, MP3 and FLAC are good starting points. The local picker also supports OGG, M4A, MP4, WebM and MKV containers; successful decoding depends on the audio codec inside the file. A video container is an audio source here, not a video-editing workspace.
 
-Use **Open project** to continue a previously saved native project. Keep its original audio available. No Babel account, relay or AI configuration is needed for Local.
+Use **Open project…** to continue a previously saved native project, **Recent** to reopen one you worked on before, or **Unsaved work › Restore** to pick up a recovery snapshot. Keep the project's original audio available. No account or AI configuration is needed for Local.
 
-Babel and Relay are optional service modes supplied by Sonus extensions. Use Babel only with authorized service access; for Relay, obtain connection/access information from your operator. The integration is developed by the Sonus author, not an official Babel product. A mode's required extensions must remain enabled while that mode is open.
+Platform modes such as **Babel** and **Babel error review** are optional tiles supplied by Sonus add-ons. The first time you open one, Sonus asks you to sign in (direct account or relay access from your operator); afterwards the tile opens straight into the mode. Accounts are managed under **Settings › Advanced › Accounts** (sign out, add another account). The integration is developed by the Sonus author, not an official Babel product. A mode's required add-ons must remain enabled while that mode is open.
 
 ### 3. Listen and edit
 
@@ -53,7 +53,7 @@ unchanged. Plain text replaces the selected segment's text and keeps its timing.
 
 - **No sound:** check the selected output device, system volume, playback state and whether the source audio is still available.
 - **No AI result:** confirm that the extension and backend are configured, installation has finished, and the device test succeeds. A model download is not part of the ordinary application installer.
-- **A mode is unavailable:** check its required extensions and service access. Local does not require platform authentication.
+- **A mode is unavailable:** check its required add-ons and service access. Local does not require signing in. If a platform tile keeps asking you to sign in, open **Settings › Advanced › Accounts** and sign out of the stale account first.
 - **Need help:** open an [issue](https://github.com/Nominy/sonus/issues) with the app/Windows version, mode, active extensions, reproduction steps and exact error. Attach only a synthetic, non-sensitive example; redact keys, account identifiers and private task content.
 
 ## Русский
@@ -66,13 +66,13 @@ unchanged. Plain text replaces the selected segment's text and keeps its timing.
 
 Alpha — экспериментальный отдельный канал. Не храните единственную копию проекта только в альфа-сборке. Сведения об alpha и ручных пакетах macOS — в [описании каналов](releasing.md).
 
-### 2. Открытие аудио в Local
+### 2. Открытие аудио с экрана «Начало»
 
-Выберите **Local → Открыть аудио** и один или несколько файлов. Каждый файл станет аудиодорожкой. Начните с WAV, MP3 или FLAC. Также поддерживаются контейнеры OGG, M4A, MP4, WebM и Matroska; возможность декодирования зависит от аудиокодека внутри файла. Видеоконтейнер здесь — источник звука, а не видеоредактор.
+На экране «Начало» — по плитке на каждый установленный режим. Выберите **Local → Открыть аудио…** и один или несколько файлов. Каждый файл станет аудиодорожкой. Начните с WAV, MP3 или FLAC. Также поддерживаются контейнеры OGG, M4A, MP4, WebM и MKV; возможность декодирования зависит от аудиокодека внутри файла. Видеоконтейнер здесь — источник звука, а не видеоредактор.
 
-Кнопка **Открыть проект** продолжает работу с сохранённым родным проектом. Сохраняйте доступ к исходному аудио. Для Local не нужны Babel, relay или настройка ИИ.
+Кнопка **Открыть проект…** продолжает работу с сохранённым родным проектом, список **Недавние** открывает прежние проекты, а **Несохранённая работа › Восстановить** возвращает снимок восстановления. Сохраняйте доступ к исходному аудио. Для Local не нужны аккаунт и настройка ИИ.
 
-Babel и Relay — необязательные режимы, предоставляемые расширениями Sonus. Для Babel нужен разрешённый доступ к сервису, для Relay — параметры подключения и доступ от вашего оператора. Интеграция — собственная разработка автора Sonus, а не официальный продукт Babel. Пока режим открыт, требуемые ему расширения должны оставаться включёнными.
+Платформенные режимы **Babel** и **Babel error review** — необязательные плитки, которые добавляют дополнения Sonus. При первом открытии Sonus попросит войти (прямой аккаунт или доступ через relay от вашего оператора); дальше плитка открывает режим сразу. Аккаунты находятся в **Настройки › Дополнительно › Аккаунты** (выход, добавление ещё одного аккаунта). Интеграция — собственная разработка автора Sonus, а не официальный продукт Babel. Пока режим открыт, требуемые ему дополнения должны оставаться включёнными.
 
 ### 3. Прослушивание и правки
 
@@ -107,5 +107,5 @@ Babel и Relay — необязательные режимы, предостав
 
 - **Нет звука:** проверьте аудиовыход, системную громкость, состояние воспроизведения и доступность исходной записи.
 - **Нет результата ИИ:** проверьте расширение, бэкенд, завершение установки и тест устройства. Модели не входят в обычный установщик приложения.
-- **Недоступен режим:** проверьте необходимые расширения и доступ к сервису. Local не требует входа на платформу.
+- **Недоступен режим:** проверьте необходимые дополнения и доступ к сервису. Local не требует входа. Если плитка платформы снова и снова просит войти, сначала выйдите из устаревшего аккаунта в **Настройки › Дополнительно › Аккаунты**.
 - **Нужна помощь:** создайте [issue](https://github.com/Nominy/sonus/issues) с версиями приложения/Windows, режимом, расширениями, шагами и точной ошибкой. Прикладывайте только синтетические примеры без чувствительных данных; удаляйте ключи, идентификаторы аккаунтов и приватное содержимое заданий.

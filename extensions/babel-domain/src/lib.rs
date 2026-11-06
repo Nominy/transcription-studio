@@ -49,7 +49,7 @@ pub fn document_environment(
     anyhow::ensure!(
         matches!(
             mode_id,
-            "sonus.babel" | "sonus.babel-relay" | "sonus.babel-file"
+            "sonus.babel" | "sonus.babel.errors" | "sonus.babel-file"
         ),
         "Unknown Babel mode `{mode_id}`"
     );

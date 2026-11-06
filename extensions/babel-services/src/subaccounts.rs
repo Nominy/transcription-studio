@@ -1,8 +1,9 @@
 //! Sub-accounts: code-login sessions routed through a `studio-relay` host, the remembered relay
 //! URL, Babel-request relaying for active sessions, and owner management APIs ([`owner`]).
+//! A session lives in its account directory (`subaccount.json`, see [`crate::account`]).
 //!
-//! Env: `STUDIO_SUBACCOUNT_SESSION_STORE` (session file), `STUDIO_SUBACCOUNT_RELAY_SETTINGS`
-//! (remembered relay URL file), `STUDIO_SUBACCOUNT_RELAY_URL` (relay URL override).
+//! Env: `STUDIO_SUBACCOUNT_RELAY_SETTINGS` (remembered relay URL file),
+//! `STUDIO_SUBACCOUNT_RELAY_URL` (relay URL override).
 
 pub mod owner;
 
@@ -16,18 +17,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
-pub const SUBACCOUNT_SESSION_STORE_ENV: &str = "STUDIO_SUBACCOUNT_SESSION_STORE";
 pub const SUBACCOUNT_RELAY_SETTINGS_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_SETTINGS";
 pub const SUBACCOUNT_RELAY_URL_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_URL";
 
 const APP_SUPPORT_DIR_NAME: &str = "Transcription Studio";
-const SESSION_FILE_NAME: &str = "subaccount-session.json";
+/// File name of a relay session inside an account directory.
+pub const SESSION_FILE_NAME: &str = "subaccount.json";
 const RELAY_SETTINGS_FILE_NAME: &str = "subaccount-relay-settings.json";
 const LOGIN_PATH: &str = "/api/subaccounts/login";
 const BABEL_SERVICE_PATH: &str = "/api/subaccounts/babel-service";
 const AUDIO_PRESIGN_PATH: &str = "/api/subaccounts/audio/presigned-urls";
 
-/// Persisted login, explicitly supplied to the relay mode's client when that mode is opened.
+/// Persisted login, explicitly supplied to a client when its account is opened.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SubaccountSession {
     /// Normalized relay host URL (no trailing `/`).
@@ -48,13 +49,9 @@ impl std::fmt::Debug for SubaccountSession {
     }
 }
 
-pub fn session_store_path() -> PathBuf {
-    env::var_os(SUBACCOUNT_SESSION_STORE_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            studio_services::paths::app_support_dir_named(APP_SUPPORT_DIR_NAME)
-                .join(SESSION_FILE_NAME)
-        })
+/// `<account dir>/subaccount.json`.
+pub fn session_store_path(account_dir: &Path) -> PathBuf {
+    account_dir.join(SESSION_FILE_NAME)
 }
 
 pub fn relay_settings_path() -> PathBuf {
@@ -72,15 +69,6 @@ pub fn read_session(path: &Path) -> Result<Option<SubaccountSession>> {
         return Ok(None);
     };
     parse_session(&source).map(Some)
-}
-
-pub fn read_default_session() -> Result<Option<SubaccountSession>> {
-    read_session(&session_store_path())
-}
-
-/// A readable sub-account session exists in the default store.
-pub fn session_is_active() -> bool {
-    read_default_session().ok().flatten().is_some()
 }
 
 /// Accepts `hostUrl|host_url|host`, `token|accessToken|sessionToken`,
@@ -119,10 +107,9 @@ pub fn save_session(path: &Path, session: &SubaccountSession) -> Result<()> {
     )
 }
 
-/// Sign out of the sub-account (removes the default session store).
-pub fn clear_default_session() -> Result<()> {
-    let path = session_store_path();
-    match fs::remove_file(&path) {
+/// Deletes a session file; a missing file is not an error.
+pub fn delete_session(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| {
@@ -204,7 +191,7 @@ pub fn normalize_relay_host_url(input: &str) -> Result<String> {
     Ok(parsed.as_str().trim_end_matches('/').to_string())
 }
 
-/// Logs in with a one-time sub-account code and saves the session to the default store.
+/// Logs in with a one-time sub-account code. The caller persists the session.
 pub async fn login_with_code(host_url: &str, code: &str) -> Result<SubaccountSession> {
     let host_url = normalize_relay_host_url(host_url)?;
     let code = code.trim();
@@ -219,9 +206,7 @@ pub async fn login_with_code(host_url: &str, code: &str) -> Result<SubaccountSes
         .await
         .context("Sub-account login request failed")?;
     let body = success_body(response, "Sub-account login").await?;
-    let session = parse_login_response(&host_url, &body)?;
-    save_session(&session_store_path(), &session)?;
-    Ok(session)
+    parse_login_response(&host_url, &body)
 }
 
 /// Session from a login response (`session`/`subaccount`/`data` wrapper or flat).

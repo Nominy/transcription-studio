@@ -43,11 +43,6 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             sonus_babel_ui::register,
             cx,
         )?;
-        sonus_shell::contributions::register_native_extension(
-            sonus_babel_ui::relay_manifest()?,
-            sonus_babel_ui::register_relay,
-            cx,
-        )?;
     }
     #[cfg(feature = "local")]
     sonus_shell::contributions::register_native_extension(
@@ -87,9 +82,9 @@ fn register_babel_checks(cx: &mut App) -> anyhow::Result<()> {
             sonus_babel_lint::ID,
             "sonus.babel-lint.checks",
             vec![
-                "sonus.babel".into(),
-                "sonus.babel-relay".into(),
-                "sonus.babel-file".into(),
+                sonus_babel_ui::ID.into(),
+                sonus_babel_ui::ERRORS_ID.into(),
+                sonus_babel_ui::FILE_ID.into(),
             ],
             providers,
         )
@@ -105,9 +100,9 @@ fn register_babel_tags(cx: &mut App) -> anyhow::Result<()> {
             sonus_babel_tags::ID,
             "sonus.babel-tags.editing",
             vec![
-                "sonus.babel".into(),
-                "sonus.babel-relay".into(),
-                "sonus.babel-file".into(),
+                sonus_babel_ui::ID.into(),
+                sonus_babel_ui::ERRORS_ID.into(),
+                sonus_babel_ui::FILE_ID.into(),
             ],
             providers,
         )

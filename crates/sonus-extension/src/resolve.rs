@@ -20,6 +20,8 @@ pub enum ResolveError {
     UnknownMode(String),
     #[error("duplicate extension release `{0}`")]
     DuplicateRelease(String),
+    #[error("mode `{mode}` needs provider `{provider}`, which no required extension declares")]
+    UnknownProvider { mode: String, provider: String },
 }
 
 /// A dependency-first plan. Shared dependencies occur once. Recommendations are excluded;
@@ -29,6 +31,8 @@ pub struct ActivationPlan<'a> {
     pub extensions: Vec<&'a ExtensionManifest>,
     /// Direct dependents, including the root mode, for required-by UI and disable guards.
     pub required_by: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    /// Extension declaring the mode's provider type, when the mode has one.
+    pub provider_owner: Option<&'a str>,
 }
 
 /// Resolves an installed or bundled mode together with its hard requirements. The root
@@ -107,9 +111,23 @@ pub fn resolve_mode<'a>(
         required_by.entry(dependency).or_default().insert(mode_id);
     }
     required_by.entry(&owner.id).or_default().insert(mode_id);
+    let provider_owner = match &mode.provider {
+        None => None,
+        Some(provider) => Some(
+            ordered
+                .iter()
+                .find(|extension| extension.providers.iter().any(|p| &p.id == provider))
+                .map(|extension| extension.id.as_str())
+                .ok_or_else(|| ResolveError::UnknownProvider {
+                    mode: mode_id.to_owned(),
+                    provider: provider.clone(),
+                })?,
+        ),
+    };
     Ok(ActivationPlan {
         extensions: ordered,
         required_by,
+        provider_owner,
     })
 }
 

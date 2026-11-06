@@ -56,8 +56,7 @@ function Start-Studio($home_) {
     if (Test-Path $home_) { Remove-Item -Recurse -Force $home_ }
     New-Item -ItemType Directory -Force -Path $home_ | Out-Null
     $env:APPDATA = $home_ -replace '/', '\'
-    $env:STUDIO_BABEL_AUTH_STORE = "$home_/babel-auth.json"
-    $env:STUDIO_SUBACCOUNT_SESSION_STORE = "$home_/sub.json"
+    $env:STUDIO_PROVIDER_DIR = "$home_/providers"
     $env:STUDIO_SUBACCOUNT_RELAY_SETTINGS = "$home_/relay.json"
     $env:STUDIO_BABEL_SERVICE_BASE_URL = 'http://127.0.0.1:9'
     $env:STUDIO_BABEL_CLERK_URL = 'http://127.0.0.1:9'

@@ -1,42 +1,164 @@
+//! One `BabelController` per (mode, account): it owns the account's client and keeps the
+//! dashboard alive while the shell shows an editor. Credentials live in the account's
+//! directory (see `sonus_babel_services::account`); the shell decides which account a mode
+//! launches with.
 use std::{collections::BTreeMap, path::PathBuf, rc::Rc};
 
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt as _};
 use gpui_kit::*;
 use sonus_babel_domain::route::StartupRoute;
-use sonus_babel_services::auth::flow::{AuthFlow, AuthStartup};
-use sonus_babel_services::babel::{BabelClient, BabelConfig, LoadedTask};
-use sonus_babel_services::subaccounts::{self, SubaccountSession};
+use sonus_babel_services::account::{AccountStatus, AccountStore};
+use sonus_babel_services::babel::{BabelClient, LoadedTask};
 use sonus_shell::editor::model::EditorModel;
-use sonus_shell::{DocumentOrigin, ProviderEnvironment, ShellHandle};
+use sonus_shell::{
+    DocumentOrigin, ModeLaunchContext, ProviderEnvironment, ProviderInstance, ProviderRegistry,
+    ProviderStatus, ShellHandle,
+};
 use studio_editor::workflow::StudioWorkflow;
 
 use crate::screens::error_task::{ErrorTaskEvent, ErrorTaskOpen, ErrorTaskScreen};
 use crate::screens::relay::RelayEvent;
-use crate::screens::{ShellModels, auth::AuthScreen, dashboard::DashboardScreen};
+use crate::screens::{ShellModels, dashboard::DashboardScreen};
 use crate::services::{BabelServices, set_document_client};
+use crate::{ERRORS_ID, ID, PROVIDER_ID};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BabelMode {
-    Direct,
-    Relay,
+/// Which projects a mode's dashboard lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardFilter {
+    /// Transcription projects (everything that is not error categorization).
+    Transcription,
+    /// Error-categorization projects only; tasks open the error review screen.
+    ErrorReview,
 }
 
-impl BabelMode {
-    pub fn id(self) -> &'static str {
+impl DashboardFilter {
+    pub fn for_mode(mode_id: &str) -> Self {
+        if mode_id == ERRORS_ID {
+            Self::ErrorReview
+        } else {
+            Self::Transcription
+        }
+    }
+
+    pub fn accepts(self, project: &sonus_babel_services::babel::DashboardProject) -> bool {
         match self {
-            Self::Direct => "sonus.babel",
-            Self::Relay => "sonus.babel-relay",
+            Self::Transcription => !project.is_error_categorization(),
+            Self::ErrorReview => project.is_error_categorization(),
         }
     }
 }
 
+/// Controllers keyed by `(mode id, account instance id)`.
 #[derive(Default)]
-struct Controllers(BTreeMap<BabelMode, Entity<BabelController>>);
+struct Controllers(BTreeMap<(String, String), Entity<BabelController>>);
 impl Global for Controllers {}
 
-pub fn controller(mode: BabelMode, cx: &App) -> Option<Entity<BabelController>> {
-    cx.try_global::<Controllers>()?.0.get(&mode).cloned()
+pub fn controller(mode_id: &str, instance_id: &str, cx: &App) -> Option<Entity<BabelController>> {
+    cx.try_global::<Controllers>()?
+        .0
+        .get(&(mode_id.to_string(), instance_id.to_string()))
+        .cloned()
+}
+
+/// Any live controller of `mode_id` (relay-host notifications and project-queue sync only
+/// need one direct-account dashboard).
+pub fn controller_for_mode(mode_id: &str, cx: &App) -> Option<Entity<BabelController>> {
+    cx.try_global::<Controllers>()?
+        .0
+        .iter()
+        .find(|((mode, _), _)| mode == mode_id)
+        .map(|(_, controller)| controller.clone())
+}
+
+/// The account directory of a provider instance.
+pub fn account_store(instance: &ProviderInstance) -> AccountStore {
+    AccountStore::new(sonus_shell::providers::instance_dir(instance))
+}
+
+/// Provider status: credentials present and usable.
+pub fn account_status(instance: &ProviderInstance) -> ProviderStatus {
+    match account_store(instance).current_status() {
+        AccountStatus::Ready { .. } => ProviderStatus::Ready {
+            detail: instance.label.clone(),
+        },
+        AccountStatus::NeedsSignIn => ProviderStatus::NeedsSignIn,
+    }
+}
+
+/// Provider sign-out: drop every controller using the account and delete its credentials.
+/// The shell removes the instance record and its directory afterwards.
+pub fn sign_out_instance(instance: &ProviderInstance, cx: &mut App) {
+    if cx.has_global::<Controllers>() {
+        let dropped: Vec<_> = {
+            let controllers = &mut cx.global_mut::<Controllers>().0;
+            let keys: Vec<_> = controllers
+                .keys()
+                .filter(|(_, id)| *id == instance.id)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| controllers.remove(&key))
+                .collect()
+        };
+        for controller in dropped {
+            controller.update(cx, |controller, cx| controller.shutdown_requests(cx));
+        }
+    }
+    // The shell deletes the whole account directory next; a failure here is not fatal.
+    let _ = account_store(instance).clear_credentials();
+}
+
+/// Registers instances whose directories exist under the providers root but which the
+/// registry does not know (a portable install moved to another machine). Never changes
+/// the selection of accounts the registry already has.
+pub fn rediscover_accounts(cx: &mut App) {
+    let provider_dir = sonus_shell::providers::providers_root().join(PROVIDER_ID);
+    let records = sonus_babel_services::account::discover_records(&provider_dir);
+    if records.is_empty() {
+        return;
+    }
+    let selected = cx.global::<ProviderRegistry>().selected(PROVIDER_ID);
+    for record in records {
+        if cx
+            .global::<ProviderRegistry>()
+            .instance(PROVIDER_ID, &record.id)
+            .is_some()
+        {
+            continue;
+        }
+        cx.update_global::<ProviderRegistry, _>(|registry, cx| {
+            registry.upsert(
+                ProviderInstance {
+                    provider: PROVIDER_ID.into(),
+                    id: record.id,
+                    label: record.label,
+                },
+                cx,
+            );
+        });
+    }
+    if let Some(selected) = selected {
+        cx.update_global::<ProviderRegistry, _>(|registry, cx| registry.select(&selected, cx));
+    }
+}
+
+/// Removes the account (credentials, record, directory) and goes back to Start.
+pub fn sign_out(instance: ProviderInstance, shell: ShellHandle, window: &mut Window, cx: &mut App) {
+    cx.update_global::<ProviderRegistry, _>(|registry, cx| registry.remove(&instance, cx));
+    shell.show_home(window, cx);
+}
+
+/// Removes the account and reopens the mode, which runs the sign-in step again.
+pub fn sign_in_again(
+    mode_id: String,
+    instance: ProviderInstance,
+    shell: ShellHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    cx.update_global::<ProviderRegistry, _>(|registry, cx| registry.remove(&instance, cx));
+    shell.show_mode(&mode_id, window, cx);
 }
 
 /// Reloads a remote task using the client captured when this document was opened.
@@ -44,10 +166,9 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
     use sonus_babel_services::babel::{
         OpenedTask, TaskRequest, review_action_id, route_metadata_from_project,
     };
-    let mode = match model.read(cx).origin().mode_id.as_str() {
-        "sonus.babel" => BabelMode::Direct,
-        "sonus.babel-relay" => BabelMode::Relay,
-        _ => return,
+    let origin = model.read(cx).origin().clone();
+    let Some(instance) = origin.instance.as_ref() else {
+        return;
     };
     let project = model.read(cx).doc().project();
     let review_action_id = review_action_id(project);
@@ -59,7 +180,7 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
         );
         return;
     }
-    let Some(controller) = controller(mode, cx) else {
+    let Some(controller) = controller(&origin.mode_id, &instance.id, cx) else {
         window.push_notification(
             Notification::error("The task's Babel workspace is no longer active."),
             cx,
@@ -78,7 +199,6 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
                 controller.reload = None;
                 match result {
                     Ok(OpenedTask::Transcript(task)) => {
-                        controller.client = Some(client);
                         controller.open_loaded_task(
                             *task,
                             "Task reloaded.",
@@ -103,52 +223,77 @@ pub fn reload_task(model: &Entity<EditorModel>, window: &mut Window, cx: &mut Ap
     });
 }
 
-/// Mode homes keep their dashboard alive while the shell displays an editor.
-pub fn build_home(
+/// Mode launch: the dashboard of `(mode, account)`, kept alive across editor sessions.
+/// `None` when the account has no usable credentials (the shell re-runs sign-in next time).
+pub fn launch(
     shell: ShellHandle,
-    mode: BabelMode,
+    context: ModeLaunchContext,
     window: &mut Window,
     cx: &mut App,
-) -> AnyView {
+) -> Option<AnyView> {
+    let Some(instance) = context.instance else {
+        window.push_notification(
+            Notification::error("Sign in to a Babel account to open this workspace."),
+            cx,
+        );
+        return None;
+    };
     if !cx.has_global::<Controllers>() {
         cx.set_global(Controllers::default());
     }
-    if let Some(controller) = cx.global::<Controllers>().0.get(&mode).cloned() {
+    let key = (context.mode_id.clone(), instance.id.clone());
+    if let Some(controller) = cx.global::<Controllers>().0.get(&key).cloned() {
         let home = controller.clone();
         window.defer(cx, move |window, cx| {
             home.update(cx, |controller, cx| controller.restore_home(window, cx));
         });
-        return controller.into();
+        return Some(controller.into());
     }
-    let controller = cx.new(|cx| BabelController::new(shell, mode, window, cx));
+    let client = match account_store(&instance).client() {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            window.push_notification(
+                Notification::error(format!(
+                    "{} is signed out. Open the workspace again to sign in.",
+                    instance.label
+                )),
+                cx,
+            );
+            return None;
+        }
+        Err(error) => {
+            window.push_notification(
+                Notification::error(format!("The saved Babel sign-in is unreadable: {error:#}")),
+                cx,
+            );
+            return None;
+        }
+    };
+    let controller =
+        cx.new(|cx| BabelController::new(shell, context.mode_id, instance, client, window, cx));
     cx.global_mut::<Controllers>()
         .0
-        .insert(mode, controller.clone());
+        .insert(key, controller.clone());
     let weak = controller.downgrade();
     window.defer(cx, move |window, cx| {
-        weak.update(cx, |controller, cx| controller.open_auth_gate(window, cx))
+        weak.update(cx, |controller, cx| controller.show_dashboard(window, cx))
             .ok();
     });
-    controller.into()
+    Some(controller.into())
 }
 
-pub fn shutdown_mode(mode: BabelMode, cx: &mut App) {
-    if !cx.has_global::<Controllers>() {
-        return;
-    }
-    let controller = cx.global_mut::<Controllers>().0.remove(&mode);
-    if let Some(controller) = controller {
-        controller.update(cx, |controller, cx| controller.shutdown_requests(cx));
-    }
-}
-
-pub fn shutdown(cx: &mut App) {
+/// Drops every controller (their clients point at account directories that may have moved).
+pub fn reset_controllers(cx: &mut App) {
     if cx.has_global::<Controllers>() {
         let controllers = std::mem::take(&mut cx.global_mut::<Controllers>().0);
         for controller in controllers.into_values() {
             controller.update(cx, |controller, cx| controller.shutdown_requests(cx));
         }
     }
+}
+
+pub fn shutdown(cx: &mut App) {
+    reset_controllers(cx);
     if cx.has_global::<ShellModels>() {
         ShellModels::relay(cx).update(cx, |relay, _| relay.shutdown());
     }
@@ -156,10 +301,10 @@ pub fn shutdown(cx: &mut App) {
 
 pub struct BabelController {
     shell: ShellHandle,
-    mode: BabelMode,
-    client: Option<BabelClient>,
-    view: AnyView,
-    auth: Option<Entity<AuthScreen>>,
+    mode_id: String,
+    instance: ProviderInstance,
+    client: BabelClient,
+    view: Option<AnyView>,
     dashboard: Option<Entity<DashboardScreen>>,
     route: Option<StartupRoute>,
     error_task: Option<Entity<ErrorTaskScreen>>,
@@ -172,174 +317,93 @@ pub struct BabelController {
 impl BabelController {
     pub fn new(
         shell: ShellHandle,
-        mode: BabelMode,
+        mode_id: String,
+        instance: ProviderInstance,
+        client: BabelClient,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let relay = ShellModels::relay(cx);
-        let relay_events = cx.subscribe_in(&relay, window, |this, _, event, window, cx| {
-            if this.mode != BabelMode::Direct {
-                return;
-            }
-            window.push_notification(
-                match event {
-                    RelayEvent::Info(message) => Notification::info(message.clone()),
-                    RelayEvent::Error(message) => Notification::error(message.clone()),
-                },
-                cx,
-            );
+        // Relay-host notices are shown once, by the owner's main Babel dashboard.
+        let shows_relay_events = mode_id == ID && client.config().relay_session.is_none();
+        let relay_events = shows_relay_events.then(|| {
+            let relay = ShellModels::relay(cx);
+            cx.subscribe_in(&relay, window, |_, _, event, window, cx| {
+                window.push_notification(
+                    match event {
+                        RelayEvent::Info(message) => Notification::info(message.clone()),
+                        RelayEvent::Error(message) => Notification::error(message.clone()),
+                    },
+                    cx,
+                );
+            })
         });
-        let root = cx.entity().downgrade();
-        let flow = match mode {
-            BabelMode::Direct => AuthFlow::login_prompt(),
-            BabelMode::Relay => AuthFlow::subaccount_login_prompt(),
-        };
-        let auth = cx.new(|cx| AuthScreen::new(root, flow, window, cx));
-        let view = auth.clone().into();
         Self {
             shell,
-            mode,
-            client: None,
-            view,
+            mode_id,
+            instance,
+            client,
+            view: None,
             dashboard: None,
             route: None,
-            auth: Some(auth),
             error_task: None,
             error_events: None,
             audio_guard: None,
             reload: None,
-            relay_events: Some(relay_events),
+            relay_events,
         }
     }
 
     fn shutdown_requests(&mut self, cx: &mut Context<Self>) {
         self.leave_task(cx);
         self.relay_events = None;
-        if let Some(auth) = &self.auth {
-            auth.update(cx, |auth, cx| {
-                auth.cancel_request();
-                cx.notify();
-            });
-        }
         if let Some(dashboard) = &self.dashboard {
             dashboard.update(cx, |dashboard, cx| dashboard.cancel_requests(cx));
         }
-        self.client = None;
     }
 
     pub fn set_route(&mut self, route: StartupRoute) {
         self.route = (!route.is_empty()).then_some(route);
     }
 
-    /// Only the explicitly selected Relay mode reads a saved relay session.
-    pub fn open_auth_gate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.mode {
-            BabelMode::Direct => {
-                self.client = Some(BabelClient::direct(BabelConfig::from_env()));
-                match AuthFlow::startup() {
-                    AuthStartup::Authenticated => self.show_dashboard(window, cx),
-                    AuthStartup::Flow(flow) => self.show_auth(flow, window, cx),
-                }
-            }
-            BabelMode::Relay => match subaccounts::read_default_session() {
-                Ok(Some(session)) => self.enter_relay(session, window, cx),
-                result => {
-                    if let Err(error) = result {
-                        window.push_notification(
-                            Notification::warning(format!(
-                                "Sub-account session ignored: {error:#}"
-                            )),
-                            cx,
-                        );
-                    }
-                    self.show_auth(AuthFlow::subaccount_login_prompt(), window, cx);
-                }
-            },
-        }
+    pub fn mode_id(&self) -> &str {
+        &self.mode_id
     }
 
-    pub fn enter_mode(&mut self, mode: BabelMode, window: &mut Window, cx: &mut Context<Self>) {
-        self.shell.show_mode(mode.id(), window, cx);
+    pub fn instance(&self) -> &ProviderInstance {
+        &self.instance
     }
 
-    pub fn enter_relay(
-        &mut self,
-        session: SubaccountSession,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.client = Some(BabelClient::relay(session));
-        self.dashboard = None;
-        self.show_dashboard(window, cx);
-    }
-
-    pub fn show_auth(&mut self, flow: AuthFlow, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_task(cx);
-        self.dashboard = None;
-        let root = cx.entity().downgrade();
-        let auth = cx.new(|cx| AuthScreen::new(root, flow, window, cx));
-        self.view = auth.clone().into();
-        self.auth = Some(auth);
-        cx.notify();
-    }
-
-    pub fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let result = match self.mode {
-            BabelMode::Direct => sonus_babel_services::auth::reset_store(),
-            BabelMode::Relay => subaccounts::clear_default_session(),
-        };
-        if let Err(error) = result {
-            window.push_notification(
-                Notification::error(format!("Could not clear the saved login: {error:#}")),
-                cx,
-            );
-            return false;
-        }
-        self.client = None;
-        let flow = match self.mode {
-            BabelMode::Direct => AuthFlow::login_prompt(),
-            BabelMode::Relay => AuthFlow::subaccount_login_prompt(),
-        };
-        self.show_auth(flow, window, cx);
-        true
+    /// The account's `auth.json` for owner-side relay calls; `None` for sub-accounts.
+    pub fn owner_auth_store(&self) -> Option<PathBuf> {
+        self.client
+            .config()
+            .auth_store
+            .clone()
+            .filter(|_| self.client.config().relay_session.is_none())
     }
 
     pub fn show_dashboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_task(cx);
-        let client = match &self.client {
-            Some(client) => client.clone(),
-            None if self.mode == BabelMode::Direct => BabelClient::direct(BabelConfig::from_env()),
-            None => {
-                self.show_auth(AuthFlow::subaccount_login_prompt(), window, cx);
-                return;
-            }
-        };
-        BabelServices::activate(client.clone(), cx);
-        self.auth = None;
-        self.client = Some(client.clone());
+        BabelServices::activate(self.client.clone(), cx);
         match &self.dashboard {
             Some(dashboard) => dashboard.update(cx, |dashboard, cx| dashboard.refresh(window, cx)),
             None => {
                 let root = cx.entity().downgrade();
                 let route = self.route.take();
                 let shell = self.shell.clone();
-                self.dashboard =
-                    Some(cx.new(|cx| DashboardScreen::new(root, shell, client, route, window, cx)));
+                let client = self.client.clone();
+                let filter = DashboardFilter::for_mode(&self.mode_id);
+                self.dashboard = Some(cx.new(|cx| {
+                    DashboardScreen::new(root, shell, client, filter, route, window, cx)
+                }));
             }
         }
-        self.view = self
-            .dashboard
-            .as_ref()
-            .expect("dashboard created")
-            .clone()
-            .into();
+        self.view = self.dashboard.clone().map(Into::into);
         cx.notify();
     }
 
     fn restore_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dashboard.is_some() {
-            self.show_dashboard(window, cx);
-        }
+        self.show_dashboard(window, cx);
     }
 
     pub fn show_dashboard_error(
@@ -368,16 +432,12 @@ impl BabelController {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<Entity<EditorModel>> {
         self.leave_task(cx);
-        let client = self
-            .client
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("This Babel mode is not signed in"))?;
         let project = workflow.into_project();
         let document =
-            sonus_babel_domain::document_environment(&project, project.id.clone(), self.mode.id())?;
+            sonus_babel_domain::document_environment(&project, project.id.clone(), &self.mode_id)?;
         let origin = DocumentOrigin {
-            mode_id: self.mode.id().to_string(),
-            provider_id: Some(self.mode.id().to_string()),
+            mode_id: self.mode_id.clone(),
+            instance: Some(self.instance.clone()),
             read_only: document.policy.read_only,
             native_path: None,
         };
@@ -392,7 +452,7 @@ impl BabelController {
         let model = self
             .shell
             .open_document(project, origin, environment, window, cx)?;
-        set_document_client(&model, client, cx);
+        set_document_client(&model, self.client.clone(), cx);
         Ok(model)
     }
 
@@ -475,7 +535,7 @@ impl BabelController {
             cx,
         );
         window.focus(&screen.read(cx).focus_handle(cx), cx);
-        self.view = screen.clone().into();
+        self.view = Some(screen.clone().into());
         self.error_task = Some(screen);
         cx.notify();
     }
@@ -501,6 +561,6 @@ impl Render for BabelController {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(self.view.clone())
+            .children(self.view.clone())
     }
 }

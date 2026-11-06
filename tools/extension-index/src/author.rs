@@ -78,6 +78,7 @@ fn render(spec: &Spec<'_>) -> Result<BTreeMap<&'static str, String>> {
         description: "An independently authored panel and command with undoable greeting insertion and empty-segment diagnostics.".into(),
         license: "MIT".into(), dependencies: BTreeMap::new(),
         permissions: vec![Permission::DocumentRead, Permission::DocumentEdit], modes: Vec::new(),
+        providers: Vec::new(),
     };
     manifest.validate()?;
     let crate_name = spec.id.replace('.', "-");

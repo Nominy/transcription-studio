@@ -1,12 +1,13 @@
 use super::*;
 use crate::{bindings::sonus::extension::host::Host, types::*};
-use std::sync::Mutex;
+use std::{collections::BTreeMap, sync::Mutex};
 
 struct TestHost {
     document: Mutex<Document>,
     undo: Mutex<Vec<Document>>,
     outputs: Mutex<Vec<Output>>,
     http_calls: Mutex<Vec<String>>,
+    instance_secrets: Mutex<BTreeMap<(String, String, String), String>>,
     race: AtomicBool,
     reject_preflight: AtomicBool,
 }
@@ -41,6 +42,7 @@ impl TestHost {
             undo: Mutex::new(Vec::new()),
             outputs: Mutex::new(Vec::new()),
             http_calls: Mutex::new(Vec::new()),
+            instance_secrets: Mutex::new(BTreeMap::new()),
             race: AtomicBool::new(false),
             reject_preflight: AtomicBool::new(false),
         })
@@ -183,6 +185,59 @@ impl HostServices for TestHost {
     fn secret_get(&self, _: &CallContext<'_>, _: &str, _: usize) -> Result<Option<String>, String> {
         panic!("denied capability reached native service")
     }
+    fn instance_secret_get(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        _: usize,
+    ) -> Result<Option<String>, String> {
+        cx.check()?;
+        Ok(self
+            .instance_secrets
+            .lock()
+            .unwrap()
+            .get(&(instance.provider.clone(), instance.id.clone(), key.into()))
+            .cloned())
+    }
+    fn instance_secret_set(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &ProviderInstance,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        cx.check()?;
+        let scoped = (instance.provider.clone(), instance.id.clone(), key.into());
+        let mut secrets = self.instance_secrets.lock().unwrap();
+        match value {
+            Some(value) => {
+                secrets.insert(scoped, value.into());
+            }
+            None => {
+                secrets.remove(&scoped);
+            }
+        }
+        Ok(())
+    }
+    fn instance_storage_get(
+        &self,
+        _: &CallContext<'_>,
+        _: &ProviderInstance,
+        _: &str,
+        _: usize,
+    ) -> Result<Option<Vec<u8>>, String> {
+        panic!("denied capability reached native service")
+    }
+    fn instance_storage_set(
+        &self,
+        _: &CallContext<'_>,
+        _: &ProviderInstance,
+        _: &str,
+        _: &[u8],
+    ) -> Result<(), String> {
+        panic!("denied capability reached native service")
+    }
     fn selection_get(&self, _: &CallContext<'_>, _: &str) -> Result<Selection, String> {
         Err("no selection in fixture".into())
     }
@@ -201,16 +256,31 @@ impl HostServices for TestHost {
     }
 }
 fn state(host: Arc<TestHost>, grants: BTreeSet<Permission>) -> State {
+    state_declaring(host, grants, BTreeSet::new())
+}
+fn state_declaring(
+    host: Arc<TestHost>,
+    grants: BTreeSet<Permission>,
+    providers: BTreeSet<String>,
+) -> State {
     let mut state = State::new(
         "example.hello-panel".into(),
         host,
         grants,
+        providers,
         Limits::default(),
         Arc::new(AtomicBool::new(false)),
     );
     state.staging = false;
     state.deadline = Instant::now() + Duration::from_secs(5);
     state
+}
+fn instance(provider: &str) -> ProviderInstance {
+    ProviderInstance {
+        provider: provider.into(),
+        id: "alice".into(),
+        label: "Alice".into(),
+    }
 }
 fn transaction(revision: u64) -> Transaction {
     Transaction {
@@ -376,6 +446,144 @@ fn malformed_ui_parent_and_recursive_depth_are_rejected() {
             .is_err()
     );
 }
+#[test]
+fn instance_namespaces_are_scoped_to_declared_providers() {
+    let host = TestHost::new();
+    let grants = BTreeSet::from([Permission::Secrets, Permission::Storage]);
+    // Extension A declares the provider and may use the instance namespace.
+    let mut owner = state_declaring(
+        host.clone(),
+        grants.clone(),
+        BTreeSet::from(["example.hello.account".to_string()]),
+    );
+    owner
+        .instance_secret_set(
+            instance("example.hello.account"),
+            "name".into(),
+            Some("Alice".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        owner
+            .instance_secret_get(instance("example.hello.account"), "name".into())
+            .unwrap()
+            .as_deref(),
+        Some("Alice")
+    );
+    // Extension B holds the same grants but does not declare the provider: denied before
+    // any native dispatch, for secrets and storage alike.
+    let mut other = state_declaring(
+        host.clone(),
+        grants.clone(),
+        BTreeSet::from(["example.other.account".to_string()]),
+    );
+    assert!(
+        other
+            .instance_secret_get(instance("example.hello.account"), "name".into())
+            .unwrap_err()
+            .contains("does not declare")
+    );
+    assert!(
+        other
+            .instance_secret_set(instance("example.hello.account"), "name".into(), None)
+            .is_err()
+    );
+    assert!(
+        other
+            .instance_storage_get(instance("example.hello.account"), "cache".into())
+            .is_err()
+    );
+    assert!(
+        other
+            .instance_storage_set(instance("example.hello.account"), "cache".into(), vec![1])
+            .is_err()
+    );
+    // Declaring the provider is not enough without the grant.
+    let mut ungranted = state_declaring(
+        host,
+        BTreeSet::new(),
+        BTreeSet::from(["example.hello.account".to_string()]),
+    );
+    assert!(
+        ungranted
+            .instance_secret_get(instance("example.hello.account"), "name".into())
+            .is_err()
+    );
+    // Instance ids become directory names: path-unsafe ids never reach the service.
+    let mut traversal = instance("example.hello.account");
+    traversal.id = "../alice".into();
+    assert!(owner.instance_secret_get(traversal, "name".into()).is_err());
+}
+#[test]
+fn provider_setup_and_status_round_trip_through_registered_contribution() {
+    let host = TestHost::new();
+    let mut state = state_declaring(
+        host.clone(),
+        BTreeSet::new(),
+        BTreeSet::from(["example.hello.account".to_string()]),
+    );
+    // Only declared provider types can be registered.
+    assert!(
+        state
+            .register(Registration {
+                id: "example.other.account".into(),
+                kind: ContributionKind::Provider,
+                title: "Other".into(),
+            })
+            .is_err()
+    );
+    // Unregistered contributions cannot finish or cancel a setup.
+    let done = ProviderSetupResult {
+        provider: "example.hello.account".into(),
+        request_id: 7,
+        id: "alice".into(),
+        label: "Alice".into(),
+    };
+    assert!(state.provider_setup_done(done.clone()).is_err());
+    assert!(
+        state
+            .provider_setup_cancel("example.hello.account".into(), 7)
+            .is_err()
+    );
+    state
+        .register(Registration {
+            id: "example.hello.account".into(),
+            kind: ContributionKind::Provider,
+            title: "Hello account".into(),
+        })
+        .unwrap();
+    state.provider_setup_done(done.clone()).unwrap();
+    state
+        .provider_setup_cancel("example.hello.account".into(), 8)
+        .unwrap();
+    let mut bad = done.clone();
+    bad.id = "Alice Smith".into();
+    assert!(state.provider_setup_done(bad).is_err());
+    state
+        .publish_provider_status(ProviderStatus {
+            instance: instance("example.hello.account"),
+            state: ProviderState::Ready,
+            detail: "signed in".into(),
+        })
+        .unwrap();
+    let outputs = host.outputs.lock().unwrap();
+    assert!(matches!(
+        &outputs[1],
+        Output::ProviderSetupDone(value) if value.request_id == 7 && value.id == "alice"
+    ));
+    assert!(matches!(
+        &outputs[2],
+        Output::ProviderSetupCancelled { request_id: 8, .. }
+    ));
+    assert!(matches!(
+        &outputs[3],
+        Output::ProviderStatus(value) if value.state == ProviderState::Ready
+    ));
+    drop(outputs);
+    // Activation cannot complete setups: that would resolve a request nobody made.
+    state.staging = true;
+    assert!(state.provider_setup_done(done).is_err());
+}
 fn wait(ticket: Ticket) -> Result<()> {
     // Test-only blocking wait; production UI uses Ticket::try_recv.
     ticket
@@ -402,7 +610,11 @@ fn package(bytes: &[u8]) -> Package {
     Package {
         manifest,
         component: bytes.to_vec(),
-        grants: BTreeSet::from([Permission::DocumentRead, Permission::DocumentEdit]),
+        grants: BTreeSet::from([
+            Permission::DocumentRead,
+            Permission::DocumentEdit,
+            Permission::Secrets,
+        ]),
         required_by_open_modes: vec!["^0.1".parse().unwrap()],
     }
 }
@@ -467,6 +679,108 @@ fn real_component_activation_ui_transactions_diagnostics_reload_and_isolation() 
             .iter()
             .any(|o| matches!(o, Output::Diagnostics(d) if d.revision == 2 && d.items.is_empty()))
     );
+    // Provider round trip: setup UI → typed name → sign in → instance secret → status →
+    // mode-open publishes the greeting document for that instance.
+    wait(
+        runtime
+            .invoke(Invocation::Event(Event::ProviderSetup(ProviderSetup {
+                provider: "example.hello.account".into(),
+                request_id: 41,
+                instance: None,
+            })))
+            .unwrap(),
+    )
+    .unwrap();
+    let account_ui = |node: &str, kind, value: &str| {
+        Invocation::Ui(UiEvent {
+            contribution: "example.hello.account".into(),
+            node: node.into(),
+            kind,
+            value: value.into(),
+            document_id: None,
+        })
+    };
+    wait(
+        runtime
+            .invoke(account_ui("name", UiEventKind::Change, "Alice Smith"))
+            .unwrap(),
+    )
+    .unwrap();
+    wait(
+        runtime
+            .invoke(account_ui("sign-in", UiEventKind::Click, ""))
+            .unwrap(),
+    )
+    .unwrap();
+    let signed_in = host
+        .outputs
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|o| match o {
+            Output::ProviderSetupDone(v) if v.request_id == 41 => Some(v.clone()),
+            _ => None,
+        })
+        .expect("setup finished");
+    assert_eq!(
+        (signed_in.id.as_str(), signed_in.label.as_str()),
+        ("alice-smith", "Alice Smith")
+    );
+    let account = ProviderInstance {
+        provider: signed_in.provider.clone(),
+        id: signed_in.id.clone(),
+        label: signed_in.label.clone(),
+    };
+    assert_eq!(
+        host.instance_secrets.lock().unwrap().get(&(
+            account.provider.clone(),
+            account.id.clone(),
+            "name".into()
+        )),
+        Some(&"Alice Smith".to_string())
+    );
+    wait(
+        runtime
+            .invoke(Invocation::Event(Event::ProviderStatus(account.clone())))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(host.outputs.lock().unwrap().iter().any(|o| matches!(
+        o,
+        Output::ProviderStatus(v) if v.state == ProviderState::Ready && v.instance.id == "alice-smith"
+    )));
+    wait(
+        runtime
+            .invoke(Invocation::Event(Event::ModeOpen(ModeOpen {
+                mode: "example.hello.notes".into(),
+                request_id: 42,
+                key: String::new(),
+                instance: Some(account.clone()),
+            })))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(host.outputs.lock().unwrap().iter().any(|o| matches!(
+        o,
+        Output::ModeDocument(v) if v.request_id == 42 && v.document.segments[0].text == "Hello, Alice Smith"
+    )));
+    wait(
+        runtime
+            .invoke(Invocation::Event(Event::ProviderSignOut(account.clone())))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(host.instance_secrets.lock().unwrap().is_empty());
+    wait(
+        runtime
+            .invoke(Invocation::Event(Event::ProviderStatus(account)))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(host.outputs.lock().unwrap().iter().any(|o| matches!(
+        o,
+        Output::ProviderStatus(v) if v.state == ProviderState::NeedsSignIn
+    )));
     let removed = host.removed();
     assert!(wait(runtime.load(package(b"not a component")).unwrap()).is_err());
     assert_eq!(host.removed(), removed);

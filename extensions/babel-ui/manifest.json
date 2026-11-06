@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "api": "^0.1",
   "runtime": "native",
-  "description": "Babel tasks, review, feedback, project context and direct-account workflow.",
+  "description": "Babel tasks, error review, feedback, project context and offline task files.",
   "license": "MIT",
   "dependencies": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" },
   "permissions": [
@@ -17,8 +17,12 @@
     { "kind": "network", "scope": "reviewgen.ovh" },
     { "kind": "network", "scope": "openrouter.ai" }
   ],
+  "providers": [
+    { "id": "sonus.babel.account", "name": "Babel account", "multiple": true }
+  ],
   "modes": [
-    { "id": "sonus.babel", "name": "Babel", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
-    { "id": "sonus.babel-file", "name": "Babel JSON file", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } }
+    { "id": "sonus.babel", "name": "Babel", "provider": "sonus.babel.account", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
+    { "id": "sonus.babel.errors", "name": "Babel error review", "provider": "sonus.babel.account", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } },
+    { "id": "sonus.babel-file", "name": "Babel file", "launch": "direct", "requires": { "sonus.babel-lint": "^0.1", "sonus.babel-tags": "^0.1" }, "recommends": { "sonus.gold": "^0.1" } }
   ]
 }

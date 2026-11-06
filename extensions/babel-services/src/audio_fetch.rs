@@ -12,7 +12,6 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::auth;
 use crate::babel::{BabelConfig, presigned_chunk_urls_payload};
 use studio_services::http;
 
@@ -165,13 +164,20 @@ fn trpc_json_payload(value: &Value) -> Option<&Value> {
         .or_else(|| value.pointer("/data"))
 }
 
-/// `<auth store dir>/audio-cache` (the config's store, else [`auth::store_path`]),
+/// `<account dir>/audio-cache` (the config's `data_dir`, else the auth store's directory),
 /// or `<temp>/TranscriptionStudio/audio-cache`.
 pub fn audio_cache_dir(config: &BabelConfig) -> PathBuf {
-    let store_path = config.auth_store.clone().unwrap_or_else(auth::store_path);
-    match store_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join("audio-cache"),
-        _ => env::temp_dir()
+    let account_dir = config.data_dir.clone().or_else(|| {
+        config
+            .auth_store
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    });
+    match account_dir {
+        Some(dir) => dir.join("audio-cache"),
+        None => env::temp_dir()
             .join("TranscriptionStudio")
             .join("audio-cache"),
     }

@@ -24,6 +24,9 @@ pub(crate) struct State {
     pub suppress: bool,
     pub staged: Vec<Output>,
     pub registrations: BTreeMap<String, ContributionKind>,
+    /// Provider types declared in the manifest: the only instances whose per-instance
+    /// secrets/storage this extension may touch, and the only `provider` registrations allowed.
+    pub providers: BTreeSet<String>,
     pub ui_nodes: BTreeMap<String, BTreeSet<String>>,
     pub remaining: usize,
 }
@@ -32,6 +35,7 @@ impl State {
         id: String,
         services: Arc<dyn HostServices>,
         grants: BTreeSet<Permission>,
+        providers: BTreeSet<String>,
         limits: Limits,
         cancellation: Arc<AtomicBool>,
     ) -> Self {
@@ -55,6 +59,7 @@ impl State {
             suppress: false,
             staged: Vec::new(),
             registrations: BTreeMap::new(),
+            providers,
             ui_nodes: BTreeMap::new(),
             remaining: limits.output_bytes,
             limits,
@@ -117,6 +122,29 @@ impl State {
         }
         Ok(())
     }
+    /// Instance namespaces are reachable only through a provider this extension declares.
+    fn instance_scope(&self, instance: &ProviderInstance) -> Result<(), String> {
+        if !self.providers.contains(&instance.provider) {
+            return Err("instance belongs to a provider this extension does not declare".into());
+        }
+        valid_instance_id(&instance.id)?;
+        if instance.label.len() > 256 {
+            return Err("instance label exceeds limit".into());
+        }
+        Ok(())
+    }
+}
+/// Instance IDs become directory names under the provider's data directory.
+pub(crate) fn valid_instance_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+    {
+        return Err("instance id must be 1..64 characters of [a-z0-9-]".into());
+    }
+    Ok(())
 }
 fn text_size(edit: &TextEdit) -> usize {
     32 + edit.segment_id.len() + edit.text.len()
@@ -272,6 +300,10 @@ impl Host for State {
         {
             return Err("duplicate registration or registration limit".into());
         }
+        if descriptor.kind == ContributionKind::Provider && !self.providers.contains(&descriptor.id)
+        {
+            return Err("provider was not declared in manifest".into());
+        }
         self.registrations
             .insert(descriptor.id.clone(), descriptor.kind);
         self.publish(Output::Registered(descriptor));
@@ -368,7 +400,10 @@ impl Host for State {
     fn publish_ui(&mut self, value: UiTree) -> Result<(), String> {
         match self.registrations.get(&value.contribution) {
             Some(
-                ContributionKind::Panel | ContributionKind::Inspector | ContributionKind::Menu,
+                ContributionKind::Panel
+                | ContributionKind::Inspector
+                | ContributionKind::Mode
+                | ContributionKind::Provider,
             ) => {}
             _ => return Err("unknown UI contribution".into()),
         }
@@ -538,6 +573,96 @@ impl Host for State {
         let value = self.services.secret_get(&self.cx(), &key, self.remaining)?;
         self.budget(16 + value.as_ref().map_or(0, String::len))?;
         Ok(value)
+    }
+    fn instance_secret_get(
+        &mut self,
+        instance: ProviderInstance,
+        key: String,
+    ) -> Result<Option<String>, String> {
+        self.check(&Permission::Secrets)?;
+        self.instance_scope(&instance)?;
+        valid_key(&key)?;
+        let value =
+            self.services
+                .instance_secret_get(&self.cx(), &instance, &key, self.remaining)?;
+        self.budget(16 + value.as_ref().map_or(0, String::len))?;
+        Ok(value)
+    }
+    fn instance_secret_set(
+        &mut self,
+        instance: ProviderInstance,
+        key: String,
+        value: Option<String>,
+    ) -> Result<(), String> {
+        self.check(&Permission::Secrets)?;
+        self.live_mutation()?;
+        self.instance_scope(&instance)?;
+        valid_key(&key)?;
+        self.budget(key.len() + value.as_ref().map_or(0, String::len))?;
+        self.services
+            .instance_secret_set(&self.cx(), &instance, &key, value.as_deref())
+    }
+    fn instance_storage_get(
+        &mut self,
+        instance: ProviderInstance,
+        key: String,
+    ) -> Result<Option<Vec<u8>>, String> {
+        self.check(&Permission::Storage)?;
+        self.instance_scope(&instance)?;
+        valid_key(&key)?;
+        let value =
+            self.services
+                .instance_storage_get(&self.cx(), &instance, &key, self.remaining)?;
+        self.budget(16 + value.as_ref().map_or(0, Vec::len))?;
+        Ok(value)
+    }
+    fn instance_storage_set(
+        &mut self,
+        instance: ProviderInstance,
+        key: String,
+        value: Vec<u8>,
+    ) -> Result<(), String> {
+        self.check(&Permission::Storage)?;
+        self.live_mutation()?;
+        self.instance_scope(&instance)?;
+        valid_key(&key)?;
+        self.budget(key.len() + value.len())?;
+        self.services
+            .instance_storage_set(&self.cx(), &instance, &key, &value)
+    }
+    fn provider_setup_done(&mut self, value: ProviderSetupResult) -> Result<(), String> {
+        self.live_mutation()?;
+        self.registered(&value.provider, ContributionKind::Provider)?;
+        self.budget(32 + value.provider.len() + value.id.len() + value.label.len())?;
+        valid_instance_id(&value.id)?;
+        if value.label.trim().is_empty() || value.label.len() > 256 {
+            return Err("instance label must be 1..256 bytes".into());
+        }
+        self.publish(Output::ProviderSetupDone(value));
+        Ok(())
+    }
+    fn provider_setup_cancel(&mut self, provider: String, request_id: u64) -> Result<(), String> {
+        self.live_mutation()?;
+        self.registered(&provider, ContributionKind::Provider)?;
+        self.budget(32 + provider.len())?;
+        self.publish(Output::ProviderSetupCancelled {
+            provider,
+            request_id,
+        });
+        Ok(())
+    }
+    fn publish_provider_status(&mut self, value: ProviderStatus) -> Result<(), String> {
+        self.live_mutation()?;
+        self.registered(&value.instance.provider, ContributionKind::Provider)?;
+        self.instance_scope(&value.instance)?;
+        self.budget(
+            32 + value.instance.id.len() + value.instance.label.len() + value.detail.len(),
+        )?;
+        if value.detail.len() > 1024 {
+            return Err("status detail exceeds limit".into());
+        }
+        self.publish(Output::ProviderStatus(value));
+        Ok(())
     }
     fn selection_get(&mut self, document_id: String) -> Result<Selection, String> {
         self.check(&Permission::DocumentRead)?;

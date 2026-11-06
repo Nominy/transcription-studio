@@ -1,6 +1,7 @@
 //! Typed component UI. Nodes never receive native handles or arbitrary HTML/URLs.
 mod files;
 mod overlay;
+mod providers;
 mod waveform;
 use crate::{
     ShellHandle,
@@ -33,7 +34,6 @@ struct OwnerUi {
     trees: BTreeMap<String, Arc<w::UiTree>>,
     overlays: BTreeMap<String, w::Overlay>,
     progress: BTreeMap<u64, w::Progress>,
-    mode_documents: BTreeMap<String, w::ModeDocument>,
 }
 impl OwnerUi {
     fn update_progress(&mut self, value: w::Progress) -> Result<()> {
@@ -161,6 +161,14 @@ pub(crate) fn preflight(owner: &str, outputs: &[sonus_wasm::Output], cx: &mut Ap
                     }
                     modes.push(registration.id.clone());
                 }
+                if matches!(registration.kind, w::ContributionKind::Provider)
+                    && !manifest
+                        .providers
+                        .iter()
+                        .any(|provider| provider.id == registration.id)
+                {
+                    bail!("provider was not declared in manifest");
+                }
             }
             Output::Ui(tree) => {
                 validate(tree)?;
@@ -170,6 +178,7 @@ pub(crate) fn preflight(owner: &str, outputs: &[sonus_wasm::Output], cx: &mut Ap
                         w::ContributionKind::Panel
                             | w::ContributionKind::Inspector
                             | w::ContributionKind::Mode
+                            | w::ContributionKind::Provider
                     )
                 }) {
                     bail!("unregistered UI contribution");
@@ -187,8 +196,12 @@ pub(crate) fn preflight(owner: &str, outputs: &[sonus_wasm::Output], cx: &mut Ap
             Output::ModeDocument(value) => {
                 crate::wasm_host::document::project(&value.document)?;
             }
-            Output::Import(_) | Output::Export(_) => {
-                bail!("unsolicited file response during activation")
+            Output::Import(_)
+            | Output::Export(_)
+            | Output::ProviderSetupDone(_)
+            | Output::ProviderSetupCancelled { .. }
+            | Output::ProviderStatus(_) => {
+                bail!("unsolicited request response during activation")
             }
             Output::Activated | Output::Removed => bail!("guest cannot publish lifecycle markers"),
             Output::Diagnostics(_)
@@ -290,27 +303,8 @@ pub(crate) fn register(
                         id: id.clone(),
                         label: title,
                         description: "Component document mode".into(),
-                        home: Rc::new(move |shell, window, cx| {
-                            let panel = cx.new(|cx| {
-                                WasmPanel::new(
-                                    owner.clone(),
-                                    mode.clone(),
-                                    shell,
-                                    false,
-                                    window,
-                                    cx,
-                                )
-                            });
-                            crate::wasm_host::invoke(
-                                &owner,
-                                Invocation::Event(w::Event::ModeOpen(w::ModeOpen {
-                                    mode: mode.clone(),
-                                    request_id: 0,
-                                    key: String::new(),
-                                })),
-                                cx,
-                            );
-                            panel.into()
+                        launch: Rc::new(move |shell, context, window, cx| {
+                            providers::launch_mode(&owner, &mode, shell, context, window, cx)
                         }),
                     },
                 )
@@ -319,6 +313,7 @@ pub(crate) fn register(
         w::ContributionKind::Importer | w::ContributionKind::Exporter => {
             files::register(owner, &registration, cx)?
         }
+        w::ContributionKind::Provider => providers::register(owner, &registration, cx)?,
         w::ContributionKind::Diagnostics
         | w::ContributionKind::Completions
         | w::ContributionKind::Decorations
@@ -348,7 +343,10 @@ pub(crate) fn publish(owner: &str, tree: w::UiTree, cx: &mut App) -> Result<()> 
         .ok_or_else(|| anyhow!("unregistered UI contribution"))?;
     if !matches!(
         known.kind,
-        w::ContributionKind::Panel | w::ContributionKind::Inspector | w::ContributionKind::Mode
+        w::ContributionKind::Panel
+            | w::ContributionKind::Inspector
+            | w::ContributionKind::Mode
+            | w::ContributionKind::Provider
     ) {
         bail!("contribution cannot own UI");
     }
@@ -471,6 +469,7 @@ fn validate(tree: &w::UiTree) -> Result<()> {
 }
 pub(crate) fn remove(owner: &str, cx: &mut App) {
     files::remove(owner, cx);
+    providers::remove(owner, cx);
     if cx.has_global::<UiStore>() {
         cx.update_global::<UiStore, _>(|store, _| {
             store.owners.remove(owner);
@@ -537,7 +536,7 @@ pub(crate) fn publish_overlay(
 }
 pub(crate) fn mode_document(
     owner: &str,
-    _shell: &ShellHandle,
+    shell: &ShellHandle,
     value: w::ModeDocument,
     cx: &mut App,
 ) -> Result<()> {
@@ -555,13 +554,7 @@ pub(crate) fn mode_document(
     {
         bail!("mode document exceeds retained byte quota");
     }
-    cx.update_global::<UiStore, _>(|store, _| {
-        let state = store.owners.get_mut(owner).expect("owner");
-        state.mode_documents.clear();
-        state.mode_documents.insert(value.mode.clone(), value);
-    });
-    cx.refresh_windows();
-    Ok(())
+    providers::open_mode_document(owner, shell, value, cx)
 }
 pub(crate) fn import_result(owner: &str, value: w::ImportResult, cx: &mut App) -> Result<()> {
     files::accept_import(owner, value, cx)
@@ -569,8 +562,24 @@ pub(crate) fn import_result(owner: &str, value: w::ImportResult, cx: &mut App) -
 pub(crate) fn export_result(owner: &str, value: w::ExportResult, cx: &mut App) -> Result<()> {
     files::accept_export(owner, value, cx)
 }
+pub(crate) fn provider_setup_done(
+    owner: &str,
+    value: w::ProviderSetupResult,
+    cx: &mut App,
+) -> Result<()> {
+    providers::setup_done(owner, value, cx)
+}
+pub(crate) fn provider_setup_cancelled(
+    owner: &str,
+    provider: &str,
+    request_id: u64,
+    cx: &mut App,
+) -> Result<()> {
+    providers::setup_cancelled(owner, provider, request_id, cx)
+}
 pub(crate) fn request_failed(owner: &str, request: u64, cx: &mut App) {
     files::request_failed(owner, request, cx);
+    providers::request_failed(owner, request, cx);
 }
 
 // Trees are validated parent-before-child. Hide inactive tab subtrees before
@@ -1089,41 +1098,6 @@ impl WasmPanel {
 }
 impl Render for WasmPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let pending = if cx.has_global::<UiStore>() {
-            cx.update_global::<UiStore, _>(|store, _| {
-                store
-                    .owners
-                    .get_mut(&self.owner)
-                    .and_then(|o| o.mode_documents.remove(&self.contribution))
-            })
-        } else {
-            None
-        };
-        if let Some(value) = pending {
-            match crate::wasm_host::document::project(&value.document) {
-                Ok(project) => {
-                    let origin = crate::DocumentOrigin {
-                        mode_id: value.mode.clone(),
-                        provider_id: Some(self.owner.clone()),
-                        read_only: value.document.read_only,
-                        native_path: None,
-                    };
-                    let mut environment =
-                        crate::ProviderEnvironment::local(project.id.clone(), None);
-                    environment.document.origin.mode = value.mode;
-                    let shell = self.shell.clone();
-                    window.defer(cx, move |window, cx| {
-                        if let Err(error) =
-                            shell.open_document(project, origin, environment, window, cx)
-                        {
-                            use gpui_kit::component::WindowExt as _;
-                            window.push_notification(error.to_string(), cx);
-                        }
-                    });
-                }
-                Err(error) => return div().child(error.to_string()).into_any_element(),
-            }
-        }
         let tree = if cx.has_global::<UiStore>() {
             cx.global::<UiStore>()
                 .owners

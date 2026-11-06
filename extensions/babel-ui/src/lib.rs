@@ -15,26 +15,24 @@ use editor::panels::{
     transport::TransportStrip,
 };
 use gpui_kit::*;
-use root::BabelMode;
 use sonus_extension::ExtensionManifest;
 use sonus_shell::contributions::{CommandContext, KeybindingContribution};
 use sonus_shell::editor::model::EditorModel;
 use sonus_shell::{
-    CommandContribution, ContributionRegistry, ModeContribution, PanelLocation, ShellHandle,
+    CommandContribution, ContributionRegistry, ModeContribution, PanelLocation,
+    ProviderContribution, ProviderRegistry, ShellHandle,
 };
 use std::rc::Rc;
 
 pub const ID: &str = "sonus.babel";
-pub const RELAY_ID: &str = "sonus.babel-relay";
+/// Error-review mode: same account, error-categorization projects only.
+pub const ERRORS_ID: &str = "sonus.babel.errors";
 pub const FILE_ID: &str = "sonus.babel-file";
+/// Provider type of the Babel sign-in (phone/e-mail or sub-account code).
+pub const PROVIDER_ID: &str = "sonus.babel.account";
 
 pub fn manifest() -> anyhow::Result<ExtensionManifest> {
     let manifest: ExtensionManifest = serde_json::from_str(include_str!("../manifest.json"))?;
-    manifest.validate()?;
-    Ok(manifest)
-}
-pub fn relay_manifest() -> anyhow::Result<ExtensionManifest> {
-    let manifest: ExtensionManifest = serde_json::from_str(include_str!("../relay-manifest.json"))?;
     manifest.validate()?;
     Ok(manifest)
 }
@@ -56,19 +54,35 @@ fn with_panels(
     }
 }
 
-/// Activates direct-account contributions after the host registers the reviewed manifest.
-/// No authentication or project request occurs until the user selects the mode home.
+/// Activates the Babel contributions after the host registers the reviewed manifest: the
+/// `sonus.babel.account` provider type and the three modes. No authentication or project
+/// request occurs until the shell launches a mode with a configured account.
 pub fn register(cx: &mut App) -> anyhow::Result<()> {
     if !cx.has_global::<screens::ShellModels>() {
         screens::ShellModels::init(cx);
     }
     polish::install(cx);
+    cx.global_mut::<ProviderRegistry>().register_type(
+        ID,
+        ProviderContribution {
+            id: PROVIDER_ID.into(),
+            label: "Babel account".into(),
+            multiple: true,
+            setup: Rc::new(|_shell, setup, window, cx| {
+                cx.new(|cx| screens::auth::AuthScreen::new(setup, window, cx))
+                    .into()
+            }),
+            status: Rc::new(|instance, _cx| root::account_status(instance)),
+            sign_out: Rc::new(root::sign_out_instance),
+        },
+    )?;
+    root::rediscover_accounts(cx);
     let registry = cx.global_mut::<ContributionRegistry>();
-    registry.set_contexts(ID, vec![ID.into(), RELAY_ID.into(), FILE_ID.into()]);
+    registry.set_contexts(ID, vec![ID.into(), ERRORS_ID.into(), FILE_ID.into()]);
     registry.register_document_provider_factory(
         ID,
         "sonus.babel.domain",
-        vec![ID.into(), RELAY_ID.into(), FILE_ID.into()],
+        vec![ID.into(), ERRORS_ID.into(), FILE_ID.into()],
         Rc::new(sonus_babel_domain::domain_providers),
     )?;
     registry.register_mode(
@@ -76,19 +90,26 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         ModeContribution {
             id: ID.into(),
             label: "Babel".into(),
-            description: "Direct Babel account tasks and review".into(),
-            home: Rc::new(|shell, window, cx| {
-                root::build_home(shell, BabelMode::Direct, window, cx)
-            }),
+            description: "Transcription tasks".into(),
+            launch: Rc::new(root::launch),
+        },
+    )?;
+    registry.register_mode(
+        ID,
+        ModeContribution {
+            id: ERRORS_ID.into(),
+            label: "Babel error review".into(),
+            description: "Error review tasks".into(),
+            launch: Rc::new(root::launch),
         },
     )?;
     registry.register_mode(
         ID,
         ModeContribution {
             id: FILE_ID.into(),
-            label: "Babel JSON file".into(),
-            description: "Offline Babel file editing; no account or remote mutations".into(),
-            home: Rc::new(screens::local_files::build_home),
+            label: "Babel file".into(),
+            description: "Edit an exported task offline".into(),
+            launch: Rc::new(screens::local_files::launch),
         },
     )?;
     registry.register_panel(
@@ -157,7 +178,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     registry.register_panel(
         ID,
         "sonus.babel.settings",
-        "Babel account and relay",
+        "Babel",
         PanelLocation::Settings,
         Rc::new(|shell, window, cx| {
             cx.new(|cx| screens::settings::SettingsView::new(shell, window, cx))
@@ -311,10 +332,10 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
             }
         }),
     );
-    for provider in [ID, RELAY_ID] {
+    for mode in [ID, ERRORS_ID] {
         registry.register_save_handler(
             ID,
-            provider,
+            mode,
             Rc::new(|model, window, cx, saved| {
                 let panels = TaskPanels::for_model(&model, window, cx);
                 panels.update(cx, |panels, cx| {
@@ -324,7 +345,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         );
         registry.register_leave_handler(
             ID,
-            provider,
+            mode,
             Rc::new(|model, window, cx, done| {
                 editor::panels::flows::request_leave(&model, window, cx, done);
             }),
@@ -332,14 +353,14 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
     }
     registry.register_save_handler(
         ID,
-        "sonus.babel-file",
+        FILE_ID,
         Rc::new(|model, window, cx, done| {
             screens::local_files::save_babel_file(&model, window, cx, done)
         }),
     );
     registry.register_leave_handler(
         ID,
-        "sonus.babel-file",
+        FILE_ID,
         Rc::new(|model, window, cx, done| {
             screens::local_files::confirm_leave(&model, window, cx, done);
         }),
@@ -441,7 +462,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         "sonus.babel.grader",
         "sonus.babel.actions",
     ] {
-        registry.set_panel_contexts(id, vec![ID.into(), RELAY_ID.into()]);
+        registry.set_panel_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
     for id in [
         "sonus.babel.submit",
@@ -452,7 +473,7 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
         "sonus.babel.feedback",
         "sonus.babel.grader",
     ] {
-        registry.set_command_contexts(id, vec![ID.into(), RELAY_ID.into()]);
+        registry.set_command_contexts(id, vec![ID.into(), ERRORS_ID.into()]);
     }
     for (id, label, start) in [
         ("sonus.babel.relay-start", "Start subaccount relay", true),
@@ -491,30 +512,6 @@ pub fn register(cx: &mut App) -> anyhow::Result<()> {
                 relay.update(cx, |relay, _| relay.shutdown());
             }
         }),
-    );
-    Ok(())
-}
-
-/// Relay is separately activated and never inferred from saved global credentials.
-pub fn register_relay(cx: &mut App) -> anyhow::Result<()> {
-    if !cx.has_global::<screens::ShellModels>() {
-        screens::ShellModels::init(cx);
-    }
-    let registry = cx.global_mut::<ContributionRegistry>();
-    registry.register_mode(
-        RELAY_ID,
-        ModeContribution {
-            id: RELAY_ID.into(),
-            label: "Babel Relay".into(),
-            description: "Tasks through an explicit subaccount relay session".into(),
-            home: Rc::new(|shell, window, cx| {
-                root::build_home(shell, BabelMode::Relay, window, cx)
-            }),
-        },
-    )?;
-    registry.on_unload(
-        RELAY_ID,
-        Rc::new(|cx| root::shutdown_mode(BabelMode::Relay, cx)),
     );
     Ok(())
 }

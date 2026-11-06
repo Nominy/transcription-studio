@@ -39,6 +39,18 @@ pub enum Permission {
     Secrets,
 }
 
+/// How a mode starts once its requirements and provider are ready.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModeLaunch {
+    /// The mode shows its own launch window (task list, guides, metadata) and opens
+    /// documents from there.
+    #[default]
+    Window,
+    /// The mode opens a document immediately; no intermediate window.
+    Direct,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModeManifest {
@@ -50,6 +62,25 @@ pub struct ModeManifest {
     /// Recommendations never become hard requirements or silently acquire permissions.
     #[serde(default)]
     pub recommends: BTreeMap<String, VersionReq>,
+    /// Provider type this mode signs in through (declared by this or a required extension).
+    /// Opening the mode runs the provider's setup when no instance is configured yet.
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub launch: ModeLaunch,
+}
+
+/// A provider type owns credentials and sessions for an external account (a task
+/// platform, a review service). Modes reference it by id; users see it only as a sign-in
+/// step while opening a mode, and as "Accounts" in advanced settings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderManifest {
+    pub id: String,
+    pub name: String,
+    /// Whether several configured instances (accounts) of this type may coexist.
+    #[serde(default)]
+    pub multiple: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +99,8 @@ pub struct ExtensionManifest {
     pub permissions: Vec<Permission>,
     #[serde(default)]
     pub modes: Vec<ModeManifest>,
+    #[serde(default)]
+    pub providers: Vec<ProviderManifest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -86,6 +119,10 @@ pub enum ManifestError {
     InvalidNetworkHost(String),
     #[error("duplicate mode identifier `{0}`")]
     DuplicateMode(String),
+    #[error("duplicate provider identifier `{0}`")]
+    DuplicateProvider(String),
+    #[error("mode `{mode}` references provider `{provider}` that is not declared")]
+    UnknownProvider { mode: String, provider: String },
 }
 
 /// Portable, path-safe identity: never used as an unchecked filesystem path.
@@ -140,6 +177,22 @@ impl ExtensionManifest {
             }
             if !modes.insert(&mode.id) {
                 return Err(ManifestError::DuplicateMode(mode.id.clone()));
+            }
+        }
+        let mut providers = std::collections::BTreeSet::new();
+        for provider in &self.providers {
+            if !valid_id(&provider.id) || provider.name.trim().is_empty() {
+                return Err(ManifestError::InvalidId(provider.id.clone()));
+            }
+            if !providers.insert(&provider.id) {
+                return Err(ManifestError::DuplicateProvider(provider.id.clone()));
+            }
+        }
+        for mode in &self.modes {
+            if let Some(provider) = &mode.provider
+                && !valid_id(provider)
+            {
+                return Err(ManifestError::InvalidId(provider.clone()));
             }
         }
         for permission in &self.permissions {

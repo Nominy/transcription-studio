@@ -215,6 +215,12 @@ pub(super) fn permission_label(permission: &Permission) -> String {
     }
 }
 
+/// Emitted after a successful catalog/package transaction with the newly activated
+/// extension ids, so the UI can offer follow-up steps (provider sign-in).
+pub enum ExtensionsEvent {
+    Activated(Vec<String>),
+}
+impl EventEmitter<ExtensionsEvent> for ExtensionsModel {}
 pub struct ExtensionsModel {
     shell: ShellHandle,
     pub index: String,
@@ -1180,6 +1186,12 @@ impl ExtensionsModel {
                     this.fail(format!("Activation failed: {failure:#}. {recovery}"), cx);
                 }).ok();
             } else {
+                let added: Vec<String> = next
+                    .active
+                    .keys()
+                    .filter(|owner| !before.active.contains_key(*owner))
+                    .cloned()
+                    .collect();
                 let cleanup_root = root.clone();
                 let cleanup = cx.background_spawn(async move {
                     InstallationStore::open(cleanup_root)?.collect_unreferenced(&before)
@@ -1192,6 +1204,9 @@ impl ExtensionsModel {
                     if let Err(error) = cleanup {
                         this.error = Some(format!("Activation succeeded; unused package cleanup failed: {error}. Referenced packages were preserved."));
                         this.log(format!("Cleanup: {error}"));
+                    }
+                    if !added.is_empty() {
+                        cx.emit(ExtensionsEvent::Activated(added));
                     }
                 }).ok();
             }

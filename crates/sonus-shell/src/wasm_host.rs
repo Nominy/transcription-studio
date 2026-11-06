@@ -100,11 +100,47 @@ struct Scope {
 struct Bridge {
     owner: String,
     grants: Mutex<BTreeSet<Permission>>,
+    /// Provider types declared by the current manifest; instance namespaces are scoped to them.
+    providers: Mutex<BTreeSet<String>>,
     scope: Mutex<Option<Scope>>,
     sender: async_channel::Sender<Message>,
     root: PathBuf,
+    /// Last answer per instance (`provider/id`) plus the requester waiting for the next one.
+    status: Mutex<ProviderStatusSlots>,
     removed: AtomicBool,
     overflow: AtomicBool,
+}
+/// Cached answers expire so expired credentials are noticed without a sign-out; guests may
+/// also publish a fresh status at any time (e.g. after a failed request) to replace one.
+const STATUS_TTL: Duration = Duration::from_secs(30);
+#[derive(Default)]
+struct ProviderStatusSlots {
+    cached: BTreeMap<String, (Instant, w::ProviderStatus)>,
+    waiting: BTreeMap<String, mpsc::SyncSender<w::ProviderStatus>>,
+}
+fn instance_key(instance: &w::ProviderInstance) -> String {
+    format!("{}/{}", instance.provider, instance.id)
+}
+/// Where one extension keeps an instance's secrets and storage. Removed with the instance
+/// and on sign-out; never shared between extensions.
+pub(crate) fn instance_data_dir(owner: &str, instance: &crate::ProviderInstance) -> PathBuf {
+    crate::providers::instance_dir(instance)
+        .join("wasm")
+        .join(owner)
+}
+pub(crate) fn shell_instance(instance: &w::ProviderInstance) -> crate::ProviderInstance {
+    crate::ProviderInstance {
+        provider: instance.provider.clone(),
+        id: instance.id.clone(),
+        label: instance.label.clone(),
+    }
+}
+pub(crate) fn guest_instance(instance: &crate::ProviderInstance) -> w::ProviderInstance {
+    w::ProviderInstance {
+        provider: instance.provider.clone(),
+        id: instance.id.clone(),
+        label: instance.label.clone(),
+    }
 }
 struct Envelope {
     request: Request,
@@ -141,6 +177,88 @@ impl Bridge {
             return Err("permission denied".into());
         }
         Ok(())
+    }
+    /// Defense in depth behind the runtime's own check: an instance namespace is reachable
+    /// only for providers this extension's manifest declares.
+    fn instance_root(
+        &self,
+        cx: &CallContext<'_>,
+        permission: Permission,
+        instance: &w::ProviderInstance,
+    ) -> Result<PathBuf, String> {
+        self.permitted(cx, permission)?;
+        if !self
+            .providers
+            .lock()
+            .map_err(|_| "provider lock poisoned")?
+            .contains(&instance.provider)
+        {
+            return Err("instance belongs to a provider this extension does not declare".into());
+        }
+        if instance.id.is_empty()
+            || instance.id.len() > 64
+            || !instance
+                .id
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        {
+            return Err("invalid instance id".into());
+        }
+        Ok(instance_data_dir(&self.owner, &shell_instance(instance)))
+    }
+    fn cached_status(&self, instance: &w::ProviderInstance) -> Option<w::ProviderStatus> {
+        let mut slots = self.status.lock().ok()?;
+        let key = instance_key(instance);
+        match slots.cached.get(&key) {
+            Some((at, value)) if at.elapsed() < STATUS_TTL => Some(value.clone()),
+            Some(_) => {
+                slots.cached.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+    fn forget_status(&self, instance: &w::ProviderInstance) {
+        if let Ok(mut slots) = self.status.lock() {
+            let key = instance_key(instance);
+            slots.cached.remove(&key);
+            slots.waiting.remove(&key);
+        }
+    }
+    fn await_status(&self, instance: &w::ProviderInstance) -> mpsc::Receiver<w::ProviderStatus> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        if let Ok(mut slots) = self.status.lock() {
+            slots.waiting.insert(instance_key(instance), sender);
+        }
+        receiver
+    }
+    fn cancel_wait(&self, instance: &w::ProviderInstance) {
+        if let Ok(mut slots) = self.status.lock() {
+            slots.waiting.remove(&instance_key(instance));
+        }
+    }
+    fn deliver_status(&self, value: &w::ProviderStatus) -> bool {
+        let declared = self
+            .providers
+            .lock()
+            .is_ok_and(|providers| providers.contains(&value.instance.provider));
+        let Ok(mut slots) = self.status.lock() else {
+            return false;
+        };
+        if !declared {
+            return false;
+        }
+        let key = instance_key(&value.instance);
+        if slots.cached.len() >= 256 && !slots.cached.contains_key(&key) {
+            return false;
+        }
+        slots
+            .cached
+            .insert(key.clone(), (Instant::now(), value.clone()));
+        if let Some(waiter) = slots.waiting.remove(&key) {
+            let _ = waiter.try_send(value.clone());
+        }
+        true
     }
     fn request(
         &self,
@@ -301,11 +419,11 @@ impl HostServices for Bridge {
         max: usize,
     ) -> Result<Option<Vec<u8>>, String> {
         self.permitted(cx, Permission::Storage)?;
-        io::get(self, cx, key, max)
+        io::get(&self.root, cx, key, max)
     }
     fn storage_set(&self, cx: &CallContext<'_>, key: &str, value: &[u8]) -> Result<(), String> {
         self.permitted(cx, Permission::Storage)?;
-        io::set(self, cx, key, value)
+        io::set(&self.root, cx, key, value)
     }
     fn secret_get(
         &self,
@@ -316,12 +434,59 @@ impl HostServices for Bridge {
         self.permitted(cx, Permission::Secrets)?;
         io::secret(self, cx, key, max)
     }
+    fn instance_secret_get(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &w::ProviderInstance,
+        key: &str,
+        max: usize,
+    ) -> Result<Option<String>, String> {
+        let root = self.instance_root(cx, Permission::Secrets, instance)?;
+        io::instance_secret_get(&root, cx, key, max)
+    }
+    fn instance_secret_set(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &w::ProviderInstance,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let root = self.instance_root(cx, Permission::Secrets, instance)?;
+        io::instance_secret_set(&root, cx, key, value)
+    }
+    fn instance_storage_get(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &w::ProviderInstance,
+        key: &str,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let root = self.instance_root(cx, Permission::Storage, instance)?;
+        io::get(&root, cx, key, max)
+    }
+    fn instance_storage_set(
+        &self,
+        cx: &CallContext<'_>,
+        instance: &w::ProviderInstance,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), String> {
+        let root = self.instance_root(cx, Permission::Storage, instance)?;
+        io::set(&root, cx, key, value)
+    }
     fn emit(&self, owner: &str, output: Output) {
         if owner != self.owner || self.removed.load(Ordering::Acquire) {
             return;
         }
         if matches!(output, Output::Removed) {
             self.removed.store(true, Ordering::Release);
+        }
+        // Status answers go straight to their requester (possibly blocked on the UI thread
+        // for one call deadline); the owner queue only learns about them for logging.
+        if let Output::ProviderStatus(value) = &output
+            && !self.deliver_status(value)
+        {
+            return;
         }
         // Full queues fail closed. The owner drains the channel and purges the extension,
         // rather than leaving stale contributions because a Removed event was lost.
@@ -445,9 +610,11 @@ pub fn activate(
     let host = Arc::new(Bridge {
         owner: owner.clone(),
         grants: Mutex::new(grants.clone()),
+        providers: Mutex::new(declared_providers(&manifest)),
         scope: Mutex::new(initial_scope),
         sender,
         root: data_root.join(&owner),
+        status: Mutex::new(ProviderStatusSlots::default()),
         removed: AtomicBool::new(false),
         overflow: AtomicBool::new(false),
     });
@@ -742,6 +909,7 @@ pub fn invoke(owner: &str, invocation: Invocation, cx: &mut App) {
     let request = match &invocation {
         Invocation::Event(w::Event::ImportRequest(value)) => Some(value.request_id),
         Invocation::Event(w::Event::ExportRequest(value)) => Some(value.request_id),
+        Invocation::Event(w::Event::ProviderSetup(value)) => Some(value.request_id),
         _ => None,
     };
     let Some(entry) = cx.global::<WasmExtensions>().entries.get(owner) else {
@@ -836,9 +1004,7 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
             .get(owner)
             .is_some_and(|entry| entry.pending.is_some());
         if replacing {
-            cx.update_global::<ContributionRegistry, _>(|registry, _| {
-                registry.clear_contributions(owner)
-            });
+            crate::contributions::clear_owner(owner, cx);
             crate::wasm_ui::remove(owner, cx);
             cx.update_global::<WasmExtensions, _>(|extensions, cx| {
                 if let Some(entry) = extensions.entries.get_mut(owner) {
@@ -849,6 +1015,9 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
                         entry.status.version = pending.manifest.version.to_string();
                         entry.status.grants = pending.grants.clone();
                         *entry.host.grants.lock().expect("grants") = pending.grants.clone();
+                        *entry.host.providers.lock().expect("providers") =
+                            declared_providers(&pending.manifest);
+                        *entry.host.status.lock().expect("status") = ProviderStatusSlots::default();
                         entry
                             .publications
                             .lock()
@@ -935,6 +1104,13 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
         Output::ModeDocument(value) => crate::wasm_ui::mode_document(owner, shell, value, cx),
         Output::Import(value) => crate::wasm_ui::import_result(owner, value, cx),
         Output::Export(value) => crate::wasm_ui::export_result(owner, value, cx),
+        Output::ProviderSetupDone(value) => crate::wasm_ui::provider_setup_done(owner, value, cx),
+        Output::ProviderSetupCancelled {
+            provider,
+            request_id,
+        } => crate::wasm_ui::provider_setup_cancelled(owner, &provider, request_id, cx),
+        // Already delivered to its requester by the bridge; only logged here.
+        Output::ProviderStatus(_) => Ok(()),
         Output::Removed | Output::Activated => unreachable!(),
     };
     match result {
@@ -953,7 +1129,7 @@ fn consume(owner: &str, shell: &ShellHandle, output: Output, cx: &mut App) {
     }
 }
 fn remove_owned(owner: &str, cx: &mut App) {
-    cx.update_global::<ContributionRegistry, _>(|registry, _| registry.force_remove(owner));
+    crate::contributions::force_remove_owner(owner, cx);
     crate::wasm_ui::remove(owner, cx);
     cx.update_global::<WasmExtensions, _>(|extensions, cx| {
         if let Some(mut entry) = extensions.entries.remove(owner) {
@@ -1199,6 +1375,140 @@ pub(crate) fn pending_manifest(owner: &str, cx: &App) -> Option<ExtensionManifes
                 |pending| pending.manifest.clone(),
             )
         })
+}
+fn declared_providers(manifest: &ExtensionManifest) -> BTreeSet<String> {
+    manifest
+        .providers
+        .iter()
+        .map(|provider| provider.id.clone())
+        .collect()
+}
+/// The manifest declaration behind a `provider` registration, if the owner declares it.
+pub(crate) fn declared_provider(
+    owner: &str,
+    id: &str,
+    cx: &App,
+) -> Option<sonus_extension::ProviderManifest> {
+    pending_manifest(owner, cx)?
+        .providers
+        .into_iter()
+        .find(|provider| provider.id == id)
+}
+fn translate_status(value: w::ProviderStatus) -> crate::ProviderStatus {
+    match value.state {
+        w::ProviderState::Ready => crate::ProviderStatus::Ready {
+            detail: value.detail,
+        },
+        w::ProviderState::NeedsSignIn => crate::ProviderStatus::NeedsSignIn,
+        w::ProviderState::Error => crate::ProviderStatus::Error(value.detail),
+    }
+}
+/// Status of an instance as reported by its WASM provider type. Answers are cached per
+/// instance until setup or sign-out invalidates them. A cold check sends `provider-status`
+/// and waits for `publish-provider-status`, bounded by a few guest call deadlines: this is
+/// the one place the UI thread waits on a guest, because the shell needs the answer
+/// synchronously while opening a mode, and the guest answers from local secrets.
+pub(crate) fn provider_status(
+    owner: &str,
+    instance: &crate::ProviderInstance,
+    cx: &App,
+) -> crate::ProviderStatus {
+    let Some(entry) = cx
+        .try_global::<WasmExtensions>()
+        .and_then(|state| state.entries.get(owner))
+        .filter(|entry| !entry.host.removed.load(Ordering::Acquire))
+    else {
+        return crate::ProviderStatus::Error("The account extension is not active".into());
+    };
+    let guest = guest_instance(instance);
+    if let Some(cached) = entry.host.cached_status(&guest) {
+        return translate_status(cached);
+    }
+    let receiver = entry.host.await_status(&guest);
+    let ticket = match entry
+        .runtime
+        .invoke(Invocation::Event(w::Event::ProviderStatus(guest.clone())))
+    {
+        Ok(ticket) => ticket,
+        Err(error) => {
+            entry.host.cancel_wait(&guest);
+            return crate::ProviderStatus::Error(error.to_string());
+        }
+    };
+    let deadline = Instant::now() + Limits::default().call_timeout * 4;
+    let result = wait_for_status(&receiver, deadline, || match ticket.try_recv() {
+        Ok(None) => GuestCall::Running,
+        Ok(Some(Ok(()))) => GuestCall::Finished,
+        Ok(Some(Err(error))) => GuestCall::Failed(error.to_string()),
+        Err(_) => GuestCall::Gone,
+    });
+    entry.host.cancel_wait(&guest);
+    match result {
+        Ok(value) => translate_status(value),
+        Err(failure) => {
+            ticket.cancel();
+            crate::ProviderStatus::Error(failure)
+        }
+    }
+}
+enum GuestCall {
+    Running,
+    Finished,
+    Failed(String),
+    Gone,
+}
+/// Waits for the guest's answer until `deadline`; `poll` reports the guest call so a
+/// finished-but-silent or failed call ends the wait early instead of at the deadline.
+fn wait_for_status(
+    receiver: &mpsc::Receiver<w::ProviderStatus>,
+    deadline: Instant,
+    mut poll: impl FnMut() -> GuestCall,
+) -> Result<w::ProviderStatus, String> {
+    loop {
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(5));
+        match receiver.recv_timeout(wait) {
+            Ok(value) => return Ok(value),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("The account extension was unloaded".into());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        match poll() {
+            GuestCall::Running => {}
+            GuestCall::Finished => {
+                return receiver
+                    .try_recv()
+                    .map_err(|_| "The account extension did not report a status".to_string());
+            }
+            GuestCall::Failed(error) => return Err(error),
+            GuestCall::Gone => return Err("The account extension was unloaded".into()),
+        }
+        if Instant::now() >= deadline {
+            return Err("The account extension did not report a status in time".into());
+        }
+    }
+}
+/// Invalidates the cached status so the next check asks the guest again.
+pub(crate) fn refresh_provider_status(owner: &str, instance: &crate::ProviderInstance, cx: &App) {
+    if let Some(entry) = cx
+        .try_global::<WasmExtensions>()
+        .and_then(|state| state.entries.get(owner))
+    {
+        entry.host.forget_status(&guest_instance(instance));
+    }
+}
+/// Sign-out: tells the guest, then deletes everything this extension stored for the
+/// instance. The registry removes the whole instance directory afterwards.
+pub(crate) fn sign_out_instance(owner: &str, instance: &crate::ProviderInstance, cx: &mut App) {
+    invoke(
+        owner,
+        Invocation::Event(w::Event::ProviderSignOut(guest_instance(instance))),
+        cx,
+    );
+    refresh_provider_status(owner, instance, cx);
+    let _ = std::fs::remove_dir_all(instance_data_dir(owner, instance));
 }
 
 #[cfg(test)]

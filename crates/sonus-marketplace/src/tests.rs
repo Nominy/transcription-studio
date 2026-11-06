@@ -25,6 +25,7 @@ fn manifest(id: &str, version: &str) -> ExtensionManifest {
         dependencies: BTreeMap::new(),
         permissions: Vec::new(),
         modes: Vec::new(),
+        providers: Vec::new(),
     }
 }
 
@@ -323,6 +324,8 @@ fn active_modes_and_unapproved_permissions_block_changes() {
         name: "Edit".into(),
         requires: BTreeMap::new(),
         recommends: BTreeMap::new(),
+        provider: None,
+        launch: Default::default(),
     });
     let bytes = archive(&extension, &[]);
     let index = catalog(vec![release(extension.clone(), &bytes)]);

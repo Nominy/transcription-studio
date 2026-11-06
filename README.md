@@ -48,13 +48,16 @@ The default build is **batteries included**: Local, Formats, basic checks, Gold 
 
 ## Choose your mode
 
+Start shows one tile per installed mode. Pick a tile; a platform mode asks you to sign in the first time you open it and remembers the account afterwards (manage accounts under **Settings › Advanced › Accounts**).
+
 | Mode | Purpose | Access |
 | --- | --- | --- |
-| **Local** | Open your audio and projects without a task platform | No account |
-| **Babel** | Optional first-party Sonus integration with Babel tasks and workflows | Authorized service account |
-| **Relay** | Optional delegated task access through a configured relay | Access provided by your operator |
+| **Local** | Open audio and projects on this computer | No account |
+| **Babel** | Optional first-party Sonus integration with Babel transcription tasks | Babel account (direct, or relay access provided by your operator) |
+| **Babel error review** | Error review tasks on the same platform | Same Babel account |
+| **Babel file** | Edit an exported Babel task offline | No account |
 
-Modes are extension contributions and declare the extensions they require. Keep dependencies enabled while the corresponding mode is open. **Sonus is not an official Babel product and does not claim Babel endorsement.** Babel and Relay are not prerequisites for Local mode.
+Modes are add-on contributions and declare the add-ons they require. Keep dependencies enabled while the corresponding mode is open. **Sonus is not an official Babel product and does not claim Babel endorsement.** Babel is not a prerequisite for Local.
 
 ## Extensions and privacy
 
@@ -67,7 +70,7 @@ WASM document, audio, storage and network-host access require explicit grants. B
 ## First project
 
 1. Install Sonus, or extract the portable archive to a writable folder.
-2. Select **Local → Open audio**. Each chosen audio file becomes a lane; WAV, MP3 and FLAC are good starting points. You can also open a saved project.
+2. On Start, select **Local → Open audio…**. Each chosen audio file becomes a lane; WAV, MP3 and FLAC are good starting points. You can also open a saved project or restore unsaved work from the same screen.
 3. Listen, create or adjust segments, assign speakers and edit the text. AI is optional: configure its backend and install/test local models before requesting transcription.
 4. Save the native project. Export subtitles or text when needed, but keep the project and original audio as your editable source.
 
