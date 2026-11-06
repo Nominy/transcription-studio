@@ -9,7 +9,7 @@
 A segment-based transcription editor for Windows: listen, fix timing, assign speakers and edit the text in one native window.
 Local projects need no account; AI, checks and formats are extensions you can switch off.
 
-**English** · [Русский](README.ru.md) · [Website](https://nominy.github.io/exaudio/) · [Get started](docs/getting-started.md) · [Releases](https://github.com/Nominy/exaudio/releases) · [Issues](https://github.com/Nominy/exaudio/issues)
+**English** · [Русский](README.ru.md) · [Website](https://nafty.is-a.dev/exaudio/) · [Get started](docs/getting-started.md) · [Releases](https://github.com/Nominy/exaudio/releases) · [Issues](https://github.com/Nominy/exaudio/issues)
 
 ![Exaudio editor: a synthetic interview after an AI draft — waveform timeline and 11 segments with speaker and timing](site/assets/editor-interview-draft.webp)
 

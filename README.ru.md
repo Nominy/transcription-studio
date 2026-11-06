@@ -9,7 +9,7 @@
 Сегментный редактор транскрипций для Windows: слушайте, правьте тайминг, назначайте спикеров и редактируйте текст в одном нативном окне.
 Локальные проекты не требуют аккаунта; ИИ, проверки и форматы — расширения, которые можно отключить.
 
-[English](README.md) · **Русский** · [Сайт](https://nominy.github.io/exaudio/) · [Начало работы](docs/getting-started.md#русский) · [Выпуски](https://github.com/Nominy/exaudio/releases) · [Issues](https://github.com/Nominy/exaudio/issues)
+[English](README.md) · **Русский** · [Сайт](https://nafty.is-a.dev/exaudio/) · [Начало работы](docs/getting-started.md#русский) · [Выпуски](https://github.com/Nominy/exaudio/releases) · [Issues](https://github.com/Nominy/exaudio/issues)
 
 ![Редактор Exaudio: синтетическое интервью после черновика ИИ — волна на таймлайне и 11 сегментов со спикером и временем](site/assets/editor-interview-draft.webp)
 
