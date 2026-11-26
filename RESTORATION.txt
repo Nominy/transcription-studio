@@ -1,0 +1,57 @@
+Transcription Studio source restoration — 2026-11-20
+
+CURRENT STATUS: this tree now includes the 0.1.16 Alpha Eval and project
+resources changes. See CHANGES-0.1.16.txt for current capabilities and limits.
+The notes below describe the earlier restoration baseline only. Its original
+archive is preserved separately under releases/restored-20261120.
+
+This is a reconstructed source tree, not a byte-for-byte recovery of the
+deleted October working directory. The installed application was not changed.
+
+Sources:
+- Base: D:\github\babel\transcription-studio (preserved unchanged).
+- tmp\eval2: evaluation.rs, actions.rs, updater.rs.
+- tmp\eval-audio-fix: mod.rs, evaluation_audio.rs.
+- tmp\chunk-audio-fix: babel_audio.rs, chunk_audio.rs, subaccounts.rs.
+
+Reconstructed integration:
+- Eval / Eval 2 dashboard routing, state, messages, rendering and timer.
+- Audio playback completion and Symphonia decoders / streaming WAV support.
+- Relay evaluation endpoint with serialized session ownership, project
+  assignment and task checks; ownership persists across relay restarts.
+- Local relay random owner token and owner request authentication.
+- Console Babel-service helper and tRPC transport; evaluation mutations
+  are sent once, without automatic retries.
+- Chunk audio URL requests for transcription tasks.
+
+Build:
+  cargo build --offline -p studio-app --bin transcription-studio --bin studio-babel-service -p studio-relay --bin studio-relay
+  powershell -File tools\package-restored.ps1
+
+Tests:
+  cargo test -p studio-relay --offline -- --test-threads=1
+  cargo test -p studio-app --bin transcription-studio --offline -- --test-threads=1
+Some tests need loopback network access to their temporary mock HTTP servers.
+Verified 2026-11-20: 776 application tests passed, 17 relay tests passed;
+the two packaging tests below were ignored. The dev application, console
+service and relay executables built successfully. A loopback smoke test of
+the real service EXE verified JSON stdin/stdout, POST evaluation saves,
+GET chunk URL requests and exactly one upstream request per operation.
+Two original packaging tests are explicitly ignored because their original
+.github workflows and .config/dotnet-tools.json were not recovered. They still
+fail if explicitly run without these files. No replacement CI was invented.
+
+Limitations / next work:
+- RU-Alpha-Eval (3882e77e-3ace-4ff2-b2df-290e3439cfce) is not implemented here.
+- Per-project Instructions / Grading guide / Library is not implemented here.
+- The recovered updater contains the planned helsinkifarter.ru:8444 feed;
+  publishing, HTTPS and end-to-end updating have not been validated.
+- Current Babel API compatibility needs separate live validation. In
+  particular, legacy non-chunk audio and review-action API methods are retained
+  from the old snapshot. No live tasks were claimed, submitted or released
+  while restoring this source.
+- Tests and builds do not prove equality with every historical patch that
+  was lost. Do not replace an installed working copy without a live smoke test.
+
+No account stores, SSH private keys, login codes or server passwords belong
+in this source tree or its source archive. Keep backups outside Downloads.

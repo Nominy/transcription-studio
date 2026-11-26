@@ -37,6 +37,42 @@ const STUDIO_BABEL_SERVICE_COOKIE: &str = "STUDIO_BABEL_SERVICE_COOKIE";
 const STUDIO_BABEL_SERVICE_AUTHORIZATION: &str = "STUDIO_BABEL_SERVICE_AUTHORIZATION";
 const STUDIO_BABEL_SERVICE_AUTH_COMMAND: &str = "STUDIO_BABEL_SERVICE_AUTH_COMMAND";
 const DEFAULT_BABEL_SERVICE_BASE_URL: &str = "https://dashboard.babel.audio";
+
+pub(super) fn run_babel_service_stdio_cli_from_args(
+    args: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Option<Result<(), String>> {
+    if !args
+        .into_iter()
+        .any(|arg| arg.as_ref() == "--babel-service-stdio")
+    {
+        return None;
+    }
+    Some((|| {
+        let envelope: Value = serde_json::from_reader(std::io::stdin())
+            .map_err(|e| format!("Invalid service request: {e}"))?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        let response = runtime.block_on(async {
+            let auth = live_auth_headers_for_request().await?;
+            let parts = live_trpc_request_parts(&envelope, &live_base_url(), auth)?;
+            let body = execute_live_trpc_request(parts.clone()).await?;
+            if envelope
+                .get("operation")
+                .and_then(Value::as_str)
+                .is_some_and(|op| op.split(',').any(|name| name == "worker.getProjects"))
+            {
+                let configs = discover_live_dashboard_project_configs(&body, &parts)
+                    .await
+                    .unwrap_or_default();
+                Ok::<_, String>(attach_dashboard_project_configs(&body, configs))
+            } else {
+                Ok(body)
+            }
+        })?;
+        std::io::stdout()
+            .write_all(response.as_bytes())
+            .map_err(|e| e.to_string())
+    })())
+}
 const BABEL_DASHBOARD_PROJECTS_OPERATIONS: &str = concat!(
     "worker.get,",
     "worker.queryWorkerMetadata,",
@@ -1181,7 +1217,58 @@ fn live_trpc_query_operation(operation: &str) -> bool {
             | "transcriptions.getReviewActionDataById"
             | "transcriptions.getLatestReviewActionByProcessedTranscriptionId"
             | "audits.getPresignedUrls"
+            | "objectStore.getPresignedUrls"
+            | "transcriptions.getPresignedChunkUrls"
+            | "project.getProjectInstructions"
+            | "project.listProjectDocuments"
+            | "project.getProjectDocument"
+            | "rubric.getProjectRubricFlags"
     )
+}
+
+pub(super) async fn execute_project_resource(
+    operation: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let envelope = json!({"operation":operation,"payload":payload});
+    let body =
+        if let Some(body) = super::subaccounts::project_resource_payload(envelope.clone()).await? {
+            body
+        } else {
+            let auth = live_auth_headers_for_request().await?;
+            let parts = live_trpc_request_parts(&envelope, &live_base_url(), auth)?;
+            execute_live_trpc_request(parts).await?
+        };
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|_| "Invalid project resource response.".to_string())?;
+    let item = value.as_array().and_then(|v| v.first()).unwrap_or(&value);
+    item.pointer("/result/data/json")
+        .cloned()
+        .ok_or_else(|| "Babel could not load this project resource.".to_string())
+}
+
+pub(super) async fn execute_evaluation_request(
+    operation: String,
+    payload: Value,
+    owner_route: Option<(String, String)>,
+) -> Result<Value, String> {
+    let body = super::subaccounts::evaluation_relay_payload(
+        json!({"operation": operation, "payload": payload}),
+        owner_route,
+    )
+    .await?;
+    let parsed: Value =
+        serde_json::from_str(&body).map_err(|_| "Invalid evaluation response.".to_string())?;
+    let item = parsed
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(&parsed);
+    if item.get("error").is_some() {
+        return Err("Babel rejected the evaluation request.".to_string());
+    }
+    item.pointer("/result/data/json")
+        .cloned()
+        .ok_or_else(|| "Evaluation response is missing result data.".to_string())
 }
 
 async fn execute_live_trpc_request(parts: LiveTrpcRequestParts) -> Result<String, String> {

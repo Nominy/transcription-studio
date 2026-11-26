@@ -63,6 +63,9 @@ fn view_surface(state: &StudioState) -> Element<'_, Message> {
         return native_auth_screen::view_native_auth_screen(flow);
     }
 
+    if let Some(evaluation) = state.evaluation.as_ref().filter(|e| e.visible) {
+        return super::evaluation::view(evaluation, &state.project_resources);
+    }
     if state.show_dashboard() {
         return dashboard::view_dashboard(state);
     }
@@ -108,6 +111,10 @@ fn view_editor<'a>(
     ));
 
     layout = layout.push(status_bar::view_editor_status_bar(state, project, editor));
+    layout = layout.push(super::project_resources::view(
+        &state.project_resources,
+        true,
+    ));
 
     let mut content: Element<'a, Message> = layout.into();
     if let Some(dialog) = state

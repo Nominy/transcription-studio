@@ -1,6 +1,6 @@
 [package]
 name = "studio-app"
-version = "0.1.12"
+version = "0.1.16"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,6 +14,10 @@ path = "src/studio_app.rs"
 name = "transcription-studio"
 path = "src/main.rs"
 
+[[bin]]
+name = "studio-babel-service"
+path = "src/babel_service.rs"
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
@@ -22,6 +26,7 @@ httpdate.workspace = true
 iced.workspace = true
 reqwest.workspace = true
 rodio.workspace = true
+rand.workspace = true
 serde_json.workspace = true
 studio-babel = { path = "../studio-babel" }
 studio-core = { path = "../studio-core" }

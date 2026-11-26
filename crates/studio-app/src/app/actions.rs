@@ -138,7 +138,16 @@ fn trace_timeline_wheel_route(
 }
 
 pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message> {
+    if let Message::Resources(message) = message {
+        return super::project_resources::update(state, message);
+    }
+    if let Message::Evaluation(message) = message {
+        let task = super::evaluation::update(state, message);
+        return Task::batch([task, super::project_resources::ensure_current(state)]);
+    }
     match message {
+        Message::Resources(_) => unreachable!(),
+        Message::Evaluation(_) => unreachable!(),
         Message::RuntimeEvent {
             event,
             status,
@@ -466,6 +475,7 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             }
         },
         Message::SubaccountSignOut => {
+            state.evaluation = None;
             if let Err(error) = state.clear_subaccount_session() {
                 state.status = format!("Sub-account sign-out failed: {error}");
             }
@@ -493,7 +503,12 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             return dispatch_pending_services(state, task);
         }
         Message::SubaccountRelayStarted(result) => {
+            let ready = result.is_ok();
             state.complete_subaccount_relay_start(result);
+            if ready && state.evaluation.as_ref().is_some_and(|e| e.visible) {
+                let project = state.evaluation.as_ref().unwrap().project.clone();
+                return super::evaluation::open(state, project);
+            }
         }
         Message::StopSubaccountRelay | Message::TrayStopRelay => {
             state.stop_subaccount_relay();
@@ -587,6 +602,10 @@ pub(crate) fn update(state: &mut StudioState, message: Message) -> Task<Message>
             state.dashboard.error = None;
         }
         Message::DashboardStartProject(project_id) => {
+            if super::evaluation::is_supported_project(&project_id) {
+                let task = super::evaluation::open(state, project_id);
+                return Task::batch([task, super::project_resources::ensure_current(state)]);
+            }
             state.begin_dashboard_start_project(&project_id);
         }
         Message::DashboardStartNextTask => {
@@ -1646,6 +1665,7 @@ fn dispatch_pending_services(state: &mut StudioState, task: Task<Message>) -> Ta
     }
     Task::batch([
         task,
+        super::project_resources::ensure_current(state),
         state.dispatch_new_babel_service_requests(),
         state.dispatch_new_review_backend_requests(),
         state.dispatch_new_subaccount_owner_requests(),

@@ -524,6 +524,8 @@ pub(super) struct HelperGhostCursorView {
 }
 
 pub(super) struct StudioState {
+    pub(super) project_resources: super::project_resources::ResourcesState,
+    pub(super) evaluation: Option<super::evaluation::EvaluationState>,
     pub(super) app_surface: AppSurface,
     pub(super) workspace_generation: u64,
     pub(super) native_auth_flow: Option<NativeAuthFlowState>,
@@ -714,6 +716,8 @@ impl Default for StudioState {
             subaccount_session: None,
             subaccount_owner: SubaccountOwnerPanelState::with_default_host(),
             relay_process: RelayProcessState::default(),
+            evaluation: None,
+            project_resources: super::project_resources::ResourcesState::default(),
             #[cfg(windows)]
             tray: None,
             dashboard: DashboardState::default(),
@@ -3492,6 +3496,7 @@ impl StudioState {
         }
         self.subaccount_owner_requests
             .push(SubaccountOwnerRequest::PushProjectQueueConfigs {
+                authorization: self.relay_owner_authorization(),
                 host_url: self.subaccount_owner.host_url.clone(),
                 configs: self
                     .dashboard
@@ -3738,6 +3743,7 @@ impl StudioState {
         let remembered_url = config.remembered_url();
         match start_relay_process(&config) {
             Ok(started) => {
+                self.relay_process.owner_authorization = Some(started.owner_authorization);
                 self.relay_process.status = RelayProcessStatus::Starting;
                 self.relay_process.url = remembered_url;
                 self.relay_process.last_error = None;
@@ -3932,8 +3938,21 @@ impl StudioState {
         self.subaccount_owner.error = None;
         self.status = "Loading Sub-account dashboard...".to_string();
         self.subaccount_owner_requests
-            .push(SubaccountOwnerRequest::LoadDashboard { host_url });
+            .push(SubaccountOwnerRequest::LoadDashboard {
+                host_url,
+                authorization: self.relay_owner_authorization(),
+            });
         true
+    }
+
+    fn relay_owner_authorization(&self) -> Option<String> {
+        if self.subaccount_owner.host_url.trim_end_matches('/')
+            == self.relay_process.url.trim_end_matches('/')
+        {
+            self.relay_process.owner_authorization.clone()
+        } else {
+            None
+        }
     }
 
     pub(super) fn begin_subaccount_owner_create(&mut self) -> bool {
@@ -3950,7 +3969,11 @@ impl StudioState {
         self.subaccount_owner.error = None;
         self.status = "Creating Sub-account...".to_string();
         self.subaccount_owner_requests
-            .push(SubaccountOwnerRequest::Create { host_url, label });
+            .push(SubaccountOwnerRequest::Create {
+                host_url,
+                label,
+                authorization: self.relay_owner_authorization(),
+            });
         true
     }
 
@@ -3968,6 +3991,7 @@ impl StudioState {
         self.status = "Revoking Sub-account...".to_string();
         self.subaccount_owner_requests
             .push(SubaccountOwnerRequest::Revoke {
+                authorization: self.relay_owner_authorization(),
                 host_url,
                 subaccount_id: subaccount_id.trim().to_string(),
             });
@@ -3995,6 +4019,7 @@ impl StudioState {
         self.status = "Saving Sub-account project assignment...".to_string();
         self.subaccount_owner_requests
             .push(SubaccountOwnerRequest::AssignProjects {
+                authorization: self.relay_owner_authorization(),
                 host_url,
                 subaccount_id: subaccount_id.trim().to_string(),
                 project_ids,
@@ -6478,7 +6503,10 @@ fn dashboard_project_from_object(
     .or_else(|| discovered.map(|config| config.stitched_queue_id.clone()))
     .unwrap_or_default();
 
-    if chunked_queue_id.is_empty() && stitched_queue_id.is_empty() {
+    if chunked_queue_id.is_empty()
+        && stitched_queue_id.is_empty()
+        && !super::evaluation::is_supported_project(&id)
+    {
         return None;
     }
 

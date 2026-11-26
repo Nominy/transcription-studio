@@ -10,6 +10,8 @@ mod create_region;
 mod diff_smoke;
 mod drafts;
 mod edit_annotation;
+mod evaluation;
+mod evaluation_audio;
 mod feedback_panel;
 mod find;
 mod formatting;
@@ -29,6 +31,7 @@ mod native_capabilities;
 mod navigation;
 mod panel_persistence;
 mod platform_paths;
+mod project_resources;
 mod recovery;
 mod relay;
 mod renderer_capture;
@@ -83,6 +86,12 @@ pub fn run_native_auth_cli_from_args(
     native_auth_cli::run_native_auth_cli_from_args(args)
 }
 
+pub fn run_babel_service_stdio_cli_from_args(
+    args: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Option<Result<(), String>> {
+    service_executor::run_babel_service_stdio_cli_from_args(args)
+}
+
 pub fn run() -> iced::Result {
     let startup_route = parse_startup_route_config(std::env::args());
     let load_bundled_sample_audio = startup_route == Default::default();
@@ -106,6 +115,9 @@ pub fn run() -> iced::Result {
             }
             apply_startup_route_config(&mut state, startup_route);
             state.open_native_auth_gate_from_store();
+            let auto_start_local_relay = state.subaccount_session.is_none()
+                && state.native_auth_flow.is_none()
+                && relay_url_is_loopback(&state.subaccount_owner.host_url);
             let diff_smoke_mode = diff_workbench_smoke_mode();
             if annotation_mutation_smoke_enabled() {
                 run_annotation_mutation_smoke(&mut state);
@@ -133,6 +145,9 @@ pub fn run() -> iced::Result {
                 state.dispatch_new_babel_service_requests(),
                 state.dispatch_new_review_backend_requests(),
             ];
+            if auto_start_local_relay {
+                startup_tasks.push(state.begin_subaccount_relay_start());
+            }
             if runtime_graphics_info_enabled() {
                 startup_tasks.push(iced::system::fetch_information().map(|information| {
                     Message::RuntimeGraphicsInfoLoaded(RuntimeGraphicsInfo {
@@ -144,6 +159,18 @@ pub fn run() -> iced::Result {
             let task = iced::Task::batch(startup_tasks);
             (state, task)
         })
+}
+
+fn relay_url_is_loopback(value: &str) -> bool {
+    url::Url::parse(value).ok().is_some_and(|url| {
+        url.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host == "::1"
+                || host
+                    .parse::<std::net::Ipv4Addr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        })
+    })
 }
 
 fn runtime_graphics_info_enabled() -> bool {

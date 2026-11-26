@@ -36,6 +36,7 @@ pub(super) struct RelayProcessState {
     pub(super) child: Option<Child>,
     pub(super) url: String,
     pub(super) last_error: Option<String>,
+    pub(super) owner_authorization: Option<String>,
 }
 
 impl Default for RelayProcessState {
@@ -45,6 +46,7 @@ impl Default for RelayProcessState {
             child: None,
             url: String::new(),
             last_error: None,
+            owner_authorization: None,
         }
     }
 }
@@ -105,6 +107,7 @@ pub(super) struct RelayLaunchConfig {
 pub(super) struct StartedRelay {
     pub(super) child: Child,
     pub(super) stderr: ChildStderr,
+    pub(super) owner_authorization: String,
 }
 
 impl RelayLaunchConfig {
@@ -121,7 +124,18 @@ impl RelayLaunchConfig {
             executable_path,
             bind,
             store_path,
-            babel_service_command: non_empty_env(RELAY_COMMAND_ENV),
+            babel_service_command: non_empty_env(RELAY_COMMAND_ENV).or_else(|| {
+                if non_empty_env(RELAY_UPSTREAM_URL_ENV).is_some() {
+                    return None;
+                }
+                let exe = env::current_exe().ok()?;
+                let helper = exe.parent()?.join(if cfg!(windows) {
+                    "TranscriptionStudio.BabelService.exe"
+                } else {
+                    "TranscriptionStudio.BabelService"
+                });
+                Some(format!("\"{}\"", helper.display()))
+            }),
             upstream_url: non_empty_env(RELAY_UPSTREAM_URL_ENV),
             task_cents: non_empty_env(RELAY_TASK_CENTS_ENV),
         })
@@ -187,6 +201,12 @@ pub(super) fn start_relay_process(config: &RelayLaunchConfig) -> Result<StartedR
         })?;
     }
     let mut command = Command::new(&config.executable_path);
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    command.env("STUDIO_SUBACCOUNT_OWNER_TOKEN", &token);
     command
         .args(config.args())
         .stdin(Stdio::null())
@@ -207,7 +227,11 @@ pub(super) fn start_relay_process(config: &RelayLaunchConfig) -> Result<StartedR
         let _ = stop_relay_child(&mut child);
         return Err("relay process did not expose stderr for readiness.".to_string());
     };
-    Ok(StartedRelay { child, stderr })
+    Ok(StartedRelay {
+        child,
+        stderr,
+        owner_authorization: format!("Bearer {token}"),
+    })
 }
 
 pub(super) async fn wait_for_relay_ready(stderr: ChildStderr) -> Result<String, String> {

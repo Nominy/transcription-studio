@@ -4,7 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{
+    ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue,
+};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
@@ -13,6 +15,8 @@ use super::native_auth::{
 };
 use super::native_auth_cli::native_babel_url;
 use super::subaccounts::subaccount_audio_presigned_urls;
+#[path = "chunk_audio.rs"]
+mod chunk_audio;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BabelPayloadLoadKind {
@@ -93,7 +97,27 @@ pub(super) async fn prepare_babel_audio_payload(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let presigned_urls = fetch_presigned_urls(s3_urls).await?;
+    let presigned_urls = if s3_urls.is_empty() {
+        BTreeMap::new()
+    } else if let Some(input) = chunk_audio::request(&value)? {
+        let by_chunk = fetch_chunk_urls(input).await?;
+        let mut urls = BTreeMap::new();
+        for source in remote_sources
+            .iter()
+            .filter(|s| is_s3_audio_source(&s.source_url))
+        {
+            let signed = by_chunk.get(&source.recording_key).ok_or_else(|| {
+                format!(
+                    "Babel did not return an audio link for fragment {}. Reload the task.",
+                    source.recording_key
+                )
+            })?;
+            urls.insert(source.source_url.clone(), signed.clone());
+        }
+        urls
+    } else {
+        fetch_presigned_urls(s3_urls).await?
+    };
     let cache_dir = default_audio_cache_dir().join(sanitize_cache_component(
         &first_string_by_key(&value, &["actionId"]).unwrap_or_else(|| "unknown-action".to_string()),
     ));
@@ -201,6 +225,44 @@ fn rewrite_remote_audio_sources(
     }
 }
 
+async fn fetch_chunk_urls(input: Value) -> Result<BTreeMap<String, String>, String> {
+    if let Some(body) = super::subaccounts::subaccount_chunk_audio_payload(input.clone()).await? {
+        return chunk_audio::parse(&body);
+    }
+    let authorization = mint_native_babel_authorization_from_store(
+        &default_native_auth_store_path(),
+        &native_babel_url(),
+        &native_clerk_url(),
+        OffsetDateTime::now_utc().unix_timestamp(),
+    )
+    .await?;
+    let query = json!({"0":{"json":input}}).to_string();
+    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    let response = super::http_client::shared_http_client()
+        .get(format!(
+            "{}/api/trpc/transcriptions.getPresignedChunkUrls?batch=1&input={encoded}",
+            native_babel_url().trim_end_matches('/')
+        ))
+        .header(AUTHORIZATION, authorization)
+        .header(ACCEPT_ENCODING, "identity")
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|_| "Audio link request failed. Try again.")?
+        .error_for_status()
+        .map_err(|e| {
+            format!(
+                "Audio link request failed: {}",
+                e.status().map(|s| s.to_string()).unwrap_or_default()
+            )
+        })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Audio link response was interrupted.")?;
+    chunk_audio::parse(&body)
+}
+
 async fn fetch_presigned_urls(s3_urls: Vec<String>) -> Result<BTreeMap<String, String>, String> {
     if s3_urls.is_empty() {
         return Ok(BTreeMap::new());
@@ -218,22 +280,9 @@ async fn fetch_presigned_urls(s3_urls: Vec<String>) -> Result<BTreeMap<String, S
         OffsetDateTime::now_utc().unix_timestamp(),
     )
     .await?;
-    let input = json!({
-        "0": {
-            "json": {
-                "s3Urls": s3_urls,
-            }
-        }
-    })
-    .to_string();
-    let encoded_input: String = url::form_urlencoded::byte_serialize(input.as_bytes()).collect();
-    let url = format!(
-        "{}/api/trpc/audits.getPresignedUrls?batch=1&input={encoded_input}",
-        babel_url.trim().trim_end_matches('/')
-    );
-
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
         AUTHORIZATION,
@@ -241,45 +290,69 @@ async fn fetch_presigned_urls(s3_urls: Vec<String>) -> Result<BTreeMap<String, S
             .map_err(|error| format!("Babel audio authorization header is invalid: {error}"))?,
     );
 
-    let response = reqwest::Client::new()
-        .get(url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|error| format!("Babel presigned audio URL request failed: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("failed to read Babel presigned audio URL response: {error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Babel presigned audio URL HTTP {status}: {}",
-            response_body_snippet(&body)
-        ));
+    let client = reqwest::Client::new();
+    let mut presigned_urls = BTreeMap::new();
+    for s3_url in s3_urls {
+        let (bucket, key) = split_s3_url(&s3_url)?;
+        let input = json!({
+            "0": {
+                "json": {
+                    "bucket": bucket,
+                    "key": key,
+                }
+            }
+        })
+        .to_string();
+        let encoded_input: String =
+            url::form_urlencoded::byte_serialize(input.as_bytes()).collect();
+        let url = format!(
+            "{}/api/trpc/application.getAudioPresignedUrl?batch=1&input={encoded_input}",
+            babel_url.trim().trim_end_matches('/')
+        );
+        let response = client
+            .get(url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .map_err(|error| format!("Babel presigned audio URL request failed: {error}"))?;
+        let status = response.status();
+        let body = response.text().await.map_err(|error| {
+            format!("failed to read Babel presigned audio URL response: {error}")
+        })?;
+        if !status.is_success() {
+            return Err(format!(
+                "Babel presigned audio URL HTTP {status}: {}",
+                response_body_snippet(&body)
+            ));
+        }
+        presigned_urls.insert(s3_url, parse_single_presigned_url_response(&body)?);
     }
-
-    parse_presigned_url_response(&body)
+    Ok(presigned_urls)
 }
 
-fn parse_presigned_url_response(body: &str) -> Result<BTreeMap<String, String>, String> {
+fn split_s3_url(source: &str) -> Result<(&str, &str), String> {
+    let remainder = source
+        .strip_prefix("s3://")
+        .ok_or_else(|| format!("Babel audio source is not an S3 URL: {source}"))?;
+    let (bucket, key) = remainder
+        .split_once('/')
+        .filter(|(bucket, key)| !bucket.is_empty() && !key.is_empty())
+        .ok_or_else(|| format!("Babel audio S3 URL is invalid: {source}"))?;
+    Ok((bucket, key))
+}
+
+fn parse_single_presigned_url_response(body: &str) -> Result<String, String> {
     let value = serde_json::from_str::<Value>(body)
         .map_err(|error| format!("failed to decode Babel presigned audio URL response: {error}"))?;
     let data = trpc_json_payload(&value)
         .ok_or_else(|| "Babel presigned audio URL response did not include data".to_string())?;
-    let map = data
-        .as_object()
-        .ok_or_else(|| "Babel presigned audio URL response was not an object".to_string())?;
-    Ok(map
-        .iter()
-        .filter_map(|(source, signed)| {
-            signed
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|signed| (source.clone(), signed.to_string()))
-        })
-        .collect())
+    data.as_str()
+        .or_else(|| data.get("url").and_then(Value::as_str))
+        .or_else(|| data.get("presignedUrl").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Babel presigned audio URL response did not include a URL".to_string())
 }
 
 fn trpc_json_payload(value: &Value) -> Option<&Value> {
@@ -514,6 +587,20 @@ mod tests {
         assert_eq!(
             value.pointer("/result/data/json/processedRecordingUriMap/recording-2"),
             Some(&Value::String("audio/speaker_2.wav".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_current_babel_single_audio_presign_contract() {
+        assert_eq!(
+            split_s3_url("s3://audio-bucket/path/to/recording.wav"),
+            Ok(("audio-bucket", "path/to/recording.wav"))
+        );
+        assert_eq!(
+            parse_single_presigned_url_response(
+                r#"[{"result":{"data":{"json":"https://signed.example/audio.wav"}}}]"#,
+            ),
+            Ok("https://signed.example/audio.wav".to_string())
         );
     }
 }

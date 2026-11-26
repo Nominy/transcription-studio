@@ -1,0 +1,32 @@
+Transcription Studio 0.1.16 — Alpha Eval and project instructions
+
+- RU-Alpha-Eval: 3882e77e-3ace-4ff2-b2df-290e3439cfce.
+- Single audio and labeled text subjects (written/spoken forms), multiple
+  choice, rating, dropdown and text questions; answer/scenario visibility.
+- Existing naturalness Eval / Eval 2 and audio decoding fixes retained.
+- Original project Instructions, How to do the task, Grading guide and Library
+  appear below the editor. Rules come from Babel, not a hardcoded translation.
+- Markdown tables and library table documents are readable inside Studio.
+  PDF/media files and acknowledgement actions remain on the Babel website;
+  the Library provides a link. No acknowledgement is sent automatically.
+- Sub-accounts retrieve rules through the owner relay with project access
+  checks. Both owner application/relay and friend's application need 0.1.16.
+
+Friend installation:
+Close Studio, extract the whole archive into a new directory, then use
+TranscriptionStudio.exe. If using the SSH relay launcher, select this EXE or
+place its existing launcher beside the new EXE. Keep the existing relay
+address and sign-in code. Do not delete AppData or local drafts.
+
+Validation:
+Full application test run: 779 passed, one table rendering failure corrected
+and verified by focused rerun; 2 legacy packaging tests ignored (missing
+original CI files). All 14 evaluation/audio tests and 2 resources tests pass.
+All 19 relay tests pass, including resource permissions, bypass rejection,
+and Windows helper launch with a quoted path containing spaces.
+
+Live Babel metadata, instructions, grading guide and library schema verified.
+On 2026-11-20 Babel returned kind=empty, reason=all_at_consensus for Alpha Eval.
+No live task could be opened, answered or submitted. End-to-end validation of
+an actual Alpha Eval task remains pending new available work. Unsupported
+question types or extra linters stop submission rather than discard data.

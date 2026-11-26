@@ -35,6 +35,8 @@ pub(super) enum AuditionKey {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Message {
+    Resources(super::project_resources::ResourcesMessage),
+    Evaluation(super::evaluation::EvaluationMessage),
     RuntimeEvent {
         event: Event,
         status: event::Status,

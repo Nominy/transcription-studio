@@ -394,6 +394,9 @@ fn reclaim_draining_players<T>(
 
 #[cfg(not(test))]
 impl AudioPlaybackBackend {
+    pub(super) fn playback_finished(&self) -> bool {
+        !self.players.is_empty() && self.players.iter().all(|player| player.empty())
+    }
     pub(super) fn prepare(&mut self) -> Result<(), String> {
         let sink_start = Instant::now();
         let mut result = self.ensure_sink();
@@ -692,6 +695,9 @@ pub(super) struct AudioPlaybackBackend {
 
 #[cfg(test)]
 impl AudioPlaybackBackend {
+    pub(super) fn playback_finished(&self) -> bool {
+        !self.active
+    }
     pub(super) fn prepare(&mut self) -> Result<(), String> {
         self.prepare_count += 1;
         self.prepared_player_count = self

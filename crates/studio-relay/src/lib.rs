@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{fs, io::AsyncWriteExt, process::Command, sync::Mutex};
 
+mod evaluation;
+
 pub type BoxedEnvelopeFuture = Pin<Box<dyn Future<Output = Result<String, RelayError>> + Send>>;
 pub type EnvelopeExecutor = Arc<dyn Fn(Value) -> BoxedEnvelopeFuture + Send + Sync>;
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -58,6 +60,7 @@ impl RelayConfig {
 pub struct RelayState {
     config: RelayConfig,
     store: Arc<Mutex<RelayStore>>,
+    evaluation_lock: Arc<Mutex<()>>,
 }
 
 impl RelayState {
@@ -66,6 +69,7 @@ impl RelayState {
         Ok(Self {
             config,
             store: Arc::new(Mutex::new(store)),
+            evaluation_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -96,6 +100,11 @@ pub fn router(state: RelayState) -> Router {
     let state = Arc::new(state);
     Router::new()
         .route("/api/subaccounts/login", post(login))
+        .route("/api/subaccounts/evaluation", post(evaluation::handle))
+        .route(
+            "/api/subaccounts/project-resources",
+            post(project_resources),
+        )
         .route("/api/subaccounts/owner/dashboard", get(owner_dashboard))
         .route("/api/subaccounts/owner/subaccounts", post(owner_create))
         .route(
@@ -191,6 +200,8 @@ struct RelayStore {
     sessions: Vec<SessionRecord>,
     #[serde(default)]
     project_queue_configs: BTreeMap<String, ProjectQueueConfig>,
+    #[serde(default)]
+    evaluation_sessions: BTreeMap<String, evaluation::EvaluationBinding>,
 }
 
 impl Default for RelayStore {
@@ -200,6 +211,7 @@ impl Default for RelayStore {
             subaccounts: Vec::new(),
             sessions: Vec::new(),
             project_queue_configs: BTreeMap::new(),
+            evaluation_sessions: BTreeMap::new(),
         }
     }
 }
@@ -486,6 +498,27 @@ async fn babel_service(
     headers: HeaderMap,
     Json(request): Json<BabelRelayRequest>,
 ) -> Result<Json<Value>, RelayError> {
+    if request
+        .envelope
+        .get("operation")
+        .and_then(Value::as_str)
+        .is_some_and(|op| {
+            op.split(',').any(|part| {
+                part.trim().starts_with("evalTasks.")
+                    || matches!(
+                        part.trim(),
+                        "project.getProjectInstructions"
+                            | "project.listProjectDocuments"
+                            | "project.getProjectDocument"
+                            | "rubric.getProjectRubricFlags"
+                    )
+            })
+        })
+    {
+        return Err(RelayError::forbidden(
+            "Use the scoped evaluation or project-resources endpoint.",
+        ));
+    }
     let subaccount_id = {
         let store = state.store.lock().await;
         let (subaccount, _) = authenticate_subaccount(&headers, &store)?;
@@ -551,6 +584,47 @@ async fn babel_service(
     Ok(Json(json!({ "payload": payload })))
 }
 
+async fn project_resources(
+    State(state): State<Arc<RelayState>>,
+    headers: HeaderMap,
+    Json(envelope): Json<Value>,
+) -> Result<Json<Value>, RelayError> {
+    let operation = envelope
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        operation,
+        "project.getProjectInstructions"
+            | "project.listProjectDocuments"
+            | "project.getProjectDocument"
+            | "rubric.getProjectRubricFlags"
+    ) || envelope.get("batchInput").is_some()
+    {
+        return Err(RelayError::forbidden(
+            "Unsupported project resource request.",
+        ));
+    }
+    let project = envelope
+        .pointer("/payload/projectId")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| RelayError::bad_request("Project ID is required."))?;
+    {
+        let store = state.store.lock().await;
+        let (account, _) = authenticate_subaccount(&headers, &store)?;
+        if !account.allowed_project_ids.is_empty()
+            && !account.allowed_project_ids.iter().any(|id| id == project)
+        {
+            return Err(RelayError::forbidden(
+                "Sub-account is not assigned to this project.",
+            ));
+        }
+    }
+    let payload = state.execute_envelope(envelope).await?;
+    Ok(Json(json!({"payload":payload})))
+}
+
 async fn audio_presigned_urls(
     State(state): State<Arc<RelayState>>,
     headers: HeaderMap,
@@ -562,7 +636,7 @@ async fn audio_presigned_urls(
     }
     let payload = state
         .execute_envelope(json!({
-            "operation": "audits.getPresignedUrls",
+            "operation": "objectStore.getPresignedUrls",
             "payload": { "s3Urls": request.s3_urls },
         }))
         .await?;
@@ -691,8 +765,12 @@ fn response_body_snippet(body: &str) -> String {
 
 #[cfg(windows)]
 fn shell_command(command_line: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
     let mut command = Command::new("cmd");
-    command.arg("/C").arg(command_line);
+    // cmd parses a command string, not a CRT-escaped argv argument.
+    command.args(["/D", "/S", "/C"]);
+    command.as_std_mut().raw_arg(format!("\"{command_line}\""));
     command.creation_flags(0x0800_0000);
     command
 }
@@ -1141,6 +1219,22 @@ fn non_empty_env(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn quoted_helper_path_with_spaces_receives_stdin() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let helper = temp.path().join("helper with spaces.exe");
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        std::fs::copy(system.join("System32/findstr.exe"), &helper).unwrap();
+        let output = super::execute_command(
+            &format!("\"{}\" .", helper.display()),
+            "{\"operation\":\"read\"}\r\n".to_owned(),
+        )
+        .await
+        .expect("quoted helper must execute");
+        assert_eq!(output.trim(), "{\"operation\":\"read\"}");
+    }
+
     use std::sync::{
         Arc,
         atomic::{AtomicI64, Ordering},
@@ -1593,6 +1687,7 @@ mod tests {
         let mut active_claims = BTreeMap::new();
         active_claims.insert("review-action-pending".to_string(), 1_783_425_600_000);
         RelayStore {
+            evaluation_sessions: BTreeMap::new(),
             version: 1,
             subaccounts: vec![
                 SubaccountRecord {

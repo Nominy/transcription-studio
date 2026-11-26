@@ -20,6 +20,7 @@ use super::service_callbacks::BabelServiceRequest;
 
 const SUBACCOUNT_SESSION_STORE_ENV: &str = "STUDIO_SUBACCOUNT_SESSION_STORE";
 const SUBACCOUNT_RELAY_SETTINGS_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_SETTINGS";
+const SUBACCOUNT_OWNER_TOKEN_ENV: &str = "STUDIO_SUBACCOUNT_OWNER_TOKEN";
 pub(super) const SUBACCOUNT_RELAY_URL_ENV: &str = "STUDIO_SUBACCOUNT_RELAY_URL";
 #[cfg(not(test))]
 const DEFAULT_SESSION_FILE_NAME: &str = "subaccount-session.json";
@@ -69,23 +70,28 @@ pub(super) struct ManagedSubaccount {
 pub(super) enum SubaccountOwnerRequest {
     LoadDashboard {
         host_url: String,
+        authorization: Option<String>,
     },
     Create {
         host_url: String,
         label: String,
+        authorization: Option<String>,
     },
     Revoke {
         host_url: String,
         subaccount_id: String,
+        authorization: Option<String>,
     },
     AssignProjects {
         host_url: String,
         subaccount_id: String,
         project_ids: Vec<String>,
+        authorization: Option<String>,
     },
     PushProjectQueueConfigs {
         host_url: String,
         configs: Vec<ProjectQueueConfig>,
+        authorization: Option<String>,
     },
 }
 
@@ -414,6 +420,99 @@ pub(super) async fn subaccount_relay_payload_for_request(
     Ok(Some(extract_relay_payload(&body)))
 }
 
+pub(super) async fn evaluation_relay_payload(
+    envelope: Value,
+    owner_route: Option<(String, String)>,
+) -> Result<String, String> {
+    let auth = if let Some(session) = read_default_subaccount_session()? {
+        relay_auth_from_session(&session)?
+    } else {
+        let (host_url, authorization) =
+            owner_route.ok_or("Start the local relay before opening an evaluation.")?;
+        RelayAuth {
+            host_url,
+            authorization,
+        }
+    };
+    let response = super::http_client::shared_http_client()
+        .post(api_url(&auth.host_url, "/api/subaccounts/evaluation"))
+        .headers(relay_headers(&auth.authorization)?)
+        .json(&envelope)
+        .send()
+        .await
+        .map_err(|_| {
+            "Evaluation relay is unreachable. Check that the updated relay is running.".to_string()
+        })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Evaluation relay response was interrupted.".to_string())?;
+    if !status.is_success() {
+        return Err(format!(
+            "Evaluation relay HTTP {status}: {}",
+            response_body_snippet(&body)
+        ));
+    }
+    Ok(extract_relay_payload(&body))
+}
+
+pub(super) async fn project_resource_payload(envelope: Value) -> Result<Option<String>, String> {
+    let Some(session) = read_default_subaccount_session()? else {
+        return Ok(None);
+    };
+    let auth = relay_auth_from_session(&session)?;
+    let response = super::http_client::shared_http_client()
+        .post(api_url(
+            &auth.host_url,
+            "/api/subaccounts/project-resources",
+        ))
+        .headers(relay_headers(&auth.authorization)?)
+        .json(&envelope)
+        .send()
+        .await
+        .map_err(|_| "Project instructions relay is unreachable.".to_string())?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Project instructions response was interrupted.".to_string())?;
+    if !status.is_success() {
+        return Err(format!(
+            "Project resources relay HTTP {status}. Update the owner relay if this endpoint is unavailable."
+        ));
+    }
+    Ok(Some(extract_relay_payload(&body)))
+}
+
+pub(super) async fn subaccount_chunk_audio_payload(input: Value) -> Result<Option<String>, String> {
+    let Some(session) = read_default_subaccount_session()? else {
+        return Ok(None);
+    };
+    let auth = relay_auth_from_session(&session)?;
+    let response = super::http_client::shared_http_client()
+        .post(api_url(&auth.host_url, BABEL_SERVICE_PATH))
+        .headers(relay_headers(&auth.authorization)?)
+        .timeout(std::time::Duration::from_secs(60))
+        .json(&json!({"requestKind":"audioChunkUrls", "envelope":{
+            "operation":"transcriptions.getPresignedChunkUrls", "payload":input
+        }}))
+        .send()
+        .await
+        .map_err(|_| "Audio link relay is unreachable.")?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Audio link relay HTTP {status}. Reload the task or check access."
+        ));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Audio link relay response was interrupted.")?;
+    Ok(Some(extract_relay_payload(&body)))
+}
+
 pub(super) async fn subaccount_audio_presigned_urls(
     s3_urls: &[String],
 ) -> Result<Option<BTreeMap<String, String>>, String> {
@@ -470,23 +569,16 @@ async fn push_project_queue_configs(request: SubaccountOwnerRequest) -> Message 
 }
 
 async fn push_project_queue_configs_result(request: SubaccountOwnerRequest) -> Result<(), String> {
-    let (host_url, configs) = match request {
-        SubaccountOwnerRequest::PushProjectQueueConfigs { host_url, configs } => {
-            (host_url, configs)
-        }
+    let (host_url, configs, supplied_authorization) = match request {
+        SubaccountOwnerRequest::PushProjectQueueConfigs {
+            host_url,
+            configs,
+            authorization,
+        } => (host_url, configs, authorization),
         _ => return Err("internal: unexpected request kind".to_string()),
     };
     let host_url = normalize_relay_host_url(&host_url)?;
-    let authorization = mint_native_babel_authorization_from_store(
-        &default_native_auth_store_path(),
-        &native_babel_url(),
-        &native_clerk_url(),
-        OffsetDateTime::now_utc().unix_timestamp(),
-    )
-    .await
-    .map_err(|error| {
-        format!("Main Babel account auth is required for Sub-account controls: {error}")
-    })?;
+    let authorization = owner_authorization(supplied_authorization).await?;
     let headers = relay_headers(&authorization)?;
     let response = reqwest::Client::new()
         .put(api_url(&host_url, OWNER_PROJECT_QUEUES_PATH))
@@ -522,7 +614,7 @@ async fn owner_dashboard_payload_for_request(
     request: SubaccountOwnerRequest,
 ) -> Result<SubaccountOwnerDashboard, String> {
     let host_url = match &request {
-        SubaccountOwnerRequest::LoadDashboard { host_url }
+        SubaccountOwnerRequest::LoadDashboard { host_url, .. }
         | SubaccountOwnerRequest::Create { host_url, .. }
         | SubaccountOwnerRequest::Revoke { host_url, .. }
         | SubaccountOwnerRequest::AssignProjects { host_url, .. }
@@ -530,16 +622,7 @@ async fn owner_dashboard_payload_for_request(
             normalize_relay_host_url(host_url)?
         }
     };
-    let authorization = mint_native_babel_authorization_from_store(
-        &default_native_auth_store_path(),
-        &native_babel_url(),
-        &native_clerk_url(),
-        OffsetDateTime::now_utc().unix_timestamp(),
-    )
-    .await
-    .map_err(|error| {
-        format!("Main Babel account auth is required for Sub-account controls: {error}")
-    })?;
+    let authorization = owner_authorization(request_owner_authorization(&request)).await?;
     let client = reqwest::Client::new();
     let response = match request {
         SubaccountOwnerRequest::LoadDashboard { .. } => {
@@ -610,6 +693,42 @@ async fn owner_dashboard_payload_for_request(
         ));
     }
     parse_owner_dashboard(&body)
+}
+
+fn request_owner_authorization(request: &SubaccountOwnerRequest) -> Option<String> {
+    match request {
+        SubaccountOwnerRequest::LoadDashboard { authorization, .. }
+        | SubaccountOwnerRequest::Create { authorization, .. }
+        | SubaccountOwnerRequest::Revoke { authorization, .. }
+        | SubaccountOwnerRequest::AssignProjects { authorization, .. }
+        | SubaccountOwnerRequest::PushProjectQueueConfigs { authorization, .. } => {
+            authorization.clone()
+        }
+    }
+}
+
+async fn owner_authorization(supplied: Option<String>) -> Result<String, String> {
+    if let Some(authorization) = supplied
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(authorization);
+    }
+    if let Ok(token) = env::var(SUBACCOUNT_OWNER_TOKEN_ENV)
+        && !token.trim().is_empty()
+    {
+        return Ok(format!("Bearer {}", token.trim()));
+    }
+    mint_native_babel_authorization_from_store(
+        &default_native_auth_store_path(),
+        &native_babel_url(),
+        &native_clerk_url(),
+        OffsetDateTime::now_utc().unix_timestamp(),
+    )
+    .await
+    .map_err(|error| {
+        format!("Main Babel account auth is required for Sub-account controls: {error}")
+    })
 }
 
 fn session_from_login_response(host_url: &str, body: &str) -> Result<SubaccountSession, String> {

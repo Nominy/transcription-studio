@@ -311,7 +311,10 @@ fn view_projects_screen(state: &StudioState) -> Element<'_, Message> {
                             .style(primary_button_style)
                             .on_press_maybe(
                                 (!state.dashboard.is_pending
-                                    && !project.chunked_queue_id.trim().is_empty())
+                                    && (!project.chunked_queue_id.trim().is_empty()
+                                        || super::super::evaluation::is_supported_project(
+                                            &project.id
+                                        )))
                                 .then_some(Message::DashboardStartProject(project.id.clone())),
                             )
                             .padding([9, 16]),
@@ -433,6 +436,9 @@ pub(super) fn view_dashboard_error<'a>(
 }
 
 fn dashboard_project_status(project: &super::super::state::DashboardProject) -> &'static str {
+    if super::super::evaluation::is_supported_project(&project.id) {
+        return "Audio evaluation — ready";
+    }
     if project.chunked_queue_id.trim().is_empty() {
         "No claimable queue"
     } else {

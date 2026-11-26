@@ -25,6 +25,12 @@ const CTRL_G: &str = "\u{7}";
 const CTRL_J: &str = "\n";
 pub(crate) fn subscription(state: &StudioState) -> Subscription<Message> {
     let mut subscriptions = vec![event::listen_with(runtime_event_message)];
+    if state.evaluation.is_some() {
+        subscriptions.push(
+            time::every(Duration::from_millis(250))
+                .map(|_| Message::Evaluation(super::evaluation::EvaluationMessage::Tick)),
+        );
+    }
     #[cfg(windows)]
     if state.tray.is_some() {
         subscriptions.push(super::tray::subscription());

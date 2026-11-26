@@ -23,7 +23,7 @@ bytes = "1.10"
 iced = { version = "0.13", features = ["tokio", "lazy", "svg", "canvas", "system", "advanced"] }
 httpdate = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
-rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all"] }
 rayon = "1.10"
 rand = "0.9"
 serde = { version = "1.0", features = ["derive"] }

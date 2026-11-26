@@ -1,4 +1,5 @@
 /target/
+/dist/
 /.studio-dev/
 tools/babel-editor-playwright/node_modules/
 tools/babel-editor-playwright/playwright-report/

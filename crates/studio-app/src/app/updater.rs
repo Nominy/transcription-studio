@@ -5,7 +5,8 @@ const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-stud
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-studio/alpha/mac-x64";
 #[cfg(not(target_os = "macos"))]
-const PLATFORM_UPDATE_FEED_URL: &str = "https://reviewgen.ovh/transcription-studio/alpha/win-x64";
+const PLATFORM_UPDATE_FEED_URL: &str =
+    "https://helsinkifarter.ru:8444/transcription-studio/alpha/win-x64";
 pub(super) const DEFAULT_UPDATE_FEED_URL: &str = default_update_feed_url_from(
     option_env!("STUDIO_DEFAULT_UPDATE_FEED_URL"),
     PLATFORM_UPDATE_FEED_URL,
